@@ -10,8 +10,16 @@ Stores and serves user identity, dietary constraints, nutrition goals, cooking p
 
 ### user_profile
 ```sql
+CREATE TABLE user_account (
+    id              BIGSERIAL PRIMARY KEY,
+    username        VARCHAR(50) NOT NULL UNIQUE,
+    password_hash   VARCHAR(255) NOT NULL,
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE user_profile (
     id                  BIGSERIAL PRIMARY KEY,
+    account_id          BIGINT NOT NULL UNIQUE REFERENCES user_account(id),
     name                VARCHAR(100) NOT NULL,
     dietary_identity    VARCHAR(30),          -- omnivore/vegetarian/vegan/pescatarian/halal/kosher
     goal_context        VARCHAR(30),          -- bulking/cutting/maintenance/general_health
@@ -130,8 +138,30 @@ CREATE TABLE eating_out_schedule (
 
 ## API
 
+### POST /api/v1/auth/register
+Create a new account.
+
+**Request:**
+```json
+{
+  "username": "irene",
+  "password": "...",
+  "name": "Irene"
+}
+```
+**Response 201:** `{ "token": "jwt..." }`
+
+### POST /api/v1/auth/login
+**Request:** `{ "username": "irene", "password": "..." }`
+
+**Response 200:** `{ "token": "jwt..." }`
+
+All endpoints below require `Authorization: Bearer <token>`.
+
+---
+
 ### GET /api/v1/profile
-Returns the full profile with all related data (allergies, intolerances, dislikes, cuisine prefs, equipment, fixed slots, eating out schedule).
+Returns the full profile for the authenticated user.
 
 **Response 200:**
 ```json
@@ -230,22 +260,29 @@ Replace eating out schedule.
 ## Service Interface
 
 ```java
+// All methods resolve the current user from Spring Security context.
+// Other modules call these with an explicit profileId.
 public interface ProfileService {
     UserProfileDto getProfile();
     UserProfileDto updateProfile(UpdateProfileRequest request);
+
+    // Auth (operates on user_account table)
+    AuthTokenDto register(RegisterRequest request);
+    AuthTokenDto login(LoginRequest request);
 
     // Nutrition targets (row-per-nutrient)
     List<NutritionTargetDto> getNutritionTargets();
     void updateNutritionTargets(List<UpdateNutritionTargetRequest> targets);
 
-    // Convenience methods for other modules
-    List<AllergenDto> getAllergens();
-    List<String> getDislikedIngredients();
-    String getDietaryIdentity();
-    CookingPreferences getCookingPreferences();
-    List<FixedMealSlotDto> getFixedMealSlots();
-    List<EatingOutDto> getEatingOutSchedule();
-    int getNewRecipesPerWeek();
+    // Convenience methods for other modules (take profileId explicitly)
+    List<AllergenDto> getAllergens(Long profileId);
+    List<String> getDislikedIngredients(Long profileId);
+    String getDietaryIdentity(Long profileId);
+    CookingPreferences getCookingPreferences(Long profileId);
+    List<NutritionTargetDto> getNutritionTargets(Long profileId);
+    List<FixedMealSlotDto> getFixedMealSlots(Long profileId);
+    List<EatingOutDto> getEatingOutSchedule(Long profileId);
+    int getNewRecipesPerWeek(Long profileId);
 }
 ```
 
