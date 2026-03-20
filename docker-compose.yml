@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: journal-db
+    environment:
+      POSTGRES_DB: journal
+      POSTGRES_USER: journal_user
+      POSTGRES_PASSWORD: journal_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
