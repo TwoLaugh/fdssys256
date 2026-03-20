@@ -4,6 +4,7 @@
 Tracks planned vs actual nutrition intake. Pre-populates from the meal plan each day, user confirms/skips/adjusts, provides daily and weekly dashboards.
 
 ## Dependencies
+- **→ Shared Reference** — `meal_type` lookup table (FK reference)
 - **→ Planner.getCurrentPlan()** — get planned meals for each day
 - **→ Recipe (via plan slots)** — recipe nutrition data per serving
 - **→ NutritionEngine.aggregateMeals()** — calculate daily totals
@@ -16,7 +17,7 @@ Tracks planned vs actual nutrition intake. Pre-populates from the meal plan each
 CREATE TABLE nutrition_log (
     id                          BIGSERIAL PRIMARY KEY,
     date                        DATE NOT NULL,
-    meal_type                   VARCHAR(20) NOT NULL,
+    meal_type_id                SMALLINT NOT NULL REFERENCES meal_type(id),
     meal_slot_id                BIGINT,               -- reference to Planner's table
     status                      VARCHAR(20) NOT NULL,  -- as_planned/modified/skipped/unplanned
     actual_recipe_version_id    BIGINT,               -- reference to Recipe's table
@@ -27,7 +28,7 @@ CREATE TABLE nutrition_log (
     carbs_g                     DECIMAL(6,1),
     fat_g                       DECIMAL(6,1),
     created_at                  TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE(date, meal_type)
+    UNIQUE(date, meal_type_id)
 );
 
 CREATE INDEX idx_nl_date ON nutrition_log(date DESC);
@@ -47,7 +48,7 @@ Daily nutrition with per-meal breakdown.
   "percentages": {"calories": 88, "proteinG": 90, "carbsG": 90, "fatG": 89},
   "meals": [
     {
-      "mealType": "breakfast",
+      "mealType": {"id": 1, "code": "breakfast", "name": "Breakfast"},
       "status": "as_planned",
       "recipeName": "Overnight Oats",
       "calories": 350,
@@ -56,7 +57,7 @@ Daily nutrition with per-meal breakdown.
       "fatG": 12
     },
     {
-      "mealType": "dinner",
+      "mealType": {"id": 3, "code": "dinner", "name": "Dinner"},
       "status": "skipped",
       "recipeName": "Salmon Stir Fry",
       "calories": 0,
@@ -112,16 +113,16 @@ Or for an unplanned meal:
 public interface NutritionTrackerService {
     DailyNutritionDto getDailyNutrition(LocalDate date);
     WeeklyNutritionDto getWeeklyNutrition(LocalDate weekStartDate);
-    NutritionLogDto updateLog(LocalDate date, String mealType, UpdateNutritionLogRequest request);
+    NutritionLogDto updateLog(LocalDate date, Short mealTypeId, UpdateNutritionLogRequest request);
 
     // Called when a new plan is generated — pre-populate the week
     void populateFromPlan(Long mealPlanId);
 
     // Called when a meal is cooked — confirm as "as_planned"
-    void confirmMealAsPlanned(LocalDate date, String mealType, Long recipeVersionId, double servings);
+    void confirmMealAsPlanned(LocalDate date, Short mealTypeId, Long recipeVersionId, double servings);
 
     // Called when a meal is skipped
-    void markMealSkipped(LocalDate date, String mealType);
+    void markMealSkipped(LocalDate date, Short mealTypeId);
 }
 ```
 

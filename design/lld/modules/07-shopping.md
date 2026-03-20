@@ -4,6 +4,7 @@
 Generates shopping lists from the meal plan minus pantry stock. Tracks items, costs, and completion status. Hands off to Grocery module for Tesco ordering.
 
 ## Dependencies
+- **→ Shared Reference** — `food_category` lookup table (FK reference)
 - **→ Planner.getCurrentPlan()** — get the meal plan and ingredient flow
 - **→ Pantry.getAvailableItems()** — what's already in the house
 - **→ Pantry.addFromShoppingList()** — add purchased items to pantry
@@ -32,7 +33,7 @@ CREATE TABLE shopping_item (
     name                    VARCHAR(150) NOT NULL,
     quantity                DECIMAL(8,2) NOT NULL,
     unit                    VARCHAR(30) NOT NULL,
-    category                VARCHAR(30) NOT NULL,
+    food_category_id        SMALLINT NOT NULL REFERENCES food_category(id),
     checked                 BOOLEAN DEFAULT FALSE,
     tesco_product_name      TEXT,
     tesco_product_id        VARCHAR(50),
@@ -71,7 +72,7 @@ Generate shopping list from current plan.
       "name": "Chicken breast",
       "quantity": 500,
       "unit": "g",
-      "category": "protein",
+      "category": {"id": 1, "code": "protein", "name": "Protein"},
       "checked": false,
       "estimatedPricePence": 350
     }

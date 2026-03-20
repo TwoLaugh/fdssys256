@@ -8,6 +8,7 @@ Each module is documented as if it were an independent service. This means:
 
 ## Modules (in build order)
 
+0. [shared-reference](00-shared-reference.md) — Lookup tables (nutrient, allergen, cuisine, food category, meal type)
 1. [profile](01-profile.md) — User identity, constraints, goals
 2. [ai](02-ai.md) — Centralised LLM interaction layer
 3. [recipe](03-recipe.md) — Recipe store, versioning, import

@@ -4,7 +4,7 @@
 Tracks ingredient inventory across fridge, freezer, and cupboard. Handles additions (from shopping, manual), deductions (when meals are cooked), expiry tracking, freezer management, and food waste logging.
 
 ## Dependencies
-**None for core functionality.** Standalone data store.
+- **→ Shared Reference** — `food_category` lookup table (FK reference)
 
 Other modules push data into it:
 - **← Planner** calls deductIngredients() when a meal is cooked
@@ -20,7 +20,7 @@ CREATE TABLE pantry_item (
     quantity        DECIMAL(8,2) NOT NULL,
     unit            VARCHAR(30) NOT NULL,
     grams_estimate  INTEGER,
-    category        VARCHAR(30) NOT NULL,     -- protein/dairy/vegetable/fruit/grain/spice/condiment/frozen/other
+    food_category_id SMALLINT NOT NULL REFERENCES food_category(id),
     storage         VARCHAR(20) NOT NULL DEFAULT 'fridge',  -- fridge/freezer/cupboard
     expiry_date     DATE,
     opened          BOOLEAN DEFAULT FALSE,
@@ -31,7 +31,7 @@ CREATE TABLE pantry_item (
 
 CREATE INDEX idx_pi_expiry ON pantry_item(expiry_date ASC);
 CREATE INDEX idx_pi_storage ON pantry_item(storage);
-CREATE INDEX idx_pi_category ON pantry_item(category);
+CREATE INDEX idx_pi_category ON pantry_item(food_category_id);
 ```
 
 ### waste_log
@@ -64,7 +64,7 @@ List all items.
     "quantity": 500,
     "unit": "g",
     "gramsEstimate": 500,
-    "category": "protein",
+    "category": {"id": 1, "code": "protein", "name": "Protein"},
     "storage": "fridge",
     "expiryDate": "2026-03-22",
     "opened": false,
@@ -84,7 +84,7 @@ Add an item.
   "name": "Chicken breast",
   "quantity": 500,
   "unit": "g",
-  "category": "protein",
+  "foodCategoryId": 1,
   "storage": "fridge",
   "expiryDate": "2026-03-22"
 }
@@ -158,7 +158,7 @@ public record PurchasedItem(
     String name,
     double quantity,
     String unit,
-    String category,
+    Short foodCategoryId,
     String storage,
     LocalDate expiryDate
 ) {}

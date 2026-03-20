@@ -4,7 +4,7 @@
 Stores and serves user identity, dietary constraints, nutrition goals, cooking preferences, and configuration. The foundational module — everything else reads from it.
 
 ## Dependencies
-**None.** This module is fully standalone.
+- **→ Shared Reference** — `nutrient`, `allergen`, `cuisine_type`, `meal_type` lookup tables (FK references)
 
 ## Data Model
 
@@ -14,11 +14,6 @@ CREATE TABLE user_profile (
     id                  BIGSERIAL PRIMARY KEY,
     name                VARCHAR(100) NOT NULL,
     dietary_identity    VARCHAR(30),          -- omnivore/vegetarian/vegan/pescatarian/halal/kosher
-    calorie_target_min  INTEGER,
-    calorie_target_max  INTEGER,
-    protein_target_g    INTEGER,
-    carb_target_g       INTEGER,
-    fat_target_g        INTEGER,
     goal_context        VARCHAR(30),          -- bulking/cutting/maintenance/general_health
     skill_level         VARCHAR(20),          -- beginner/intermediate/advanced
     weeknight_max_mins  INTEGER DEFAULT 30,
@@ -41,13 +36,28 @@ CREATE TABLE user_profile (
 );
 ```
 
+### nutrition_target
+Row-per-nutrient design — supports all macros and micronutrients without schema changes.
+
+```sql
+CREATE TABLE nutrition_target (
+    id              BIGSERIAL PRIMARY KEY,
+    profile_id      BIGINT NOT NULL REFERENCES user_profile(id),
+    nutrient_id     SMALLINT NOT NULL REFERENCES nutrient(id),
+    target_min      DECIMAL(8,2),
+    target_max      DECIMAL(8,2),
+    priority        VARCHAR(10) DEFAULT 'normal',  -- critical/normal/nice_to_have
+    UNIQUE(profile_id, nutrient_id)
+);
+```
+
 ### allergy
 ```sql
 CREATE TABLE allergy (
     id          BIGSERIAL PRIMARY KEY,
     profile_id  BIGINT NOT NULL REFERENCES user_profile(id),
-    allergen    VARCHAR(50) NOT NULL,
-    UNIQUE(profile_id, allergen)
+    allergen_id SMALLINT NOT NULL REFERENCES allergen(id),
+    UNIQUE(profile_id, allergen_id)
 );
 ```
 
@@ -76,11 +86,11 @@ CREATE TABLE ingredient_dislike (
 ### cuisine_preference
 ```sql
 CREATE TABLE cuisine_preference (
-    id          BIGSERIAL PRIMARY KEY,
-    profile_id  BIGINT NOT NULL REFERENCES user_profile(id),
-    cuisine     VARCHAR(50) NOT NULL,
-    preference  VARCHAR(20) NOT NULL,     -- favourite/enjoy/neutral/less_preferred
-    UNIQUE(profile_id, cuisine)
+    id              BIGSERIAL PRIMARY KEY,
+    profile_id      BIGINT NOT NULL REFERENCES user_profile(id),
+    cuisine_type_id SMALLINT NOT NULL REFERENCES cuisine_type(id),
+    preference      VARCHAR(20) NOT NULL,     -- favourite/enjoy/neutral/less_preferred
+    UNIQUE(profile_id, cuisine_type_id)
 );
 ```
 
@@ -97,24 +107,24 @@ CREATE TABLE equipment (
 ### fixed_meal_slot
 ```sql
 CREATE TABLE fixed_meal_slot (
-    id          BIGSERIAL PRIMARY KEY,
-    profile_id  BIGINT NOT NULL REFERENCES user_profile(id),
-    day_of_week VARCHAR(10),              -- monday/tuesday/... or NULL for every day
-    meal_type   VARCHAR(20) NOT NULL,
-    description TEXT NOT NULL,
-    recipe_id   BIGINT,                   -- optional external reference (Recipe module)
-    applies_to  VARCHAR(20) DEFAULT 'weekday'  -- weekday/weekend/all
+    id              BIGSERIAL PRIMARY KEY,
+    profile_id      BIGINT NOT NULL REFERENCES user_profile(id),
+    day_of_week     VARCHAR(10),              -- monday/tuesday/... or NULL for every day
+    meal_type_id    SMALLINT NOT NULL REFERENCES meal_type(id),
+    description     TEXT NOT NULL,
+    recipe_id       BIGINT,                   -- optional external reference (Recipe module)
+    applies_to      VARCHAR(20) DEFAULT 'weekday'  -- weekday/weekend/all
 );
 ```
 
 ### eating_out_schedule
 ```sql
 CREATE TABLE eating_out_schedule (
-    id          BIGSERIAL PRIMARY KEY,
-    profile_id  BIGINT NOT NULL REFERENCES user_profile(id),
-    day_of_week VARCHAR(10) NOT NULL,
-    meal_type   VARCHAR(20) NOT NULL,
-    notes       TEXT
+    id              BIGSERIAL PRIMARY KEY,
+    profile_id      BIGINT NOT NULL REFERENCES user_profile(id),
+    day_of_week     VARCHAR(10) NOT NULL,
+    meal_type_id    SMALLINT NOT NULL REFERENCES meal_type(id),
+    notes           TEXT
 );
 ```
 
@@ -129,11 +139,6 @@ Returns the full profile with all related data (allergies, intolerances, dislike
   "id": 1,
   "name": "Irene",
   "dietaryIdentity": "omnivore",
-  "calorieTargetMin": 2000,
-  "calorieTargetMax": 2200,
-  "proteinTargetG": 150,
-  "carbTargetG": 200,
-  "fatTargetG": 70,
   "goalContext": "maintenance",
   "skillLevel": "intermediate",
   "weeknightMaxMins": 30,
@@ -151,20 +156,29 @@ Returns the full profile with all related data (allergies, intolerances, dislike
   "primaryStore": "tesco",
   "shoppingFrequency": "weekly",
   "deliveryPreference": "delivery",
-  "allergies": ["nuts"],
+  "nutritionTargets": [
+    {"nutrient": {"id": 1, "code": "calories", "name": "Calories", "unit": "kcal"}, "targetMin": 2000, "targetMax": 2200, "priority": "critical"},
+    {"nutrient": {"id": 2, "code": "protein", "name": "Protein", "unit": "g"}, "targetMin": 140, "targetMax": 160, "priority": "critical"},
+    {"nutrient": {"id": 3, "code": "carbs", "name": "Carbohydrates", "unit": "g"}, "targetMin": 180, "targetMax": 220, "priority": "normal"},
+    {"nutrient": {"id": 4, "code": "fat", "name": "Fat", "unit": "g"}, "targetMin": 60, "targetMax": 80, "priority": "normal"},
+    {"nutrient": {"id": 13, "code": "iron", "name": "Iron", "unit": "mg"}, "targetMin": 8, "targetMax": null, "priority": "nice_to_have"}
+  ],
+  "allergies": [
+    {"id": 1, "code": "nuts", "name": "Tree Nuts"}
+  ],
   "intolerances": [
     {"substance": "lactose", "severity": "moderate", "notes": "hard cheese is fine"}
   ],
   "ingredientDislikes": ["coriander", "blue cheese"],
   "cuisinePreferences": [
-    {"cuisine": "mediterranean", "preference": "favourite"}
+    {"cuisine": {"id": 1, "code": "mediterranean", "name": "Mediterranean"}, "preference": "favourite"}
   ],
   "equipment": ["oven", "hob", "air_fryer", "blender"],
   "fixedMealSlots": [
-    {"dayOfWeek": null, "mealType": "breakfast", "description": "overnight oats", "appliesTo": "weekday"}
+    {"dayOfWeek": null, "mealType": {"id": 1, "code": "breakfast", "name": "Breakfast"}, "description": "overnight oats", "appliesTo": "weekday"}
   ],
   "eatingOutSchedule": [
-    {"dayOfWeek": "friday", "mealType": "dinner", "notes": "usually eat out"}
+    {"dayOfWeek": "friday", "mealType": {"id": 3, "code": "dinner", "name": "Dinner"}, "notes": "usually eat out"}
   ]
 }
 ```
@@ -175,11 +189,22 @@ Partial update. Send only the fields to change.
 **Request:**
 ```json
 {
-  "calorieTargetMin": 2100,
-  "allergies": ["nuts", "sesame"]
+  "goalContext": "cutting",
+  "allergies": [1, 9]
 }
 ```
 **Response 200:** full profile.
+
+### PUT /api/v1/profile/nutrition-targets
+Replace full nutrition target list.
+
+**Request:**
+```json
+[
+  {"nutrientId": 1, "targetMin": 2000, "targetMax": 2200, "priority": "critical"},
+  {"nutrientId": 2, "targetMin": 140, "targetMax": 160, "priority": "critical"}
+]
+```
 
 ### PUT /api/v1/profile/allergies
 Replace full allergy list.
@@ -209,11 +234,14 @@ public interface ProfileService {
     UserProfileDto getProfile();
     UserProfileDto updateProfile(UpdateProfileRequest request);
 
+    // Nutrition targets (row-per-nutrient)
+    List<NutritionTargetDto> getNutritionTargets();
+    void updateNutritionTargets(List<UpdateNutritionTargetRequest> targets);
+
     // Convenience methods for other modules
-    List<String> getAllergens();
+    List<AllergenDto> getAllergens();
     List<String> getDislikedIngredients();
     String getDietaryIdentity();
-    NutritionTargets getNutritionTargets();
     CookingPreferences getCookingPreferences();
     List<FixedMealSlotDto> getFixedMealSlots();
     List<EatingOutDto> getEatingOutSchedule();

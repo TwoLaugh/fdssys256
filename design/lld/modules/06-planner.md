@@ -4,6 +4,7 @@
 The central orchestrator. Generates weekly meal plans by arranging recipes, optimises ingredient utilisation across pack sizes, and handles mid-week adjustments (skips, swaps, rebalancing).
 
 ## Dependencies
+- **→ Shared Reference** — `meal_type` lookup table (FK reference)
 - **→ Profile.getProfile()** — constraints, goals, fixed slots, eating out schedule
 - **→ Profile.getNutritionTargets()** — calorie/macro targets
 - **→ Recipe.getRecipeIndex()** — lightweight recipe list for pass 1
@@ -38,7 +39,7 @@ CREATE TABLE meal_slot (
     id                  BIGSERIAL PRIMARY KEY,
     meal_plan_id        BIGINT NOT NULL REFERENCES meal_plan(id) ON DELETE CASCADE,
     date                DATE NOT NULL,
-    meal_type           VARCHAR(20) NOT NULL,     -- breakfast/lunch/dinner/snack
+    meal_type_id        SMALLINT NOT NULL REFERENCES meal_type(id),
     recipe_version_id   BIGINT,                   -- FK to Recipe module's table
     servings            INTEGER NOT NULL DEFAULT 1,
     status              VARCHAR(20) DEFAULT 'planned',  -- planned/cooked/skipped/swapped/eating_out
@@ -80,8 +81,8 @@ Generate a new weekly meal plan.
 {
   "weekStartDate": "2026-03-23",
   "overrides": [
-    {"date": "2026-03-25", "mealType": "dinner", "note": "I want tacos"},
-    {"date": "2026-03-28", "mealType": "dinner", "note": "eating out"}
+    {"date": "2026-03-25", "mealTypeId": 3, "note": "I want tacos"},
+    {"date": "2026-03-28", "mealTypeId": 3, "note": "eating out"}
   ]
 }
 ```
@@ -104,7 +105,7 @@ Generate a new weekly meal plan.
     {
       "id": 1,
       "date": "2026-03-23",
-      "mealType": "breakfast",
+      "mealType": {"id": 1, "code": "breakfast", "name": "Breakfast"},
       "recipe": {"id": 5, "name": "Overnight Oats", "calories": 350},
       "servings": 1,
       "status": "planned",

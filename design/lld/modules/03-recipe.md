@@ -4,6 +4,7 @@
 Stores, versions, and manages all recipes regardless of source (AI-generated, user-submitted, imported from URL). Handles recipe CRUD, versioning with changelogs, recipe-specific notes, and AI-powered recipe evolution.
 
 ## Dependencies
+- **→ Shared Reference** — `cuisine_type`, `meal_type`, `food_category` lookup tables (FK references)
 - **→ Profile.getAllergens()** — filter recipes by dietary safety
 - **→ Profile.getDislikedIngredients()** — filter/flag disliked ingredients
 - **→ AI.execute(RECIPE_IMPORT)** — extract recipe from URL HTML
@@ -25,8 +26,7 @@ CREATE TABLE recipe (
     avg_rating      DECIMAL(3,2),
     times_cooked    INTEGER DEFAULT 0,
     last_cooked_at  TIMESTAMP,
-    meal_types      VARCHAR(100)[],           -- {breakfast,lunch,dinner,snack}
-    cuisine         VARCHAR(50),
+    cuisine_type_id SMALLINT REFERENCES cuisine_type(id),
     difficulty      VARCHAR(20),              -- easy/medium/hard
     tags            VARCHAR(50)[],
     archived        BOOLEAN DEFAULT FALSE,
@@ -34,9 +34,20 @@ CREATE TABLE recipe (
     updated_at      TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_recipe_cuisine ON recipe(cuisine);
+CREATE INDEX idx_recipe_cuisine ON recipe(cuisine_type_id);
 CREATE INDEX idx_recipe_archived ON recipe(archived);
 CREATE INDEX idx_recipe_avg_rating ON recipe(avg_rating DESC);
+```
+
+### recipe_meal_type
+Junction table — a recipe can suit multiple meal types.
+
+```sql
+CREATE TABLE recipe_meal_type (
+    recipe_id       BIGINT NOT NULL REFERENCES recipe(id) ON DELETE CASCADE,
+    meal_type_id    SMALLINT NOT NULL REFERENCES meal_type(id),
+    PRIMARY KEY (recipe_id, meal_type_id)
+);
 ```
 
 ### recipe_version
@@ -75,7 +86,7 @@ CREATE TABLE recipe_ingredient (
     unit                    VARCHAR(30),
     grams_estimate          INTEGER,
     ingredient_mapping_id   BIGINT,           -- FK to NutritionEngine's table
-    category                VARCHAR(30),
+    food_category_id        SMALLINT REFERENCES food_category(id),
     display_order           INTEGER NOT NULL DEFAULT 0
 );
 
@@ -112,8 +123,8 @@ List with filters.
       "avgRating": 4.5,
       "timesCooked": 3,
       "lastCookedAt": "2026-04-01T18:30:00Z",
-      "mealTypes": ["dinner"],
-      "cuisine": "east_asian",
+      "mealTypes": [{"id": 3, "code": "dinner", "name": "Dinner"}],
+      "cuisine": {"id": 2, "code": "east_asian", "name": "East Asian"},
       "difficulty": "easy",
       "tags": ["quick", "high-protein"],
       "calories": 450,
@@ -141,8 +152,8 @@ Create manually.
 ```json
 {
   "name": "My Favourite Pasta",
-  "mealTypes": ["dinner"],
-  "cuisine": "italian",
+  "mealTypes": [3],
+  "cuisineTypeId": 6,
   "difficulty": "easy",
   "servings": 2,
   "prepTimeMins": 5,
