@@ -12,11 +12,11 @@ The Meal Planner is the central orchestrator. It simultaneously satisfies three 
 
 ```
                  ┌───────────────────────────────────────┐
-                 │            USER FEEDBACK               │
-                 │                                        │
-                 │    natural language, ratings,           │
-                 │    manual overrides on any part         │
-                 └─────┬─────────────┬─────────────┬──────┘
+                 │            USER FEEDBACK              │
+                 │                                       │
+                 │    natural language, ratings,         │
+                 │    manual overrides on any part       │
+                 └─────┬─────────────┬─────────────┬─────┘
                        │             │             │
                        ▼             ▼             ▼
           ┌─────────────────┐ ┌─────────────┐ ┌─────────────────┐
@@ -33,21 +33,21 @@ The Meal Planner is the central orchestrator. It simultaneously satisfies three 
           │                 │ │  symptoms,  │ │                 │
           │                 │ │  labs, wear │ │                 │
           └────────┬────────┘ └──────┬──────┘ └────────┬────────┘
-                   │                 │                  │
-                   ▼                 ▼                  ▼
+                   │                 │                 │
+                   ▼                 ▼                 ▼
           ┌────────────────────────────────────────────────────┐
-          │                   MEAL PLANNER                      │
-          │                                                     │
-          │  optimises across all three constraint systems      │
-          │  to produce a weekly plan                           │
-          │                                                     │
-          │         ▲                              │            │
-          │         │    ┌───────────────────┐     │            │
-          │         └────│  RECIPE ENGINE    │◄────┘            │
-          │              │                   │                  │
-          │              │  store, discover, │                  │
-          │              │  generate, evolve │                  │
-          │              └───────────────────┘                  │
+          │                   MEAL PLANNER                     │
+          │                                                    │
+          │  optimises across all three constraint systems     │
+          │  to produce a weekly plan                          │
+          │                                                    │
+          │         ▲                              │           │
+          │         │    ┌───────────────────┐     │           │
+          │         └────│  RECIPE ENGINE    │◄────┘           │
+          │              │                   │                 │
+          │              │  store, discover, │                 │
+          │              │  generate, evolve │                 │
+          │              └───────────────────┘                 │
           └─────┬──────────────────┬──────────────────┬────────┘
                 │                  │                  │
                 ▼                  ▼                  ▼
@@ -59,13 +59,13 @@ The Meal Planner is the central orchestrator. It simultaneously satisfies three 
           │  schedule │   │  actual      │   │  shopping +  │
           │           │   │  intake      │   │  ordering    │
           └─────┬─────┘   └──────┬───────┘   └──────┬───────┘
-                │                │                   │
-                └────────┬───────┴───────────────────┘
-                         ▼
-                 ┌───────────────┐
-                 │ USER FEEDBACK │
-                 │  (loops back) │
-                 └───────────────┘
+                │                │                  │
+                └───────────────┬───────────────────┘
+                                ▼
+                        ┌───────────────┐
+                        │ USER FEEDBACK │
+                        │  (loops back) │
+                        └───────────────┘
 ```
 
 ### Loop 1: Preference Loop
