@@ -11,52 +11,61 @@ An AI-powered meal planning and health optimisation system for personal/family u
 The Meal Planner is the central orchestrator. It simultaneously satisfies three parallel constraint-optimisation loops, each with its own input state, internal optimisation, and output that feeds back into itself.
 
 ```
-                  ┌─────────────────────────────────────┐
-                  │           USER FEEDBACK              │
-                  │                                      │
-                  │   natural language, ratings,          │
-                  │   manual overrides on any part        │
-                  └────┬──────────┬──────────┬───────────┘
-                       │          │          │
-                       ▼          ▼          ▼
-  ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
-  │    PREFERENCE MODEL  │ │   NUTRITION MODEL    │ │     PROVISIONS       │
-  │                      │ │                      │ │                      │
-  │  likes/dislikes,     │ │  calorie/macro/micro │ │  pantry, equipment,  │
-  │  allergies,          │ │  targets, dietary    │ │  environment, budget,│
-  │  cooking style,      │ │  identity            │ │  supplier avail.     │
-  │  cuisine prefs,      │ │                      │ │                      │
-  │  meal structure      │ │  refined over time   │ │                      │
-  │                      │ │  by health tracking: │ │                      │
-  │                      │ │  mood, symptoms, wt, │ │                      │
-  │                      │ │  labs, wearables,    │ │                      │
-  │                      │ │  genomics            │ │                      │
-  └──────────┬───────────┘ └──────────┬───────────┘ └──────────┬───────────┘
-             │                        │                        │
-             └────────────┬───────────┘────────────────────────┘
-                          ▼
-  ┌──────────────────────────────────────────────────────────────────────┐
-  │                          MEAL PLANNER                                │
-  │                                                                      │
-  │   Simultaneously optimises across all three constraint systems       │
-  │   to produce a weekly plan that satisfies preferences, hits          │
-  │   nutrition targets, and works within available provisions           │
-  └──────────┬────────────────────┬────────────────────┬─────────────────┘
-             │                    │                    │
-             ▼                    ▼                    ▼
-  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────────────┐
-  │   WEEKLY PLAN    │ │ NUTRITION LOGGER │ │      TESCO ORDER         │
-  │                  │ │                  │ │                          │
-  │   7-day schedule │ │  planned vs      │ │  price-aware shopping    │
-  │   of meals       │ │  actual intake   │ │  + automated ordering    │
-  └────────┬─────────┘ └────────┬─────────┘ └────────────┬─────────────┘
-           │                    │                        │
-           └────────────┬───────┘────────────────────────┘
-                        ▼
-                  ┌───────────────┐
-                  │ USER FEEDBACK │
-                  │  (loops back) │
-                  └───────────────┘
+                 ┌───────────────────────────────────────┐
+                 │            USER FEEDBACK               │
+                 │                                        │
+                 │    natural language, ratings,           │
+                 │    manual overrides on any part         │
+                 └─────┬─────────────┬─────────────┬──────┘
+                       │             │             │
+                       ▼             ▼             ▼
+          ┌─────────────────┐ ┌─────────────┐ ┌─────────────────┐
+          │   PREFERENCE    │ │  NUTRITION  │ │   PROVISIONS    │
+          │     MODEL       │ │    MODEL    │ │                 │
+          │                 │ │             │ │  pantry,        │
+          │  likes/dislikes │ │  cal/macro/ │ │  equipment,     │
+          │  allergies      │ │  micro tgts │ │  environment,   │
+          │  cooking style  │ │  dietary id │ │  budget,        │
+          │  cuisine prefs  │ │             │ │  supplier avail │
+          │  meal structure │ │  refined by │ │                 │
+          │                 │ │  health:    │ │                 │
+          │                 │ │  mood, wt,  │ │                 │
+          │                 │ │  symptoms,  │ │                 │
+          │                 │ │  labs, wear │ │                 │
+          └────────┬────────┘ └──────┬──────┘ └────────┬────────┘
+                   │                 │                  │
+                   ▼                 ▼                  ▼
+          ┌────────────────────────────────────────────────────┐
+          │                   MEAL PLANNER                      │
+          │                                                     │
+          │  optimises across all three constraint systems      │
+          │  to produce a weekly plan                           │
+          │                                                     │
+          │         ▲                              │            │
+          │         │    ┌───────────────────┐     │            │
+          │         └────│  RECIPE ENGINE    │◄────┘            │
+          │              │                   │                  │
+          │              │  store, discover, │                  │
+          │              │  generate, evolve │                  │
+          │              └───────────────────┘                  │
+          └─────┬──────────────────┬──────────────────┬────────┘
+                │                  │                  │
+                ▼                  ▼                  ▼
+          ┌───────────┐   ┌──────────────┐   ┌──────────────┐
+          │  WEEKLY   │   │  NUTRITION   │   │    TESCO     │
+          │   PLAN    │   │   LOGGER     │   │    ORDER     │
+          │           │   │              │   │              │
+          │  7-day    │   │  planned vs  │   │  price-aware │
+          │  schedule │   │  actual      │   │  shopping +  │
+          │           │   │  intake      │   │  ordering    │
+          └─────┬─────┘   └──────┬───────┘   └──────┬───────┘
+                │                │                   │
+                └────────┬───────┴───────────────────┘
+                         ▼
+                 ┌───────────────┐
+                 │ USER FEEDBACK │
+                 │  (loops back) │
+                 └───────────────┘
 ```
 
 ### Loop 1: Preference Loop
