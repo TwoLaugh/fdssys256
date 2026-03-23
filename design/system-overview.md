@@ -60,12 +60,12 @@ The Meal Planner is the central orchestrator. It simultaneously satisfies three 
           │           │   │  intake      │   │  ordering    │
           └─────┬─────┘   └──────┬───────┘   └──────┬───────┘
                 │                │                  │
-                └───────────────┬───────────────────┘
-                                ▼
-                        ┌───────────────┐
-                        │ USER FEEDBACK │
-                        │  (loops back) │
-                        └───────────────┘
+                └────────────────┬──────────────────┘
+                                 ▼
+                         ┌───────────────┐
+                         │ USER FEEDBACK │
+                         │  (loops back) │
+                         └───────────────┘
 ```
 
 ### Loop 1: Preference Loop
