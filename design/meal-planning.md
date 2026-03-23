@@ -130,3 +130,9 @@ Both need versioning, constraint awareness, and full preference/nutrition/provis
 - How to handle recipes that share prep (e.g., "make a big batch of tomato sauce Sunday, use in 3 recipes across the week")?
 - Seasonal ingredient awareness — should the AI prefer in-season produce?
 - Should discovery run automatically or only when the user asks?
+- **How does three-loop optimisation work technically?** Several approaches to prototype:
+  - *Single-pass AI prompt*: give all three models as context, AI reasons about trade-offs internally. Simple but implicit — hard to debug.
+  - *Sequential priority*: hard constraints first → nutrition targets → provisions/budget. Clear but rigid — can't trade off nutrition for budget.
+  - *Two-pass with constraint scoring*: Pass 1 (cheap model) scores every candidate recipe against all three loops. Pass 2 (frontier) assembles the week from scored pool, optimising combined score. Maps naturally to existing two-pass design.
+  - *Iterative refinement*: generate initial plan, then run "critique" passes per loop and adjust. Multiple AI calls but each is simpler.
+  - Architecture stays the same regardless — this is a prototyping question (Phase 4).

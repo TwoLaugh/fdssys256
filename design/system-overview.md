@@ -11,78 +11,68 @@ An AI-powered meal planning and health optimisation system for personal/family u
 The Meal Planner is the central orchestrator. It simultaneously satisfies three parallel constraint-optimisation loops, each with its own input state, internal optimisation, and output that feeds back into itself.
 
 ```
-                         ┌─────────────────────────────┐
-                         │        USER FEEDBACK         │
-                         │  (natural language, ratings,  │
-                         │   manual overrides)           │
-                         └──┬──────────┬──────────┬─────┘
-                            │          │          │
-                            ▼          ▼          ▼
-               ┌────────────────┐ ┌─────────┐ ┌──────────────┐
-               │   PREFERENCE   │ │NUTRITION│ │  PROVISIONS  │
-               │     MODEL      │ │  MODEL  │ │              │
-               │                │ │         │ │ pantry,      │
-               │ likes/dislikes,│ │ calorie/│ │ equipment,   │
-               │ allergies,     │ │ macro/  │ │ environment, │
-               │ cooking style, │ │ micro   │ │ budget,      │
-               │ cuisine prefs, │ │ targets,│ │ supplier     │
-               │ meal structure │ │ dietary │ │ availability │
-               │                │ │ identity│ │              │
-               └───────┬────────┘ └────┬────┘ └──────┬───────┘
-                       │               │              │
-                       ▼               ▼              ▼
-              ┌─────────────────────────────────────────────────┐
-              │                  MEAL PLANNER                    │
-              │                                                  │
-              │  Simultaneously optimises across all three       │
-              │  constraint systems to produce a weekly plan     │
-              │  that satisfies preferences, hits nutrition      │
-              │  targets, and works within available provisions  │
-              └──────┬──────────┬──────────┬──────────┬─────────┘
-                     │          │          │          │
-                     ▼          ▼          ▼          ▼
-              ┌──────────┐ ┌────────┐ ┌────────┐ ┌──────────┐
-              │  WEEKLY  │ │NUTRITN │ │SHOPPING│ │ COOKING  │
-              │   PLAN   │ │ LOGGER │ │  LIST  │ │  MODE    │
-              │          │ │        │ │        │ │ (recipe  │
-              │ 7-day    │ │planned │ │plan −  │ │  UI view)│
-              │ schedule │ │vs real │ │pantry  │ │          │
-              └──────────┘ └───┬────┘ └───┬────┘ └──────────┘
-                               │          │
-                               ▼          ▼
-                          ┌────────┐ ┌─────────┐
-                          │ HEALTH │ │  TESCO  │
-                          │TRACKER │ │  ORDER  │
-                          │        │ │         │
-                          │mood,wt,│ │ browser │
-                          │symptoms│ │ automate│
-                          │labs,   │ │ → user  │
-                          │genomics│ │ reviews │
-                          └───┬────┘ └────┬────┘
-                              │           │
-                              ▼           ▼
-                     ┌──────────┐  ┌───────────┐
-                     │ NUTRITION│  │ PROVISIONS │
-                     │  MODEL   │  │  (update   │
-                     │ (refine  │  │   pantry)  │
-                     │  targets)│  │            │
-                     └──────────┘  └────────────┘
+                  ┌─────────────────────────────────────┐
+                  │           USER FEEDBACK              │
+                  │                                      │
+                  │   natural language, ratings,          │
+                  │   manual overrides on any part        │
+                  └────┬──────────┬──────────┬───────────┘
+                       │          │          │
+                       ▼          ▼          ▼
+  ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
+  │    PREFERENCE MODEL  │ │   NUTRITION MODEL    │ │     PROVISIONS       │
+  │                      │ │                      │ │                      │
+  │  likes/dislikes,     │ │  calorie/macro/micro │ │  pantry, equipment,  │
+  │  allergies,          │ │  targets, dietary    │ │  environment, budget,│
+  │  cooking style,      │ │  identity            │ │  supplier avail.     │
+  │  cuisine prefs,      │ │                      │ │                      │
+  │  meal structure      │ │  refined over time   │ │                      │
+  │                      │ │  by health tracking: │ │                      │
+  │                      │ │  mood, symptoms, wt, │ │                      │
+  │                      │ │  labs, wearables,    │ │                      │
+  │                      │ │  genomics            │ │                      │
+  └──────────┬───────────┘ └──────────┬───────────┘ └──────────┬───────────┘
+             │                        │                        │
+             └────────────┬───────────┘────────────────────────┘
+                          ▼
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │                          MEAL PLANNER                                │
+  │                                                                      │
+  │   Simultaneously optimises across all three constraint systems       │
+  │   to produce a weekly plan that satisfies preferences, hits          │
+  │   nutrition targets, and works within available provisions           │
+  └──────────┬────────────────────┬────────────────────┬─────────────────┘
+             │                    │                    │
+             ▼                    ▼                    ▼
+  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────────────┐
+  │   WEEKLY PLAN    │ │ NUTRITION LOGGER │ │      TESCO ORDER         │
+  │                  │ │                  │ │                          │
+  │   7-day schedule │ │  planned vs      │ │  price-aware shopping    │
+  │   of meals       │ │  actual intake   │ │  + automated ordering    │
+  └────────┬─────────┘ └────────┬─────────┘ └────────────┬─────────────┘
+           │                    │                        │
+           └────────────┬───────┘────────────────────────┘
+                        ▼
+                  ┌───────────────┐
+                  │ USER FEEDBACK │
+                  │  (loops back) │
+                  └───────────────┘
 ```
 
 ### Loop 1: Preference Loop
 **Input:** Preference Model (likes, dislikes, allergies, intolerances, cooking style, cuisine preferences, meal structure, time constraints)
 **Optimisation:** Find/create recipes that match taste, ease, and lifestyle. The Recipe Engine searches existing recipes, discovers online, and generates new ones — all filtered and scored against preferences.
-**Output:** Selected recipes in the plan. Feedback after eating refines the preference model.
+**Output:** Selected recipes in the weekly plan. User feedback after eating refines the preference model.
 
 ### Loop 2: Nutrition Loop
-**Input:** Nutrition Model (calorie/macro/micro targets, dietary identity, health goals)
+**Input:** Nutrition Model (calorie/macro/micro targets, dietary identity, health goals). The model is refined over time by health tracking data — mood, symptoms, weight, labs, wearable data, genomics — which lives within this loop, not as a separate module. Health tracking is how the nutrition model learns from outcomes.
 **Optimisation:** Balance nutritional targets across the week. Individual meals may miss targets but the weekly total should converge.
-**Output:** Daily nutrition totals in the plan. Nutrition logger tracks planned vs actual. Health tracker (mood, symptoms, weight, labs, genomics) feeds insights back to refine nutrition targets.
+**Output:** Nutrition logger tracks planned vs actual. User feedback on portions and nutrition fit refines the model. Health data (mood, weight trends, lab results) triggers deeper target adjustments via AI-generated weekly/monthly reviews.
 
 ### Loop 3: Provisions Loop
-**Input:** Provisions (pantry inventory, freezer, cupboard, equipment, kitchen environment, budget, supplier availability/pricing)
+**Input:** Provisions (pantry inventory, freezer, cupboard, equipment, kitchen environment, budget, supplier availability/pricing). Budget constraint requires checking Tesco prices, so Tesco is already involved at the input stage.
 **Optimisation:** Work within what's available, maximise ingredient utilisation across pack sizes, minimise waste and cost.
-**Output:** Shopping list (plan ingredients minus pantry). Tesco ordering executes the purchase. Purchased items update pantry. Feedback like "too expensive", "couldn't find", "needs equipment I don't have" refines provisions.
+**Output:** Tesco order (price-aware shopping + ordering). This replaces a separate "shopping list" — the shopping list is just the internal calculation that feeds the order. Purchased items update pantry. User feedback like "too expensive", "couldn't find", "needs equipment I don't have" refines provisions.
 
 ### The Hard Problem
 The planner's real challenge is satisfying all three loops simultaneously. A recipe might be perfect for preferences but blow the budget. Another might nail nutrition targets but require equipment you don't own. The AI must find the best overall solution, not optimise each loop independently.
@@ -151,7 +141,7 @@ Cross-cutting layer for all LLM interactions. Every module that needs AI goes th
 | Import recipe from URL | Mid | Per import |
 | Nutrition: map ingredients to USDA entries | Cheap (Haiku) | Per recipe |
 | Parse user free-text input | Cheap (Haiku) | Per interaction |
-| Health review generation | Mid | Weekly/monthly |
+| Nutrition/health review generation | Mid | Weekly/monthly |
 | Tesco product matching + navigation | Mid/Frontier | 1x/week |
 | Shopping list calculation | Deterministic code | 1x/week |
 | Nutrition aggregation | Deterministic code | Daily |
@@ -165,7 +155,7 @@ Alerts and reminders delivered in-app. Listens to events across all modules.
 - Defrost reminders from Provisions (freezer)
 - Prep reminders from Meal Planner ("start marinating at 6pm")
 - Nutrition alerts from Tracker ("way under protein today")
-- Weekly review available from Health Tracker
+- Weekly nutrition/health review available
 
 ---
 
@@ -176,10 +166,12 @@ The primary way users interact with and improve the system.
 - AI interprets and scores against rubric: taste, ease, nutrition fit, portion, cost, repeat desire
 - Routes feedback to the appropriate loop:
   - Taste/ease/cuisine → Preference Model
-  - Portion size/nutrition fit → Nutrition Model
+  - Portion size/nutrition fit/health signals (mood, symptoms, weight) → Nutrition Model
   - Cost/availability/equipment/shelf life → Provisions
+- Health tracking (mood, energy, symptoms, weight, labs, wearables, genomics) feeds through here into the Nutrition Model — it's part of the feedback loop, not a separate system
 - Drives recipe evolution (versioning, changelogs)
 - Maintains the Preference Model (AI-generated structured summary, ~2000 tokens, regenerated every 5 feedbacks)
+- Generates weekly/monthly AI reviews correlating food with health outcomes
 
 ---
 
@@ -255,13 +247,11 @@ Single deployable application with clean internal module boundaries. The three-l
 src/main/java/com/example/mealprep/
 ├── auth/             ← User accounts (thin auth layer)
 ├── preference/       ← Preference Model (Loop 1 state)
-├── nutrition/        ← Nutrition Model + Tracker (Loop 2 state + logging)
+├── nutrition/        ← Nutrition Model + Tracker + Health Tracking (Loop 2)
 ├── provisions/       ← Pantry + Equipment + Environment (Loop 3 state)
 ├── recipe/           ← Recipe Engine (store, discovery, generation, versioning)
 ├── planner/          ← Meal Planner + Adjustments (the orchestrator)
-├── shopping/         ← Shopping List Generator
-├── grocery/          ← Tesco Ordering (provisions output)
-├── health/           ← Health Tracker (feeds back to nutrition model)
+├── grocery/          ← Tesco: price checking, shopping list, ordering (Loop 3 output)
 ├── feedback/         ← Feedback System (routes to all three loops)
 ├── ai/               ← AI Service (cross-cutting LLM layer)
 ├── notification/     ← Notifications (cross-cutting alerts)
@@ -281,7 +271,7 @@ Modules communicate through service interfaces. Each owns its own DB tables. Ext
 - Provisions (pantry — manual tracking, equipment list)
 - Recipe Engine (CRUD, import from URL, AI generation)
 - Meal Planner (weekly plan generation, three-loop optimisation)
-- Shopping list generation
+- Tesco integration (price checking + shopping list + ordering)
 - Basic nutrition dashboard
 - React frontend with core views
 
@@ -291,18 +281,16 @@ Modules communicate through service interfaces. Each owns its own DB tables. Ext
 - Recipe versioning and evolution
 - Recipe discovery (online search + filter)
 - Plan adjustments (event + intent UX for mid-week disruptions)
-- Cooking mode (step-by-step recipe view)
 - Nutrition tracking (planned vs actual)
+- Health tracking tier 1 (mood, symptoms, weight — feeds into nutrition model)
 
-### Phase 3: Automation & Health
-- Tesco grocery ordering (Claude browser control)
-- Auto-provisions updates from purchases
-- Health tracker tier 1 (mood, symptoms, weight, progress photos)
+### Phase 3: Health & Polish
 - Weekly/monthly AI reviews (health → nutrition model refinement)
+- Progress photos
 - Notifications (expiry, prep reminders, defrost)
 - Food waste tracking and reporting
 
-### Phase 4: Advanced Health & Polish
+### Phase 4: Advanced Health & Expansion
 - Wearable integration (Apple Health, Garmin, etc.)
 - Blood panel upload and AI analysis
 - Genomics integration
