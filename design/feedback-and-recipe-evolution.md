@@ -17,22 +17,28 @@ Rather than a formal optimization loop, lean into what LLMs are actually good at
 
 2. **AI scores against a rubric** (see below) — partly from user feedback, partly calculated
 
-3. **AI stores the feedback** linked to the recipe version
+3. **AI routes feedback to the appropriate loop(s)**:
+   - Taste, ease, cuisine, cooking style → **Preference Model** (Loop 1)
+   - Portion size, nutrition fit, macro balance → **Nutrition Model** (Loop 2)
+   - Cost, ingredient availability, equipment needs, shelf life → **Provisions** (Loop 3)
+   - Most feedback touches Loop 1. Some touches multiple loops simultaneously.
 
-4. **Next time the recipe is considered for a plan**, the AI can see:
+4. **AI stores the feedback** linked to the recipe version
+
+5. **Next time the recipe is considered for a plan**, the AI can see:
    - All previous versions of this recipe
    - All feedback per version
    - What changed between versions and whether it helped
    - The rubric scores over time
 
-5. **AI decides whether to adjust** — it can:
+6. **AI decides whether to adjust** — it can:
    - Tweak the recipe itself (less sugar in the sauce, sub honey for maple syrup)
    - Change portions
    - Suggest a cooking method change
    - Look online for ideas / techniques to address the feedback
    - Or leave it alone if scores are good
 
-6. **Creates a new version** with a changelog ("reduced sugar by 30%, swapped to honey based on feedback about sweetness")
+7. **Creates a new version** with a changelog ("reduced sugar by 30%, swapped to honey based on feedback about sweetness")
 
 ### This is NOT the hummus approach because:
 - Meals have too many interacting dimensions for blind optimization
@@ -49,18 +55,18 @@ Rather than a formal optimization loop, lean into what LLMs are actually good at
 
 ## Feedback Rubric
 
-Each meal gets scored on these dimensions. Some are user-provided, some auto-calculated.
+Each meal gets scored on these dimensions. Some are user-provided, some auto-calculated. Each dimension maps to a loop:
 
-| Dimension | Source | Scale | Notes |
-|-----------|--------|-------|-------|
-| **Taste** | User feedback (conversational) | 1-5 | AI interprets from natural language |
-| **Nutrition fit** | Calculated | % match to goals | How well did this meal's macros fit the daily/weekly targets? |
-| **Ease of making** | User feedback | 1-5 | Time, effort, complexity |
-| **Portion satisfaction** | User feedback | too little / right / too much | Were you still hungry? Too full? |
-| **Ingredient accessibility** | Calculated | easy / moderate / hard | Were ingredients easy to source? Already in pantry? |
-| **Cost efficiency** | Calculated | £/serving | From shopping list prices |
-| **Repeat desire** | User feedback | yes / maybe / no | "Would you want this again?" |
-| **Household reception** | User feedback | free text | Did the family like it? |
+| Dimension | Source | Scale | Loop | Notes |
+|-----------|--------|-------|------|-------|
+| **Taste** | User feedback (conversational) | 1-5 | Preference | AI interprets from natural language |
+| **Ease of making** | User feedback | 1-5 | Preference | Time, effort, complexity |
+| **Nutrition fit** | Calculated | % match to goals | Nutrition | How well did this meal's macros fit targets? |
+| **Portion satisfaction** | User feedback | too little / right / too much | Nutrition | Were you still hungry? Too full? |
+| **Ingredient accessibility** | Calculated | easy / moderate / hard | Provisions | Were ingredients easy to source? Already in pantry? |
+| **Cost efficiency** | Calculated | price/serving | Provisions | From shopping list prices |
+| **Repeat desire** | User feedback | yes / maybe / no | Preference | "Would you want this again?" |
+| **Household reception** | User feedback | free text | Preference | Did the family like it? |
 
 The AI uses these to decide:
 - Whether to suggest the recipe again
@@ -119,6 +125,27 @@ The AI doesn't just iterate blindly. When it wants to improve a recipe, it can:
 3. **Cross-reference other rated recipes** — "user liked the sauce on Recipe X, try a similar approach here"
 4. **Search online** — if the feedback suggests a technique gap (e.g., "how to get crispy skin"), look up established methods
 5. **Propose changes and explain why** — user can approve/reject before it goes into the plan
+
+---
+
+## Feedback Examples by Loop
+
+### Primarily Loop 1 (Preference)
+- "The sauce was too sweet" → updates taste preferences
+- "This took too long for a Tuesday" → reinforces weeknight time constraints
+- "Kids loved this" → notes household reception for shared meals
+- "I'm bored of chicken" → updates ingredient trending patterns
+
+### Primarily Loop 2 (Nutrition)
+- "Portion was too small, I was hungry after" → adjusts portion sizing
+- "Good but needs more protein" → flags nutrition gap for this meal type
+- "I felt sluggish after this — too many carbs?" → symptom correlation
+
+### Primarily Loop 3 (Provisions)
+- "Too expensive for a weeknight dinner" → cost feedback adjusts budget scoring
+- "Couldn't find lemongrass at Tesco" → availability feedback
+- "I don't have a food processor" → equipment constraint (if not already known)
+- "The spinach went off before I used it" → shelf life consideration for planning
 
 ---
 

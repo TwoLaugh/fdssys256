@@ -1,13 +1,17 @@
 # Preference Model — Detailed Design
 
+*Loop 1 state. This is the living document that captures everything the system has learned about the user's food preferences. It evolves from feedback and drives recipe selection, discovery, and evolution.*
+
 ## What It Is
 
 A structured, bounded summary of everything the AI has learned about the user's food preferences. It's the distilled output of all feedback, ratings, and behavioural patterns.
 
 It is NOT:
 - The raw feedback data (that's stored separately in the Feedback System)
-- The user profile (that's explicit constraints/goals set by the user)
+- The nutrition model (that's Loop 2 — calorie/macro/micro targets)
 - A machine learning model (no embeddings, no weights — just structured text)
+
+It also holds **hard constraints** (allergies, dietary identity) alongside soft preferences. Hard constraints are stored both here and as immutable database records — the preference model copy is for AI context convenience, the DB is the safety-critical source of truth.
 
 ## Why It Exists
 

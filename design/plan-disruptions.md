@@ -1,5 +1,7 @@
 # Plan Disruptions & Mid-Week Adjustments
 
+*Part of the Meal Planner module. When a disruption occurs, the planner must rebalance across all three loops: preferences (do the replacement recipes still match taste?), nutrition (do weekly targets still converge?), and provisions (what happens to the unused ingredients?).*
+
 ## The Problem
 
 The meal plan is generated weekly, but reality doesn't follow the plan. Things that cause disruptions:

@@ -1,196 +1,200 @@
-# System Components — Full Breakdown & Dependencies
+# System Components — Three-Loop Architecture
 
-## All Components
+*This doc maps the conceptual three-loop architecture to implementation modules. The loops are the "why," the modules are the "how."*
 
-### 1. User Profile Service
-Manages user identity, constraints, preferences, goals.
-- **Depends on**: Nothing — foundational
-- **Used by**: Everything else
+## Architecture Overview
 
-### 2. Recipe Store
-CRUD for recipes. Storage, versioning, tagging, search.
-- **Depends on**: User Profile (for dietary filtering)
-- **Used by**: Meal Planner, Recipe Discovery, Shopping List, Nutrition Tracker, Feedback System
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    THREE CONSTRAINT LOOPS                        │
+│                                                                  │
+│  Loop 1 (Preference)    Loop 2 (Nutrition)    Loop 3 (Provisions)│
+│  ├─ Preference Model    ├─ Nutrition Model    ├─ Pantry          │
+│  ├─ Recipe Engine        ├─ Nutrition Tracker  ├─ Equipment       │
+│  └─ Feedback System     ├─ Health Tracker     ├─ Budget          │
+│                          └─ Feedback System    ├─ Supplier Data   │
+│                                                └─ Feedback System │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────┐       │
+│  │              MEAL PLANNER (orchestrator)              │       │
+│  │  Optimises across all three loops simultaneously      │       │
+│  └──────────────────────────────────────────────────────┘       │
+│                                                                  │
+│  Cross-cutting: AI Service, Notifications, Auth, Frontend       │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-### 3. Recipe Discovery
-Finds new recipes online, filters against user profile, scores and presents them.
-- **Depends on**: User Profile (constraints/preferences), Recipe Store (to check what's already in library), AI Service
-- **Used by**: Recipe Store (imports discovered recipes), Meal Planner (new recipes feed into planning)
+## Implementation Modules
 
-### 4. Pantry Manager
-Tracks ingredient inventory — what's in the house (fridge, cupboard, freezer), quantities, expiry. Includes food waste tracking (what was thrown away and why) and freezer management (frozen portions, defrost reminders).
-- **Depends on**: Nothing (standalone data store)
-- **Used by**: Meal Planner, Shopping List Generator, Notifications (expiry alerts, defrost reminders)
+### Auth
+Thin infrastructure layer. Not a domain module.
+- **Depends on**: Nothing
+- **Used by**: Everything (provides user identity)
+- Username/password, household membership
 
-### 5. Meal Planner
-Generates weekly plans by arranging recipes across days, optimising ingredient usage.
-- **Depends on**: User Profile, Recipe Store, Pantry Manager, Feedback/Preference Model, AI Service
-- **Used by**: Shopping List Generator, Nutrition Tracker, Plan Adjustment Handler
+### Preference Model (Loop 1 state)
+AI-maintained structured document summarising user preferences.
+- **Depends on**: Feedback System (feedback triggers regeneration)
+- **Used by**: Meal Planner (context for recipe selection), Recipe Engine (guides discovery and generation)
+- Hard/soft constraints, taste preferences, cuisine preferences, cooking patterns, meal structure
 
-### 6. Plan Adjustment Handler
-Handles mid-week disruptions — skipped meals, substitutions, swaps, rebalancing.
-- **Depends on**: Meal Planner (the current plan), Pantry Manager, Recipe Store, AI Service
-- **Used by**: Meal Planner (updates the plan), Pantry Manager (adjusts stock), Shopping List Generator (may need top-up)
+### Nutrition Model (Loop 2 state)
+Calorie/macro/micro targets and dietary identity.
+- **Depends on**: Health Tracker (refines targets based on outcomes)
+- **Used by**: Meal Planner (constrains nutritional balance), Nutrition Tracker (targets to compare against)
+- Initially set during onboarding, refined over time by health data
 
-### 7. Shopping List Generator
-Calculates what to buy: plan ingredients minus pantry stock.
-- **Depends on**: Meal Planner (what's needed), Pantry Manager (what's in stock)
-- **Used by**: Grocery Ordering, Pantry Manager (purchased items added back)
+### Provisions Manager (Loop 3 state)
+Everything about what you have to work with.
+- **Depends on**: Shopping List (purchased items added), Grocery Ordering (price/availability data)
+- **Used by**: Meal Planner (constrains feasibility), Shopping List (what's already in stock), Notifications (expiry alerts, defrost reminders)
+- Pantry inventory, equipment, environment, budget, supplier data, food waste tracking
 
-### 8. Grocery Ordering (Tesco)
-Automates adding shopping list items to Tesco basket via browser control.
-- **Depends on**: Shopping List Generator, User Profile (store preference, account), AI Service (browser control)
-- **Used by**: Pantry Manager (purchased items → pantry), Plan Adjustment Handler (substitutions)
+### Recipe Engine
+Unified system for all recipe operations — store, discovery, AI generation, versioning.
+- **Depends on**: Preference Model (filtering and scoring), AI Service (generation, import, evolution)
+- **Used by**: Meal Planner (the pool of recipes to arrange), Feedback System (what was eaten)
+- Three sources: existing library, online discovery, AI generation
+- All share the same versioning and constraint-aware mechanism
 
-### 9. Nutrition Tracker
-Tracks planned vs actual nutrition intake. Daily/weekly dashboards.
-- **Depends on**: Meal Planner (planned meals), Recipe Store (nutrition data per recipe)
-- **Used by**: Meal Planner (informs future plans if consistently over/under), Health Tracker, Dashboard
+### Meal Planner (the orchestrator)
+Generates weekly plans by simultaneously optimising across all three loops.
+- **Depends on**: Preference Model, Nutrition Model, Provisions, Recipe Engine, AI Service
+- **Used by**: Shopping List, Nutrition Tracker, Feedback System (which meal was eaten when)
+- Handles mid-week disruptions via event + intent UX pattern
+- The most coupled component — by design, since it orchestrates everything
 
-### 9b. Health Tracker (expansion of User Profile + Nutrition Tracker)
-Tracks health signals over time: mood/energy, symptoms, weight, progress photos, wearable data, blood panels, genomics. Generates weekly/monthly reviews. Feeds insights back into meal planning.
-- **Depends on**: User Profile (goals, constraints), Nutrition Tracker (what was eaten), AI Service (pattern analysis, review generation)
-- **Used by**: Meal Planner (adjusted targets, discovered intolerances), User Profile (updates constraints based on findings)
+### Shopping List Generator
+Deterministic: plan ingredients minus provisions stock.
+- **Depends on**: Meal Planner (what's needed), Provisions (what's in stock)
+- **Used by**: Grocery Ordering, Provisions (purchased items update pantry)
+- Grouped by store section, accounts for pack sizes, budget estimate
+- No AI needed — pure arithmetic
 
-### 10. Feedback System
-Collects user feedback on meals, maintains preference model.
-- **Depends on**: Recipe Store (what was eaten), Meal Planner (which plan slot)
-- **Used by**: Recipe Store (recipe evolution/versioning), Meal Planner (preference model influences future plans), Recipe Discovery (learn what user accepts/rejects)
+### Grocery Ordering (Tesco)
+Browser automation via Claude computer use / Chrome connector.
+- **Depends on**: Shopping List, AI Service (browser control)
+- **Used by**: Provisions (purchased items → pantry, price data → supplier cache), Meal Planner (substitution flags)
+- User always reviews basket before checkout
+- Purchased items auto-added to provisions
 
-### 11. AI Service
-Centralised layer for all LLM interactions. Routes to appropriate model tier.
+### Nutrition Tracker (Loop 2 logging)
+Tracks planned vs actual nutrition intake.
+- **Depends on**: Meal Planner (planned meals), Recipe Engine (nutrition data per recipe), Nutrition Model (targets)
+- **Used by**: Health Tracker (trend data)
+- Pre-populated from meal plan, user confirms/skips/adjusts
+
+### Health Tracker (Loop 2 feedback)
+Closes the loop between food and health outcomes.
+- **Depends on**: Nutrition Tracker (what was eaten), AI Service (pattern analysis, review generation)
+- **Used by**: Nutrition Model (refines targets based on outcomes)
+- Tier 1: mood/energy, symptoms, weight, progress photos
+- Tier 2+: wearables, blood panels, genomics
+- Generates weekly/monthly AI reviews
+
+### Feedback System (multi-loop routing)
+Collects user feedback on meals and routes it to the appropriate loop(s).
+- **Depends on**: Recipe Engine (what was eaten), Meal Planner (which slot)
+- **Used by**: Preference Model (taste/ease feedback), Nutrition Model (portion/macro feedback), Provisions (cost/availability feedback), Recipe Engine (drives versioning)
+- Conversational input, AI interprets and scores against rubric
+- Maintains the Preference Model (~2000 token AI-generated summary, regenerated every 5 feedbacks)
+
+### AI Service (cross-cutting)
+Centralised layer for all LLM interactions.
 - **Depends on**: Nothing (external API wrapper)
-- **Used by**: Everything that needs AI — Meal Planner, Recipe Discovery, Plan Adjustments, Feedback interpretation, Grocery Ordering, Recipe import/parsing
+- **Used by**: Everything that needs AI
+- Model tier routing (frontier/mid/cheap), prompt templates, context assembly, response parsing, cost tracking, failure handling
 
-### 12. Notification System
-Alerts and reminders — expiry warnings, prep reminders, plan suggestions.
-- **Depends on**: Pantry Manager (expiry), Meal Planner (schedule), Nutrition Tracker (shortfalls)
-- **Used by**: Frontend (displays notifications)
+### Notification System (cross-cutting)
+Alerts and reminders delivered in-app.
+- **Depends on**: Provisions (expiry, defrost), Meal Planner (prep reminders), Nutrition Tracker (shortfalls), Health Tracker (review ready)
+- **Used by**: Frontend
 
-### 13. Frontend
-The web app UI — all views (dashboard, plan, recipes, pantry, nutrition, settings).
+### Frontend
+React web app — all views.
 - **Depends on**: All backend services via API
 - **Used by**: User
 
 ---
 
-## Dependency Map
+## Dependency Flow (Three Loops Visible)
 
 ```
-                    ┌──────────────┐
-                    │ User Profile │
-                    └──────┬───────┘
-                           │ used by everything
-          ┌────────────────┼────────────────────┐
-          ▼                ▼                     ▼
-   ┌─────────────┐  ┌───────────┐       ┌──────────────┐
-   │Recipe Store  │  │  Pantry   │       │  AI Service  │
-   └──────┬──────┘  │  Manager  │       │  (LLM layer) │
-          │         └─────┬─────┘       └──────┬───────┘
-          │               │                    │
-          ▼               ▼                    │ used by many
-   ┌──────────────┐      │              ┌──────┘
-   │   Recipe     │      │              │
-   │  Discovery   │      │              │
-   └──────┬───────┘      │              │
-          │              │              │
-          ▼              ▼              ▼
-        ┌─────────────────────────────────┐
-        │         MEAL PLANNER            │
-        │  (the central orchestrator)     │
-        └───────────┬─────────────────────┘
-                    │
-         ┌──────────┼──────────┐
-         ▼          ▼          ▼
-  ┌────────────┐ ┌────────┐ ┌──────────────┐
-  │  Shopping  │ │Nutrition│ │   Feedback   │
-  │   List     │ │ Tracker │ │   System     │
-  └─────┬──────┘ └────────┘ └──────────────┘
-        │
-        ▼
-  ┌────────────┐
-  │  Grocery   │
-  │  Ordering  │
-  └─────┬──────┘
-        │
-        ▼
-  ┌────────────┐
-  │   Pantry   │ ◄── cycle: purchases update pantry
-  │  (update)  │
-  └────────────┘
+                    LOOP 1                LOOP 2              LOOP 3
+                 (Preference)           (Nutrition)         (Provisions)
 
-  ┌──────────────────┐
-  │  Notifications   │ ◄── listens to pantry, planner, nutrition
-  └──────────────────┘
-
-  ┌──────────────────┐
-  │    Frontend      │ ◄── consumes all services
-  └──────────────────┘
+              ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+              │  Preference  │    │  Nutrition    │    │  Provisions  │
+              │    Model     │    │    Model      │    │   Manager    │
+              └──────┬───────┘    └──────┬────────┘    └──────┬───────┘
+                     │                   │                     │
+         ┌───────────┘                   │                     │
+         ▼                               ▼                     ▼
+  ┌─────────────┐              ┌──────────────────────────────────────┐
+  │   Recipe    │─────────────►│            MEAL PLANNER              │
+  │   Engine    │              │      (the central orchestrator)      │
+  └─────────────┘              └─────┬────────┬────────┬─────────────┘
+                                     │        │        │
+                              ┌──────┘    ┌───┘    ┌───┘
+                              ▼           ▼        ▼
+                        ┌──────────┐ ┌────────┐ ┌──────────┐
+                        │ Feedback │ │Nutritn │ │ Shopping  │
+                        │  System  │ │Tracker │ │   List    │
+                        └─────┬────┘ └───┬────┘ └─────┬────┘
+                              │          │            │
+                    ┌─────────┤          ▼            ▼
+                    │         │    ┌──────────┐ ┌──────────┐
+                    ▼         │    │  Health  │ │  Tesco   │
+              Preference      │    │ Tracker  │ │  Order   │
+              Model ◄─────────┘    └────┬─────┘ └────┬─────┘
+              (Loop 1                   │             │
+               update)                  ▼             ▼
+                                  Nutrition      Provisions
+                                  Model          (update)
+                                  (Loop 2        (Loop 3
+                                   refine)        update)
 ```
 
 ---
 
 ## Standalone vs Coupled
 
-### Can work independently (standalone data + logic)
-- **User Profile** — just a settings store
-- **Recipe Store** — CRUD + versioning, useful even without planning
-- **Pantry Manager** — inventory tracking, useful on its own
+### Can work independently
+- **Provisions Manager** — inventory tracking, useful on its own
+- **Recipe Engine** — CRUD + versioning, useful even without planning
 - **AI Service** — stateless API wrapper
-- **Nutrition Tracker** — could work with manual meal logging, no planner needed
+- **Nutrition Tracker** — could work with manual meal logging
 
 ### Need other components to function
-- **Meal Planner** — needs profile + recipes + pantry + AI (the most coupled component)
-- **Shopping List Generator** — needs plan + pantry
+- **Meal Planner** — needs all three loop states + recipes + AI (most coupled, by design)
+- **Shopping List** — needs plan + provisions
 - **Grocery Ordering** — needs shopping list + AI
-- **Recipe Discovery** — needs profile + recipe store + AI
-- **Plan Adjustment Handler** — needs planner + pantry + recipes + AI
 - **Feedback System** — needs recipes + planner (what was eaten when)
-- **Notifications** — needs pantry + planner + nutrition data
+- **Health Tracker** — needs nutrition tracker + AI
+- **Notifications** — needs provisions + planner + nutrition data
+- **Preference Model** — needs feedback system (to evolve)
 
 ---
 
-## On Architecture: Microservices vs Modular Monolith
+## Architecture: Modular Monolith
 
-### Microservices would give you:
-- Independent deployment of each component
-- Different tech per service if needed
-- Isolated scaling
-- Clear API boundaries
-
-### But for this project:
-- **Single user** — no scaling pressure
-- **13 services** each needing their own deployment, database, logging, error handling — massive operational overhead
-- Inter-service communication (HTTP/gRPC/message queues) adds latency and failure modes
-- Debugging distributed systems is genuinely hard
-- You'd spend more time on infrastructure than features
-
-### Recommended: Modular Monolith
-One deployable application, but with clean internal module boundaries.
+One deployable application with clean internal module boundaries.
 
 ```
-claudeTest/
-├── src/main/java/com/example/mealprep/
-│   ├── profile/          ← User Profile module
-│   │   ├── UserProfile.java
-│   │   ├── ProfileService.java
-│   │   └── ProfileController.java
-│   ├── recipe/           ← Recipe Store module
-│   │   ├── Recipe.java
-│   │   ├── RecipeVersion.java
-│   │   ├── RecipeService.java
-│   │   └── RecipeController.java
-│   ├── pantry/           ← Pantry module
-│   ├── planner/          ← Meal Planner module
-│   ├── shopping/         ← Shopping List module
-│   ├── grocery/          ← Grocery Ordering module
-│   ├── nutrition/        ← Nutrition Tracker module
-│   ├── feedback/         ← Feedback System module
-│   ├── discovery/        ← Recipe Discovery module
-│   ├── adjustment/       ← Plan Adjustment module
-│   ├── notification/     ← Notifications module
-│   ├── ai/               ← AI Service module (centralised LLM calls)
-│   └── MealPrepApplication.java
+src/main/java/com/example/mealprep/
+├── auth/             ← User accounts (thin auth layer)
+├── preference/       ← Preference Model (Loop 1 state)
+├── nutrition/        ← Nutrition Model + Tracker (Loop 2 state + logging)
+├── provisions/       ← Pantry + Equipment + Environment (Loop 3 state)
+├── recipe/           ← Recipe Engine (store, discovery, generation, versioning)
+├── planner/          ← Meal Planner + Adjustments (orchestrator)
+├── shopping/         ← Shopping List Generator
+├── grocery/          ← Tesco Ordering (provisions output)
+├── health/           ← Health Tracker (feeds back to nutrition model)
+├── feedback/         ← Feedback System (routes to all three loops)
+├── ai/               ← AI Service (cross-cutting LLM layer)
+├── notification/     ← Notifications (cross-cutting alerts)
+└── MealPrepApplication.java
 ```
 
 **Key rules**:
@@ -198,4 +202,4 @@ claudeTest/
 - Each module owns its own database tables
 - If you ever need to extract a microservice later, the module boundary is already clean — it's a refactor, not a rewrite
 
-**This gives you 90% of the architectural benefits of microservices with 10% of the operational cost.** For a personal project, this is the right call. You can always split later if a specific module needs independent scaling (spoiler: it won't for a single user).
+**This gives you 90% of the architectural benefits of microservices with 10% of the operational cost.**

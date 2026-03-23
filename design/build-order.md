@@ -9,26 +9,27 @@
 ## The Order
 
 ### Step 1: Foundation + Project Restructure
-**What**: Restructure the existing Spring Boot project from the journal app into the modular monolith structure. Set up the module packages, shared config, and React frontend scaffolding.
+**What**: Restructure the existing Spring Boot project into the modular monolith structure. Set up module packages, shared config, and React frontend scaffolding.
 
 - Rename/restructure packages to `com.example.mealprep.*`
-- Set up module packages (profile, recipe, pantry, planner, shopping, ai, etc.)
+- Set up module packages (auth, preference, nutrition, provisions, recipe, planner, shopping, ai, etc.)
 - Add Anthropic Java SDK dependency (or HTTP client for Claude API)
-- Scaffold React frontend (create-react-app or Vite) alongside Spring Boot
+- Scaffold React frontend (Vite + TypeScript) alongside Spring Boot
 - Set up API communication pattern (REST controllers + React fetch)
 - Clean out the journal app code
 
 **Testable outcome**: Empty app with the right structure, frontend talks to backend, builds and runs.
 
-### Step 2: User Profile
-**What**: The profile module — constraints, goals, preferences, cooking prefs.
+### Step 2: Auth + Profile Setup
+**What**: Thin auth layer + initial preference/nutrition model setup.
 
-- Data model: UserProfile entity + DB migration
-- REST API: GET/PUT profile
-- Frontend: Settings page with sections (constraints, goals, cooking, budget)
-- Seed with your actual data so everything downstream has real context to work with
+- Data model: UserAccount, PreferenceModel (initial static version), NutritionModel entities
+- REST API: register, login, GET/PUT preference constraints, GET/PUT nutrition targets
+- Frontend: login/register, settings page with sections (constraints, goals, cooking prefs)
+- Seed with your actual data so everything downstream has real context
+- Quick preference quiz for cold start (10-15 dishes, swipe like/dislike)
 
-**Testable outcome**: You can fill in your dietary constraints, calorie goals, allergies, etc. and persist them.
+**Testable outcome**: You can create an account, set dietary constraints, calorie goals, allergies, and persist them.
 
 ### Step 3: AI Service (core)
 **What**: The centralised AI layer — model routing, prompt templates, response parsing, cost tracking.
@@ -42,7 +43,7 @@
 
 **Testable outcome**: Can send a prompt to Claude and get a parsed JSON response back. Cost is logged.
 
-### Step 4: Recipe Store
+### Step 4: Recipe Engine
 **What**: Recipe CRUD, versioning, nutrition calculation, import from URL.
 
 - Data model: Recipe, RecipeVersion, RecipeIngredient entities
@@ -53,30 +54,30 @@
 
 **Testable outcome**: You can add recipes manually, import from URLs, see calculated nutrition. This is already useful on its own.
 
-### Step 5: Pantry Manager
-**What**: Ingredient inventory across fridge/freezer/cupboard.
+### Step 5: Provisions Manager
+**What**: Pantry inventory, equipment list, environment, budget settings.
 
-- Data model: PantryItem entity (name, qty, unit, category, storage location, expiry)
-- REST API: CRUD pantry items, filter by location/category/expiry
-- Frontend: Pantry page grouped by category, expiry highlighting, quick add
+- Data model: PantryItem entity (name, qty, unit, category, storage location, expiry), Equipment, Budget
+- REST API: CRUD pantry items, filter by location/category/expiry, GET/PUT equipment and budget
+- Frontend: Provisions page — pantry tab (grouped by category, expiry highlighting, quick add), equipment tab, budget settings
 - No auto-deduction yet (that comes with the planner)
 
-**Testable outcome**: You can track what's in your kitchen. Expiring items are visible.
+**Testable outcome**: You can track what's in your kitchen, what equipment you own, and your budget. Expiring items are visible.
 
 ### Step 6: Meal Planner (the big one)
-**What**: AI-driven weekly plan generation using the two-pass approach.
+**What**: AI-driven weekly plan generation — the three-loop orchestrator.
 
 - Prompt templates: recipe selection (pass 1) + plan assembly (pass 2)
-- Context assembly: profile + pantry + recipe index → pass 1 → full recipes → pass 2
+- Context assembly: preference model + nutrition model + provisions + recipe index → pass 1 → full recipes → pass 2
 - Data model: MealPlan, MealSlot entities
 - REST API: generate plan, get current plan, override a slot
-- Pantry auto-deduction: when a meal is marked as cooked, subtract ingredients
+- Pantry auto-deduction: when a meal is marked as cooked, subtract ingredients from provisions
 - Frontend: Weekly plan view (calendar grid), daily dashboard, mark as cooked/skip
 
-**Testable outcome**: Generate a real meal plan for your week. Mark meals as cooked and see pantry update. This is the core value moment.
+**Testable outcome**: Generate a real meal plan for your week. Mark meals as cooked and see provisions update. This is the core value moment.
 
 ### Step 7: Shopping List
-**What**: Deterministic generation from plan minus pantry.
+**What**: Deterministic generation from plan minus provisions.
 
 - Logic: aggregate plan ingredients → subtract pantry stock → group by category
 - Data model: ShoppingList, ShoppingItem entities
@@ -85,16 +86,17 @@
 
 **Testable outcome**: Generate a shopping list from your meal plan. Check items off as you shop.
 
-### Step 8: Feedback System + Preference Model
-**What**: Collect meal feedback, maintain the AI-generated preference model.
+### Step 8: Feedback System + Preference Model Evolution
+**What**: Collect meal feedback, route to loops, maintain the AI-generated preference model.
 
-- Data model: FeedbackEntry entity, PreferenceModel (stored as JSON)
+- Data model: FeedbackEntry entity, PreferenceModel versioning (stored as JSONB)
 - Feedback collection: conversational input after meals, AI interprets and scores against rubric
+- Multi-loop routing: AI categorises feedback and routes to preference/nutrition/provisions
 - Preference model: regeneration pipeline (batch feedback → AI update → store new version)
 - Recipe evolution: feedback triggers recipe versioning, AI suggests changes
 - Frontend: feedback prompt after marking meal as cooked, "suggest changes" chat sidebar on recipe page, preference model viewer in settings
 
-**Testable outcome**: Give feedback on meals, see your preference model build up, see recipes evolve based on your input.
+**Testable outcome**: Give feedback on meals, see your preference model build up, see recipes evolve based on your input. Feedback that mentions cost/availability updates provisions awareness.
 
 ### Step 9: Nutrition Tracker
 **What**: Planned vs actual nutrition tracking with daily/weekly dashboards.
@@ -107,11 +109,11 @@
 **Testable outcome**: See your daily nutrition, confirm what you ate, view trends.
 
 ### Step 10: Recipe Discovery
-**What**: AI finds recipes online, filters against profile, presents suggestions.
+**What**: AI finds recipes online, filters against preference model, presents suggestions.
 
 - Discovery pipeline: AI searches → filters against constraints → scores against preferences → presents top picks
 - Frontend: discovery section in recipe library ("Suggested for you"), accept/skip
-- Accepted recipes imported into Recipe Store
+- Accepted recipes imported into Recipe Engine
 
 **Testable outcome**: AI suggests new recipes you might like. Accept ones that appeal.
 
@@ -119,8 +121,8 @@
 **What**: Mid-week disruption handling.
 
 - Event + intent UX: skip, swap, move, rebalance
-- AI rebalancing when requested (adjusts remaining days)
-- Pantry/nutrition recalculation after adjustments
+- AI rebalancing when requested (adjusts remaining days across all three loops)
+- Provisions/nutrition recalculation after adjustments
 - Frontend: quick-action buttons on meal slots, chat fallback for complex adjustments
 
 **Testable outcome**: Skip a meal, swap for something else, have the AI rebalance your week.
@@ -131,25 +133,27 @@
 - Integration with Claude computer use / Chrome connector
 - Shopping list item → Tesco search → AI picks best product → add to basket
 - User reviews basket before any checkout
-- Purchased items auto-added to pantry
+- Purchased items auto-added to provisions
 - Substitution handling → flags to plan adjustment system
+- Price data cached in provisions (supplier availability)
 
 **Testable outcome**: Your shopping list turns into a Tesco basket with one click.
 
 ### Step 13: Health Tracker + Reviews
-**What**: Mood/energy/symptom logging, weight tracking, AI-generated reviews.
+**What**: Mood/energy/symptom logging, weight tracking, AI-generated reviews that feed back into nutrition model.
 
 - Data model: HealthLog entity (mood, energy, symptoms, weight, notes)
 - Weekly/monthly AI review generation
+- Reviews feed insights back into Nutrition Model (Loop 2 refinement)
 - Frontend: daily health check-in, weight chart, review pages
 - Later tiers: wearable sync, blood panels, genomics
 
-**Testable outcome**: Log how you feel, see patterns correlated with meals, get AI-generated weekly summaries.
+**Testable outcome**: Log how you feel, see patterns correlated with meals, get AI-generated weekly summaries. Nutrition targets may adjust based on health outcomes.
 
 ### Step 14: Notifications + Cooking Mode + Polish
 **What**: Everything that makes it feel finished.
 
-- Notifications: expiry alerts, defrost reminders, prep prompts
+- Notifications: expiry alerts (provisions), defrost reminders (provisions), prep prompts (planner)
 - Cooking mode: step-by-step recipe view with large text and timers
 - Natural language search across the system
 - PWA setup (installable, offline recipe viewing)
@@ -165,7 +169,7 @@
 Step 1-2:  Foundation         ██░░░░░░░░░░░░░░░░░░  You can set up your profile
 Step 3:    AI Service         ████░░░░░░░░░░░░░░░░  AI works
 Step 4:    Recipes            ██████░░░░░░░░░░░░░░  You can manage recipes
-Step 5:    Pantry             ████████░░░░░░░░░░░░  You can track ingredients
+Step 5:    Provisions         ████████░░░░░░░░░░░░  You can track ingredients
 Step 6:    MEAL PLANNER       ██████████░░░░░░░░░░  ← Core value. It plans your meals.
 Step 7:    Shopping List      ████████████░░░░░░░░  Plan → shopping list
 Step 8:    Feedback           ██████████████░░░░░░  System learns from you

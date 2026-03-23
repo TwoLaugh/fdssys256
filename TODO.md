@@ -1,37 +1,38 @@
 # Development Plan
 
-## Phase 1: Review & Finalise Design
-- [ ] Review each module LLD — discuss and confirm data models, APIs, and flows
-  - [ ] 00 - Shared Reference
-  - [ ] 01 - Profile
-  - [ ] 02 - AI Service
-  - [ ] 03 - Recipe
-  - [ ] 04 - Nutrition Engine
-  - [ ] 05 - Pantry
-  - [ ] 06 - Planner
-  - [ ] 07 - Shopping
-  - [ ] 08 - Feedback
-  - [ ] 09 - Nutrition Tracker
-  - [ ] 10 - Discovery
-  - [ ] 11 - Grocery (Tesco)
-  - [ ] 12 - Health
-  - [ ] 13 - Notification
-- [ ] Review high-level design docs — confirm ideas and direction
-  - [ ] system-overview.md
-  - [ ] ai-service.md
-  - [ ] preference-model.md
-  - [ ] nutrition-engine.md
-  - [ ] recipe-system.md
-  - [ ] feedback-and-recipe-evolution.md
-  - [ ] meal-planning.md
-  - [ ] pantry-tracking.md
-  - [ ] plan-disruptions.md
-  - [ ] health-tracking.md
-  - [ ] frontend-ux.md
-  - [ ] user-profile.md
-  - [ ] risk-and-complexity.md
-  - [ ] build-order.md
-  - [ ] additional-ideas.md
+## Phase 1a: Review High-Level Design (do first — shapes the LLD work)
+Review order: core concepts first, then features that depend on them, then support/polish.
+- [ ] 1. system-overview.md — the single source of truth, review first
+- [ ] 2. user-profile.md — everything depends on knowing the user
+- [ ] 3. ai-service.md — the engine behind most features
+- [ ] 4. preference-model.md — how AI learns the user, feeds into recipes/planner
+- [ ] 5. recipe-system.md — core content unit
+- [ ] 6. nutrition-engine.md — how recipes get nutrition data
+- [ ] 7. feedback-and-recipe-evolution.md — how recipes improve
+- [ ] 8. meal-planning.md — the main product value
+- [ ] 9. pantry-tracking.md — supports planner and shopping
+- [ ] 10. plan-disruptions.md — edge cases for the planner
+- [ ] 11. frontend-ux.md — how users interact with all of the above
+- [ ] 12. health-tracking.md — later-phase feature, but review the vision
+- [ ] 13. risk-and-complexity.md — sanity check after reviewing everything
+- [ ] 14. build-order.md — confirm sequencing still makes sense
+- [ ] 15. additional-ideas.md — anything worth promoting to a real feature?
+
+## Phase 1b: Review Module LLDs (after high-level is confirmed)
+- [ ] 00 - Shared Reference
+- [ ] 01 - Profile
+- [ ] 02 - AI Service
+- [ ] 03 - Recipe
+- [ ] 04 - Nutrition Engine
+- [ ] 05 - Pantry
+- [ ] 06 - Planner
+- [ ] 07 - Shopping
+- [ ] 08 - Feedback
+- [ ] 09 - Nutrition Tracker
+- [ ] 10 - Discovery
+- [ ] 11 - Grocery (Tesco)
+- [ ] 12 - Health
+- [ ] 13 - Notification
 
 ## Phase 2: Test Plan
 Write comprehensive test specs per module so implementation = "make the tests pass."

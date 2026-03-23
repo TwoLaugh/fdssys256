@@ -1,10 +1,10 @@
 # Health Tracking & Direction System
 
+*Part of Loop 2 (Nutrition). The Health Tracker closes the feedback loop: Nutrition Model → Meal Planner → Nutrition Logger → Health Tracker → Nutrition Model refinement.*
+
 ## The Big Picture
 
-The meal planner becomes much more powerful if it can close the loop between **what you eat** and **how it affects you**. Right now the system plans meals and tracks nutrition. But nutrition is a means to an end — the actual goals are things like energy, body composition, mood, symptom management, performance.
-
-This is essentially an expansion of the user profile from static preferences into a **living, data-informed health model**.
+The meal planner becomes much more powerful if it can close the loop between **what you eat** and **how it affects you**. The Nutrition Model sets targets, the planner hits them, the nutrition tracker logs actuals, and the health tracker correlates food with outcomes. Insights feed back into the Nutrition Model to refine targets over time.
 
 ## Data Sources (layered, add over time)
 
@@ -105,25 +105,27 @@ An AI-generated report that synthesises everything:
 
 ---
 
-## Architecture Considerations
+## Architecture: Loop 2 Feedback
 
-This is conceptually an **expansion of User Profile + Nutrition Tracker**, not a separate system.
+In the three-loop architecture, Health Tracking is the feedback mechanism for Loop 2 (Nutrition):
 
 ```
-User Profile (static)          Health Data (dynamic)
-├── dietary identity            ├── mood/energy logs
-├── allergies                   ├── symptom logs
-├── goals                      ├── weight history
-├── preferences                ├── progress photos
-└── cooking prefs              ├── wearable data (synced)
-                               ├── blood panel results
-                               ├── genome-derived considerations
-                               └── AI-generated health insights
-
-Both feed into → Meal Planner as context
+Nutrition Model (targets: calories, macros, micros, goals)
+    │
+    ▼
+Meal Planner (optimises nutrition across the week)
+    │
+    ▼
+Nutrition Tracker (planned vs actual daily intake)
+    │
+    ▼
+Health Tracker (correlates food with outcomes)
+    │
+    ▼
+Nutrition Model refined (adjust targets based on evidence)
 ```
 
-The key is that health data is **time-series** while profile data is **mostly static**. Different storage and query patterns, but they inform the same planning decisions.
+Health data is **time-series** while the Nutrition Model is **mostly static targets**. Different storage and query patterns, but the health tracker's job is to close the loop — turning observed outcomes into better targets.
 
 ---
 

@@ -4,13 +4,36 @@
 
 Meal planning is mostly an **arrangement problem**, not a creative one. The AI isn't inventing 21 meals from scratch each week. It's:
 
-1. Drawing from the recipe library (existing recipes, AI-generated, imported, discovered)
+1. Drawing from the Recipe Engine (existing library, discovered online, AI-generated)
 2. Arranging them across the week
-3. Optimizing for ingredient utilisation across the plan
+3. Optimising simultaneously across three constraint loops
+
+## The Three-Loop Optimisation
+
+The planner's real job is finding solutions that satisfy all three loops at once. Optimising any single loop independently is easy — the hard problem is the intersection.
+
+### Loop 1 (Preferences): Does the plan match what the user likes?
+- Recipes align with taste, cuisine, and cooking style preferences
+- Variety meets the user's new-vs-familiar ratio
+- Weeknight meals respect time constraints, weekends allow complexity
+- Fixed slots honoured ("I always have overnight oats for weekday breakfasts")
+
+### Loop 2 (Nutrition): Does the plan hit nutritional targets?
+- Daily/weekly macro targets (calories, protein, carbs, fat)
+- Individual meals may miss targets but the weekly total should converge
+- Micro targets considered if set (iron, vitamin D, fibre)
+- Goal context influences recipe selection (bulking → higher calorie density)
+
+### Loop 3 (Provisions): Does the plan work with what's available?
+- Uses pantry items before they expire
+- Maximises ingredient utilisation across pack sizes (the core optimisation — see below)
+- Stays within budget
+- Only uses equipment that exists in the current environment
+- Accounts for supplier availability (don't plan around items frequently out of stock)
 
 ## The Real Complexity: Ingredient Utilisation
 
-This is the core optimisation challenge. Supermarkets sell in fixed pack sizes. Recipes use arbitrary amounts.
+This is the core optimisation challenge within Loop 3. Supermarkets sell in fixed pack sizes. Recipes use arbitrary amounts.
 
 **Example problem**:
 - Recipe A needs 200g spinach
@@ -30,26 +53,29 @@ This is the core optimisation challenge. Supermarkets sell in fixed pack sizes. 
 ## Planning Inputs
 
 ```
-Recipe Library (rated, versioned, tagged)
-  + User Profile (constraints, goals, preferences)
-  + Pantry State (what's already available, expiry dates)
+Recipe Engine (existing library + online discovery + AI generation)
+  + Preference Model (Loop 1 state — taste, style, variety, constraints)
+  + Nutrition Model (Loop 2 state — calorie/macro/micro targets)
+  + Provisions (Loop 3 state — pantry, equipment, budget, pack sizes)
   + User Overrides ("I want pizza Friday", "eating out Wednesday")
-  + Variety Preferences (X new recipes per week, Y repeats)
-  + Budget Target
-  + Pack Size Data (from Tesco or manual — "chicken comes in 500g packs")
 ```
 
 ## Planning Outputs
+
+Each output feeds a different loop:
 
 ```
 Weekly Meal Plan
   ├── 7 days × meal slots (breakfast, lunch, dinner, snacks)
   ├── Each slot: recipe, servings, which pantry items it uses
+  │
+  ├── → Loop 1: Selected recipes (feedback after eating refines preferences)
+  ├── → Loop 2: Daily nutrition totals vs targets (logged, feeds health tracker)
+  ├── → Loop 3: Shopping list (plan ingredients − pantry stock → Tesco order)
+  │
   ├── Ingredient utilisation map (what's bought, where each portion goes)
   ├── Predicted leftover ingredients + suggested uses
-  ├── Daily nutrition totals vs targets
-  ├── Estimated weekly cost
-  └── Shopping list (derived — what's needed beyond pantry)
+  └── Estimated weekly cost
 ```
 
 ## Variety Control
@@ -62,49 +88,40 @@ User configures their preference for novelty vs. familiarity:
 
 ---
 
-# Recipe Discovery
+# Recipe Engine
 
-## The Idea
-A background process (or on-demand) that finds recipes online, filters them against the user's profile, and offers them for inclusion in the library.
+*Unified system combining what was previously separate: Recipe Store, Recipe Discovery, and AI Recipe Generation. They share the same mechanisms: constraint awareness, versioning, and preference/nutrition context.*
 
-## How It Works
+See also: recipe-system.md (detailed recipe design), feedback-and-recipe-evolution.md (versioning and evolution)
 
-1. **Search phase**: AI searches recipe sites/databases for recipes matching broad criteria
-   - Cuisine types the user likes
-   - Ingredient categories in season or on sale
-   - Meal types needed (quick weeknight dinners, batch cook lunches, etc.)
+## Three Sources, One Pipeline
 
-2. **Filter phase**: Automated cut based on hard constraints
-   - Remove anything with allergens
-   - Remove anything violating dietary identity (meat dishes for vegans, etc.)
-   - Remove anything exceeding max cooking time for the intended slot
-   - Remove anything with ingredients the user has rated as disliked
+### Existing Library
+Recipes already saved, with version history and feedback. The primary pool the planner draws from.
 
-3. **Score & rank**: AI scores remaining recipes on fit
-   - How well do macros align with goals?
-   - Does it use ingredients the user already likes?
-   - Does it complement the existing library (fills gaps in cuisine variety)?
-   - Ease of making vs. user skill level
+### Online Discovery
+Background or on-demand process that finds recipes online, filters against constraints, scores against preferences, imports accepted ones.
+- Search → hard-filter (constraints) → score (preferences) → present
+- User swipes: add to library / skip / save for later
+- Learns from accept/reject patterns over time
 
-4. **Present to user**: "I found 5 recipes you might like this week"
-   - User swipes through: add to library / skip / save for later
-   - Added recipes get imported (parsed, nutrition calculated, stored)
+### AI Generation
+Creates new recipes or adapts existing ones based on specific gaps. This is the same mechanism as recipe evolution (feedback-driven versioning) — the difference is just the trigger:
+- Evolution: "improve this existing recipe based on feedback"
+- Generation: "create something new for this gap" (e.g., "need a high-protein weeknight meal under 30 mins using the chicken in the fridge")
 
-5. **Over time**: Discovery gets smarter
-   - Learns which suggested recipes the user actually accepts
-   - Learns which cuisines/styles they consistently skip
-   - Narrows search to higher-hit-rate territory
+Both need versioning, constraint awareness, and full preference/nutrition/provisions context.
+
+## Discovery Sources
+- Recipe websites (BBC Good Food, Allrecipes, Serious Eats, etc.)
+- Reddit recipe communities
+- YouTube cooking channels (extract recipe from description/comments)
+- AI-generated originals inspired by patterns in liked recipes
 
 ## Discovery Frequency
 - Could run weekly alongside plan generation
 - Or on-demand: "Find me something new for dinner"
 - User sets how many new recipes per week they want to try
-
-## Sources
-- Recipe websites (BBC Good Food, Allrecipes, Serious Eats, etc.)
-- Reddit recipe communities
-- YouTube cooking channels (extract recipe from description/comments)
-- AI-generated originals inspired by patterns in liked recipes
 
 ---
 

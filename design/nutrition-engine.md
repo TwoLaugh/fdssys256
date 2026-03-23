@@ -1,5 +1,7 @@
 # Nutrition Engine — Detailed Design
 
+*Supports Loop 2 (Nutrition) by providing the data layer: every recipe gets nutrition values calculated via USDA/Open Food Facts mapping. The Nutrition Model sets targets; the Nutrition Engine calculates what each recipe actually delivers.*
+
 ## The Problem
 
 Every recipe needs accurate-ish nutrition data (calories, protein, carbs, fat per serving). This data comes from mapping recipe ingredients to a nutrition database. The mapping is the hard part.

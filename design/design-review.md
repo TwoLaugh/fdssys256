@@ -1,4 +1,6 @@
-# Design Review — Full Audit
+# Design Review — Full Audit (HISTORICAL)
+
+*This audit was conducted before the three-loop architecture rewrite. Most issues raised here have been addressed in the updated system-overview.md and related docs. Kept as a historical record of the design evolution.*
 
 ## Inconsistencies Found & Fixed
 
