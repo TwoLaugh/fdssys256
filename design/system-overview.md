@@ -19,61 +19,90 @@ The system has six major components with distinct roles:
 The planning cadence defaults to weekly but is configurable.
 
 ```
-                 ┌───────────────────────────────────────┐
-                 │            USER FEEDBACK              │
-                 │                                       │
-                 │    natural language, ratings,         │
-                 │    manual overrides on any part       │
-                 └─────┬─────────────┬─────────────┬─────┘
-                       │             │             │
-                       ▼             ▼             ▼
-          ┌─────────────────┐ ┌─────────────┐ ┌─────────────────┐
-          │   PREFERENCE    │ │  NUTRITION  │ │   PROVISIONS    │
-          │     MODEL       │ │    MODEL    │ │                 │
-          │                 │ │             │ │  pantry,        │
-          │  likes/dislikes │ │  cal/macro/ │ │  equipment,     │
-          │  allergies      │ │  micro tgts │ │  environment,   │
-          │  cooking style  │ │  dietary id │ │  budget,        │
-          │  cuisine prefs  │ │             │ │  supplier avail │
-          │  meal structure │ │  refined by │ │                 │
-          │                 │ │  health:    │ │                 │
-          │                 │ │  mood, wt,  │ │                 │
-          │                 │ │  symptoms,  │ │                 │
-          │                 │ │  labs, wear │ │                 │
-          └────────┬────────┘ └──────┬──────┘ └────────┬────────┘
-                   │                 │                 │
-                   ▼                 ▼                 ▼
-          ┌────────────────────────────────────────────────────┐
-          │                   MEAL PLANNER                     │
-          │                                                    │
-          │  optimises across all three constraint systems     │
-          │  to produce a weekly plan                          │
-          │                                                    │
-          │         ▲                              │           │
-          │         │    ┌───────────────────┐     │           │
-          │         └────│  RECIPE ENGINE    │◄────┘           │
-          │              │                   │                 │
-          │              │  store, discover, │                 │
-          │              │  generate, evolve │                 │
-          │              └───────────────────┘                 │
-          └─────┬──────────────────┬──────────────────┬────────┘
-                │                  │                  │
-                ▼                  ▼                  ▼
-          ┌───────────┐   ┌──────────────┐   ┌──────────────┐
-          │  WEEKLY   │   │  NUTRITION   │   │    TESCO     │
-          │   PLAN    │   │   LOGGER     │   │    ORDER     │
-          │           │   │              │   │              │
-          │  7-day    │   │  planned vs  │   │  price-aware │
-          │  schedule │   │  actual      │   │  shopping +  │
-          │           │   │  intake      │   │  ordering    │
-          └─────┬─────┘   └──────┬───────┘   └──────┬───────┘
-                │                │                  │
-                └────────────────┬──────────────────┘
-                                 ▼
-                         ┌───────────────┐
-                         │ USER FEEDBACK │
-                         │  (loops back) │
-                         └───────────────┘
+          ╔═══════════════════════════════════════════════════════════╗
+          ║                    USER INTERACTION                       ║
+          ║          view plan · cook · eat · give feedback           ║
+          ╚══════════════════════════╤════════════════════════════════╝
+                                     │
+                                     ▼
+          ┌──────────────────────────────────────────────────────────┐
+          │                    FEEDBACK SYSTEM                       │
+          │                                                          │
+          │   conversational input → AI interprets → routes:         │
+          │     taste/ease/cuisine ──────────────────► preference     │
+          │     portion/nutrition/health ────────────► nutrition      │
+          │     cost/availability/equipment ─────────► provisions     │
+          │                                                          │
+          │   also drives: recipe evolution · pref model regen       │
+          │                 weekly/monthly AI health reviews          │
+          └──────────┬───────────────┬───────────────┬───────────────┘
+                     │               │               │
+                     ▼               ▼               ▼
+          ┌──────────────┐  ┌────────────────┐  ┌────────────────────┐
+          │  PREFERENCE  │  │   NUTRITION    │  │    PROVISIONS      │
+          │    MODEL     │  │     MODEL      │  │                    │
+          │              │  │                │  │  pantry · freezer   │
+          │  allergies   │  │  cal / macro / │  │  cupboard           │
+          │  intolerances│  │  micro targets │  │  equipment          │
+          │  likes       │  │  dietary id    │  │  environment        │
+          │  dislikes    │  │                │  │  budget             │
+          │  cuisine     │  │  refined by    │  │  supplier avail     │
+          │  cooking     │  │  health data:  │  │                    │
+          │  style       │  │  mood · weight │  │  ◄── Tesco prices  │
+          │  meal        │  │  symptoms      │  │      at input      │
+          │  structure   │  │  labs · wear   │  │      stage         │
+          └──────┬───────┘  └───────┬────────┘  └─────────┬──────────┘
+                 │                  │                      │
+                 │         LOOP 1  │  LOOP 2              │  LOOP 3
+                 └──────────────┐  │  ┌───────────────────┘
+                                ▼  ▼  ▼
+          ╔══════════════════════════════════════════════════════════╗
+          ║                     MEAL PLANNER                        ║
+          ║                                                         ║
+          ║   optimises across all three constraint systems          ║
+          ║   simultaneously to produce a weekly plan                ║
+          ║                                                         ║
+          ║          ▲     ┌─────────────────────┐     │            ║
+          ║          │     │    RECIPE ENGINE     │     │            ║
+          ║          └─────┤                     ◄─────┘            ║
+          ║                │  existing library    │                  ║
+          ║                │  online discovery    │                  ║
+          ║                │  AI generation       │                  ║
+          ║                │  version · evolve    │                  ║
+          ║                └─────────────────────┘                  ║
+          ╚═════╤══════════════════╤═══════════════════╤════════════╝
+                │                  │                   │
+                ▼                  ▼                   ▼
+          ┌───────────┐   ┌───────────────┐   ┌───────────────────┐
+          │  WEEKLY   │   │   NUTRITION   │   │   TESCO ORDER     │
+          │   PLAN    │   │    LOGGER     │   │                   │
+          │           │   │               │   │   price-aware     │
+          │  7-day    │   │  planned vs   │   │   shopping list   │
+          │  schedule │   │  actual       │   │   + ordering      │
+          │           │   │  intake       │   │                   │
+          │           │   │               │   │   purchased items │
+          │           │   │               │   │   ──► pantry      │
+          └─────┬─────┘   └───────┬───────┘   └─────────┬─────────┘
+                │                 │                     │
+                └─────────────────┼─────────────────────┘
+                                  │
+                                  ▼
+          ╔═══════════════════════════════════════════════════════════╗
+          ║                    USER INTERACTION                       ║
+          ║                       ↺ loops back                        ║
+          ╚═══════════════════════════════════════════════════════════╝
+
+          ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ cross-cutting services ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+
+          ┌───────────────────────────┐  ┌───────────────────────────┐
+          │        AI SERVICE         │  │   NOTIFICATION SYSTEM     │
+          │                           │  │                           │
+          │  frontier · mid · cheap   │  │  expiry warnings          │
+          │  prompt mgmt · context    │  │  defrost reminders        │
+          │  structured parsing       │  │  prep reminders           │
+          │  cost tracking · retry    │  │  nutrition alerts          │
+          │                           │  │  health review available  │
+          └───────────────────────────┘  └───────────────────────────┘
 ```
 
 ---
