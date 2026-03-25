@@ -14,7 +14,7 @@ The system has six major components with distinct roles:
 - **One recipe database:** The Recipe Engine. An independent catalogue (split into user and system catalogues) of recipes with versioning and branching. It doesn't optimise anything — it's the pool the planner draws from.
 - **One recipe optimiser:** Adapts individual recipes against the three data models. Triggered on import, after feedback, on data model changes, or at plan-time. Proposes changes to user recipes (requires approval), freely modifies system recipes.
 - **One orchestrator:** The Meal Planner. Operates in three phases: recipe-level adaptation (via the optimiser), plan-level composition (combinatorial search), and plan-level creative augmentation (AI-generated gap-filling). It queries the Recipe Engine to find combinations of recipes that satisfy all three data models simultaneously.
-- **One feedback system:** Single conversational interface accessible from anywhere in the UI. Context-aware classifier routes feedback to four destinations (Preference Model, Nutrition Model, Provisions, Recipe Engine). Can split a single piece of feedback across multiple destinations. The only component that writes back to the data models via AI interpretation — all other writes are manual direct edits or planner outputs.
+- **One feedback system:** Single conversational interface accessible from anywhere in the UI. Context-aware classifier routes feedback to five destinations (Preference Model, Nutrition Model, Provisions, Recipe Engine, Meal Planner). Can split a single piece of feedback across multiple destinations. The only component that writes back to the data models via AI interpretation — all other writes are manual direct edits or planner outputs. Plan disruptions route to the Meal Planner to trigger mid-week re-optimisation.
 
 The planning cadence defaults to weekly but is configurable.
 
@@ -80,9 +80,26 @@ The planning cadence defaults to weekly but is configurable.
 Holds the user's taste profile, constraints, and cooking lifestyle. Likes, dislikes, allergies, intolerances, cooking style, cuisine preferences, meal structure, time constraints. The planner filters and scores recipes against this. Feedback after eating refines it over time.
 
 ### Data Model 2: Nutrition Model
-Holds calorie/macro/micro targets, dietary identity, and health goals. Refined over time by health tracking data — mood, symptoms, weight, labs, wearable data, genomics — which lives within this model, not as a separate module. Health tracking is how the nutrition model learns from outcomes. The planner balances nutritional targets across the planning period — individual meals may miss targets but the total should converge.
+Holds calorie/macro/micro targets, dietary identity, and health goals. Designed for maximum depth — the system should support everything a serious nutrition tracker would need.
 
-The nutrition logger works like MyFitnessPal: planned meals are pre-filled from the meal plan and can be confirmed with a tap, or overridden via AI-assisted free-text entry ("actually I had X instead") or manual editing. This tracks planned vs actual intake.
+**Macro targets:**
+- Total daily calorie target and macro gram targets (not just ratios — 180g protein is a hard floor, not "30% of calories")
+- Per-meal macro distribution (e.g., 40g protein at breakfast, 50g at lunch, 50g at dinner, 40g across snacks)
+- Daily floors vs weekly averages — some targets (like protein) need to be consistent daily, not just converge over the week
+- TDEE variations for training days vs rest days (manual activity input initially, wearable-driven later)
+
+**Micro targets:**
+- Full micronutrient tracking: iron, zinc, B12, vitamin D, omega-3, magnesium, etc.
+- User-settable targets for any tracked micro
+- Micronutrient data sourced from USDA FoodData Central and Open Food Facts (also usable for in-app standalone food search — logging "a banana" as a snack pulls from these databases)
+
+**Dietary patterns:**
+- Intermittent fasting support (eating windows, fasting periods)
+- Dietary identity (vegan, keto, paleo, etc.) as a constraint layer on top of numerical targets
+
+Refined over time by health tracking data — mood, symptoms, weight, labs, wearable data, genomics — which lives within this model, not as a separate module. Health tracking is how the nutrition model learns from outcomes. The planner balances nutritional targets across the planning period — individual meals may miss targets but the total should converge, with daily floors respected for key nutrients.
+
+The nutrition logger works like MyFitnessPal: planned meals are pre-filled from the meal plan and can be confirmed with a tap, or overridden via AI-assisted free-text entry ("actually I had X instead") or manual editing. Standalone food items (snacks, drinks, etc.) can be searched and logged directly from the USDA/Open Food Facts databases. This tracks planned vs actual intake.
 
 ### Data Model 3: Provisions
 Holds pantry inventory, freezer, cupboard, equipment, kitchen environment, budget, and supplier availability/pricing. Budget constraint requires checking grocery prices, so the grocery provider is already involved at the input stage. The planner works within what's available, maximises ingredient utilisation across pack sizes, and minimises waste and cost.
@@ -97,10 +114,19 @@ The planner isn't one monolithic optimisation pass. It operates in three distinc
 Before composing the plan, the planner can invoke the Recipe Optimiser to adapt recipes in the system catalogue (and propose adaptations for user recipes) to better fit current data models. This expands the pool of well-fitting options available for plan composition. Uses mid-tier AI.
 
 **Phase 2: Plan-level composition**
-The combinatorial problem — selecting and arranging recipes from both catalogues across the planning period to satisfy all three data models in aggregate. Which combination of meals across 7 days best satisfies preferences, hits nutrition targets in total, and fits within budget/pantry? This is search and ranking over a known set. Uses frontier AI.
+The combinatorial problem — selecting and arranging recipes from both catalogues across the planning period to satisfy all three data models in aggregate. Which combination of meals across 7 days best satisfies preferences, hits nutrition targets in total, and fits within budget/pantry? This is search and ranking over a known set. **The exact algorithmic approach is TBD** — options include deterministic scoring with search algorithms, traditional ML, LLMs, or a hybrid. Multi-constraint optimisation may be better served by a scoring function + search than by pure LLM generation. To be determined during implementation.
 
 **Phase 3: Plan-level creative augmentation**
 After composition, the planner identifies remaining gaps and makes intelligent additions or swaps that no existing recipe covers. Adding a yoghurt as a snack to hit a protein target. Swapping one cut of meat for another to drop cost while maintaining preferences. These are plan-level interventions, not recipe modifications — they don't go through recipe versioning. This is the hardest phase because the AI reasons creatively over the full space of possible food items rather than searching a known catalogue. Uses frontier AI, with hard constraint guardrails (allergies, dietary identity).
+
+### Mid-week re-optimisation
+
+The planner doesn't only run once at the start of the week. It can re-run on the remaining days of an active plan when triggered by:
+- **Disruptions** — ingredient spoiled, schedule changed, didn't cook what was planned. The user reports this via the feedback interface on the weekly plan view, and the planner offers to regenerate the remaining days.
+- **Grocery substitutions** — Tesco delivered parsley instead of coriander. The GroceryProvider reports substitutions, Provisions updates, and the planner re-optimises affected meals with the ingredients actually available.
+- **Macro corrections** — actual intake has diverged from planned (logged via nutrition logger). The planner can re-optimise remaining meals to compensate for the gap.
+
+Re-optimisation runs the same three phases but scoped to the remaining days only, respecting ingredients already purchased and meals already eaten. It's the same optimiser, just with a smaller window and more locked-in constraints.
 
 ### The Hard Problem
 The planner's real challenge is satisfying all three data models simultaneously across all three phases. A recipe might be perfect for preferences but blow the budget. Another might nail nutrition targets but require equipment you don't own. The AI must find the best overall solution, not optimise each model independently.
@@ -122,6 +148,17 @@ Both catalogues share the same data structures, versioning, and branching mechan
 - **Manual entry / import** — user adds a recipe or imports from URL. Goes into the user catalogue.
 - **Online discovery** — search the web, hard-filter against constraints, score against preferences. Goes into the system catalogue; user can promote to their catalogue.
 - **AI generation** — create new recipes based on specific gaps (e.g., "need a high-protein weeknight meal under 30 mins"). Goes into the system catalogue unless the user explicitly saves it.
+
+### Recipe properties
+
+Every recipe carries metadata that the planner uses for scheduling and optimisation:
+- **Servings** — how many portions the recipe makes. Enables batch cooking: a recipe that makes 5 servings can fill Monday–Friday lunches from a single cook.
+- **Stores well** — whether the recipe keeps well in the fridge/freezer, and for how long. The planner uses this to schedule batch-cooked meals across multiple days safely.
+- **Packable** — whether the meal works cold or reheated without a full kitchen (e.g., suitable for a lunchbox or packed lunch). Distinct from a sit-down cooked meal.
+- **Prep time / cook time / total time** — used for scheduling against the user's time constraints per meal slot.
+- **Equipment required** — checked against Provisions.
+
+These properties let the user express preferences like "Tuesdays and Wednesdays we want to eat the same thing" or "I want to meal prep all lunches on Sunday." The planner selects recipes with the right storage/packability/servings properties and schedules a single cook session with consumption spread across the week.
 
 ### Versioning and branching
 
@@ -191,9 +228,9 @@ Cross-cutting layer for all LLM interactions. Every module that needs AI goes th
 
 | Task | Model Tier | Frequency |
 |------|-----------|-----------|
-| Meal Planner Phase 2: plan composition | Frontier (Sonnet/Opus) | 1x/week |
+| Meal Planner Phase 2: plan composition | TBD (may be deterministic/hybrid) | 1x/week |
 | Meal Planner Phase 3: creative augmentation | Frontier (Sonnet/Opus) | 1x/week |
-| Rebalance plan after disruption | Frontier | Ad-hoc |
+| Mid-week re-optimisation (remaining days) | TBD (same approach as Phase 2) | Ad-hoc |
 | Recipe Optimiser: adapt recipes against data models | Mid (Haiku/Sonnet) | Per trigger |
 | Generate new recipe | Mid (Haiku/Sonnet) | As needed |
 | Incorporate feedback → preference model | Mid | After meals |
@@ -226,12 +263,13 @@ The primary way users interact with and improve the system. Single conversationa
 ### Entry points
 Feedback can be given from anywhere in the UI. The screen context provides implicit routing — feedback entered on the Tesco order screen is assumed to be a provisions concern, feedback on a recipe page is assumed to be a taste/preference concern, feedback on the nutrition dashboard is assumed to be a nutrition concern. General feedback (e.g., from a home screen) requires the classifier to work harder, but the AI can ask clarifying questions rather than guess.
 
-### Four destinations
+### Five destinations
 The AI classifier routes each piece of feedback to the appropriate destination(s):
 - **Preference Model** — taste, likes/dislikes, cooking style, cuisine preferences
 - **Nutrition Model** — portions, macro fit, health signals (mood, symptoms, weight)
 - **Provisions** — cost, availability, equipment, shelf life
 - **Recipe Engine** — the recipe itself needs changing (triggers versioning/evolution). Distinct from preference feedback: "I don't like coriander" is a preference; "this recipe needs more garlic" is a recipe change.
+- **Meal Planner** — plan disruptions and schedule changes. "The chicken's gone off", "we're eating out tonight", "I didn't cook Wednesday's meal." These trigger mid-week re-optimisation of remaining days rather than updating a data model.
 
 A single piece of feedback can route to multiple destinations. "That meal was too expensive and I didn't like the texture" splits to both provisions and preference. The classifier handles this.
 
@@ -297,7 +335,9 @@ AI-maintained structured document. Regenerated periodically from accumulated fee
 }
 ```
 
-The user can view and manually correct this at any time. Hard constraints (allergies, dietary identity) are stored both here and in the database as immutable records — the AI-maintained version is a convenience copy, the DB is the source of truth for safety-critical constraints.
+The user can view and manually correct this at any time. Hard constraints (allergies, dietary identity) are stored both here and in a separate, hard-locked database table that is only editable by the user directly — never by AI, never by the feedback system, never by the optimiser. The AI-maintained version in the preference model is a convenience copy; the DB is the source of truth for safety-critical constraints.
+
+**Allergy safety is enforced deterministically, not by prompts.** Every output that touches food — plan composition, recipe optimisation, creative augmentation, grocery substitutions — is passed through a deterministic hard-filter that checks against the allergy database before being shown to the user. This filter is code, not an AI instruction. The system never trusts the LLM to remember or respect allergies.
 
 ---
 
@@ -330,7 +370,7 @@ src/main/java/com/example/mealprep/
 ├── recipe/optimiser/ ← Recipe Optimiser (adapts recipes against data models — four trigger points)
 ├── planner/          ← Meal Planner (orchestrator — three-phase optimisation across all data models)
 ├── grocery/          ← GroceryProvider abstraction + Tesco implementation (Provisions output)
-├── feedback/         ← Feedback System (context-aware routing to four destinations)
+├── feedback/         ← Feedback System (context-aware routing to five destinations incl. planner)
 ├── ai/               ← AI Service (cross-cutting LLM layer)
 ├── notification/     ← Notifications (cross-cutting alerts)
 └── MealPrepApplication.java
@@ -355,11 +395,11 @@ Modules communicate through service interfaces. Each owns its own DB tables. Ext
 - React frontend with core views
 
 ### Phase 2: Intelligence
-- Feedback system (conversational, context-aware routing to four destinations: preference, nutrition, provisions, recipe engine)
+- Feedback system (conversational, context-aware routing to five destinations: preference, nutrition, provisions, recipe engine, meal planner)
 - Preference Model evolution (AI-maintained, regenerated from feedback)
 - Recipe Optimiser post-feedback trigger (feedback → proposed recipe changes)
 - Recipe discovery (online search + filter)
-- Plan adjustments (event + intent UX for mid-week disruptions)
+- Mid-week re-optimisation (disruptions, grocery substitutions, and macro corrections trigger re-plan of remaining days)
 - Nutrition tracking (planned vs actual)
 - Health tracking tier 1 (mood, symptoms, weight — feeds into nutrition model)
 
