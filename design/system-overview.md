@@ -8,12 +8,13 @@ An AI-powered meal planning and health optimisation system for personal/family u
 
 ## Architecture: Three Data Models, One Planner
 
-The system has five major components with distinct roles:
+The system has six major components with distinct roles:
 
 - **Three data models (state):** Preference Model, Nutrition Model, and Provisions. These are data objects that hold constraints, targets, and current state. They don't contain optimisation logic — they're what gets optimised against.
 - **One recipe database:** The Recipe Engine. An independent catalogue (split into user and system catalogues) of recipes with versioning and branching. It doesn't optimise anything — it's the pool the planner draws from.
 - **One recipe optimiser:** Adapts individual recipes against the three data models. Triggered on import, after feedback, on data model changes, or at plan-time. Proposes changes to user recipes (requires approval), freely modifies system recipes.
 - **One orchestrator:** The Meal Planner. Operates in three phases: recipe-level adaptation (via the optimiser), plan-level composition (combinatorial search), and plan-level creative augmentation (AI-generated gap-filling). It queries the Recipe Engine to find combinations of recipes that satisfy all three data models simultaneously.
+- **One feedback system:** Single conversational interface accessible from anywhere in the UI. Context-aware classifier routes feedback to four destinations (Preference Model, Nutrition Model, Provisions, Recipe Engine). Can split a single piece of feedback across multiple destinations. The only component that writes back to the data models via AI interpretation — all other writes are manual direct edits or planner outputs.
 
 The planning cadence defaults to weekly but is configurable.
 
