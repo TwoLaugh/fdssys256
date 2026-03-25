@@ -20,8 +20,8 @@ The planning cadence defaults to weekly but is configurable.
 
 ```
      ╔═════════════════════════════════════════════════════════════════════╗
-     ║                       USER INTERACTION                             ║
-     ║             view plan · cook · eat · give feedback                 ║
+     ║                       USER INTERACTION                              ║
+     ║             view plan · cook · eat · give feedback                  ║
      ╚════════════════════════════════╤════════════════════════════════════╝
                                       │
                                       ▼
@@ -29,15 +29,15 @@ The planning cadence defaults to weekly but is configurable.
      │                        FEEDBACK SYSTEM                              │
      │                                                                     │
      │  conversational input → AI classifies → routes to:                  │
-     │    taste/ease/cuisine ────────────────────────► preference           │
-     │    portion/nutrition/health ──────────────────► nutrition            │
-     │    cost/availability/equipment ──────────────► provisions            │
-     │    recipe-specific changes ──────────────────► recipe engine         │
+     │    taste/ease/cuisine ────────────────────────► preference          │
+     │    portion/nutrition/health ──────────────────► nutrition           │
+     │    cost/availability/equipment ──────────────► provisions           │
+     │    recipe-specific changes ──────────────────► recipe engine        │
      │                                                                     │
      │  single input can split across multiple destinations                │
-     └───────┬─────────────────┬─────────────────┬─────────────────┬───────┘
-             │                 │                 │                 │
-             ▼                 ▼                 ▼                 ▼
+     └───────┬─────────────────┬─────────────────┬───────────────────┬─────┘
+             │                 │                 │                   │
+             ▼                 ▼                 ▼                   ▼
      ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
      │  PREFERENCE  │   │  NUTRITION   │   │  PROVISIONS  │   │ RECIPE ENGINE│
      │    MODEL     │   │    MODEL     │   │              │   │              │
@@ -52,12 +52,12 @@ The planning cadence defaults to weekly but is configurable.
      │              │   │ labs · wear  │   │ ◄─ grocery   │   │ discover/gen │
      │              │   │              │   │    prices    │   │              │
      └───────┬──────┘   └───────┬──────┘   └───────┬──────┘   └───────┬──────┘
-             │                 │                 │                 │
-             ▼                 ▼                 ▼                 ▼
+             │                  │                  │                  │
+             ▼                  ▼                  ▼                  ▼
      ┌─────────────────────────────────────────────────────────────────────┐
      │                       RECIPE OPTIMISER                              │
      │                                                                     │
-     │  adapts individual recipes against all three data models             │
+     │  adapts individual recipes against all three data models            │
      │  triggers: import · feedback · data model change · plan-time        │
      │  user recipes: propose (requires approval)                          │
      │  system recipes: apply freely                                       │
@@ -65,9 +65,9 @@ The planning cadence defaults to weekly but is configurable.
                                       │
                                       ▼
      ╔═════════════════════════════════════════════════════════════════════╗
-     ║                         MEAL PLANNER                               ║
+     ║                         MEAL PLANNER                                ║
      ║                                                                     ║
-     ║  queries Recipe Engine · checks against all three data models        ║
+     ║  queries Recipe Engine · checks against all three data models       ║
      ║  may invoke Recipe Optimiser as pre-step                            ║
      ║                                                                     ║
      ║  Phase 1: composition — select + arrange from both catalogues       ║
@@ -89,11 +89,11 @@ The planning cadence defaults to weekly but is configurable.
                                          │
                                          ▼
      ╔═════════════════════════════════════════════════════════════════════╗
-     ║                       USER INTERACTION                             ║
-     ║                          ↺ loops back                              ║
+     ║                       USER INTERACTION                              ║
+     ║                          ↺ loops back                               ║
      ╚═════════════════════════════════════════════════════════════════════╝
 
-     ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ cross-cutting services ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+        ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ cross-cutting services ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 
      ┌─────────────────────────────────┐  ┌────────────────────────────────┐
      │          AI SERVICE             │  │     NOTIFICATION SYSTEM        │
