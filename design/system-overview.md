@@ -8,7 +8,7 @@ An AI-powered meal planning and health optimisation system for personal/family u
 
 ## Architecture: Three Data Models, One Planner
 
-The system has six major components with distinct roles:
+The system has seven major components with distinct roles:
 
 - **Three data models (state):** Preference Model, Nutrition Model, and Provisions. Data objects that hold constraints, targets, and current state. They don't contain optimisation logic — they're what gets optimised against.
 - **Recipe Engine:** An independent catalogue (split into user and system catalogues) of recipes with versioning and branching. It doesn't optimise anything — it's the pool the planner draws from.
@@ -354,10 +354,11 @@ src/main/java/com/example/mealprep/
 ├── nutrition/        ← Nutrition Model + Logger + Health Tracking (data model — targets + tracking)
 ├── provisions/       ← Pantry + Equipment + Environment + Budget (data model — physical constraints)
 ├── recipe/           ← Recipe Engine (independent catalogue — user + system catalogues, versioning, branching)
-├── recipe/optimiser/ ← Recipe Optimiser (adapts recipes against data models — four trigger points)
+├── optimiser/        ← Recipe Optimiser (adapts recipes against data models — four trigger points)
 ├── planner/          ← Meal Planner (orchestrator — two-phase optimisation: composition + creative augmentation)
 ├── grocery/          ← GroceryProvider abstraction + Tesco implementation (Provisions output)
 ├── feedback/         ← Feedback System (context-aware routing to four data destinations)
+├── household/        ← Household Model (shared provisions, multi-user constraint unions)
 ├── ai/               ← AI Service (cross-cutting LLM layer)
 ├── notification/     ← Notifications (cross-cutting alerts)
 └── MealPrepApplication.java
