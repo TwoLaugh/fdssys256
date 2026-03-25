@@ -8,11 +8,12 @@ An AI-powered meal planning and health optimisation system for personal/family u
 
 ## Architecture: Three Data Models, One Planner
 
-The system has four major components with distinct roles:
+The system has five major components with distinct roles:
 
 - **Three data models (state):** Preference Model, Nutrition Model, and Provisions. These are data objects that hold constraints, targets, and current state. They don't contain optimisation logic — they're what gets optimised against.
-- **One recipe database:** The Recipe Engine. An independent catalogue of recipes (stored, discovered, AI-generated) with versioning. It doesn't optimise anything — it's the pool the planner draws from.
-- **One orchestrator:** The Meal Planner. This is where the optimisation lives. It queries the Recipe Engine to find combinations of recipes that satisfy all three data models simultaneously. It effectively runs three constraint-checking passes (preference, nutrition, provisions) that must converge on a single plan.
+- **One recipe database:** The Recipe Engine. An independent catalogue (split into user and system catalogues) of recipes with versioning and branching. It doesn't optimise anything — it's the pool the planner draws from.
+- **One recipe optimiser:** Adapts individual recipes against the three data models. Triggered on import, after feedback, on data model changes, or at plan-time. Proposes changes to user recipes (requires approval), freely modifies system recipes.
+- **One orchestrator:** The Meal Planner. Operates in three phases: recipe-level adaptation (via the optimiser), plan-level composition (combinatorial search), and plan-level creative augmentation (AI-generated gap-filling). It queries the Recipe Engine to find combinations of recipes that satisfy all three data models simultaneously.
 
 The planning cadence defaults to weekly but is configurable.
 
@@ -87,25 +88,68 @@ Holds pantry inventory, freezer, cupboard, equipment, kitchen environment, budge
 
 The grocery order is the output — the shopping list is just the internal calculation that feeds it. Purchased items update the pantry. The grocery integration sits behind an abstraction (GroceryProvider interface) so different suppliers can be slotted in. Tesco is the first concrete implementation, needed from day one for real cost optimisation.
 
+### Meal Planner: Three Phases
+
+The planner isn't one monolithic optimisation pass. It operates in three distinct phases, each with different logic and AI requirements:
+
+**Phase 1: Recipe-level adaptation (pre-plan)**
+Before composing the plan, the planner can invoke the Recipe Optimiser to adapt recipes in the system catalogue (and propose adaptations for user recipes) to better fit current data models. This expands the pool of well-fitting options available for plan composition. Uses mid-tier AI.
+
+**Phase 2: Plan-level composition**
+The combinatorial problem — selecting and arranging recipes from both catalogues across the planning period to satisfy all three data models in aggregate. Which combination of meals across 7 days best satisfies preferences, hits nutrition targets in total, and fits within budget/pantry? This is search and ranking over a known set. Uses frontier AI.
+
+**Phase 3: Plan-level creative augmentation**
+After composition, the planner identifies remaining gaps and makes intelligent additions or swaps that no existing recipe covers. Adding a yoghurt as a snack to hit a protein target. Swapping one cut of meat for another to drop cost while maintaining preferences. These are plan-level interventions, not recipe modifications — they don't go through recipe versioning. This is the hardest phase because the AI reasons creatively over the full space of possible food items rather than searching a known catalogue. Uses frontier AI, with hard constraint guardrails (allergies, dietary identity).
+
 ### The Hard Problem
-The planner's real challenge is satisfying all three data models simultaneously. A recipe might be perfect for preferences but blow the budget. Another might nail nutrition targets but require equipment you don't own. The AI must find the best overall solution, not optimise each model independently.
+The planner's real challenge is satisfying all three data models simultaneously across all three phases. A recipe might be perfect for preferences but blow the budget. Another might nail nutrition targets but require equipment you don't own. The AI must find the best overall solution, not optimise each model independently.
 
 ---
 
 ## Recipe Engine
 
-Independent database for all recipe operations. The Recipe Engine is a catalogue — it stores, discovers, generates, and versions recipes, but contains no optimisation logic. The Meal Planner queries it to find and rank recipes against the three data models. Combines what was previously separate (recipe store, discovery, AI generation) because they share the same mechanisms: constraint awareness, versioning, and preference/nutrition context.
+Independent database for all recipe operations. The Recipe Engine is a catalogue — it stores, discovers, generates, and versions recipes, but contains no optimisation logic. The Meal Planner queries it to find and rank recipes against the three data models.
 
-**Three sources, one pipeline:**
-- **Existing library** — recipes already saved, with version history and feedback
-- **Online discovery** — search the web, hard-filter against constraints, score against preferences, import accepted ones
-- **AI generation** — create new recipes or adapt existing ones based on specific gaps (e.g., "need a high-protein weeknight meal under 30 mins")
+### Two catalogues
 
-**Recipe evolution** (same mechanism for all sources):
-- Feedback triggers versioning — AI proposes changes, user approves
-- Changelogs track what changed and why
-- Per-version feedback so you can compare iterations
-- Constraint-aware: won't evolve a recipe into something that violates allergies or nutrition targets
+- **User catalogue** — recipes deliberately entered, imported, or saved by the user. These are "owned" recipes. The Recipe Optimiser proposes changes to these but never applies them without user approval. This is the curated library.
+- **System catalogue** — AI-managed pool of recipes the system has discovered, generated, or adapted on its own. The Recipe Optimiser can modify these freely without approval, giving the planner a much larger and more flexible set of options to draw from. The user can promote any system recipe to their user catalogue at any time.
+
+Both catalogues share the same data structures, versioning, and branching mechanisms. The only difference is the approval model.
+
+### Three sources, one pipeline
+- **Manual entry / import** — user adds a recipe or imports from URL. Goes into the user catalogue.
+- **Online discovery** — search the web, hard-filter against constraints, score against preferences. Goes into the system catalogue; user can promote to their catalogue.
+- **AI generation** — create new recipes based on specific gaps (e.g., "need a high-protein weeknight meal under 30 mins"). Goes into the system catalogue unless the user explicitly saves it.
+
+### Versioning and branching
+
+Every recipe change creates a new version. Versions are comparable — you can look at any two versions side by side and see what changed and why (ingredients, method steps, portions). Per-version feedback lets you track whether changes actually improved the recipe.
+
+**Branching** handles the case where a recipe has meaningful variants that should coexist rather than replace each other. If you swap the protein in a stir fry from chicken to beef, that's not just a version — it changes several steps and produces a meaningfully different dish. That becomes a branch: same base recipe, different variant. The planner can pick between branches based on which better fits the current plan (e.g., beef branch is over budget this week, use the chicken branch). Branches share a common ancestor and can each have their own version history.
+
+A version is a linear change (tweak salt, adjust portion size). A branch is a fork (different protein, different cooking method that changes the character of the dish).
+
+---
+
+## Recipe Optimiser
+
+A single mechanism for adapting recipes against the three data models (preference, nutrition, provisions). It doesn't live inside the Recipe Engine (which is just storage) or the Meal Planner (which is plan composition). It's a distinct component that can be triggered from multiple places.
+
+### Trigger 1: Import / discovery
+A recipe enters the system (imported from URL, discovered online, manually added). The optimiser runs it against all three data models and proposes adaptations. "This recipe uses cream, you're lactose intolerant — swap for coconut cream?" "This calls for fillet steak, that's over budget — suggest rump instead?" For user catalogue recipes, the user reviews and accepts or rejects. For system catalogue recipes, changes apply automatically.
+
+### Trigger 2: Post-feedback
+The user has eaten the meal and given feedback ("too salty", "needed more protein"). The feedback system updates the relevant data model(s), and the optimiser proposes a new version (or branch) of that specific recipe addressing the feedback.
+
+### Trigger 3: Data model change
+The user updates preferences, changes nutrition targets, or budget shifts. Recipes that were previously well-fitted may now have gaps. The user can hit a "re-optimise" button on any recipe (or batch across the catalogue) to get new suggestions against the updated constraints. For user catalogue recipes, suggestions are proposed. For system catalogue recipes, changes apply automatically.
+
+### Trigger 4: Plan-time
+During weekly plan composition, the Meal Planner may request slight recipe tweaks to make the overall plan work. The optimiser handles the actual adaptation. Changes to user recipes are surfaced in the plan ("I swapped turkey for chicken in Wednesday's stir fry to stay in budget"). System catalogue recipes are adapted freely.
+
+### Core principle: propose, not apply (for user recipes)
+The user catalogue is the user's curated library. The optimiser never silently mutates it. Every change is a proposed new version or branch that the user can accept, reject, or modify. The system catalogue has no such restriction — the AI can iterate freely, giving the planner more options to work with.
 
 ---
 
@@ -146,9 +190,11 @@ Cross-cutting layer for all LLM interactions. Every module that needs AI goes th
 
 | Task | Model Tier | Frequency |
 |------|-----------|-----------|
-| Generate weekly meal plan | Frontier (Sonnet/Opus) | 1x/week |
+| Meal Planner Phase 2: plan composition | Frontier (Sonnet/Opus) | 1x/week |
+| Meal Planner Phase 3: creative augmentation | Frontier (Sonnet/Opus) | 1x/week |
 | Rebalance plan after disruption | Frontier | Ad-hoc |
-| Generate/evolve recipe | Mid (Haiku/Sonnet) | As needed |
+| Recipe Optimiser: adapt recipes against data models | Mid (Haiku/Sonnet) | Per trigger |
+| Generate new recipe | Mid (Haiku/Sonnet) | As needed |
 | Incorporate feedback → preference model | Mid | After meals |
 | Recipe discovery (search + filter) | Mid | Weekly |
 | Import recipe from URL | Mid | Per import |
@@ -269,7 +315,7 @@ The user can view and manually correct this at any time. Hard constraints (aller
 
 ## Architecture: Modular Monolith
 
-Single deployable application with clean internal module boundaries. Most modules are independently buildable: auth, preference, nutrition, provisions, recipe engine, and grocery can each be developed in isolation. The Meal Planner and Feedback System are where integration complexity lives — these depend on the other modules and should come last. The household model is also cross-cutting (shared provisions, constraint unions across users).
+Single deployable application with clean internal module boundaries. Most modules are independently buildable: auth, preference, nutrition, provisions, recipe engine, and grocery can each be developed in isolation. The Meal Planner, Recipe Optimiser, and Feedback System are where integration complexity lives — these depend on the data models and recipe engine and should come last. The household model is also cross-cutting (shared provisions, constraint unions across users).
 
 The conceptual architecture maps to implementation modules like this:
 
@@ -279,8 +325,9 @@ src/main/java/com/example/mealprep/
 ├── preference/       ← Preference Model (data model — constraints + taste profile)
 ├── nutrition/        ← Nutrition Model + Logger + Health Tracking (data model — targets + tracking)
 ├── provisions/       ← Pantry + Equipment + Environment + Budget (data model — physical constraints)
-├── recipe/           ← Recipe Engine (independent database — store, discovery, generation, versioning)
-├── planner/          ← Meal Planner (orchestrator — optimises across all three data models)
+├── recipe/           ← Recipe Engine (independent database — user + system catalogues, versioning, branching)
+├── recipe/optimiser/ ← Recipe Optimiser (adapts recipes against data models — four trigger points)
+├── planner/          ← Meal Planner (orchestrator — three-phase optimisation across all data models)
 ├── grocery/          ← GroceryProvider abstraction + Tesco implementation (Provisions output)
 ├── feedback/         ← Feedback System (context-aware routing to four destinations)
 ├── ai/               ← AI Service (cross-cutting LLM layer)
@@ -299,8 +346,9 @@ Modules communicate through service interfaces. Each owns its own DB tables. Ext
 - Preference Model (initial setup, hard/soft constraints, cooking prefs)
 - Nutrition Model (calorie/macro targets)
 - Provisions (pantry — manual tracking, equipment list)
-- Recipe Engine (CRUD, import from URL, AI generation)
-- Meal Planner (weekly plan generation, three-loop optimisation)
+- Recipe Engine (CRUD, import from URL, AI generation, user + system catalogues, versioning + branching)
+- Recipe Optimiser (adapt recipes on import, re-optimise on data model change)
+- Meal Planner (three-phase optimisation: recipe adaptation, plan composition, creative augmentation)
 - Grocery integration via GroceryProvider abstraction (Tesco as first implementation: price checking + shopping list + ordering)
 - Basic nutrition dashboard
 - React frontend with core views
@@ -308,7 +356,7 @@ Modules communicate through service interfaces. Each owns its own DB tables. Ext
 ### Phase 2: Intelligence
 - Feedback system (conversational, context-aware routing to four destinations: preference, nutrition, provisions, recipe engine)
 - Preference Model evolution (AI-maintained, regenerated from feedback)
-- Recipe versioning and evolution
+- Recipe Optimiser post-feedback trigger (feedback → proposed recipe changes)
 - Recipe discovery (online search + filter)
 - Plan adjustments (event + intent UX for mid-week disruptions)
 - Nutrition tracking (planned vs actual)
