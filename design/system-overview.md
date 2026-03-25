@@ -6,9 +6,15 @@
 
 An AI-powered meal planning and health optimisation system for personal/family use. The AI handles planning, recipe management, and learning from feedback. The user views, gives feedback, and makes adjustments.
 
-## Architecture: Three Constraint Loops
+## Architecture: Three Data Models, One Planner
 
-The Meal Planner is the central orchestrator. It simultaneously satisfies three parallel constraint-optimisation loops, each with its own input state, internal optimisation, and output that feeds back into itself.
+The system has four major components with distinct roles:
+
+- **Three data models (state):** Preference Model, Nutrition Model, and Provisions. These are data objects that hold constraints, targets, and current state. They don't contain optimisation logic — they're what gets optimised against.
+- **One recipe database:** The Recipe Engine. An independent catalogue of recipes (stored, discovered, AI-generated) with versioning. It doesn't optimise anything — it's the pool the planner draws from.
+- **One orchestrator:** The Meal Planner. This is where the optimisation lives. It queries the Recipe Engine to find combinations of recipes that satisfy all three data models simultaneously. It effectively runs three constraint-checking passes (preference, nutrition, provisions) that must converge on a single plan.
+
+The planning cadence defaults to weekly but is configurable.
 
 ```
                  ┌───────────────────────────────────────┐
@@ -68,29 +74,27 @@ The Meal Planner is the central orchestrator. It simultaneously satisfies three 
                          └───────────────┘
 ```
 
-### Loop 1: Preference Loop
-**Input:** Preference Model (likes, dislikes, allergies, intolerances, cooking style, cuisine preferences, meal structure, time constraints)
-**Optimisation:** Find/create recipes that match taste, ease, and lifestyle. The Recipe Engine searches existing recipes, discovers online, and generates new ones — all filtered and scored against preferences.
-**Output:** Selected recipes in the weekly plan. User feedback after eating refines the preference model.
+### Data Model 1: Preference Model
+Holds the user's taste profile, constraints, and cooking lifestyle. Likes, dislikes, allergies, intolerances, cooking style, cuisine preferences, meal structure, time constraints. The planner filters and scores recipes against this. Feedback after eating refines it over time.
 
-### Loop 2: Nutrition Loop
-**Input:** Nutrition Model (calorie/macro/micro targets, dietary identity, health goals). The model is refined over time by health tracking data — mood, symptoms, weight, labs, wearable data, genomics — which lives within this loop, not as a separate module. Health tracking is how the nutrition model learns from outcomes.
-**Optimisation:** Balance nutritional targets across the week. Individual meals may miss targets but the weekly total should converge.
-**Output:** Nutrition logger tracks planned vs actual. User feedback on portions and nutrition fit refines the model. Health data (mood, weight trends, lab results) triggers deeper target adjustments via AI-generated weekly/monthly reviews.
+### Data Model 2: Nutrition Model
+Holds calorie/macro/micro targets, dietary identity, and health goals. Refined over time by health tracking data — mood, symptoms, weight, labs, wearable data, genomics — which lives within this model, not as a separate module. Health tracking is how the nutrition model learns from outcomes. The planner balances nutritional targets across the planning period — individual meals may miss targets but the total should converge.
 
-### Loop 3: Provisions Loop
-**Input:** Provisions (pantry inventory, freezer, cupboard, equipment, kitchen environment, budget, supplier availability/pricing). Budget constraint requires checking Tesco prices, so Tesco is already involved at the input stage.
-**Optimisation:** Work within what's available, maximise ingredient utilisation across pack sizes, minimise waste and cost.
-**Output:** Tesco order (price-aware shopping + ordering). This replaces a separate "shopping list" — the shopping list is just the internal calculation that feeds the order. Purchased items update pantry. User feedback like "too expensive", "couldn't find", "needs equipment I don't have" refines provisions.
+The nutrition logger works like MyFitnessPal: planned meals are pre-filled from the meal plan and can be confirmed with a tap, or overridden via AI-assisted free-text entry ("actually I had X instead") or manual editing. This tracks planned vs actual intake.
+
+### Data Model 3: Provisions
+Holds pantry inventory, freezer, cupboard, equipment, kitchen environment, budget, and supplier availability/pricing. Budget constraint requires checking grocery prices, so the grocery provider is already involved at the input stage. The planner works within what's available, maximises ingredient utilisation across pack sizes, and minimises waste and cost.
+
+The grocery order is the output — the shopping list is just the internal calculation that feeds it. Purchased items update the pantry. The grocery integration sits behind an abstraction (GroceryProvider interface) so different suppliers can be slotted in. Tesco is the first concrete implementation, needed from day one for real cost optimisation.
 
 ### The Hard Problem
-The planner's real challenge is satisfying all three loops simultaneously. A recipe might be perfect for preferences but blow the budget. Another might nail nutrition targets but require equipment you don't own. The AI must find the best overall solution, not optimise each loop independently.
+The planner's real challenge is satisfying all three data models simultaneously. A recipe might be perfect for preferences but blow the budget. Another might nail nutrition targets but require equipment you don't own. The AI must find the best overall solution, not optimise each model independently.
 
 ---
 
 ## Recipe Engine
 
-Unified system for all recipe operations. Combines what was previously separate (recipe store, discovery, AI generation) because they share the same mechanisms: constraint awareness, versioning, and preference/nutrition context.
+Independent database for all recipe operations. The Recipe Engine is a catalogue — it stores, discovers, generates, and versions recipes, but contains no optimisation logic. The Meal Planner queries it to find and rank recipes against the three data models. Combines what was previously separate (recipe store, discovery, AI generation) because they share the same mechanisms: constraint awareness, versioning, and preference/nutrition context.
 
 **Three sources, one pipeline:**
 - **Existing library** — recipes already saved, with version history and feedback
@@ -151,7 +155,7 @@ Cross-cutting layer for all LLM interactions. Every module that needs AI goes th
 | Nutrition: map ingredients to USDA entries | Cheap (Haiku) | Per recipe |
 | Parse user free-text input | Cheap (Haiku) | Per interaction |
 | Nutrition/health review generation | Mid | Weekly/monthly |
-| Tesco product matching + navigation | Mid/Frontier | 1x/week |
+| Grocery product matching + navigation (Tesco initially) | Mid/Frontier | 1x/week |
 | Shopping list calculation | Deterministic code | 1x/week |
 | Nutrition aggregation | Deterministic code | Daily |
 
@@ -170,17 +174,32 @@ Alerts and reminders delivered in-app. Listens to events across all modules.
 
 ## Feedback System
 
-The primary way users interact with and improve the system.
+The primary way users interact with and improve the system. Single conversational interface with context-aware routing.
+
+### Entry points
+Feedback can be given from anywhere in the UI. The screen context provides implicit routing — feedback entered on the Tesco order screen is assumed to be a provisions concern, feedback on a recipe page is assumed to be a taste/preference concern, feedback on the nutrition dashboard is assumed to be a nutrition concern. General feedback (e.g., from a home screen) requires the classifier to work harder, but the AI can ask clarifying questions rather than guess.
+
+### Four destinations
+The AI classifier routes each piece of feedback to the appropriate destination(s):
+- **Preference Model** — taste, likes/dislikes, cooking style, cuisine preferences
+- **Nutrition Model** — portions, macro fit, health signals (mood, symptoms, weight)
+- **Provisions** — cost, availability, equipment, shelf life
+- **Recipe Engine** — the recipe itself needs changing (triggers versioning/evolution). Distinct from preference feedback: "I don't like coriander" is a preference; "this recipe needs more garlic" is a recipe change.
+
+A single piece of feedback can route to multiple destinations. "That meal was too expensive and I didn't like the texture" splits to both provisions and preference. The classifier handles this.
+
+### Misclassification
+Misrouted feedback silently degrades the wrong model, so routed feedback should be surfaceable and correctable by the user rather than fire-and-forget.
+
+### Processing
 - Conversational input (natural language, not forms)
 - AI interprets and scores against rubric: taste, ease, nutrition fit, portion, cost, repeat desire
-- Routes feedback to the appropriate loop:
-  - Taste/ease/cuisine → Preference Model
-  - Portion size/nutrition fit/health signals (mood, symptoms, weight) → Nutrition Model
-  - Cost/availability/equipment/shelf life → Provisions
 - Health tracking (mood, energy, symptoms, weight, labs, wearables, genomics) feeds through here into the Nutrition Model — it's part of the feedback loop, not a separate system
-- Drives recipe evolution (versioning, changelogs)
 - Maintains the Preference Model (AI-generated structured summary, ~2000 tokens, regenerated every 5 feedbacks)
 - Generates weekly/monthly AI reviews correlating food with health outcomes
+
+### Manual direct edits
+Every data model (Preference, Nutrition, Provisions) and the Recipe Engine are directly editable by the user with no AI in the loop. This is the escape hatch when the AI gets something wrong or the user just knows what they want. Manual changes take effect immediately.
 
 ---
 
@@ -243,25 +262,27 @@ The user can view and manually correct this at any time. Hard constraints (aller
 - **State/Styling**: TanStack Query + Zustand + Tailwind CSS
 - **AI**: Anthropic API (Claude models, tiered)
 - **Nutrition data**: USDA FoodData Central + Open Food Facts
-- **Grocery automation**: Claude computer use / Chrome connector
+- **Grocery automation**: GroceryProvider abstraction; Tesco via Claude computer use / Chrome connector
 - **Hosting**: Local / self-hosted
 
 ---
 
 ## Architecture: Modular Monolith
 
-Single deployable application with clean internal module boundaries. The three-loop conceptual architecture maps to implementation modules like this:
+Single deployable application with clean internal module boundaries. Most modules are independently buildable: auth, preference, nutrition, provisions, recipe engine, and grocery can each be developed in isolation. The Meal Planner and Feedback System are where integration complexity lives — these depend on the other modules and should come last. The household model is also cross-cutting (shared provisions, constraint unions across users).
+
+The conceptual architecture maps to implementation modules like this:
 
 ```
 src/main/java/com/example/mealprep/
 ├── auth/             ← User accounts (thin auth layer)
-├── preference/       ← Preference Model (Loop 1 state)
-├── nutrition/        ← Nutrition Model + Tracker + Health Tracking (Loop 2)
-├── provisions/       ← Pantry + Equipment + Environment (Loop 3 state)
-├── recipe/           ← Recipe Engine (store, discovery, generation, versioning)
-├── planner/          ← Meal Planner + Adjustments (the orchestrator)
-├── grocery/          ← Tesco: price checking, shopping list, ordering (Loop 3 output)
-├── feedback/         ← Feedback System (routes to all three loops)
+├── preference/       ← Preference Model (data model — constraints + taste profile)
+├── nutrition/        ← Nutrition Model + Logger + Health Tracking (data model — targets + tracking)
+├── provisions/       ← Pantry + Equipment + Environment + Budget (data model — physical constraints)
+├── recipe/           ← Recipe Engine (independent database — store, discovery, generation, versioning)
+├── planner/          ← Meal Planner (orchestrator — optimises across all three data models)
+├── grocery/          ← GroceryProvider abstraction + Tesco implementation (Provisions output)
+├── feedback/         ← Feedback System (context-aware routing to four destinations)
 ├── ai/               ← AI Service (cross-cutting LLM layer)
 ├── notification/     ← Notifications (cross-cutting alerts)
 └── MealPrepApplication.java
@@ -280,12 +301,12 @@ Modules communicate through service interfaces. Each owns its own DB tables. Ext
 - Provisions (pantry — manual tracking, equipment list)
 - Recipe Engine (CRUD, import from URL, AI generation)
 - Meal Planner (weekly plan generation, three-loop optimisation)
-- Tesco integration (price checking + shopping list + ordering)
+- Grocery integration via GroceryProvider abstraction (Tesco as first implementation: price checking + shopping list + ordering)
 - Basic nutrition dashboard
 - React frontend with core views
 
 ### Phase 2: Intelligence
-- Feedback system (conversational, rubric scoring, routes to loops)
+- Feedback system (conversational, context-aware routing to four destinations: preference, nutrition, provisions, recipe engine)
 - Preference Model evolution (AI-maintained, regenerated from feedback)
 - Recipe versioning and evolution
 - Recipe discovery (online search + filter)
