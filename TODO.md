@@ -1,38 +1,41 @@
 # Development Plan
 
-## Phase 1a: Review High-Level Design (do first — shapes the LLD work)
-Review order: core concepts first, then features that depend on them, then support/polish.
-- [ ] 1. system-overview.md — the single source of truth, review first
-- [ ] 2. user-profile.md — everything depends on knowing the user
-- [ ] 3. ai-service.md — the engine behind most features
-- [ ] 4. preference-model.md — how AI learns the user, feeds into recipes/planner
-- [ ] 5. recipe-system.md — core content unit
-- [ ] 6. nutrition-engine.md — how recipes get nutrition data
-- [ ] 7. feedback-and-recipe-evolution.md — how recipes improve
-- [ ] 8. meal-planning.md — the main product value
-- [ ] 9. pantry-tracking.md — supports planner and shopping
-- [ ] 10. plan-disruptions.md — edge cases for the planner
-- [ ] 11. frontend-ux.md — how users interact with all of the above
-- [ ] 12. health-tracking.md — later-phase feature, but review the vision
-- [ ] 13. risk-and-complexity.md — sanity check after reviewing everything
-- [ ] 14. build-order.md — confirm sequencing still makes sense
-- [ ] 15. additional-ideas.md — anything worth promoting to a real feature?
+## Phase 1: Design (current)
 
-## Phase 1b: Review Module LLDs (after high-level is confirmed)
-- [ ] 00 - Shared Reference
-- [ ] 01 - Profile
-- [ ] 02 - AI Service
-- [ ] 03 - Recipe
-- [ ] 04 - Nutrition Engine
-- [ ] 05 - Pantry
-- [ ] 06 - Planner
-- [ ] 07 - Shopping
-- [ ] 08 - Feedback
-- [ ] 09 - Nutrition Tracker
-- [ ] 10 - Discovery
-- [ ] 11 - Grocery (Tesco)
-- [ ] 12 - Health
-- [ ] 13 - Notification
+System overview is the source of truth. Design work = get each component's data model and behaviour nailed down in detail, working outward from the overview.
+
+### 1a. Resolve system-overview.md TODOs
+- [ ] Household constraint conflicts — conflict resolution strategy for irreconcilable shared-meal constraints
+- [ ] Planner failure / fallback UX — what happens when no valid plan exists
+- [ ] Nutrition Logger vs Feedback System boundary — clarify the one-liner distinction
+- [ ] Recipe discovery quality/trust — how garbage-in on scraped recipes is handled
+
+### 1b. Data model designs (Preference, Nutrition, Provisions)
+The three data models are what everything else optimises against. Pin these down first.
+- [ ] Preference Model — full schema, hard-constraint table design, soft preference structure, how feedback writes update it
+- [ ] Nutrition Model — full schema, macro/micro targets, health tracking fields, how the logger interacts
+- [ ] Provisions — full schema, pantry/freezer/equipment/budget, grocery price integration, expiry/depletion tracking
+
+### 1c. Recipe data model
+Depends on the three data models being clear (recipe properties need to map to what the optimiser checks against).
+- [ ] Recipe Engine — schema for both catalogues, versioning/branching model, recipe metadata properties, source pipeline (manual/import/discovery/generation)
+
+### 1d. Optimiser and Planner design
+The hard parts. With data models and recipe structure defined, the constraint space is concrete.
+- [ ] Recipe Optimiser — how it reads the three data models, adaptation logic per trigger, propose-vs-apply mechanics
+- [ ] Meal Planner — Phase 1 composition approach (scoring/search/hybrid), Phase 2 creative augmentation, mid-week re-optimisation, how it invokes the optimiser
+
+### 1e. Remaining component designs
+- [ ] Feedback System — classifier design, routing logic, multi-destination splitting, misclassification correction UX
+- [ ] Household Model — shared provisions, constraint unions, per-user vs shared meal slots
+- [ ] AI Service — prompt management, tier routing, context assembly, cost tracking
+- [ ] Notification System — event sources, delivery mechanism, alert types
+- [ ] Grocery Provider — GroceryProvider interface, Tesco implementation approach
+
+### 1f. Reconcile old HLD docs with system overview
+The old design/ HLDs (preference-model.md, recipe-system.md, nutrition-engine.md, pantry-tracking.md, meal-planning.md, etc.) predate the current system overview and may conflict. Once the above designs are done:
+- [ ] Review each old HLD against the system overview — retire, merge, or update as needed
+- [ ] Update or retire old LLDs that no longer match
 
 ## Phase 2: Test Plan
 Write comprehensive test specs per module so implementation = "make the tests pass."
