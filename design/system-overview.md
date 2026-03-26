@@ -44,7 +44,7 @@ The planning cadence defaults to weekly but is configurable.
      │              │   │              │   │              │   │              │
      │ allergies    │   │ cal/macro/   │   │ pantry       │   │ user catalog │
      │ likes        │   │ micro tgts   │   │ freezer      │   │ sys catalog  │
-     │ dislikes     │   │ dietary id   │   │ equipment    │   │              │
+     │ dislikes     │   │ dietary ptns │   │ equipment    │   │              │
      │ cuisine      │   │              │   │ environment  │   │ versioning   │
      │ cooking      │   │ ◄─ health:   │   │ budget       │   │ branching    │
      │ meal struct  │   │ mood · wt    │   │ suppliers    │   │              │
@@ -121,7 +121,7 @@ For the concrete JSON shape and details, see [preference-model-shape.md](prefere
 
 ## Data Model 2: Nutrition Model
 
-Holds calorie/macro/micro targets, dietary identity, and health goals. Designed for maximum depth — the system should support everything a serious nutrition tracker would need.
+Holds calorie/macro/micro targets and health goals. Designed for maximum depth — the system should support everything a serious nutrition tracker would need.
 
 **Macro targets:**
 - Total daily calorie target and macro gram targets (not just ratios — 180g protein is a hard floor, not "30% of calories")
@@ -376,3 +376,15 @@ Modules communicate through service interfaces. Each owns its own DB tables. Ext
 ## Phased Delivery
 
 See [phased-delivery.md](phased-delivery.md) for the full phase breakdown.
+
+---
+
+## TODO
+
+- **Household constraint conflicts:** The planner "respects the union of all eaters' hard constraints" for shared meals, but irreconcilable combinations (e.g., vegan + keto) need a conflict resolution strategy. Should the planner flag impossible constraint sets? Suggest splitting a shared meal into individual meals? Needs at least a note here or in the Household LLD.
+
+- **Planner failure / fallback UX:** What happens when the planner genuinely can't produce a valid plan (budget too tight + nutrition targets too strict + limited provisions)? The system needs a way to surface "I can't satisfy all your constraints, here's what I'd relax and why." Easy to defer, painful to retrofit.
+
+- **Nutrition Logger vs Feedback System boundary:** Both accept free-text and involve AI interpretation, but serve different purposes. Worth a one-liner clarifying that the logger is for intake correction (what you ate) while feedback is for preference/quality signals (what you thought about what you ate).
+
+- **Recipe discovery quality/trust:** Web-scraped recipes don't always have accurate nutrition data or reliable ingredient lists. The hard-filter pipeline (search → filter → score → import to system catalogue) needs a note on how recipe quality and nutritional data trust is handled, since garbage-in on ingredients would cascade through the optimiser.
