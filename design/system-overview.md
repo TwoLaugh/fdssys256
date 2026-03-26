@@ -115,7 +115,7 @@ Holds the user's taste profile, constraints, and cooking lifestyle. Likes, disli
 
 Hard constraints (allergies, dietary identity) are stored in a separate, hard-locked database table that is only editable by the user directly — never by AI, never by the feedback system, never by the optimiser. **Allergy safety is enforced deterministically, not by prompts.** Every output that touches food is passed through a deterministic hard-filter that checks against the allergy database before being shown to the user. This filter is code, not an AI instruction. The system never trusts the LLM to remember or respect allergies.
 
-For the concrete JSON shape and details, see [preference-model-shape.md](preference-model-shape.md).
+For the full design — JSON shape, update logic, versioning, and field rationale — see [preference-model.md](preference-model.md).
 
 ---
 
@@ -256,7 +256,7 @@ Misrouted feedback silently degrades the wrong model, so routed feedback should 
 - Conversational input (natural language, not forms)
 - AI interprets and scores against rubric: taste, ease, nutrition fit, portion, cost, repeat desire
 - Health tracking (mood, energy, symptoms, weight, labs, wearables, genomics) feeds through here into the Nutrition Model — it's part of the feedback loop, not a separate system
-- Maintains the Preference Model (AI-generated structured summary, ~2000 tokens, regenerated every 5 feedbacks)
+- Routes preference-relevant feedback to the preference update pipeline, which proposes delta-based updates (not full regeneration) to the Preference Model
 - Generates weekly/monthly AI reviews correlating food with health outcomes
 
 ### Manual direct edits

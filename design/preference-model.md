@@ -108,16 +108,16 @@ The AI-maintained preference document. This is what gets included as context in 
 
   "ingredient_preferences": {
     "favourites": [
-      {"item": "chicken thighs", "evidence_count": 23, "last_signal": "2026-04-10"},
-      {"item": "sweet potato", "evidence_count": 15, "last_signal": "2026-04-08"},
-      {"item": "lemon", "evidence_count": 18, "last_signal": "2026-04-12"},
-      {"item": "garlic", "evidence_count": 20, "last_signal": "2026-04-11"},
-      {"item": "chickpeas", "evidence_count": 12, "last_signal": "2026-04-05"}
+      {"item": "chicken thighs", "evidence_count": 23, "last_signal": "2026-04-10", "source": "feedback"},
+      {"item": "sweet potato", "evidence_count": 15, "last_signal": "2026-04-08", "source": "feedback"},
+      {"item": "lemon", "evidence_count": 18, "last_signal": "2026-04-12", "source": "feedback"},
+      {"item": "garlic", "evidence_count": 20, "last_signal": "2026-04-11", "source": "inferred"},
+      {"item": "chickpeas", "evidence_count": 12, "last_signal": "2026-04-05", "source": "feedback"}
     ],
     "disliked": [
-      {"item": "coriander", "evidence_count": 8, "last_signal": "2026-04-01"},
-      {"item": "blue cheese", "evidence_count": 5, "last_signal": "2026-03-20"},
-      {"item": "raw celery", "evidence_count": 3, "last_signal": "2026-03-15"}
+      {"item": "coriander", "evidence_count": 8, "last_signal": "2026-04-01", "source": "feedback"},
+      {"item": "blue cheese", "evidence_count": 5, "last_signal": "2026-03-20", "source": "onboarding"},
+      {"item": "raw celery", "evidence_count": 3, "last_signal": "2026-03-15", "source": "feedback"}
     ],
     "trending_positive": [
       {"item": "tahini", "evidence_count": 3, "first_signal": "2026-03-20"},
@@ -164,7 +164,8 @@ The AI-maintained preference document. This is what gets included as context in 
       "breakfast": {"mode": "rotation", "rotation_size": 3},
       "lunch": {"mode": "batch_repeat", "max_consecutive_same": 5, "weekly_unique_minimum": 1},
       "dinner": {"mode": "high_variety", "max_consecutive_same": 1, "new_per_week": 2},
-      "snacks": {"mode": "static"}
+      "snacks": {"mode": "static"},
+      "recipe_repeat_cooldown_weeks": {"default": 2, "overrides": {"breakfast": 0}}
     },
     "recurring_skips": [
       {"day": "friday", "meal": "dinner", "reason": "usually eats out"}
@@ -260,13 +261,17 @@ The AI-maintained preference document. This is what gets included as context in 
 
 ### Field design rationale
 
+**Notes fields are for AI context, not programmatic querying.** Several sections have free-text `notes` fields (flavour, cuisine, meal timing). These exist because some preference nuances — "Responds well to brightness (lemon, vinegar)" — are genuinely hard to structure and are consumed by the AI as prompt context. Notes should always be supplementary to structured data, never the primary storage for a preference. Keep them short; they compete with structured fields for the token budget.
+
+**Source tracking on ingredient preferences.** The `source` field distinguishes `"feedback"` (user explicitly said something), `"inferred"` (AI noticed a pattern the user never mentioned), and `"onboarding"` (seeded from the initial quiz). This helps the user-facing "here's what I think you like" view — users can see which preferences are their own words vs AI guesses. Inferred preferences should be easier to override than explicit ones.
+
 **Evidence tracking on ingredient preferences.** `evidence_count` and `last_signal` let the planner and optimiser weight preferences by confidence. A favourite with 23 data points steers harder than one from onboarding with 2. Stale preferences (no signal in 3+ months) get flagged for re-evaluation. This adds tokens per item but is worth it for the fields the planner weights most heavily.
 
 **Ingredient frequency caps.** Prevents the planner from over-indexing on favourites. Even if chicken thighs are the top-rated protein, 5 chicken dinners in a week is monotonous.
 
 **Structured cooking contexts.** Replaces flat strings like "under 30 mins on weeknights" with per-context objects the planner can query directly. `lazy_night` and `cooking_project` are real meal-prep patterns that the planner needs to schedule around.
 
-**Novelty tolerance per meal slot.** Replaces the single `new_vs_familiar_ratio` value. Breakfast tolerance is fundamentally different from dinner tolerance — most people want identical breakfasts but varied dinners.
+**Novelty tolerance per meal slot.** Replaces the single `new_vs_familiar_ratio` value. Breakfast tolerance is fundamentally different from dinner tolerance — most people want identical breakfasts but varied dinners. `recipe_repeat_cooldown_weeks` controls how long before a specific recipe can reappear — some people are fine with weekly taco Tuesday, others need 2-3 weeks before a repeat.
 
 **Batch cooking as a first-class section.** The system overview describes batch cooking support in the Recipe Engine (servings, stores_well, packable) but the preference model previously gave the planner nothing to match that metadata against. Now the planner knows prep day preferences, leftover tolerance, freezer tolerance, and whether to repeat or transform leftovers.
 
