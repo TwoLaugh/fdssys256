@@ -115,7 +115,7 @@ Holds the user's taste profile, constraints, and cooking lifestyle. Likes, disli
 
 Hard constraints (allergies, dietary identity) are stored in a separate, hard-locked database table that is only editable by the user directly — never by AI, never by the feedback system, never by the optimiser. **Allergy safety is enforced deterministically, not by prompts.** Every output that touches food is passed through a deterministic hard-filter that checks against the allergy database before being shown to the user. This filter is code, not an AI instruction. The system never trusts the LLM to remember or respect allergies.
 
-For the full design — JSON shape, update logic, versioning, and field rationale — see [preference-model.md](preference-model.md).
+The Preference Model is split into three tiers: **hard constraints** (DB-locked, user-only, deterministic enforcement), **taste profile** (AI-maintained JSON, delta-updated from feedback, ~2500 tokens), and **lifestyle config** (user-set settings for meal structure, batch cooking, eating context — stable for months, changed when life changes). Each tier has its own storage, update mechanism, and staleness strategy. For the full design see [preference-model.md](preference-model.md).
 
 ---
 
