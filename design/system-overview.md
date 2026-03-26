@@ -53,6 +53,8 @@ The planning cadence defaults to weekly but is configurable.
      │              │   │              │   │    prices    │   │              │
      └───────┬──────┘   └───────┬──────┘   └───────┬──────┘   └───────┬──────┘
              │                  │                  │                  │
+         constraints        constraints        constraints         recipes
+             │                  │                  │                  │
              ▼                  ▼                  ▼                  ▼
      ┌─────────────────────────────────────────────────────────────────────┐
      │                       RECIPE OPTIMISER                              │
@@ -134,7 +136,6 @@ Holds calorie/macro/micro targets, dietary identity, and health goals. Designed 
 
 **Dietary patterns:**
 - Intermittent fasting support (eating windows, fasting periods)
-- Dietary identity (vegan, keto, paleo, etc.) as a constraint layer on top of numerical targets
 
 Refined over time by health tracking data — mood, symptoms, weight, labs, wearable data, genomics — which lives within this model, not as a separate module. Health tracking is how the nutrition model learns from outcomes. The planner balances nutritional targets across the planning period — individual meals may miss targets but the total should converge, with daily floors respected for key nutrients.
 
@@ -152,7 +153,7 @@ The grocery order is the output — the shopping list is just the internal calcu
 
 ## Recipe Engine
 
-Independent catalogue for all recipe operations. It stores, discovers, generates, and versions recipes, but contains no optimisation logic. The Meal Planner queries it to find and rank recipes against the three data models.
+Independent catalogue for all recipe operations. It stores, discovers, generates, and versions recipes, but contains no optimisation logic. The Meal Planner queries it for candidate recipes, then ranks and selects from those against the three data models.
 
 ### Two catalogues
 
@@ -305,7 +306,11 @@ Cross-cutting layer for all LLM interactions. Every module that needs AI goes th
 | Mid-week re-optimisation (remaining days) | TBD (same approach as Phase 1) | Ad-hoc |
 | Recipe Optimiser: adapt recipes against data models | Mid (Haiku/Sonnet) | Per trigger |
 | Generate new recipe | Mid (Haiku/Sonnet) | As needed |
+| Classify/route feedback to destinations | Cheap (Haiku) | After meals |
 | Incorporate feedback → Preference Model | Mid | After meals |
+| Incorporate feedback → Nutrition Model | Mid | After meals |
+| Incorporate feedback → Provisions | Cheap (Haiku) | After meals |
+| Incorporate feedback → Recipe Engine (trigger evolution) | Mid | After meals |
 | Recipe discovery (search + filter) | Mid | Weekly |
 | Import recipe from URL | Mid | Per import |
 | Nutrition: map ingredients to USDA entries | Cheap (Haiku) | Per recipe |
@@ -341,7 +346,7 @@ Alerts and reminders delivered in-app. Listens to events across all modules.
 
 ---
 
-## Architecture: Modular Monolith
+## Implementation: Modular Monolith
 
 Single deployable application with clean internal module boundaries. Most modules are independently buildable: auth, preference, nutrition, provisions, recipe engine, and grocery can each be developed in isolation. The Meal Planner, Recipe Optimiser, and Feedback System are where integration complexity lives — these depend on the data models and Recipe Engine and should come last. The Household Model is also cross-cutting (shared provisions, constraint unions across users).
 
