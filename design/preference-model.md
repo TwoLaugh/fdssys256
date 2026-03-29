@@ -68,6 +68,8 @@ The AI-maintained preference document. This is what gets included as context in 
 
 **Token budget: ~2500 tokens.** This is the compression of potentially hundreds of feedback entries into something small enough to include in every relevant prompt. The AI writes itself a cheat sheet about you and updates it regularly.
 
+**Archive:** When items are pruned from the taste profile to stay within the token budget, they are moved to an unbounded **preference archive** rather than deleted. The archive preserves the full learning history — every preference the system has ever held, with its evidence count, last signal date, and the reason it was pruned (low evidence, staleness, token pressure). The archive is not included in regular prompts (it's too large), but the delta update pipeline loads it alongside the current taste profile so it can detect re-emerging preferences: if new feedback supports something previously pruned, the AI re-promotes it with higher confidence rather than treating it as a fresh discovery. This prevents preference cycling and means pruning is never lossy.
+
 ### Shape
 
 ```json
@@ -153,9 +155,9 @@ The AI-maintained preference document. This is what gets included as context in 
   ],
 
   "learned_insights": [
-    "Prefers brown rice over white",
-    "Likes spicy but not extreme heat",
-    "Responds well to 5-8 ingredient recipes"
+    "Prefers brown rice over white — tried white rice in 3 recipes, consistently rated lower",
+    "Likes spicy but not extreme heat — jalapeño fine, scotch bonnet too much",
+    "Batch-cooked curries rate higher than batch-cooked pasta dishes"
   ]
 }
 ```
@@ -166,7 +168,7 @@ The AI-maintained preference document. This is what gets included as context in 
 
 **Source tracking on ingredient preferences.** The `source` field distinguishes `"feedback"` (user explicitly said something), `"inferred"` (AI noticed a pattern the user never mentioned), and `"onboarding"` (seeded from the initial quiz). This helps the user-facing "here's what I think you like" view — users can see which preferences are their own words vs AI guesses. Inferred preferences should be easier to override than explicit ones.
 
-**Evidence tracking on ingredient preferences.** `evidence_count` and `last_signal` let the planner and optimiser weight preferences by confidence. A favourite with 23 data points steers harder than one from onboarding with 2. Stale preferences (no signal in 3+ months) get flagged for re-evaluation. This adds tokens per item but is worth it for the fields the planner weights most heavily.
+**Evidence tracking on ingredient preferences.** `evidence_count` and `last_signal` let the planner and optimiser weight preferences by confidence. A favourite with 23 data points steers harder than one from onboarding with 2. Stale stable preferences (no signal in 3+ months) get flagged for re-evaluation — distinct from the 4-week experiment lifecycle, which governs how long an unresolved experiment can stay active. This adds tokens per item but is worth it for the fields the planner weights most heavily.
 
 **Household context tags.** `suitable_for` on recipes and `individual_only_preferences` let the planner distinguish "foods I enjoy alone" from "foods that work for the family" when filling shared vs individual meal slots. Full household merge logic belongs in the Household Model design.
 
@@ -268,10 +270,15 @@ User-configured settings that define *how*, *when*, and *where* the user eats. T
     "snacks": {"variety_tolerance": "low", "complexity_tolerance": "minimal", "staples": ["fruit", "nuts", "yoghurt"]}
   },
 
-  "beverage_preferences": {
-    "with_meals": "water, occasionally sparkling",
-    "morning": "black coffee before breakfast",
-    "avoids": ["sugary drinks", "alcohol on weeknights"]
+  "accompaniments": {
+    "beverages": {
+      "with_meals": "water, occasionally sparkling",
+      "morning": "black coffee before breakfast",
+      "avoids": ["sugary drinks", "alcohol on weeknights"]
+    },
+    "sides": {
+      "notes": "Often adds yoghurt or fruit as a side — treat as meal components for nutrition and grocery planning"
+    }
   }
 }
 ```
@@ -287,6 +294,8 @@ User-configured settings that define *how*, *when*, and *where* the user eats. T
 **Reheating preferences.** Critical for batch cooking to actually work. Without this, the planner schedules microwave-reheated fish for a Wednesday office lunch and the user skips it.
 
 **Seasonal preferences.** Prevents tone-deaf suggestions (gazpacho on a freezing Tuesday, heavy stew in August). The planner can cross-reference season when scoring recipes.
+
+**Accompaniments.** Beverages and sides (yoghurt, fruit, bread) are treated like any other meal component — they contribute to nutrition tracking, appear on grocery orders, and the planner can add them to fill nutritional gaps (e.g., adding a yoghurt to hit a protein target). They're in lifestyle config rather than the taste profile because they're stable habits, not learned preferences.
 
 **Staleness risk.** Unlike the taste profile, these fields don't self-update from feedback. The system should prompt the user to review lifestyle config every 2–3 months: "You set your weekday lunch as packed/office — is that still right?" This is especially important after the system detects behavioural drift (e.g., user keeps logging home-cooked lunches but their config says "office/packed").
 
@@ -335,6 +344,9 @@ Updates are triggered:
    Here is the current taste profile:
    {{current_taste_profile}}
 
+   Here is the preference archive (items previously pruned from the active profile):
+   {{preference_archive}}
+
    Here are the new feedback entries since the last update:
    {{new_feedback}}
 
@@ -345,6 +357,8 @@ Updates are triggered:
    - UPDATE notes field
    - PROMOTE experiment to stable preference (move from active_experiments to the appropriate field)
    - DISCARD experiment (insufficient evidence or contradicted)
+   - ARCHIVE item (move from active profile to archive — use when pruning for token budget)
+   - RE-PROMOTE item from archive (move back to active profile with increased confidence)
 
    Rules:
    - Only propose changes supported by the new feedback
@@ -353,16 +367,18 @@ Updates are triggered:
    - Remove any learned_insight already captured in structured fields
    - Discard any experiment older than 4 weeks with insufficient evidence
    - Keep learned_insights capped at 8 items and active_experiments at 5
+   - If the profile is approaching ~2500 tokens, propose ARCHIVE operations for the lowest-evidence or stalest items before proposing additions
+   - Check the archive for re-emerging preferences — if new feedback supports a previously archived item, use RE-PROMOTE instead of ADD (carries forward the historical evidence count)
    ```
 4. Parse the delta response, validate each operation against the schema
-5. Apply valid deltas to the taste profile
+5. Apply valid deltas to the taste profile; archived items are moved to the preference archive with their metadata and pruning reason
 6. Increment version, update `feedback_cursor` and `last_updated`
 7. Store the new version alongside the previous version
 
 ### Why deltas, not full regeneration?
 
 - **No structural drift.** The application owns the schema. The AI can't rename keys, change nesting, or alter the JSON structure.
-- **No lossy overwrites.** The AI can't accidentally drop a preference by omitting it from a regeneration. It has to explicitly propose a REMOVE.
+- **No lossy overwrites.** The AI can't accidentally drop a preference by omitting it from a regeneration. It has to explicitly propose a REMOVE or ARCHIVE — and archived items are preserved, not deleted.
 - **Auditable.** Every change has a clear delta that can be logged, reviewed, and rolled back individually.
 - **Hard constraint safety.** Hard constraints are never in the document, so the AI can't touch them even accidentally.
 - **Lifestyle config safety.** Lifestyle settings are stored separately, so the AI can't accidentally change your meal structure because you gave feedback on a recipe.
@@ -435,7 +451,7 @@ Trending preferences drive exploration — if tahini is trending positive, disco
 - Hard constraints: computes the union (most restrictive) across all eaters for shared meals
 - Taste profile: `household_context` tags and `suitable_for` on recipe preferences distinguish individual-only from family-suitable options
 
-Full merge logic (weighting, conflict resolution) is defined in the Household Model design.
+Full merge logic (weighting, conflict resolution) is defined in the Household Model design. When household hard constraints are irreconcilable, the planner's constraint resolution system handles it — see the system overview's [Constraint resolution](system-overview.md#constraint-resolution) section.
 
 ---
 
@@ -458,7 +474,7 @@ The initial taste profile is explicitly flagged as low-confidence. The planner g
 2. **Week 1 (prompted):** Eating context (do you pack lunches?), batch cooking interest (yes/no)
 3. **Week 2+ (prompted if relevant):** Reheating preferences (only if batch cooking is enabled), seasonal preferences, novelty tolerance
 
-Fields not yet configured use sensible defaults. The system works without them; they just make it smarter over time.
+Fields not yet configured use sensible defaults. The system works without them; they just make it smarter over time. The specific default values will be documented once all three data model designs are complete — defaults need to be coherent across the Preference Model, Nutrition Model, and Provisions.
 
 ### Hard constraints
 
@@ -474,7 +490,7 @@ Fields not yet configured use sensible defaults. The system works without them; 
 - Active experiments have a lifecycle: after 4 weeks or N data points, they must resolve (promote to preference or discard)
 - Learned insights are capped at 8 items; insights that duplicate structured fields are removed
 - Active experiments are capped at 5 items
-- The ~2500-token budget forces summarisation — if the model grows too large, low-evidence or stale preferences are the first to be pruned
+- The ~2500-token budget forces summarisation — if the profile grows too large, low-evidence or stale preferences are archived (moved to the preference archive, not deleted). The archive preserves full history and is checked during updates to detect re-emerging preferences
 
 ### Lifestyle config
 - All fields have sensible defaults — the system works without configuration

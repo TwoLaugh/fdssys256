@@ -44,7 +44,7 @@ The planning cadence defaults to weekly but is configurable.
      │              │   │              │   │              │   │              │
      │ allergies    │   │ cal/macro/   │   │ pantry       │   │ user catalog │
      │ likes        │   │ micro tgts   │   │ freezer      │   │ sys catalog  │
-     │ dislikes     │   │ dietary ptns │   │ equipment    │   │              │
+     │ dislikes     │   │ IF/eat wndws │   │ equipment    │   │              │
      │ cuisine      │   │              │   │ environment  │   │ versioning   │
      │ cooking      │   │ ◄─ health:   │   │ budget       │   │ branching    │
      │ meal struct  │   │ mood · wt    │   │ suppliers    │   │              │
@@ -107,6 +107,8 @@ The planning cadence defaults to weekly but is configurable.
      └─────────────────────────────────┘  └────────────────────────────────┘
 ```
 
+*Note: The diagram shows the recipe adaptation flow (data models → optimiser → planner). The planner also reads constraints directly from the three data models for scoring and filtering — not all data flows through the optimiser first.*
+
 ---
 
 ## Data Model 1: Preference Model
@@ -121,7 +123,7 @@ The Preference Model is split into three tiers: **hard constraints** (DB-locked,
 
 ## Data Model 2: Nutrition Model
 
-Holds calorie/macro/micro targets and health goals. Designed for maximum depth — the system should support everything a serious nutrition tracker would need.
+Holds calorie/macro/micro targets, dietary patterns, and health goals. Designed for maximum depth — the system should support everything a serious nutrition tracker would need. Dietary identity (vegetarian, keto, etc.) is owned by the Preference Model's hard constraints tier — the Nutrition Model consumes it as an input but doesn't store or manage it.
 
 **Macro targets:**
 - Total daily calorie target and macro gram targets (not just ratios — 180g protein is a hard floor, not "30% of calories")
@@ -139,7 +141,7 @@ Holds calorie/macro/micro targets and health goals. Designed for maximum depth �
 
 Refined over time by health tracking data — mood, symptoms, weight, labs, wearable data, genomics — which lives within this model, not as a separate module. Health tracking is how the nutrition model learns from outcomes. The planner balances nutritional targets across the planning period — individual meals may miss targets but the total should converge, with daily floors respected for key nutrients.
 
-The nutrition logger works like MyFitnessPal: planned meals are pre-filled from the meal plan and can be confirmed with a tap, or overridden via AI-assisted free-text entry ("actually I had X instead") or manual editing. Standalone food items (snacks, drinks, etc.) can be searched and logged directly from the USDA/Open Food Facts databases. This tracks planned vs actual intake.
+The nutrition logger works like MyFitnessPal: planned meals are pre-filled from the meal plan and can be confirmed with a tap, or overridden via AI-assisted free-text entry ("actually I had X instead") or manual editing. Standalone food items (snacks, drinks, etc.) can be searched and logged directly from the USDA/Open Food Facts databases. This tracks planned vs actual intake. The logger is distinct from the Feedback System: the logger records *what you ate* (intake correction — replaces planned with actual, writes directly to the Nutrition Model's intake tracking), while the Feedback System records *what you thought about what you ate* (quality and preference signals, routed through the AI classifier to any of the four data destinations).
 
 ---
 
@@ -186,6 +188,18 @@ Every recipe change creates a new version. Versions are comparable — you can l
 
 A version is a linear change (tweak salt, adjust portion size). A branch is a fork (different protein, different cooking method that changes the character of the dish).
 
+### Data quality and nutrition ownership
+
+Every recipe carries a `data_quality` tier reflecting how much to trust its ingredient list:
+- **`user_verified`** — manually entered or confirmed by the user. Highest trust.
+- **`imported`** — extracted from a URL. Medium trust — structured extraction may have errors in quantities or miss ingredients.
+- **`ai_generated`** — created by the system. Medium trust — internally consistent but unverified against reality.
+- **`web_discovered`** — scraped from search results. Lowest trust — ingredient lists may be incomplete or inaccurate.
+
+**Nutrition is always recalculated internally by the nutrition engine**, regardless of source. External nutrition data from imported or discovered recipes is discarded — the system re-maps every ingredient list through its own USDA/Open Food Facts pipeline. This ensures consistent accuracy across all recipes, and means future enhancements (bioavailability adjustments for cooking methods, nutrient interaction modelling for ingredient pairings) apply uniformly. The only exception is recipes where the user has manually overridden specific nutrition values — those overrides are preserved.
+
+The `data_quality` tier affects how the system handles the recipe: low-trust recipes get a visual indicator in the plan so the user knows the underlying ingredient list may be less reliable, and the nutrition engine can flag implausible mappings (e.g., an ingredient that doesn't match any USDA entry) for user review.
+
 ---
 
 ## Recipe Optimiser
@@ -206,6 +220,8 @@ During weekly plan composition, the Meal Planner may invoke the optimiser as a p
 
 ### Core principle: propose, not apply (for user recipes)
 The user catalogue is the user's curated library. The optimiser never silently mutates it. Every change is a proposed new version or branch that the user can accept, reject, or modify. The system catalogue has no such restriction — the AI can iterate freely, giving the planner more options to work with.
+
+**Approval UX:** Proposed changes are presented as a diff — the original ingredient/step in red, the suggested replacement in green — with an accept/reject control per change. A conversational AI suggestion box is available alongside the diff so the user can discuss or refine the proposal before accepting.
 
 ---
 
@@ -231,6 +247,19 @@ Re-optimisation runs the same two phases but scoped to the remaining days only, 
 ### The Hard Problem
 The planner's real challenge is satisfying all three data models simultaneously across both phases. A recipe might be perfect for preferences but blow the budget. Another might nail nutrition targets but require equipment you don't own. The AI must find the best overall solution, not optimise each model independently.
 
+### Constraint resolution
+
+Before attempting composition, the planner runs a constraint feasibility check across all active constraints — individual nutrition/preference/provisions constraints and, for shared meals, the union of household hard constraints. When the constraint set is too restrictive to produce a viable plan, the planner surfaces the conflict and proposes resolutions rather than silently failing or producing a half-baked plan.
+
+The resolution logic classifies the type of conflict and proposes the most sensible fix for that type:
+
+- **Household hard constraint collision** (e.g., one person is vegan, another is keto): the viable recipe intersection is near-zero. The best resolution is splitting the meal slot into individual meals, not relaxing either person's dietary identity. The planner proposes the split and re-plans each person independently for that slot.
+- **Nutrition vs budget tension** (e.g., 180g daily protein floor at £50/week): the constraint set is individually valid but collectively infeasible. The planner ranks relaxation options by impact — "drop protein floor to 160g (opens 12 recipes)" vs "increase budget to £60 (opens 8 recipes)" — and lets the user choose.
+- **Provisions bottleneck** (e.g., limited equipment, small pantry, no freezer): the planner identifies which physical constraint is most limiting and suggests workarounds — simpler recipes, different cooking methods, or a mid-week shop.
+- **Over-specified preferences** (e.g., novelty tolerance + cuisine restrictions + ingredient caps leave too few candidates): the planner identifies which soft preference is most restrictive and suggests temporarily widening it — "relaxing the 3x/week chicken cap to 4x would open 6 more dinner options this week."
+
+The key design principle: hard constraints (allergies, dietary identity) are never relaxed — the system proposes structural changes (split meals, different meal slots) instead. Soft constraints (budget, nutrition targets, preferences) can be relaxed, and the planner ranks relaxation options by how much plan quality they recover per unit of constraint loosening. The user always chooses; the planner never silently degrades.
+
 ---
 
 ## Feedback System
@@ -254,9 +283,12 @@ Misrouted feedback silently degrades the wrong model, so routed feedback should 
 
 ### Processing
 - Conversational input (natural language, not forms)
-- AI interprets and scores against rubric: taste, ease, nutrition fit, portion, cost, repeat desire
+- AI classifies and routes feedback to the appropriate destination(s):
+  - Preference-relevant → preference update pipeline (proposes delta-based updates to the taste profile)
+  - Nutrition-relevant (portions, macro fit, health signals) → Nutrition Model
+  - Provisions-relevant (cost, availability, equipment) → Provisions
+  - Recipe-specific (recipe changes, version/branch triggers) → Recipe Engine
 - Health tracking (mood, energy, symptoms, weight, labs, wearables, genomics) feeds through here into the Nutrition Model — it's part of the feedback loop, not a separate system
-- Routes preference-relevant feedback to the preference update pipeline, which proposes delta-based updates (not full regeneration) to the Preference Model
 - Generates weekly/monthly AI reviews correlating food with health outcomes
 
 ### Manual direct edits
@@ -271,7 +303,7 @@ Household members share Provisions and add constraints to shared meal slots.
 - Each user has their own account, Preference Model, and Nutrition Model
 - Provisions (pantry, equipment, environment) are shared per household
 - Household settings define which meals are shared vs individual
-- For shared meals, the planner respects the union of all eaters' hard constraints (allergies, dietary identity)
+- For shared meals, the planner respects the union of all eaters' hard constraints (allergies, dietary identity). When this union is irreconcilable, the planner's constraint resolution system proposes splitting into individual meals — see [Constraint resolution](#constraint-resolution) under Meal Planner.
 - Portions scale per meal based on headcount
 - Primary user manages provisions and the shared plan; household members can give feedback on their own meals
 
@@ -377,14 +409,3 @@ Modules communicate through service interfaces. Each owns its own DB tables. Ext
 
 See [phased-delivery.md](phased-delivery.md) for the full phase breakdown.
 
----
-
-## TODO
-
-- **Household constraint conflicts:** The planner "respects the union of all eaters' hard constraints" for shared meals, but irreconcilable combinations (e.g., vegan + keto) need a conflict resolution strategy. Should the planner flag impossible constraint sets? Suggest splitting a shared meal into individual meals? Needs at least a note here or in the Household LLD.
-
-- **Planner failure / fallback UX:** What happens when the planner genuinely can't produce a valid plan (budget too tight + nutrition targets too strict + limited provisions)? The system needs a way to surface "I can't satisfy all your constraints, here's what I'd relax and why." Easy to defer, painful to retrofit.
-
-- **Nutrition Logger vs Feedback System boundary:** Both accept free-text and involve AI interpretation, but serve different purposes. Worth a one-liner clarifying that the logger is for intake correction (what you ate) while feedback is for preference/quality signals (what you thought about what you ate).
-
-- **Recipe discovery quality/trust:** Web-scraped recipes don't always have accurate nutrition data or reliable ingredient lists. The hard-filter pipeline (search → filter → score → import to system catalogue) needs a note on how recipe quality and nutritional data trust is handled, since garbage-in on ingredients would cascade through the optimiser.
