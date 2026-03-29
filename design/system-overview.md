@@ -46,10 +46,11 @@ The planning cadence defaults to weekly but is configurable.
      │ likes        │   │ micro tgts   │   │ freezer      │   │ sys catalog  │
      │ dislikes     │   │ IF/eat wndws │   │ equipment    │   │              │
      │ cuisine      │   │              │   │ environment  │   │ versioning   │
-     │ cooking      │   │ ◄─ health:   │   │ budget       │   │ branching    │
-     │ meal struct  │   │ mood · wt    │   │ suppliers    │   │              │
-     │              │   │ symptoms     │   │              │   │ store/import │
-     │              │   │ labs · wear  │   │ ◄─ grocery   │   │ discover/gen │
+     │ cooking      │   │ food/mood    │   │ budget       │   │ branching    │
+     │ meal struct  │   │ journal      │   │ suppliers    │   │              │
+     │              │   │              │   │              │   │ store/import │
+     │              │   │ ◄─ health    │   │ ◄─ grocery   │   │ discover/gen │
+     │              │   │   directives │   │    prices    │   │              │
      │              │   │              │   │    prices    │   │              │
      └───────┬──────┘   └───────┬──────┘   └───────┬──────┘   └───────┬──────┘
              │                  │                  │                  │
@@ -139,7 +140,7 @@ Holds calorie/macro/micro targets, dietary patterns, and health goals. Designed 
 **Dietary patterns:**
 - Intermittent fasting support (eating windows, fasting periods)
 
-Refined over time by health tracking data — mood, symptoms, weight, labs, wearable data, genomics — which lives within this model, not as a separate module. Health tracking is how the nutrition model learns from outcomes. The planner balances nutritional targets across the planning period — individual meals may miss targets but the total should converge, with daily floors respected for key nutrients.
+The planner balances nutritional targets across the planning period — individual meals may miss targets but the total should converge, with daily floors respected for key nutrients. Includes a food/mood journal for free-text notes tied to meals. Comprehensive health tracking (mood scales, weight, labs, wearables, genomics) lives in a separate health platform — when connected, it pushes dietary directives (target adjustments, elimination protocols, ingredient restrictions) to the Nutrition Model via a propose/accept flow.
 
 The nutrition logger works like MyFitnessPal: planned meals are pre-filled from the meal plan and can be confirmed with a tap, or overridden via AI-assisted free-text entry ("actually I had X instead") or manual editing. Standalone food items (snacks, drinks, etc.) can be searched and logged directly from the USDA/Open Food Facts databases. This tracks planned vs actual intake. The logger is distinct from the Feedback System: the logger records *what you ate* (intake correction — replaces planned with actual, writes directly to the Nutrition Model's intake tracking), while the Feedback System records *what you thought about what you ate* (quality and preference signals, routed through the AI classifier to any of the four data destinations).
 
@@ -288,7 +289,7 @@ Misrouted feedback silently degrades the wrong model, so routed feedback should 
   - Nutrition-relevant (portions, macro fit, health signals) → Nutrition Model
   - Provisions-relevant (cost, availability, equipment) → Provisions
   - Recipe-specific (recipe changes, version/branch triggers) → Recipe Engine
-- Health tracking (mood, energy, symptoms, weight, labs, wearables, genomics) feeds through here into the Nutrition Model — it's part of the feedback loop, not a separate system
+- Food/mood journal entries (free-text notes tied to meals) provide context for feedback classification
 - Generates weekly/monthly AI reviews correlating food with health outcomes
 
 ### Manual direct edits
@@ -347,7 +348,7 @@ Cross-cutting layer for all LLM interactions. Every module that needs AI goes th
 | Import recipe from URL | Mid | Per import |
 | Nutrition: map ingredients to USDA entries | Cheap (Haiku) | Per recipe |
 | Parse user free-text input | Cheap (Haiku) | Per interaction |
-| Nutrition/health review generation | Mid | Weekly/monthly |
+| Parse health platform directives | Cheap (Haiku) | Per directive |
 | Grocery product matching + navigation (Tesco initially) | Mid/Frontier | 1x/week |
 | Shopping list calculation | Deterministic code | 1x/week |
 | Nutrition aggregation | Deterministic code | Daily |
@@ -361,7 +362,7 @@ Alerts and reminders delivered in-app. Listens to events across all modules.
 - Defrost reminders from Provisions (freezer)
 - Prep reminders from Meal Planner ("start marinating at 6pm")
 - Nutrition alerts from Nutrition Model ("way under protein today")
-- Weekly nutrition/health review available
+- Health platform directive received (pending user review)
 
 ---
 

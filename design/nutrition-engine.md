@@ -1,6 +1,6 @@
 # Nutrition Model — Design
 
-*The user's nutritional targets, intake tracking, and health outcomes. One of the three data models the system optimises against.*
+*The user's nutritional targets, intake tracking, and food/mood journaling. One of the three data models the system optimises against.*
 
 ## What It Is
 
@@ -10,15 +10,16 @@ The model has four concerns:
 
 | Concern | What it holds | Updated by |
 |---|---|---|
-| **Nutritional targets** | Calorie/macro/micro goals, per-meal distribution, daily floors | User via settings, refined by health tracking outcomes |
+| **Nutritional targets** | Calorie/macro/micro goals, per-meal distribution, daily floors | User via settings; health platform directives (if connected) |
 | **Intake tracking** | Planned vs actual intake per meal, daily/weekly aggregates | Nutrition logger (automated from plan + manual corrections) |
 | **Nutrition engine** | Ingredient-to-nutrition mapping pipeline, USDA/Open Food Facts cache | Automated on recipe create/import/evolve, user corrections |
-| **Health tracking** | Mood, energy, symptoms, weight, body composition, labs, wearable data, genomics | User input, wearable sync, manual lab entry |
+| **Food/mood journal** | Free-text notes tied to meals — how the user felt after eating | User input after meals |
 
 This is **not**:
 - The Preference Model (taste, cooking style, lifestyle — what the user *wants*)
 - Dietary identity (vegetarian, keto, etc. — owned by the Preference Model's hard constraints tier; the Nutrition Model consumes it as an input)
 - The Meal Planner (which reads targets and optimises against them — the Nutrition Model is passive state, not logic)
+- A health tracking platform (mood scales, weight trends, labs, wearables, genomics — that's a separate system, the [Personal Biology Platform](https://github.com/TwoLaugh/project-ideas/tree/main/personal-biology-platform), which integrates with MealPrep AI via dietary directives)
 
 ---
 
@@ -188,58 +189,128 @@ Both accept free-text and involve AI interpretation, but they write to different
 
 ---
 
-## Health Tracking
+## Food/Mood Journal
 
-Health tracking lives within the Nutrition Model because it's how the model learns from outcomes — the feedback loop between what you eat and how you feel. It is not a separate module.
+A simple free-text journal tied to meal slots. After eating, the user can note how they felt — "felt bloated after dinner", "energy crashed at 3pm", "felt great after that lunch". This is the only health-adjacent feature that lives in MealPrep AI, because it's tightly coupled to specific meals rather than being general health tracking.
 
-### Data sources
+### Shape
 
 ```json
 {
-  "manual_tracking": {
-    "mood": {"scale": "1-5", "frequency": "daily", "optional": true},
-    "energy": {"scale": "1-5", "frequency": "daily", "optional": true},
-    "sleep_quality": {"scale": "1-5", "frequency": "daily", "optional": true},
-    "symptoms": {"type": "free_text_tags", "frequency": "as_needed", "examples": ["bloating", "headache", "brain fog", "skin breakout"]},
-    "weight": {"unit": "kg", "frequency": "weekly_or_daily", "optional": true},
-    "body_measurements": {"fields": ["waist_cm", "hip_cm"], "frequency": "monthly", "optional": true}
-  },
-  "lab_results": {
-    "entry_method": "manual",
-    "tracked_markers": ["HbA1c", "cholesterol_total", "LDL", "HDL", "triglycerides", "vitamin_d", "iron", "ferritin", "B12", "TSH"],
-    "frequency": "per_test",
-    "notes": "User enters results manually after blood work. System stores with date for trend analysis."
-  },
-  "wearable_integration": {
-    "status": "future",
-    "planned_sources": ["Apple Health", "Garmin", "Fitbit"],
-    "planned_data": ["heart_rate_resting", "HRV", "sleep_stages", "steps", "active_calories"],
-    "notes": "v2+ feature. Would enable automatic TDEE adjustment and sleep-informed meal timing."
-  },
-  "genomics": {
-    "status": "future",
-    "notes": "Nutrigenomic data (e.g., from 23andMe) could inform micro targets — MTHFR variants affect folate needs, APOE variants affect fat metabolism recommendations. Long-term feature."
+  "2026-04-15": {
+    "lunch": {
+      "journal_entry": "Felt sluggish about an hour after eating. Might have been too carb-heavy.",
+      "logged_at": "2026-04-15T14:30:00"
+    },
+    "dinner": {
+      "journal_entry": "Really satisfied, good energy all evening. Perfect portion.",
+      "logged_at": "2026-04-15T20:15:00"
+    }
   }
 }
 ```
 
-### Health reviews
+### How it's used
 
-The system generates periodic AI reviews correlating food patterns with health outcomes:
-- **Weekly:** quick summary — average mood/energy vs nutrition targets hit, any symptom patterns
-- **Monthly:** deeper analysis — weight trends vs calorie targets, symptom correlations with specific foods or macros, micro intake gaps
-- **On lab results:** compare new labs with previous, correlate changes with dietary shifts since last test
+- **By the Feedback System:** Journal entries are available as context when the AI classifier routes feedback. "I felt bloated after dinner" alongside the actual meal data helps the classifier route more accurately — is it a portion issue (Nutrition Model), an ingredient sensitivity (possibly a health platform directive), or a recipe problem (Recipe Engine)?
+- **By the user:** A personal food diary they can review to spot their own patterns. No AI analysis within MealPrep AI — deeper correlations (food vs mood vs biomarkers) are the job of the health platform if connected.
+- **Exported to health platform:** If the Personal Biology Platform is connected, journal entries are available as a data source for cross-domain correlation (e.g., correlating food diary with gut microbiome test results or wearable HRV data).
 
-These reviews use a mid-tier AI model and are presented as insights, not prescriptions. The system surfaces correlations ("your energy scores were higher in weeks where you hit your iron target") but doesn't make medical claims.
+### What this is NOT
 
-### How health tracking refines targets
+This is not a structured health tracking system. No mood scales, no symptom tags, no weight logging, no lab results, no wearable data. All of that lives in the [Personal Biology Platform](https://github.com/TwoLaugh/project-ideas/tree/main/personal-biology-platform) — a separate app that handles the full spectrum of biological data (genomics, blood panels, microbiome, wearables, metabolomics, etc.). MealPrep AI provides the food/intake data; the health platform provides the biological context; the integration layer connects them.
 
-Health outcomes create a slow feedback loop on nutritional targets themselves:
-- Persistent low energy despite hitting calorie targets → may need to adjust macro ratios or check iron/B12
-- Weight trending up despite hitting calorie target → TDEE estimate may be too high, suggest reducing target
-- Bloating correlating with high-fibre days → may need to adjust fibre target or increase gradually
+---
 
-These refinements are **proposed to the user**, never auto-applied. The AI suggests target adjustments with reasoning; the user accepts, rejects, or modifies.
+## Health Platform Integration
+
+MealPrep AI is a meal planning system, not a health tracking platform. Comprehensive health tracking — mood/energy scales, weight trends, lab results, wearable data, genomics, microbiome — belongs in the separate [Personal Biology Platform](https://github.com/TwoLaugh/project-ideas/tree/main/personal-biology-platform). When the user connects both systems, they communicate through **dietary directives** — discrete, actionable instructions that the health platform pushes to MealPrep AI.
+
+### Why directives, not raw data sync
+
+The health platform holds genomic data, blood panels, microbiome results, wearable streams, and dozens of other biomarker sources. MealPrep AI doesn't need or want any of that raw data — it needs to know *what to do differently when planning meals*. Directives are the translation layer: the health platform does the analysis, MealPrep AI receives the actionable output.
+
+### Directive structure
+
+Each directive is a discrete instruction that maps to something MealPrep AI already understands:
+
+```json
+{
+  "directive_id": "dir-047",
+  "source_platform": "personal-biology-platform",
+  "created_at": "2026-04-15T10:00:00Z",
+  "status": "pending_review",
+
+  "type": "elimination_trial",
+  "evidence": {
+    "summary": "Elevated IgG response to eggs detected in food sensitivity panel. Gut microbiome shows reduced barrier integrity markers.",
+    "tests_referenced": ["IgG food sensitivity panel (2026-04-10)", "Gut microbiome (2026-04-01)"],
+    "confidence": "moderate"
+  },
+
+  "instruction": {
+    "action": "restrict_ingredient",
+    "target": "eggs",
+    "scope": "all_forms",
+    "duration": {
+      "type": "staged_protocol",
+      "phases": [
+        {"phase": "elimination", "duration_weeks": 6, "rule": "complete exclusion"},
+        {"phase": "reintroduction", "duration_weeks": 4, "rule": "introduce once per week, log journal response"},
+        {"phase": "resolution", "rule": "user decides based on journal entries during reintroduction"}
+      ]
+    }
+  },
+
+  "maps_to": {
+    "model": "preference_model",
+    "tier": "hard_constraints",
+    "temporary": true,
+    "auto_expires": "2026-07-01"
+  }
+}
+```
+
+### Directive types
+
+| Type | Example | Maps to |
+|---|---|---|
+| **Ingredient restriction** | "Eliminate eggs for 6 weeks" | Preference Model hard constraints (temporary) |
+| **Target adjustment** | "Increase iron target to 25mg based on low ferritin + MTHFR variant" | Nutrition Model micro targets |
+| **Macro rebalance** | "Increase carb ratio on training days based on HRV recovery data" | Nutrition Model activity adjustments |
+| **Elimination trial** | "Low-FODMAP protocol: 4-week elimination, staged reintroduction" | Preference Model hard constraints (temporary, multi-phase) |
+| **Reintroduction protocol** | "Reintroduce dairy — one serving per week, monitor journal" | Planner scheduling + journal prompts |
+| **Sensitivity downgrade** | "Egg reintroduction successful — downgrade from hard restriction to soft preference (limit to 3x/week)" | Move from hard constraints to taste profile soft constraints |
+
+### Propose, not apply
+
+The same principle as the Recipe Optimiser's user-recipe policy: **directives are always proposed to the user, never auto-applied**. When a directive arrives:
+
+1. The user sees a notification: "Your health platform suggests eliminating eggs for 6 weeks based on your recent food sensitivity panel."
+2. The directive shows the evidence summary and the proposed action.
+3. The user accepts, rejects, or modifies (e.g., "I'll reduce eggs but not eliminate completely").
+4. Accepted directives are applied to the appropriate model with their metadata (source, confidence, expiry) preserved.
+
+The health platform cannot silently change meal plans. Even high-confidence directives require user review.
+
+### What MealPrep AI exports
+
+The integration is bidirectional. MealPrep AI provides data the health platform consumes:
+
+- **Actual intake data** — what the user ate (macro/micro breakdown per meal, per day)
+- **Meal composition** — which ingredients, in what quantities
+- **Food/mood journal entries** — free-text notes tied to specific meals
+- **Adherence to directives** — did the user actually follow the elimination protocol?
+
+This data feeds into the health platform's cross-domain correlations — e.g., correlating actual iron intake with ferritin trends, or food diary entries with gut microbiome changes.
+
+### Without the health platform
+
+MealPrep AI works fully standalone. The health platform integration is an optional enhancement. Without it:
+- Nutritional targets are set manually by the user
+- No dietary directives — the user manages restrictions and targets directly
+- The food/mood journal is a personal diary with no automated analysis
+- The system is still a complete meal planning tool — the health platform just makes it smarter about *why* certain targets or restrictions exist
 
 ---
 
@@ -450,13 +521,23 @@ Each consumer reads a different slice of the Nutrition Model.
 **Reads intake tracking for alerts:**
 - "You're at 100g protein with one meal left — dinner needs to be protein-heavy"
 - "You've exceeded your sodium target today"
-- "Weekly health review available"
 
 ### By the Feedback System
 
 **Receives routed feedback:**
 - Portion complaints ("too much food", "still hungry") → may adjust per-meal calorie distribution
-- Health signals (mood, energy, symptoms) → stored in health tracking, feeds into periodic reviews
+- Journal entries provide context for feedback classification
+
+### By the Health Platform (if connected)
+
+**Reads:**
+- Actual intake data (macro/micro per meal/day)
+- Meal composition (ingredients, quantities)
+- Food/mood journal entries
+- Directive adherence
+
+**Writes:**
+- Dietary directives (restrictions, target adjustments, elimination protocols)
 
 ---
 
@@ -470,6 +551,8 @@ Each consumer reads a different slice of the Nutrition Model.
 | Portion *style* (large-volume, low-density) | Preference Model (taste profile) | Presentation preference — but calorie/gram targets per meal live here |
 | Pantry inventory, budget | Provisions | Physical/financial constraints, not nutritional |
 | Recipe storage, versioning | Recipe Engine | Catalogue concern — nutrition engine calculates values, Recipe Engine stores them on the recipe |
+| Health tracking (mood scales, weight, labs, wearables, genomics) | Personal Biology Platform (separate app) | Full health tracking is a separate system — MealPrep AI receives dietary directives, not raw health data |
+| Food-health correlations and reviews | Personal Biology Platform (separate app) | Cross-domain analysis requires biomarker data MealPrep AI doesn't hold |
 
 ### Key interaction rules
 
