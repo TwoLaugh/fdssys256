@@ -279,6 +279,14 @@ User-configured settings that define *how*, *when*, and *where* the user eats. T
     "sides": {
       "notes": "Often adds yoghurt or fruit as a side — treat as meal components for nutrition and grocery planning"
     }
+  },
+
+  "grocery_quality_preferences": {
+    "organic": "when_price_comparable",
+    "free_range_eggs": "always",
+    "free_range_meat": "preferred",
+    "branded_vs_own_label": "own_label_preferred",
+    "notes": "Willing to spend more on protein quality, flexible on everything else"
   }
 }
 ```
@@ -294,6 +302,8 @@ User-configured settings that define *how*, *when*, and *where* the user eats. T
 **Reheating preferences.** Critical for batch cooking to actually work. Without this, the planner schedules microwave-reheated fish for a Wednesday office lunch and the user skips it.
 
 **Seasonal preferences.** Prevents tone-deaf suggestions (gazpacho on a freezing Tuesday, heavy stew in August). The planner can cross-reference season when scoring recipes.
+
+**Grocery quality preferences.** Product quality rules (organic, free-range, branded vs own-label) live here rather than in the Provision Model's budget section because they describe what the user *values*, not what they can *afford*. The grocery module consults the Preference Model for quality rules and the Provision Model for the budget constraint — the two are independent. A user with a tight budget who "always" wants free-range eggs is expressing a priority, and the budget enforces the trade-off.
 
 **Accompaniments.** Beverages and sides (yoghurt, fruit, bread) are treated like any other meal component — they contribute to nutrition tracking, appear on grocery orders, and the planner can add them to fill nutritional gaps (e.g., adding a yoghurt to hit a protein target). They're in lifestyle config rather than the taste profile because they're stable habits, not learned preferences.
 
