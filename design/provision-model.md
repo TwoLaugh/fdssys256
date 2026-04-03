@@ -63,14 +63,14 @@ All inventory items share a base structure. Additional fields apply depending on
   "source": "tesco_order",
   "source_ref": "order-2026-04-15",
   "cost_paid": 3.50,
-  "usda_mapping_id": "chicken-thigh-skinless-raw",
+  "ingredient_mapping_key": "chicken thigh skinless raw",
   "notes": null
 }
 ```
 
 **Base fields (all items):**
 - `item_id`, `name`, `category`, `storage_location`, `added_at`, `source` — identity and provenance
-- `usda_mapping_id` — links to the Nutrition Model's ingredient mapping cache. Used to match inventory items to recipe ingredients and to calculate nutrition for logged intake. Set automatically when items are added from a grocery order (the grocery module maps products to USDA entries); for manual adds, the system infers the mapping or the user confirms it.
+- `ingredient_mapping_key` — the `search_term` key into the Nutrition Model's ingredient mapping cache (e.g., `"chicken thigh skinless raw"`). Used to match inventory items to recipe ingredients and to calculate nutrition for logged intake. Set automatically when items are added from a grocery order (the grocery module maps products to the Nutrition Model's cache); for manual adds, the system infers the mapping or the user confirms it.
 
 **Quantity-tracked items (fridge, freezer, cupboard):**
 - `quantity`, `unit`, `expiry_date`, `cost_paid`, `source_ref`
@@ -108,7 +108,7 @@ Spices and shelf-stable basics (oil, salt, flour, rice, soy sauce, etc.) don't n
   "is_staple": true,
   "source": "manual_add",
   "added_at": "2026-04-01T10:00:00",
-  "usda_mapping_id": "cumin-ground"
+  "ingredient_mapping_key": "cumin ground"
 }
 ```
 
@@ -139,7 +139,7 @@ Frozen items use the base inventory structure plus freezer-specific extensions:
   "added_at": "2026-04-10T14:00:00",
   "source": "batch_cook",
   "source_recipe_id": "bolognese-v3",
-  "usda_mapping_id": null,
+  "ingredient_mapping_key": null,
 
   "frozen_at": "2026-04-10",
   "max_freeze_weeks": 12,
@@ -161,21 +161,29 @@ Every fridge item has an `expiry_date`. The system uses this in two ways:
 
 Cupboard items have expiry dates too but they're informational rather than planning-critical — the planner doesn't urgently schedule around a tin of chickpeas expiring in 8 months.
 
+**Where do expiry dates come from?** Grocery orders (e.g., Tesco) do not include expiry dates in their delivery data. Expiry dates are populated by:
+1. **Category-based defaults.** The system estimates expiry from food category: fresh chicken = delivery date + 3 days, fresh vegetables = + 5 days, dairy = + 7 days, etc. These defaults are conservative and can be refined over time from waste data (if `spoiled_early` waste entries suggest a category's default is too generous, the system tightens it).
+2. **User correction.** The user can override any expiry date ("this chicken says use by Friday" → update to Friday). User corrections take precedence over defaults.
+3. **Freezer items.** Expiry is calculated from `frozen_at + max_freeze_weeks`. `max_freeze_weeks` comes from recipe metadata or category defaults.
+
 If the user doesn't track expiry dates (see [Core Principle: Everything Is Optional](#core-principle-everything-is-optional)), inventory items simply have no `expiry_date` field. The planner still uses inventory for "what's in the house" but doesn't do expiry-driven scheduling or freshness alerts.
 
 ### Inventory updates
 
-Inventory changes from five sources:
+Inventory changes from six sources:
 
 | Source | Mechanism | Reliability |
 |---|---|---|
 | **Grocery order** | Auto-add from confirmed Tesco order (items, quantities, actual prices, substitutions) | High — structured data from the order |
-| **Cook event** | Auto-deduct recipe ingredients when user marks a meal as cooked | Medium — assumes recipe was followed exactly |
+| **Cook event** | Auto-deduct recipe ingredients when user marks a meal as cooked. For batch cooks, also adds prepared portions to inventory (see below). | Medium — assumes recipe was followed exactly |
+| **Meal consumption** | Auto-deduct one portion when user confirms eating a pre-made meal from inventory (batch-cooked or frozen). Distinct from cook events — nothing is cooked, just consumed. | High — single-tap confirmation |
 | **Manual add** | User adds items bought elsewhere (corner shop, market, gifts) | High — user-entered |
 | **Manual remove** | User removes items (eaten as snack, gone off, given away) | High — user-entered |
 | **Waste log** | User logs wasted items with reason — deducts from inventory and records waste data | High — user-entered |
 
 **Cook-event deduction detail:** When the user confirms "I cooked Chicken Stir Fry," the system deducts the recipe's ingredient list from inventory. The user sees a confirmation: "Removed from pantry: 400g chicken thighs, 1 pepper, 200g rice, 2 tbsp soy sauce. Anything different?" The user can correct before confirming. Partial cooks ("I halved the recipe") adjust the deduction proportionally.
+
+**Batch cook detail:** When a batch cook produces multiple portions, the system deducts raw ingredients and adds prepared portions to inventory. The user specifies the storage split: "5 portions of curry — how many for the fridge vs freezer?" Default: enough fridge portions to cover the next 2-3 days (within the recipe's fridge shelf life), remainder to freezer. This creates two inventory entries from one cook event — e.g., 2 fridge portions (expiry: delivery + recipe's `max_fridge_days`) and 3 freezer portions (with full freezer metadata). The user can adjust the split.
 
 **Snack and standalone consumption:** Items eaten outside of planned recipes (grabbed a banana, had some yoghurt) are logged via the nutrition logger's standalone food logging. If the logged item exists in inventory, the system prompts: "Remove 1 banana from pantry?" This keeps inventory roughly accurate without requiring the user to manually manage every item. This cross-model interaction (Nutrition Model logger → Provisions inventory) is the canonical flow for unplanned consumption — the Nutrition Model doc should cross-reference it.
 
@@ -185,7 +193,7 @@ Inventory changes from five sources:
 
 ## Equipment
 
-A mostly-static list of what kitchen tools are available. The planner and recipe optimiser use this to filter recipes — no slow cooker means no slow cooker recipes.
+A mostly-static list of what kitchen tools are available. The planner and Recipe Optimiser use this to filter recipes — no slow cooker means no slow cooker recipes.
 
 ### Shape
 
@@ -208,7 +216,7 @@ A mostly-static list of what kitchen tools are available. The planner and recipe
 }
 ```
 
-Equipment is a hard filter — if a recipe requires equipment the user doesn't have, it's excluded from plan composition entirely. The recipe optimiser can propose equipment substitutions ("this recipe uses a food processor — a stick blender would work for this step") but only if the substitution doesn't fundamentally change the recipe.
+Equipment is a hard filter — if a recipe requires equipment the user doesn't have, it's excluded from plan composition entirely. The Recipe Optimiser can propose equipment substitutions ("this recipe uses a food processor — a stick blender would work for this step") but only if the substitution doesn't fundamentally change the recipe.
 
 ---
 
@@ -235,7 +243,7 @@ Weekly grocery spend constraints. The simplest concern conceptually but one of t
 
 **`tolerance_over`** allows the planner flexibility — a £50 target with £10 tolerance means the planner can propose a £58 plan rather than degrading meal quality to hit £50 exactly. The user sees the estimated cost and decides.
 
-**`price_sensitivity`** is a coarse signal: `low` (don't worry about cost), `moderate` (balance cost with quality), `high` (always prefer cheapest option). Affects how aggressively the planner and recipe optimiser suggest cheaper alternatives.
+**`price_sensitivity`** is a coarse signal: `low` (don't worry about cost), `moderate` (balance cost with quality), `high` (always prefer cheapest option). Affects how aggressively the planner and Recipe Optimiser suggest cheaper alternatives.
 
 **Note:** Product quality preferences (organic, free-range, branded vs own-label) live in the Preference Model's lifestyle config, not here. Those are about what the user *values*, not what they can *afford*. The grocery module consults the Preference Model for quality rules and the Provision Model for budget limits — the two are independent.
 
@@ -284,7 +292,7 @@ A product cache that builds from grocery orders — prices, pack sizes, and subs
   "substitution_history": [
     {"date": "2026-04-01", "substituted_with": "tesco-chicken-thigh-bone-in-1kg", "accepted": false}
   ],
-  "usda_mapping_id": "chicken-thigh-skinless-raw"
+  "ingredient_mapping_key": "chicken thigh skinless raw"
 }
 ```
 
@@ -370,7 +378,7 @@ In practice this has several steps:
 1. **Aggregate plan ingredients.** Sum all ingredients needed across the week's recipes, combining duplicates (3 recipes using chicken → total chicken needed).
 2. **Subtract inventory.** For each ingredient, check if it exists in inventory. If the user has 200g chicken but the plan needs 600g, the shopping list needs 400g. If the user has 800g, the shopping list needs 0g for chicken.
 3. **Add staples.** Any staple item at `low` or `out` is added to the shopping list regardless of whether the plan needs it. This is the auto-replenishment mechanism.
-4. **Map to supplier products.** Each shopping list item is matched to a supplier product from the cache. If the item needs 400g chicken and the smallest pack is 1kg, the shopping list orders 1kg. The 600g surplus stays in inventory after cooking.
+4. **Map to supplier products.** Each shopping list item is matched to a supplier product from the cache. If the item needs 400g chicken and the smallest pack is 1kg, the shopping list orders 1kg. The 600g surplus remains in inventory after delivery, available for future cook events.
 5. **Calculate estimated cost.** Sum the prices of all supplier products. If some items have no cached price (early weeks), flag the estimate as partial.
 
 **Who owns this logic:** The planner triggers the calculation as part of plan generation. The shopping list is a planner output that feeds into the grocery module. Provisions is read-only during this process — it supplies the inventory and staples data but doesn't contain the calculation logic.
@@ -454,9 +462,10 @@ Provisions data degrades over time. The system should be honest about this rathe
 ### Supplier cache
 - Prices older than 2 weeks are flagged as "estimated" in cost calculations
 - Prices older than 4 weeks are excluded from cost estimates entirely — the system treats these ingredients as unpriced and notes the gap
+- **Exception during ramp-up:** For the first 8 weeks of use (while the cache is building coverage), staleness thresholds are relaxed — no prices are excluded, though all are flagged as "estimated" after 2 weeks. This prevents the staleness policy from undermining the budget ramp-up period (see [Budget](#budget))
 
 ### Waste logging
-- Waste quantity cannot exceed current inventory for that item (prevents logging more waste than exists)
+- If inventory tracking is active, waste quantity cannot exceed current inventory for that item (prevents logging more waste than exists). If inventory tracking is off, waste logging is unconstrained — the system accepts the user's estimate without validation.
 - Waste entries are immutable once logged — corrections create a new entry, not an edit
 
 ---
