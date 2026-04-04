@@ -36,23 +36,23 @@ This split makes dependency direction explicit. The Planner injects query servic
 ### Who injects what
 
 ```
-                        Query Services                      Update Services
-                  Pref  Nutr  Prov  Recipe            Pref  Nutr  Prov  Recipe
-                  ────  ────  ────  ──────            ────  ────  ────  ──────
-Planner            ✓     ✓     ✓      ✓
+                        Query Services                      Update Services          Other Services
+                  Pref  Nutr  Prov  Recipe            Pref  Nutr  Prov  Recipe    Optimiser
+                  ────  ────  ────  ──────            ────  ────  ────  ──────    ─────────
+Planner            ✓     ✓     ✓      ✓                                              ✓
 Optimiser          ✓     ✓     ✓      ✓                                   ✓
-Feedback System    ✓     ✓     ✓      ✓                ✓     ✓     ✓      ✓
+Feedback System                                        ✓     ✓     ✓               ✓
 Grocery Module                 ✓                                   ✓
 Notification       ✓     ✓     ✓
 Household          ✓           ✓
 Nutrition Logger               ✓                              ✓     ✓
 ```
 
-The Feedback System is the only component that writes to all four destinations. The Grocery Module only reads from and writes to Provisions. The Planner is read-only — it produces a plan as output, but never mutates the data models directly.
+The Feedback System routes to three data model update services (Preference, Nutrition, Provisions) and to the **Optimiser** for recipe feedback — it does not write to `RecipeUpdateService` directly. The Optimiser owns all recipe modification logic, including recipe-specific feedback. The Planner also calls the Optimiser for plan-time adaptations. The Grocery Module only reads from and writes to Provisions. The Planner is read-only for data models — it produces a plan as output but never mutates them directly.
 
 **Note:** The Nutrition Logger needs `ProvisionUpdateService` for the snack consumption flow ("Remove 1 banana from pantry?" when a standalone food item is logged). This cross-model write is the canonical path for unplanned consumption.
 
-**Important:** The Feedback System only classifies and routes — the actual update logic lives in each destination module's update service. The Feedback System calls `PreferenceUpdateService.applyFeedback(feedback)`, not `preferenceRepository.save(modifiedProfile)`. This prevents the Feedback System from becoming a god-object.
+**Important:** The Feedback System only classifies and routes — the actual update logic lives in each destination module. For recipe-specific feedback, the Feedback System calls `OptimiserService.handleRecipeFeedback()` — the Optimiser owns all recipe modification logic (culinary and nutritional reasoning). For other feedback, it calls the relevant module's update service (`PreferenceUpdateService.applyFeedback()`, etc.). The Feedback System never calls `RecipeUpdateService` directly. This prevents the Feedback System from becoming a god-object and ensures all recipe modifications go through the Optimiser's culinary intelligence.
 
 ### When to use events instead
 
@@ -572,13 +572,13 @@ User gives feedback ("too salty and too expensive")
 Feedback System: AI classifier (cheap model, via tool use for structured output)
     Input:  feedback text + UI context (which screen, which meal/recipe)
     Output: classification with routing destinations
-              "too salty" ──────► Recipe Engine (recipe-specific change)
+              "too salty" ──────► Recipe (via Optimiser — culinary reasoning)
               "too expensive" ──► Provisions (cost concern)
          │
          ▼
-For each destination, Feedback System calls the relevant update service:
-    RecipeUpdateService.proposeEvolution(recipeId, feedback)
-    ProvisionUpdateService.recordCostFeedback(userId, feedback)
+For each destination, Feedback System calls the relevant service:
+    OptimiserService.handleRecipeFeedback(recipeId, feedback)  ← recipe feedback
+    ProvisionUpdateService.applyFeedback(userId, feedback)     ← provisions feedback
          │
          ▼
 Publishes FeedbackProcessedEvent (payload: which destinations were updated)
@@ -749,6 +749,8 @@ GET    /api/v1/planner/jobs/{jobId}                    ← poll for async status
 
 # Feedback
 POST   /api/v1/feedback
+POST   /api/v1/feedback/{feedbackId}/routes/{routingId}/correct  ← misclassification correction
+GET    /api/v1/feedback?limit=20                                 ← recent feedback with routing
 
 # Grocery
 GET    /api/v1/grocery/shopping-list                   ← current plan's shopping list
@@ -955,15 +957,9 @@ Store on a different drive or sync to OneDrive. Test restore once — an unteste
 
 Each remaining HLD must define the following, ensuring implementation-readiness and consistency with this architecture.
 
-### Recipe Engine HLD must define:
+### Recipe Engine HLD: ✅ Complete
 
-- **Query service:** `RecipeQueryService` — search/filter (with query params for cuisine, time, catalogue type, tags), get by ID, `getByIds(List<Long>)` for batch hydration, get recipe index (for planner context assembly — must include names, tags, ratings, macros, equipment, prep time), get nutrition, get versions/branches
-- **Update service:** `RecipeUpdateService` — create, import from URL, version, branch, update nutrition data, `proposeEvolution(recipeId, feedback)` for feedback-driven changes
-- **Events published:** `RecipeImportedEvent`, `RecipeEvolvedEvent`
-- **AI tasks:** Recipe import (URL → structured recipe), recipe generation (gap-filling), recipe discovery (web search + filter). Each with context assembly, model tier, tool use schema, failure mode.
-- **Two-catalogue approval model:** Every write path must check catalogue type. User catalogue → propose (requires approval). System catalogue → apply freely. This distinction must be explicit in the update service interface.
-- **API endpoints:** CRUD, search with filters, version history, branching
-- **Key flow:** Import pipeline (URL fetch → AI extraction → nutrition engine pass → hard constraint filter → store)
+See [recipe-engine.md](recipe-engine.md). Defines: two catalogues with approval model, three-way change taxonomy (version/branch/substitution), full recipe data structure with structured tags and embedding column reserved, import pipeline, search/filtering interface, and service interfaces with batch methods.
 
 ### Meal Planner HLD must define:
 
@@ -976,26 +972,13 @@ Each remaining HLD must define the following, ensuring implementation-readiness 
 - **Async flow:** Plan generation uses the job/polling pattern. Define job states, progress reporting, cancellation.
 - **Transactional boundaries:** Plan generation reads from all models but writes only to `planner_plans` / `planner_meal_slots`. No data model mutations.
 
-### Recipe Optimiser HLD must define:
+### Recipe Optimiser HLD: ✅ Complete
 
-- **Query services injected:** `PreferenceQueryService`, `NutritionQueryService`, `ProvisionQueryService`, `RecipeQueryService`
-- **Update service injected:** `RecipeUpdateService`
-- **Hard constraint filter:** Injects `HardConstraintFilterService`, runs after proposing adaptations
-- **Events listened to:** `RecipeImportedEvent` (Trigger 1), `DataModelChangedEvent` (Trigger 3)
-- **Events published:** `RecipeEvolvedEvent`
-- **AI task:** Recipe adaptation — context (recipe + relevant constraints from all 3 models), model tier, tool use schema for proposed changes, failure mode
-- **The four triggers** with detailed flow for each
-- **Propose vs apply:** How proposed changes are stored pending user approval (user catalogue) vs applied immediately (system catalogue). Proposed changes need a storage model (pending_recipe_changes table? version with status "proposed"?).
+See [recipe-optimiser.md](recipe-optimiser.md). Defines: three layers of intelligence (culinary, nutritional, constraint), four triggers with detailed flows, version vs branch vs substitution decision logic, `NutritionalKnowledgeService` interface for upgradeable food science, `PlannerHint` mechanism for communicating plan-level concerns, and the "interface everything for upgrade" principle.
 
-### Feedback System HLD must define:
+### Feedback System HLD: ✅ Complete
 
-- **Update services injected:** `PreferenceUpdateService`, `NutritionUpdateService`, `ProvisionUpdateService`, `RecipeUpdateService`
-- **Events published:** `FeedbackProcessedEvent` (with payload of which destinations were updated)
-- **AI task:** Feedback classification — context (feedback text + UI screen context + meal/recipe data), model tier, tool use schema for routing decisions, failure mode
-- **Multi-destination routing:** How classification that splits across destinations works. Transactional boundary: if the Provisions write succeeds but the Recipe Engine write fails, what state is the system in? Each destination write should be independent — partial success is acceptable, logged, and surfaceable to the user.
-- **Misclassification correction:** How the user discovers and corrects misrouted feedback. The UX for "here's what I think you meant — correct me?"
-- **API endpoint:** Single `POST /api/v1/feedback` with `{ text: "too salty and expensive", context: { screen: "recipe_detail", recipeId: 123, mealSlotId: 456 } }`
-- **Quality monitoring:** Track classification accuracy over time. When the user corrects a misroute, log it as ground truth for future evaluation.
+See [feedback-system.md](feedback-system.md). Defines: four destinations (recipe via Optimiser, preference, nutrition, provisions), multi-destination routing with independent transactions, confidence-based handling (auto-route ≥ 0.8, flag 0.5-0.8, clarify < 0.5), misclassification correction flow with ground truth logging, quality monitoring metrics, and the classifier AI task.
 
 ### Grocery Module HLD must define:
 
