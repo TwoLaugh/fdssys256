@@ -170,6 +170,12 @@ Both catalogues share the same data structures, versioning, and branching mechan
 - **Online discovery** — search the web, hard-filter against constraints, score against preferences. Goes into the system catalogue; user can promote to their catalogue.
 - **AI generation** — create new recipes based on specific gaps (e.g., "need a high-protein weeknight meal under 30 mins"). Goes into the system catalogue unless the user explicitly saves it.
 
+### Cold start
+
+Both catalogues start empty. For the first plan generation, the planner has no recipes to select from in Phase 1 — it relies entirely on Phase 2 (creative augmentation) to generate meals from scratch, or triggers recipe discovery/generation as a pre-step to populate the system catalogue before composition. The first 1-2 weeks will lean heavily on AI generation. As the user imports recipes and the system discovers/generates more, the catalogues grow and Phase 1 becomes the primary selection mechanism.
+
+**System catalogue pruning.** The system catalogue grows unboundedly — every plan generation can add recipes via discovery, generation, and optimiser adaptation. Recipes that have never been used in a plan and have no user interaction (no feedback, no promotion to user catalogue) after 3 months should be archived. Recipes that have been used or rated are retained indefinitely.
+
 ### Recipe properties
 
 Every recipe carries metadata that the planner uses for scheduling and optimisation:

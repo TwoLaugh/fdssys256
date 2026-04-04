@@ -96,7 +96,7 @@ Similarly, the Feedback System processing a single multi-destination feedback en
 | `RecipeImportedEvent` | Recipe Engine (new recipe added to either catalogue) | Optimiser (Trigger 1) | Run adaptation against data models |
 | `RecipeEvolvedEvent` | Optimiser or Recipe Engine (version/branch created) | Nutrition Engine | Recalculate nutrition for new version |
 | `GroceryOrderConfirmedEvent` | Grocery Module (order confirmed by user) | Provisions | Add items to inventory, update supplier cache |
-| `DataModelChangedEvent` | Any data model (significant change to constraints/targets) | Optimiser (Trigger 3) | Batch re-optimise affected system catalogue recipes |
+| `DataModelChangedEvent` | Any data model (significant change to constraints/targets — **distinct from the per-model events above**) | Optimiser (Trigger 3) | Batch re-optimise affected system catalogue recipes. Note: `PreferenceChangedEvent` etc. target the Planner for mid-week re-opt; `DataModelChangedEvent` targets the Optimiser for recipe catalogue maintenance. A single data model change may publish both — they serve different consumers with different responses. |
 | `ExpiryApproachingEvent` | Scheduled check on Provisions (`@Scheduled`) | Notification System | Alert user about expiring items |
 | `HealthDirectiveReceivedEvent` | Health Platform integration | Notification System, Nutrition/Preference | Alert user to review proposed directive |
 
@@ -403,13 +403,17 @@ Pass 1 — Recipe Selection (cheap/mid model)
   Output:  15-20 candidate recipe IDs + confidence flag
   Size:    ~2500 tokens input
 
-Pass 2 — Plan Assembly (frontier model)
-  Context: profile + preferences + provisions + FULL selected recipes
-  Output:  7-day structured meal plan
+Pass 2 — Creative Augmentation (frontier model)
+  Context: profile + preferences + provisions + FULL selected recipes + gaps from Pass 1
+  Output:  Complete 7-day plan: arranges selected recipes into slots, fills remaining
+           gaps with creative additions (sides, snacks, swaps), ensures nutrition targets
+           converge across the week
   Size:    ~5000 tokens input (verify by counting actual tokens before calling)
 ```
 
 This pattern — index first, full details only for selected items — applies to any AI task that needs to reason over a large set.
+
+**Index scaling.** At 150+ user recipes plus hundreds of system catalogue recipes, the raw index will exceed the ~2,500 token budget. The planner must **pre-filter before building the index**: exclude recipes that fail hard constraints (equipment, allergies, dietary identity), exclude archived/unused system catalogue recipes, and apply coarse lifestyle filters (no 2-hour recipes for weeknight slots). This deterministic pre-filtering reduces the candidate set before the index is assembled, keeping it within the token budget. The pre-filtering logic is part of the Planner, not the Recipe Engine.
 
 **Failure modes to design for:**
 - Pass 1 selects poorly because the index is too lossy → include equipment requirements and prep time in the index, not just names/tags/macros
@@ -444,7 +448,7 @@ Monthly summary available in settings: "This month: £X.XX across Y API calls."
 - Per-task token caps (see table above) — abort before calling if context exceeds cap
 - Per-user daily spend cap (configurable, default: £5/day) — AI features degrade gracefully when hit (show cached plans, disable generation)
 - Per-task-type rate limits — plan generation max a few times per day, feedback classification max ~20/day. Catches runaway loops.
-- Circuit breaker (Resilience4j or Spring Retry's `@CircuitBreaker`) — if 5 consecutive calls to the same task type fail, stop trying for 5 minutes. Prevents retry storms.
+- Circuit breaker (Resilience4j `@CircuitBreaker`) — if 5 consecutive calls to the same task type fail, stop trying for 5 minutes. Prevents retry storms. **Use Resilience4j consistently for all resilience patterns** (retry, rate limiting, circuit breaking) — don't mix with Spring Retry.
 - Idempotency for expensive operations — if the user double-clicks "Generate Plan," the job/polling pattern deduplicates at the job level. Only one frontier API call.
 - Log full prompt on failure only — avoids bloating the log table while preserving debuggability.
 
@@ -471,8 +475,8 @@ Monthly summary available in settings: "This month: £X.XX across Y API calls."
 - **Purpose:** Ingredient identification, nutrition lookup (~370k food entries)
 - **API:** `https://fdc.nal.usda.gov/api-guide`
 - **Caching:** The `nutrition_ingredient_mapping` table IS the cache. Once mapped, never looked up again. After a few months, API calls become rare.
-- **Rate limiting:** 1000 requests/hour with API key. Wrap in Spring Retry's `@Retryable` or Resilience4j `@RateLimiter`.
-- **Failure:** Retry on 5xx (up to 2 attempts via `@Retryable`). On persistent failure, flag ingredient as "unmapped" with `nutrition_status = "pending"`. A `@Scheduled` background job retries unmapped ingredients periodically.
+- **Rate limiting:** 1000 requests/hour with API key. Wrap in Resilience4j `@RateLimiter`.
+- **Failure:** Retry on 5xx (up to 2 attempts via Resilience4j `@Retry`). On persistent failure, flag ingredient as "unmapped" with `nutrition_status = "pending"`. A `@Scheduled` background job retries unmapped ingredients periodically.
 - **Testing:** WireMock with recorded responses. No need for Testcontainers.
 
 ### Open Food Facts

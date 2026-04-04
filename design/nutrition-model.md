@@ -562,6 +562,31 @@ Each consumer reads a different slice of the Nutrition Model.
 
 ---
 
+## Bootstrapping (Cold Start)
+
+### Nutritional targets
+
+Nutritional targets are asked during onboarding with sensible defaults the user can accept or customise:
+
+- **Calorie target:** Estimated from age, sex, weight, height, and activity level using the Mifflin-St Jeor equation. The user provides these during onboarding (or skips, and the system uses a population average: ~2000 kcal for women, ~2500 kcal for men).
+- **Macro targets:** Derived from the calorie target using standard splits (e.g., 30% protein, 40% carbs, 30% fat) and converted to grams. The user can override any macro individually.
+- **Micro targets:** Defaulted from standard dietary reference intakes (DRI), adjusted for age and sex from the user's profile metadata. Not shown in the v1 UI but tracked internally.
+- **Per-meal distribution:** Defaulted from the calorie target and the user's meal structure (from Preference Model lifestyle config). E.g., if the user eats 3 meals + snacks and targets 2200 kcal, default to ~500 breakfast, ~650 lunch, ~700 dinner, ~350 snacks.
+- **Eating window:** Not set by default. Only configured if the user indicates intermittent fasting during onboarding.
+- **Activity adjustments:** Not set by default. The user adds these when they want training-day vs rest-day differentiation.
+
+If the user skips nutrition setup entirely, the planner operates without nutrition constraints — it still produces valid plans based on preferences and provisions, just without macro/micro optimisation. Nutrition tracking is an optional enhancement, consistent with the Provision Model's "everything is optional" principle.
+
+### Ingredient mapping cache
+
+Starts empty. Populated on-demand as recipes enter the system. No bootstrapping needed — the first recipe import or AI generation triggers the mapping pipeline.
+
+### Intake tracking
+
+Pre-filled from the meal plan once planning starts. No bootstrapping needed — the logger has nothing to track until the first plan exists.
+
+---
+
 ## Open Questions
 
 - **Bioavailability modelling.** Cooking methods affect nutrient availability (e.g., cooking tomatoes increases lycopene bioavailability, pairing iron-rich foods with vitamin C increases iron absorption). v1 uses raw-based calculations, but the architecture should not preclude adding cooking-method and ingredient-pairing adjustments to the nutrition calculation later. The mapping pipeline's per-ingredient structure supports this — a future step could apply modifiers after the base calculation.

@@ -365,7 +365,7 @@ Waste data aggregates into weekly/monthly summaries: total cost wasted, most-was
 
 ## Shopping List Calculation
 
-The shopping list is the bridge between Provisions and the grocery module. It's calculated by deterministic code (not AI), owned by the planner, and uses data from Provisions.
+The shopping list is the bridge between Provisions and the grocery module. It's calculated by deterministic code (not AI), **owned by the Planner module**, and uses data from Provisions. It's documented here because the formula depends entirely on Provisions data structures, but the implementation lives in the Planner. The Planner HLD will define the full algorithm; this section specifies the data contract from the Provisions side.
 
 ### Formula
 
