@@ -46,7 +46,9 @@ class DecisionLogServiceIT {
 
   @AfterEach
   void cleanUp() {
-    repository.deleteAll();
+    // Single DELETE FROM decision_log — deleteAll() iterates row-by-row and trips
+    // the parent_decision_id self-FK when ancestry tests have left a chain in place.
+    repository.deleteAllInBatch();
   }
 
   @Test
