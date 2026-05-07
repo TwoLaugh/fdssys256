@@ -1,11 +1,11 @@
 services:
   postgres:
     image: postgres:16
-    container_name: journal-db
+    container_name: mealprep-db
     environment:
-      POSTGRES_DB: journal
-      POSTGRES_USER: journal_user
-      POSTGRES_PASSWORD: journal_pass
+      POSTGRES_DB: mealprep_dev
+      POSTGRES_USER: mealprep_dev
+      POSTGRES_PASSWORD: mealprep_dev
     ports:
       - "5432:5432"
     volumes:

@@ -89,7 +89,10 @@ Similarly, the Feedback System processing a single multi-destination feedback en
 |---|---|---|---|
 | `MealCookedEvent` | UI/Planner (user marks meal cooked) | Provisions (deduct ingredients), Nutrition Logger (auto-confirm intake) | Inventory deduction, nutrition tracking |
 | `MealConsumedEvent` | UI (user confirms eating pre-made meal) | Provisions (deduct one portion) | Portion deduction from fridge/freezer |
-| `ProvisionChangedEvent` | Provisions (after any inventory update, grocery delivery, waste log — **batched per operation**) | Planner | Offers mid-week re-optimisation for remaining days |
+| `ProvisionChangedEvent` (sealed) | Provisions — sub-kinds: `ItemSpoiledEvent`, `ItemRanOutEvent`, `ItemAddedFromGroceryEvent`, `SubstitutionAcceptedEvent`. Batched per operation. | Planner | Offers mid-week re-optimisation for remaining days |
+| `EquipmentChangedEvent` | Provisions | Planner (cache invalidation) | Plan re-eligibility check |
+| `BudgetChangedEvent` | Provisions | Planner (cache invalidation) | Re-score under new budget |
+| `HouseholdMemberAddedEvent`, `HouseholdMemberRemovedEvent`, `HouseholdSettingsChangedEvent`, `HouseholdRoleChangedEvent`, `HouseholdCreatedEvent` | Household | Planner, Notification | Plan slot reconfiguration, alert household members |
 | `NutritionIntakeDivergedEvent` | Nutrition Logger (actual intake diverges significantly from planned) | Planner | Shifts remaining targets, may trigger re-optimisation |
 | `PreferenceChangedEvent` | Preference module (after taste profile delta or lifestyle config change) | Planner | Offers re-optimisation if mid-plan |
 | `FeedbackProcessedEvent` | Feedback System (after AI classifies and routes — **one event per feedback entry**) | Notification System | Confirms to user what was updated (payload includes which destinations) |
@@ -97,29 +100,38 @@ Similarly, the Feedback System processing a single multi-destination feedback en
 | `RecipeEvolvedEvent` | Optimiser or Recipe Engine (version/branch created) | Nutrition Engine | Recalculate nutrition for new version |
 | `GroceryOrderConfirmedEvent` | Grocery Module (order confirmed by user) | Provisions | Add items to inventory, update supplier cache |
 | `DataModelChangedEvent` | Any data model (significant change to constraints/targets — **distinct from the per-model events above**) | Optimiser (Trigger 3) | Batch re-optimise affected system catalogue recipes. Note: `PreferenceChangedEvent` etc. target the Planner for mid-week re-opt; `DataModelChangedEvent` targets the Optimiser for recipe catalogue maintenance. A single data model change may publish both — they serve different consumers with different responses. |
-| `ExpiryApproachingEvent` | Scheduled check on Provisions (`@Scheduled`) | Notification System | Alert user about expiring items |
+| `ItemNearingExpiryEvent` | Scheduled check on Provisions (`@Scheduled`) | Notification System | Alert user about expiring items |
 | `HealthDirectiveReceivedEvent` | Health Platform integration | Notification System, Nutrition/Preference | Alert user to review proposed directive |
 
 ### Event payload design
 
-Events carry IDs and a change type, not full data objects. The listener fetches current state via the relevant query service.
+Events carry IDs, not full data objects. The listener fetches current state via the relevant query service.
+
+**Sealed hierarchies, not single events with `changeType` enums.** Where an event has multiple sub-kinds with distinct downstream consequences (e.g. spoilage vs grocery delivery), model them as a sealed interface with one record per kind. Listeners get exhaustive `switch` and subtype-specific fields; publishers don't pay the cost of a discriminator field that isn't always meaningful. Single-kind events stay as plain records.
 
 ```java
-public class ProvisionChangedEvent extends ApplicationEvent {
-    private final Long userId;
-    private final ChangeType changeType;  // INVENTORY_DEDUCTION, GROCERY_DELIVERY, WASTE_LOGGED, EXPIRY_UPDATE
-    private final List<Long> affectedItemIds;
+// Sealed hierarchy — Provisions has multiple change kinds with different consequences.
+public sealed interface ProvisionChangedEvent
+    permits ItemSpoiledEvent, ItemRanOutEvent, ItemAddedFromGroceryEvent,
+            SubstitutionAcceptedEvent {
+    UUID userId();
+    UUID traceId();
+    Instant occurredAt();
 }
 
-public class MealCookedEvent extends ApplicationEvent {
-    private final Long userId;
-    private final Long recipeId;
-    private final Long planId;
-    private final Long mealSlotId;
-    private final int servingsCooked;
-    private final boolean isBatchCook;
-}
+public record ItemSpoiledEvent(UUID userId, UUID itemId, String reason,
+                               UUID traceId, Instant occurredAt) implements ProvisionChangedEvent {}
+// ...etc
+
+// Plain record — MealCookedEvent is single-kind.
+public record MealCookedEvent(
+    UUID userId, UUID recipeId, UUID planId, UUID mealSlotId,
+    int servingsCooked, boolean isBatchCook,
+    UUID traceId, Instant occurredAt
+) {}
 ```
+
+Equipment and budget changes get their own event types (`EquipmentChangedEvent`, `BudgetChangedEvent`) — separate from the `ProvisionChangedEvent` hierarchy because the planner uses different cache-invalidation strategies for each.
 
 Note: because listeners use `@TransactionalEventListener(AFTER_COMMIT)`, they run after the publishing transaction commits. The query service returns the already-updated state. If a listener needs "before and after," the event payload must carry the delta.
 
@@ -146,13 +158,16 @@ Grocery Module                      ✓  (after handling substitutions)
 
 ```java
 public interface HardConstraintFilterService {
-    FilterResult check(Long userId, List<String> ingredientMappingKeys);
-    FilterResult checkRecipe(Long userId, Long recipeId);
-    List<Long> filterRecipes(Long userId, List<Long> recipeIds);  // returns only safe recipes
+    FilterResult check(UUID userId, List<String> ingredientMappingKeys);
+    FilterResult checkRecipe(UUID userId, UUID recipeId, List<String> recipeIngredientMappingKeys);
+    List<UUID> filterRecipes(UUID userId, Map<UUID, List<String>> recipesIngredientKeys);
+    FilterResult checkForHousehold(List<UUID> userIds, List<String> ingredientMappingKeys);
 }
 ```
 
 The filter reads from `PreferenceQueryService.getHardConstraints(userId)` — the DB-locked allergy/dietary identity table. It never reads from the taste profile or any AI-maintained data.
+
+Note: `checkRecipe` takes the ingredient list from the caller rather than loading the recipe internally. This avoids a circular dependency — every food-output module (including recipe) injects the filter, and the filter cannot in turn depend on `RecipeQueryService`. Callers always have the ingredient list at the point of call. `checkForHousehold` accepts a union of eaters' constraints for shared meal slots.
 
 ### Enforcement rules
 
@@ -214,16 +229,17 @@ Either way, do not rely solely on naming conventions and good intentions.
 
 ### Cross-module references
 
-**No `@ManyToOne` or `@JoinColumn` across module boundaries.** If the Planner references a recipe, it stores `recipe_id` as a plain `Long` column. Resolution happens through `RecipeQueryService.getById(recipeId)`.
+**No `@ManyToOne` or `@JoinColumn` across module boundaries.** If the Planner references a recipe, it stores `recipe_id` as a plain `UUID` column. Resolution happens through `RecipeQueryService.getById(recipeId)`.
 
 Shared identifiers and where they're owned:
 
 | Identifier | Owned by | Used by | Type | Normalisation |
 |---|---|---|---|---|
 | `ingredient_mapping_key` | Nutrition Model (`nutrition_ingredient_mapping.search_term`) | Provisions (inventory items), Supplier data, Recipe ingredients | `text` | Always lowercase, trimmed. The Nutrition Model provides a `normaliseKey()` utility. All modules must use it before storing or looking up keys — "Chicken Breast" and "chicken breast" must resolve to the same entry. |
-| `recipe_id` | Recipe Engine (`recipe_recipes.id`) | Planner (meal slots), Provisions (batch cook source), Feedback (routing) | `bigint` | N/A |
+| `recipe_id` | Recipe Engine (`recipe_recipes.id`) | Planner (meal slots), Provisions (batch cook source), Feedback (routing) | `uuid` | N/A |
 | `product_id` | Provisions (`provision_supplier_products.product_id`) | Grocery Module | `text` | N/A |
-| `user_id` | Auth (`auth_users.id`) | Every module | `bigint` | N/A |
+| `user_id` | Auth (`auth_users.id`) | Every module | `uuid` | N/A |
+| `decision_id` / `trace_id` | Core (`decision_log`) | Every module that runs an optimisation loop | `uuid` | App-generated; propagated via service args and MDC |
 
 ### JSONB columns
 
@@ -278,7 +294,7 @@ public interface AiService {
 public interface AiTask<T> {
     TaskType getTaskType();           // determines model tier, timeout, token cap
     String getSystemPrompt();         // separate from user messages (Anthropic API requirement)
-    Map<String, String> getContext(); // fills template placeholders for user message
+    Map<String, Object> getContext(); // structured context — placeholders, rollups, candidate lists
     ToolDefinition getToolSchema();   // JSON schema for structured output via tool use
 }
 ```
@@ -430,7 +446,7 @@ Every API call is logged to `ai_call_log`:
 | Column | Type | Purpose |
 |---|---|---|
 | `timestamp` | timestamp | When the call was made |
-| `user_id` | bigint | Who triggered it |
+| `user_id` | uuid | Who triggered it |
 | `task_type` | text | Which AI task (e.g., `PLAN_ASSEMBLY`, `FEEDBACK_CLASSIFICATION`) |
 | `model_used` | text | Which model was actually called |
 | `prompt_version` | text | Hash or identifier of the prompt template used — correlates prompt changes with quality |
@@ -957,32 +973,18 @@ Store on a different drive or sync to OneDrive. Test restore once — an unteste
 
 Each remaining HLD must define the following, ensuring implementation-readiness and consistency with this architecture.
 
-### Recipe Engine HLD: ✅ Complete
+### Recipe System HLD: ✅ Complete
 
-See [recipe-engine.md](recipe-engine.md). Defines: two catalogues with approval model, three-way change taxonomy (version/branch/substitution), full recipe data structure with structured tags and embedding column reserved, import pipeline, search/filtering interface, and service interfaces with batch methods.
+See [recipe-system.md](recipe-system.md). Defines: catalogue + adaptation pipeline as one subsystem with two internal concerns, two catalogues with approval model, three-way change taxonomy (version/branch/substitution), full recipe data structure with structured tags and embedding column reserved, import pipeline, search/filtering interface, service interfaces with batch methods, and the four adaptation triggers with their flows. Replaces the earlier split into separate Recipe Engine + Recipe Optimiser HLDs.
 
-### Meal Planner HLD must define:
+### Meal Planner HLD: ✅ Complete
 
-- **Query services injected:** `PreferenceQueryService`, `NutritionQueryService`, `ProvisionQueryService`, `RecipeQueryService`
-- **Hard constraint filter:** Injects `HardConstraintFilterService`, runs after Phase 2
-- **Events listened to:** `ProvisionChangedEvent`, `NutritionIntakeDivergedEvent`, `PreferenceChangedEvent`
-- **AI tasks:** Plan composition (Phase 1), plan augmentation (Phase 2) — context assembly details, model tier, tool use schema for the plan output, failure mode
-- **Deterministic code:** Shopping list calculation (5-step formula from Provision Model), hard constraint filter post-AI
-- **Key decisions:** What "offers re-optimisation" means concretely (notification with one-click re-run? auto-run? user prompt?). What happens when AI fails mid-plan (show previous plan as template? error + retry?).
-- **Async flow:** Plan generation uses the job/polling pattern. Define job states, progress reporting, cancellation.
-- **Transactional boundaries:** Plan generation reads from all models but writes only to `planner_plans` / `planner_meal_slots`. No data model mutations.
-
-### Recipe Optimiser HLD: ✅ Complete
-
-See [recipe-optimiser.md](recipe-optimiser.md). Defines: three layers of intelligence (culinary, nutritional, constraint), four triggers with detailed flows, version vs branch vs substitution decision logic, `NutritionalKnowledgeService` interface for upgradeable food science, `PlannerHint` mechanism for communicating plan-level concerns, and the "interface everything for upgrade" principle.
+See [meal-planner.md](meal-planner.md). Defines: stage-by-stage instantiation of the [optimisation-loop](optimisation-loop.md) pattern at week scale, plan/day/slot/scheduled-recipe data model, plan lifecycle with immutable historical generations and copy-forward revert, scoring function with seven sub-scores and uniform v1 weights, Phase 2 creative augmentation mechanics, constraint feasibility check, mid-week re-optimisation with state-based pinning (eaten/cooked/cooking/skipped) and Provisions-utilisation incentive in scoring, household integration, failure modes, data volume estimates, observability events, and API surface.
 
 ### Feedback System HLD: ✅ Complete
 
 See [feedback-system.md](feedback-system.md). Defines: four destinations (recipe via Optimiser, preference, nutrition, provisions), multi-destination routing with independent transactions, confidence-based handling (auto-route ≥ 0.8, flag 0.5-0.8, clarify < 0.5), misclassification correction flow with ground truth logging, quality monitoring metrics, and the classifier AI task.
 
-### Grocery Module HLD must define:
+### Grocery Module HLD: ✅ Complete
 
-- **`GroceryProvider` implementation strategy:** Browser automation approach, containerisation, timeout configuration
-- **Partial failure handling:** What happens when 3 of 5 items are added to basket but automation breaks. User sees what succeeded, can complete manually.
-- **Substitution acceptance/rejection flow:** How the user reviews and accepts/rejects Tesco substitutions through the UI
-- **The deferred implementation strategy:** Shopping list works standalone from day one. Tesco automation is added later.
+See [grocery.md](grocery.md). Defines: the `GroceryProvider` abstraction (provider-agnostic interface, Tesco as v1 implementation via browser automation), deterministic shopping-list calculation (no AI), order lifecycle states, substitution proposal/accept/reject flow, partial-failure handling that always permits user manual completion, the event catalogue grocery publishes and consumes, failure modes, and the rule that automation never auto-confirms purchases — the user always confirms in the provider's own UI.

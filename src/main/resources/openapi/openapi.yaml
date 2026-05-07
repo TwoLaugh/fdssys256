@@ -1,0 +1,200 @@
+openapi: 3.0.3
+info:
+  title: MealPrep AI
+  description: |
+    Backend API for the MealPrep AI personal meal-planning system.
+
+    See the architectural docs in `design/` and the LLDs in `lld/`.
+  version: 0.1.0
+  contact:
+    name: MealPrep AI
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: /
+    description: Same-origin (production deployment)
+paths:
+  /api/v1/admin/decision-log/{decisionId}:
+    get:
+      tags: [DecisionLog]
+      operationId: getDecisionLogEntry
+      summary: Get a single decision-log entry by ID.
+      security:
+        - cookieAuth: [admin]
+      parameters:
+        - in: path
+          name: decisionId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The decision-log entry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DecisionLogDto' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/admin/decision-log/trace/{traceId}:
+    get:
+      tags: [DecisionLog]
+      operationId: getDecisionLogByTrace
+      summary: Get all decision-log entries for a trace, ordered by creation time.
+      security:
+        - cookieAuth: [admin]
+      parameters:
+        - in: path
+          name: traceId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Decisions in the trace; empty list if none exist.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DecisionLogDto' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/admin/decision-log/{decisionId}/ancestry:
+    get:
+      tags: [DecisionLog]
+      operationId: getDecisionAncestry
+      summary: Walk parent_decision_id recursively up to maxDepth.
+      security:
+        - cookieAuth: [admin]
+      parameters:
+        - in: path
+          name: decisionId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: maxDepth
+          schema: { type: integer, minimum: 1, maximum: 32, default: 32 }
+      responses:
+        '200':
+          description: Ancestor chain ordered root-first; cycleDetected is true if the depth cap was hit.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AncestryResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: SESSION
+      description: |
+        Session cookie issued by the auth module. Admin endpoints require the
+        ROLE_ADMIN scope. Currently un-enforced; auth-01 wires the filter chain.
+  schemas:
+    DecisionLogDto:
+      type: object
+      required: [decisionId, traceId, scopeKind, scopeId, scale, triggeredBy, inputs, iteration, createdAt]
+      properties:
+        decisionId: { type: string, format: uuid }
+        traceId: { type: string, format: uuid }
+        parentDecisionId: { type: string, format: uuid, nullable: true }
+        scopeKind: { type: string, example: "plan-week" }
+        scopeId: { type: string, format: uuid }
+        scale: { type: string, enum: [WEEK, RECIPE, OTHER] }
+        triggeredBy: { type: string, example: "user-initiated" }
+        actorUserId: { type: string, format: uuid, nullable: true }
+        inputs:
+          type: object
+          additionalProperties: true
+        candidates:
+          type: object
+          nullable: true
+          additionalProperties: true
+        chosen:
+          type: object
+          nullable: true
+          additionalProperties: true
+        reasoning: { type: string, nullable: true }
+        emittedDirective:
+          type: object
+          nullable: true
+          additionalProperties: true
+        iteration: { type: integer, minimum: 0 }
+        durationMs: { type: integer, nullable: true }
+        createdAt: { type: string, format: date-time }
+    AncestryResponse:
+      type: object
+      required: [ancestors, cycleDetected]
+      properties:
+        ancestors:
+          type: array
+          items: { $ref: '#/components/schemas/DecisionLogDto' }
+        cycleDetected:
+          type: boolean
+          description: True when the walk hit maxDepth — caller should investigate the parent chain.
+    ProblemDetail:
+      type: object
+      description: RFC 9457 ProblemDetail; the canonical error shape across all endpoints.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: A URI identifying the problem type.
+          example: https://mealprep.example.com/problems/validation-error
+        title:
+          type: string
+          description: Short human-readable summary.
+          example: Validation failed
+        status:
+          type: integer
+          description: HTTP status code.
+          example: 400
+        detail:
+          type: string
+          description: Human-readable explanation specific to this occurrence.
+        instance:
+          type: string
+          format: uri
+          description: A URI identifying the specific occurrence.
+        errors:
+          type: array
+          description: Optional field-level validation errors.
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+              rejectedValue: {}
+  responses:
+    BadRequest:
+      description: Validation or syntactic error.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    Unauthorized:
+      description: Missing or invalid authentication.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    Conflict:
+      description: Conflict with current state (optimistic-lock, duplicate, etc.).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    UnprocessableEntity:
+      description: Semantic error (constraint feasibility, etc.).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    TooManyRequests:
+      description: Rate limit exceeded.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }

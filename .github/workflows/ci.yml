@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  build:
+    name: Build, test, lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Verify (compile + unit tests + integration tests + JaCoCo)
+        run: ./mvnw --batch-mode --no-transfer-progress clean verify
+
+      - name: Spotless check (google-java-format)
+        run: ./mvnw --batch-mode --no-transfer-progress spotless:check
+
+      - name: OpenAPI lint
+        run: npx -y @apidevtools/swagger-cli@4.0.4 validate src/main/resources/openapi/openapi.yaml
+
+      - name: Coverage summary (JaCoCo)
+        if: always()
+        run: |
+          if [ -f target/site/jacoco/jacoco.xml ]; then
+            echo "Coverage report at target/site/jacoco/index.html"
+          else
+            echo "No JaCoCo report — skipping coverage summary."
+          fi
+
+      - name: Upload JaCoCo report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          if-no-files-found: ignore
+
+  mutation:
+    name: Mutation testing (Pitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Skip mutation testing on PRs marked WIP — fast feedback for in-progress work.
+    if: ${{ !contains(github.event.pull_request.title, 'WIP') && !contains(github.event.pull_request.labels.*.name, 'wip') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Run Pitest
+        run: ./mvnw --batch-mode --no-transfer-progress test-compile pitest:mutationCoverage
+
+      - name: Upload Pitest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-reports
+          path: target/pit-reports/
+          if-no-files-found: ignore

@@ -1,10 +1,47 @@
+# Build output
 target/
 *.class
 *.jar
 *.war
+*.ear
+
+# Logs
 *.log
+logs/
+
+# IDE
 .idea/
 *.iml
+*.iws
+*.ipr
+.vscode/
+.eclipse/
+.settings/
+.project
+.classpath
+
+# OS junk
 .DS_Store
+Thumbs.db
+
+# Node (only if frontend tooling is added later)
 node_modules/
+
+# Local secrets / env
 .env
+.env.local
+*.local
+
+# Maven wrapper download cache (the wrapper itself is committed)
+.mvn/wrapper/maven-wrapper.jar
+
+# Pitest / JaCoCo / test outputs not meant for version control
+target/pit-reports/
+target/site/jacoco/
+*.exec
+
+# Testcontainers / Docker leftovers
+.testcontainers/
+
+# Personal harness settings (per-machine; gitignored per Claude Code convention)
+.claude/settings.local.json

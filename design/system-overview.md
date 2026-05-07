@@ -148,9 +148,9 @@ The nutrition logger works like MyFitnessPal: planned meals are pre-filled from 
 
 ## Data Model 3: Provisions
 
-Holds pantry inventory, freezer, cupboard, equipment, kitchen environment, budget, and supplier availability/pricing. Budget constraint requires checking grocery prices, so the grocery provider is already involved at the input stage. The planner works within what's available, maximises ingredient utilisation across pack sizes, and minimises waste and cost.
+Holds pantry inventory, freezer, cupboard, equipment, kitchen environment, and budget. The planner works within what's available, maximises ingredient utilisation across pack sizes, and minimises waste and cost.
 
-The grocery order is the output — the shopping list is just the internal calculation that feeds it. Purchased items update the pantry. The grocery integration sits behind an abstraction (GroceryProvider interface) so different suppliers can be slotted in. Tesco is the first concrete implementation, needed from day one for real cost optimisation.
+The shopping list is a first-class output of the [Grocery module](grocery.md) — generated whenever a plan is generated, available to every user regardless of provider integration. Purchased items update the pantry through the grocery module's manual mark-bought flow or, for users with provider integration, through the order reconciliation flow. Cost optimisation is **learned over time from the user's actual paid prices** (the grocery module's price-history tier), not scraped from supplier feeds — confidence-weighted aggregates feed the planner's cost sub-score, with quote-based refresh available on demand for users who connect a provider. Tesco is the first concrete provider implementation; the GroceryProvider abstraction lets others plug in.
 
 ---
 
@@ -237,7 +237,7 @@ The user catalogue is the user's curated library. The optimiser never silently m
 The orchestrator. Operates in two distinct phases. Before either phase runs, the planner may invoke the Recipe Optimiser (Trigger 4: plan-time) as a pre-step to expand the pool of well-fitting recipes — but this is the optimiser doing its job, not a planner phase.
 
 ### Phase 1: Plan-level composition
-The combinatorial problem — selecting and arranging recipes from both catalogues across the planning period to satisfy all three data models in aggregate. Which combination of meals across 7 days best satisfies preferences, hits nutrition targets in total, and fits within budget/pantry? This is search and ranking over a known set. **The exact algorithmic approach is TBD** — options include deterministic scoring with search algorithms, traditional ML, LLMs, or a hybrid. Multi-constraint optimisation may be better served by a scoring function + search than by pure LLM generation. To be determined during implementation.
+The combinatorial problem — selecting and arranging recipes from both catalogues across the planning period to satisfy all three data models in aggregate. Which combination of meals across 7 days best satisfies preferences, hits nutrition targets in total, and fits within budget/pantry? This is search and ranking over a known set. The approach is **hybrid deterministic + LLM**: deterministic hard-filter, scoring function, and beam search produce the top-N candidate plans (no AI in the loop here), with the LLM picking among them in Phase 2 with qualitative reasoning. See [optimisation-loop.md](optimisation-loop.md) for the abstract pattern and [meal-planner.md](meal-planner.md) for the week-scale instance.
 
 ### Phase 2: Plan-level creative augmentation
 After composition, the planner identifies remaining gaps and makes intelligent additions or swaps that no existing recipe covers. Adding a yoghurt as a snack to hit a protein target. Swapping one cut of meat for another to drop cost while maintaining preferences. These are plan-level interventions, not recipe modifications — they don't go through recipe versioning. This is the hardest phase because the AI reasons creatively over the full space of possible food items rather than searching a known catalogue. Uses frontier AI, with hard constraint guardrails (allergies, dietary identity).
@@ -340,9 +340,9 @@ Cross-cutting layer for all LLM interactions. Every module that needs AI goes th
 
 | Task | Model Tier | Frequency |
 |------|-----------|-----------|
-| Meal Planner Phase 1: plan composition | TBD (may be deterministic/hybrid) | 1x/week |
-| Meal Planner Phase 2: creative augmentation | Frontier (Sonnet/Opus) | 1x/week |
-| Mid-week re-optimisation (remaining days) | TBD (same approach as Phase 1) | Ad-hoc |
+| Meal Planner Phase 1: plan composition | Deterministic (no AI) | 1x/week |
+| Meal Planner Phase 2: creative augmentation + pick from N | Frontier (Sonnet/Opus) | 1x/week |
+| Mid-week re-optimisation (remaining days) | Same as Phase 1 + Phase 2 | Ad-hoc |
 | Recipe Optimiser: adapt recipes against data models | Mid (Haiku/Sonnet) | Per trigger |
 | Generate new recipe | Mid (Haiku/Sonnet) | As needed |
 | Classify/route feedback to destinations | Cheap (Haiku) | After meals |
