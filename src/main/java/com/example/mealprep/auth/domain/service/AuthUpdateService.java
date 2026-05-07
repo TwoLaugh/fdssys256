@@ -1,10 +1,11 @@
 package com.example.mealprep.auth.domain.service;
 
 import com.example.mealprep.auth.api.dto.LoginRequest;
+import com.example.mealprep.auth.api.dto.PasswordChangeRequest;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import java.util.UUID;
 
-/** Write API for the auth module — register / login / logout. */
+/** Write API for the auth module — register / login / logout / password change. */
 public interface AuthUpdateService {
 
   /**
@@ -24,4 +25,15 @@ public interface AuthUpdateService {
    * no-op and the controller still returns 204.
    */
   void logout(UUID sessionId);
+
+  /**
+   * Rotate the authenticated user's password. Verifies {@code currentPassword} via real BCrypt
+   * compare (wrong → {@code InvalidCredentialsException} / 401), strength-validates the new
+   * password (failure → 400 with {@code errors[]}), updates the hash + {@code passwordUpdatedAt},
+   * bulk-revokes every other active session for the user, then revokes-and-reissues the calling
+   * session so the user is not bounced. Returns a fresh {@link LoginOutcome} the controller turns
+   * into a new {@code Set-Cookie}.
+   */
+  LoginOutcome changePassword(
+      UUID currentSessionId, PasswordChangeRequest request, LoginContext loginContext);
 }

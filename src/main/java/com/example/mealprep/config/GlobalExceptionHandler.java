@@ -7,6 +7,7 @@ import jakarta.validation.ConstraintViolationException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -96,6 +97,26 @@ public class GlobalExceptionHandler {
     pd.setTitle("Invalid credentials");
     pd.setInstance(URI.create(req.getRequestURI()));
     return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  /**
+   * 409 — concurrent update lost the {@code @Version} race. Hibernate's {@code
+   * StaleObjectStateException} is wrapped by Spring as {@link OptimisticLockingFailureException};
+   * mapping it here lets the loser of a password-change race surface a clean conflict instead of a
+   * 500.
+   */
+  @ExceptionHandler(OptimisticLockingFailureException.class)
+  public ResponseEntity<ProblemDetail> handleOptimisticLockingFailure(
+      OptimisticLockingFailureException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetail.forStatusAndDetail(
+            HttpStatus.CONFLICT, "Resource was updated concurrently; please retry.");
+    pd.setType(URI.create(PROBLEM_BASE + "concurrent-update"));
+    pd.setTitle("Concurrent update");
+    pd.setInstance(URI.create(req.getRequestURI()));
+    return ResponseEntity.status(HttpStatus.CONFLICT)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

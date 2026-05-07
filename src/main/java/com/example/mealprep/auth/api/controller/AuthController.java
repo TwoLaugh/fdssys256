@@ -2,6 +2,7 @@ package com.example.mealprep.auth.api.controller;
 
 import com.example.mealprep.auth.api.dto.LoginRequest;
 import com.example.mealprep.auth.api.dto.LoginResponse;
+import com.example.mealprep.auth.api.dto.PasswordChangeRequest;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.api.dto.UserDto;
 import com.example.mealprep.auth.config.AuthProperties;
@@ -23,6 +24,7 @@ import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -109,6 +111,27 @@ public class AuthController {
         .getUser(userId)
         .orElseThrow(
             () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required."));
+  }
+
+  @PutMapping(
+      path = "/password",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(summary = "Rotate password; revoke other sessions; re-issue current.")
+  public ResponseEntity<UserDto> changePassword(
+      @Valid @RequestBody PasswordChangeRequest request, HttpServletRequest httpRequest) {
+    UUID currentSessionId =
+        currentUserResolver
+            .currentSessionId()
+            .orElseThrow(
+                () ->
+                    new ResponseStatusException(
+                        HttpStatus.UNAUTHORIZED, "Authentication required."));
+    LoginOutcome outcome =
+        authUpdateService.changePassword(currentSessionId, request, contextOf(httpRequest));
+    return ResponseEntity.ok()
+        .header(HttpHeaders.SET_COOKIE, sessionCookie(outcome).toString())
+        .body(outcome.user());
   }
 
   // ---------------- Helpers ----------------
