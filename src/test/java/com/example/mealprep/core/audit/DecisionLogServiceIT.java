@@ -11,6 +11,7 @@ import com.example.mealprep.core.audit.domain.service.DecisionLogQueryService;
 import com.example.mealprep.core.audit.domain.service.DecisionLogService;
 import com.example.mealprep.core.audit.domain.service.internal.DecisionLogServiceImpl;
 import com.example.mealprep.core.testdata.DecisionLogTestData;
+import com.example.mealprep.testsupport.TestContainersConfig;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -29,10 +31,12 @@ import org.springframework.transaction.support.TransactionTemplate;
  * {@code @Transactional(REQUIRES_NEW)} write survives caller transaction rollback; trace lookup
  * returns rows in created_at order; recursive ancestry CTE walks the parent chain.
  *
- * <p>Requires Docker; uses the {@code tc:postgresql:16-alpine} JDBC URL convention from {@code
- * application-test.properties}.
+ * <p>Requires Docker. {@link TestContainersConfig} provides a {@code pgvector/pgvector:pg16}
+ * container wired in via {@code @ServiceConnection}, since the Flyway migrations install the {@code
+ * vector} extension and the plain {@code postgres} image doesn't ship it.
  */
 @SpringBootTest
+@Import(TestContainersConfig.class)
 class DecisionLogServiceIT {
 
   @Autowired private DecisionLogService writeService;

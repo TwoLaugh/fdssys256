@@ -1,17 +1,20 @@
 package com.example.mealprep;
 
+import com.example.mealprep.testsupport.TestContainersConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 
 /**
  * Smoke test asserting the Spring context starts in the {@code test} profile.
  *
- * <p>The {@code application-test.properties} datasource URL uses the Testcontainers JDBC URL
- * convention ({@code jdbc:tc:postgresql:16-alpine:///mealprep}), so {@code @SpringBootTest} spins
- * up a Postgres container automatically — no explicit {@code @Container} field needed here.
+ * <p>{@link TestContainersConfig} provides the Postgres + pgvector container via
+ * {@code @ServiceConnection}; without it, Flyway's first migration ({@code CREATE EXTENSION
+ * vector}) fails on the upstream {@code postgres} image.
  */
 @SpringBootTest
+@Import(TestContainersConfig.class)
 @ActiveProfiles("test")
 class MealPrepApplicationTests {
 

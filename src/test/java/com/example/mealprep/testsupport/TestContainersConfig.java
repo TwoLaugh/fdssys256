@@ -7,13 +7,14 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * Optional explicit Testcontainers bootstrap.
+ * Canonical Testcontainers bootstrap for ITs that need a real Postgres.
  *
- * <p>Most ITs simply rely on the {@code jdbc:tc:postgresql:16-alpine:///mealprep} URL convention
- * configured in {@code application-test.properties}, which spins up a container per JVM. This
- * configuration is the alternative path for tests that need explicit access to the container (for
- * example to grab the Postgres host/port programmatically) via Spring Boot 3.1+'s
- * {@code @ServiceConnection}.
+ * <p>Uses the {@code pgvector/pgvector:pg16} image (Postgres 16 with the {@code vector} extension
+ * pre-installed at the OS level) — the {@code V…__core_install_pgvector.sql} migration calls {@code
+ * CREATE EXTENSION vector}, which fails on the plain {@code postgres:16-alpine} image.
+ *
+ * <p>{@code asCompatibleSubstituteFor("postgres")} tells Testcontainers to treat the image as a
+ * drop-in replacement for the upstream postgres image.
  *
  * <p>Usage:
  *
@@ -29,7 +30,8 @@ public class TestContainersConfig {
   @Bean
   @ServiceConnection
   PostgreSQLContainer<?> postgresContainer() {
-    return new PostgreSQLContainer<>(DockerImageName.parse("postgres:16-alpine"))
+    return new PostgreSQLContainer<>(
+            DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres"))
         .withDatabaseName("mealprep")
         .withUsername("test")
         .withPassword("test")
