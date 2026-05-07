@@ -14,6 +14,83 @@ servers:
   - url: /
     description: Same-origin (production deployment)
 paths:
+  # ===== auth =====
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Create a new user account and auto-log in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: User created; session cookie issued.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: AUTH_SESSION cookie.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserDto' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Authenticate; receive session cookie.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Logged in; session cookie issued.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401':
+          description: Invalid credentials (generic; never distinguishes unknown user from wrong password).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revoke the current session.
+      security:
+        - cookieAuth: []
+      responses:
+        '204':
+          description: Logged out; cookie cleared.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: Cleared AUTH_SESSION cookie.
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      operationId: getCurrentUser
+      summary: Probe authentication state.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Authenticated user details.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserDto' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  # ===== decision-log =====
   /api/v1/admin/decision-log/{decisionId}:
     get:
       tags: [DecisionLog]
@@ -84,11 +161,44 @@ components:
     cookieAuth:
       type: apiKey
       in: cookie
-      name: SESSION
+      name: AUTH_SESSION
       description: |
-        Session cookie issued by the auth module. Admin endpoints require the
-        ROLE_ADMIN scope. Currently un-enforced; auth-01 wires the filter chain.
+        Session cookie issued by /api/v1/auth/login or /api/v1/auth/register.
+        Auth-01a: anonymous access is rejected outside the whitelisted paths.
+        Auth-roles-followup will tighten ROLE_ADMIN gating on admin endpoints.
   schemas:
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+          pattern: '^[a-zA-Z0-9_-]+$'
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string }
+    LoginResponse:
+      type: object
+      required: [userId, username]
+      properties:
+        userId: { type: string, format: uuid }
+        username: { type: string }
+    UserDto:
+      type: object
+      required: [userId, username, createdAt]
+      properties:
+        userId: { type: string, format: uuid }
+        username: { type: string }
+        createdAt: { type: string, format: date-time }
     DecisionLogDto:
       type: object
       required: [decisionId, traceId, scopeKind, scopeId, scale, triggeredBy, inputs, iteration, createdAt]

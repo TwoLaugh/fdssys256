@@ -23,10 +23,11 @@ import org.springframework.web.server.ResponseStatusException;
 /**
  * Admin observability endpoints for the decision log.
  *
- * <p>{@code @PreAuthorize("hasRole('ADMIN')")} is present on every method but is not yet enforced —
- * the auth-01 ticket activates Spring Security's method-security pipeline.
- * <strong>TODO(auth-01-followup):</strong> verify these endpoints reject anonymous access once the
- * auth filter chain is wired.
+ * <p>{@code @PreAuthorize("hasRole('ADMIN')")} is present on every method but is not yet enforced.
+ * Auth-01a wires the filter chain so anonymous requests now return 401, but role gating still
+ * passes for any authenticated user — the flat user model has no ROLE_ADMIN authority yet.
+ * <strong>TODO(auth-roles-followup):</strong> introduce ROLE_ADMIN once the household-admin model
+ * lands and verify these endpoints reject non-admin authenticated users.
  */
 @RestController
 @RequestMapping("/api/v1/admin/decision-log")
