@@ -45,3 +45,6 @@ target/site/jacoco/
 
 # Personal harness settings (per-machine; gitignored per Claude Code convention)
 .claude/settings.local.json
+
+# Subagent worktrees — created by `Agent` tool with isolation: "worktree".
+.claude/worktrees/

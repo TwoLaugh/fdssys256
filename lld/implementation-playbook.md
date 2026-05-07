@@ -227,68 +227,79 @@ Concrete:
 
 ---
 
-## Verification model — agent self-verify + harness pre/post flight
+## Verification model — agent self-verify
 
-Locked 2026-05-07 after the project-setup pilot exposed the gap.
+Updated 2026-05-08 after the auth-01 pilot validated subagent capabilities.
 
-**Agents must run `./mvnw verify` (and the other CI gates) themselves and iterate until green.** A ticket is not "done" from the agent's side until the build is green locally. Two pom artefact-resolution bugs slipped past the project-setup agent because it couldn't run Maven; this is the single biggest workflow risk and we close it here.
+**Agents must run `./mvnw verify` (and the other CI gates) themselves and iterate until green.** A ticket is not "done" from the agent's side until the build is green locally.
 
-### Required tools available to every implementer agent
+### What we tested 2026-05-08
 
-- `./mvnw` (Maven wrapper) — run `compile`, `verify`, `pitest:mutationCoverage`, `spotless:check`, etc.
-- `git` — branch, commit, push.
-- `docker` — Testcontainers needs the Docker daemon for the IT layer.
-- `npx` — for `swagger-cli validate src/main/resources/openapi/openapi.yaml`.
+A diagnostic subagent (worktree isolation, default `general-purpose` type) ran each of these in its sandboxed bash:
 
-If the agent's sandbox blocks any of these, the ticket cannot ship per this playbook. The agent must report the blocker explicitly; the harness either escalates permissions or runs the verification on the agent's behalf as fallback.
+| Capability | Status | Notes |
+|---|---|---|
+| `./mvnw -version` | ✓ | Maven 3.9.6 + JDK 17 |
+| `./mvnw compile` | ✓ | clean |
+| `./mvnw -DskipITs test` | ✓ | 109 tests passed |
+| `git status` | ✓ | works |
+| HTTPS to Maven Central | ✓ | dep downloads work |
+| `docker info` | ✗ → ✓ | Daemon depends on user starting Docker Desktop |
+| `npx` | ✗ | Node not installed on host PATH |
 
-### The agent's verify-and-iterate loop
+The earlier project-setup-pilot conclusion that "sandboxes block mvn/git/docker" was a misread of a different failure (a `Permission to use Bash has been denied` prompt that the operator denied and the agent should have re-prompted on). **Subagents in the current Claude Code build can self-verify the entire mvn pipeline.** Docker is environment-state, not sandbox-state. Node is missing-tool, not sandbox-state.
 
-After writing implementation + tests:
+### Required tools
 
-1. `./mvnw clean compile` — must succeed before going further (catches pom-level issues fast)
-2. `./mvnw test` — unit tests must pass
-3. `./mvnw verify` — full suite including ITs (Testcontainers spins Postgres)
-4. `./mvnw pitest:mutationCoverage` — mutation score ≥70% on the ticket's production code
-5. `./mvnw spotless:check` — formatting clean
-6. `npx -y @apidevtools/swagger-cli validate src/main/resources/openapi/openapi.yaml` — spec valid
+- `./mvnw` (Maven wrapper) — run `compile`, `verify`, `pitest:mutationCoverage`, `spotless:apply`, `spotless:check`. Confirmed agent-accessible.
+- `git` — read-only access from the agent (status/log/diff). Commits and pushes are parent-side; the agent does NOT need git write.
+- `docker` — needs Docker Desktop running on the host for Testcontainers ITs. Without it, `-DskipITs` skips the IT phase and the agent self-verifies unit tests + spotless only; ITs land on CI.
+- `npx` — used by `swagger-cli` for OpenAPI lint. Optional in the agent loop because CI runs the same lint.
 
-If any step fails: read the error, fix, re-run. **Maximum 3 iteration attempts** per ticket. After that, the agent reports the failing state with diagnosis and stops.
+### The standard agent prompt verify-and-iterate block
 
-### Harness-side pre-flight check (5 minutes before launching)
-
-Before launching an implementer agent, the harness (or you / me running Bash) verifies the **starting state is clean**:
-
-```
-./mvnw dependency:resolve -q   # catches artefact-name mistakes left by previous tickets
-./mvnw compile -q              # confirms the codebase compiles
-./mvnw test -q                 # confirms existing tests pass
-```
-
-If pre-flight fails, fix the prior state before launching the next agent. Don't pile bugs on bugs.
-
-### Harness-side post-flight check (after agent reports done)
-
-After the agent reports "done," before user review:
+Every code-generation agent prompt should end with this block, adapted to the ticket:
 
 ```
-./mvnw clean verify            # full re-run; catches anything the agent missed
-./mvnw pitest:mutationCoverage # confirms mutation score
+After writing the code, loop:
+  1. ./mvnw -DskipITs -Dspotless.check.skip=true test
+  2. On failures: read errors, fix smallest possible thing, goto 1
+  3. Cap at 5 iterations; STOP and report if still red after 5
+  4. ./mvnw spotless:apply
+  5. ./mvnw -DskipITs spotless:check
+If Docker is up on the host, also run `./mvnw verify` (no -DskipITs) once
+at the end to exercise the IT layer. If it fails on a Docker-related
+error rather than a code error, note it in the report and continue —
+parent / CI catches the gap.
+Do NOT git commit or git push — the parent does that after reviewing.
+Final report:
+  - Files created / modified (with one-line reason for each)
+  - Total tests passing after final iteration
+  - Iteration count and what was fixed each iteration
+  - Anything still failing or stubbed
 ```
 
-If post-flight fails: feed the failure back to the same agent (via `SendMessage` to its agent ID) for follow-up. If the agent has timed out, spawn a "follow-up fix" agent with the failure log.
+### Why self-verify, not parent-verify
 
-### When agents truly cannot run the gates
+Empirically (auth-01 pilot, three sub-tickets): the parent verify→fix loop caught a predictable set of issues — Spring DI failures (constructor ambiguity, missing beans), ArchUnit boundary violations, compile-level visibility issues, spotless drift. **All of these are caught by `./mvnw test` itself.** When the agent runs the loop, the parent's job shrinks from "find and fix" to "review and merge." Parent context cost drops sharply; agent cost goes up modestly (a few extra mvn runs per ticket).
 
-Sandbox limitations are real; not every environment grants `mvn` / `docker` / `git`. **The agent's correct behaviour when blocked is to STOP IMMEDIATELY and report**, NOT to ship speculative code. Validated by the core-01 pilot: the agent hit `Permission to use Bash has been denied` on `git checkout -b`, recognised it as the sandbox limitation the playbook calls out, and stopped before writing a single source file. That's the desired behaviour.
+The auth-01 pilot logged the four parent fixes that the new self-verify loop would have caught:
+- 01a: ArchUnit `noCrossModuleRepositoryImports` rule violation; missing `NoResourceFoundException` handler → unit-test failure
+- 01b: `DUMMY_BCRYPT_HASH` test access → compile failure; `PasswordStrengthValidator` constructor ambiguity → context-load failure; `GlobalExceptionHandler` Clock dep → context-load failure
+- 01c: clean — no parent fixes needed (one-shot)
 
-Three fallbacks when the implementer agent is blocked:
+### What the parent still does
 
-- **Grant permissions and resume.** If the harness operator can elevate permissions (allow-list `git`, `./mvnw`, `mvn`, `npx`, `docker`), do so and resume the same agent via `SendMessage` — preserves context. Cheapest if the limitation is artificial.
-- **Pair-mode:** Implementer agent writes code; harness operator (or a separate Verifier agent with broader permissions) runs the gates and feeds failures back via `SendMessage`. Mechanical; doubles round-trips per ticket but works in any sandbox.
-- **Manual verification:** Harness operator runs the gates between every agent step. Slowest. Only acceptable for the first ~5-10 tickets while the pattern matures, then re-evaluate.
+- **Review the agent's report** before merging — security-critical changes get extra eyeballing.
+- **Resolve cross-agent merge conflicts** when running parallel sub-tickets (auth-01b/01c collided on `GlobalExceptionHandler.java` — 3-min manual merge).
+- **Run ITs in CI** when the agent skipped them (Docker-down or first-time Postgres setup). The PR's CI gate is the final word.
+- **Pre-flight clean check** before launching: `./mvnw -DskipITs test` against the current branch base, confirming the agent isn't inheriting a broken state.
 
-The default model is **agent self-verify**. Fallbacks exist for environments that can't support it. **Never** silently ship unverified code. The cost of a few hours of harness operator time to verify on the agent's behalf is enormously less than the compounding cost of bugs piling on bugs across 75 tickets.
+### When self-verify breaks down
+
+If the agent reports "5 iterations exhausted, still red" the parent intervenes — same as before, but now with a clear log of what the agent tried. If the failure is **Docker-bound** (`Could not find a valid Docker environment`) the agent should NOT fix it; it should note the gap and stop, letting the parent or CI handle ITs.
+
+The agent must NEVER silently ship unverified code. STOP and REPORT is always preferable to hopeful submission.
 
 ### Common compatibility traps caught in pilots
 
@@ -554,22 +565,70 @@ After pilots:
 
 ### Per-ticket agent spawn
 
-Agent prompt includes:
-1. The ticket file (`tickets/<module>/<NN>-<feature>.md`) verbatim
-2. The relevant LLD(s) — e.g. `lld/preference.md` for preference tickets
-3. This playbook (`lld/implementation-playbook.md`) — the contract
-4. The style guide (`lld/style-guide.md`)
-5. Path to recent merged PRs in the same module (as concrete examples of the patterns)
+Agents run with `isolation: "worktree"` so they work in a fresh checkout off main and can't disturb the parent's working tree. The parent commits, pushes, and opens the PR after reviewing the agent's report; the agent never touches git history.
 
-Agent task:
-1. Read the ticket and the behavioural spec.
-2. Create a feature branch.
-3. Write the OpenAPI changes first, if any.
-4. Write the tests (unit + IT) per the behavioural spec, BEFORE the implementation.
-5. Write the implementation.
-6. Run the full CI locally; fix any reds.
-7. Push and open the PR with the template filled in.
-8. Tag the user for review.
+Agent prompt structure (use as a template — adapt the **Specifics** block per ticket; everything else is reusable):
+
+```
+You are implementing **<TICKET-ID> — <Title>** for <project description>.
+
+## Read these first, in this order
+1. tickets/<module>/<NN>-<title>.md — the ticket. Behavioural spec, OpenAPI excerpt, edge-case checklist, file list.
+2. lld/<module>.md — module design.
+3. lld/style-guide.md — project conventions.
+4. lld/implementation-playbook.md §Verification model — the verify loop you will run.
+
+Use existing modules in this repo as shape references:
+- src/main/java/com/example/mealprep/<existing-module>/ — same api/ + domain/ structure
+- src/test/java/com/example/mealprep/<existing-tests>/ — same test patterns
+- src/test/java/com/example/mealprep/testsupport/{TestContainersConfig, OpenApiValidatorConfig}.java — IT helpers
+
+## What's already there
+<list of files already on this branch that the agent should NOT modify>
+
+## What you implement
+<list of files this ticket creates / modifies, from the ticket's "Files this ticket touches">
+
+## Hard constraints
+- Do NOT git commit or git push — parent does that.
+- Stay strictly inside <ticket-ID> scope. <list adjacent tickets and what to NOT touch>
+- Don't refactor unrelated code.
+- Don't add comments that just restate code.
+
+## Quality bar
+<security-critical or otherwise non-obvious correctness requirements per LLD>
+
+## Verify loop  (do this AFTER writing the code)
+1. ./mvnw -DskipITs -Dspotless.check.skip=true test
+2. On failures: read errors, fix smallest possible thing, goto 1
+3. Cap at 5 iterations; STOP and report if still red after 5
+4. ./mvnw spotless:apply
+5. ./mvnw -DskipITs spotless:check
+If Docker is up on the host, also run `./mvnw verify` (no -DskipITs) once
+at the end to exercise the IT layer. If it fails on a Docker-related
+error rather than a code error, note it in the report and continue.
+Do NOT git commit or git push.
+
+## Output format
+Reply with:
+- Files created (with one-line reason each)
+- Files modified (with one-line reason each)
+- Total tests passing after final iteration
+- Iteration count and what was fixed each iteration
+- Decisions you had to make and want the parent to confirm
+- Anything stubbed or skipped
+```
+
+### Parallel agents — coordinate scope
+
+When two tickets are independent of each other (e.g. auth-01b and auth-01c after auth-01a lands), they can run as parallel sibling agents. Each prompt **explicitly names the sibling's scope** so neither stomps on shared files. Validated by the auth-01 pilot:
+
+- 01b's prompt: "do NOT touch anything in 01c (password change, PUT endpoint, bulk-revoke). 01c is being implemented in parallel by a sibling agent."
+- 01c's prompt: "do NOT touch anything in 01b (throttle, lockout, breached-list, dummy verify, audit row writes). 01b is being implemented in parallel by a sibling agent."
+
+Both can run with `run_in_background: true` in a single tool call; parent waits for completion notifications and verifies each as it returns.
+
+Even with explicit scope walls, expect a 1-3 minute manual merge resolution on shared cross-cutting files (`GlobalExceptionHandler`, `openapi.yaml`, controller files that gain new endpoints). Plan for it.
 
 ### Ticking the edge-case checklist
 
