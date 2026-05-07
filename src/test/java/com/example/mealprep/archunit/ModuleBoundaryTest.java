@@ -50,18 +50,37 @@ class ModuleBoundaryTest {
           .as("Repositories live in `<module>.domain.repository`; nothing else may import them.")
           .allowEmptyShould(true);
 
-  /** No module may import another module's {@code domain.repository} sub-package. */
+  /**
+   * No module may import another module's {@code domain.repository} sub-package. Encoded one rule
+   * per module — ArchUnit's {@code (*)} placeholders aren't back-referenced, so we can't write a
+   * single "same module is exempt" rule generically. Add a new {@code @ArchTest} field per module
+   * as modules land. Same-module imports are permitted because the source class' package starts
+   * with the module's package prefix.
+   */
   @ArchTest
-  static final ArchRule noCrossModuleRepositoryImports =
+  static final ArchRule coreReposAreInternalToCore =
       noClasses()
           .that()
-          .resideInAPackage("com.example.mealprep.(*)..")
+          .resideOutsideOfPackage("com.example.mealprep.core..")
           .should()
           .dependOnClassesThat()
-          .resideInAPackage("com.example.mealprep.(*).domain.repository..")
+          .resideInAPackage("com.example.mealprep.core..domain.repository..")
           .as(
-              "Cross-module access goes through the target module's `<Module>QueryService` /"
-                  + " `<Module>UpdateService`, never through its repositories.")
+              "core repos are accessible only within the core module —"
+                  + " cross-module callers go through DecisionLogQueryService / LockService.")
+          .allowEmptyShould(true);
+
+  @ArchTest
+  static final ArchRule authReposAreInternalToAuth =
+      noClasses()
+          .that()
+          .resideOutsideOfPackage("com.example.mealprep.auth..")
+          .should()
+          .dependOnClassesThat()
+          .resideInAPackage("com.example.mealprep.auth.domain.repository..")
+          .as(
+              "auth repos are accessible only within the auth module —"
+                  + " cross-module callers go through AuthQueryService / CurrentUserResolver.")
           .allowEmptyShould(true);
 
   /**
