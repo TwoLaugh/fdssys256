@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.mealprep.auth.api.dto.LoginRequest;
+import com.example.mealprep.auth.api.dto.PasswordChangeRequest;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.api.dto.UserDto;
 import com.example.mealprep.auth.api.mapper.UserMapper;
@@ -23,6 +24,7 @@ import com.example.mealprep.auth.domain.service.internal.PasswordHasher;
 import com.example.mealprep.auth.domain.service.internal.PasswordStrengthValidator;
 import com.example.mealprep.auth.domain.service.internal.SessionTokenGenerator;
 import com.example.mealprep.auth.event.UserLoggedInEvent;
+import com.example.mealprep.auth.event.UserPasswordChangedEvent;
 import com.example.mealprep.auth.event.UserRegisteredEvent;
 import com.example.mealprep.auth.exception.InvalidCredentialsException;
 import com.example.mealprep.auth.exception.UsernameAlreadyExistsException;
@@ -268,6 +270,145 @@ class AuthServiceImplTest {
     service.logout(null);
 
     verify(sessionRepository, never()).findById(any());
+  }
+
+  // ---------------- changePassword ----------------
+
+  @Test
+  void changePassword_throwsInvalidCredentials_forWrongCurrentPassword() {
+    AuthServiceImpl service = service();
+    UUID sessionId = UUID.randomUUID();
+    UUID userId = UUID.randomUUID();
+    User user =
+        AuthTestData.user()
+            .withId(userId)
+            .withUsername("alice")
+            .withPasswordHash(passwordHasher.hash("the-real-current-password"))
+            .build();
+    Session session = AuthTestData.session().withId(sessionId).withUserId(userId).build();
+    when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(session));
+    when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+
+    assertThatThrownBy(
+            () ->
+                service.changePassword(
+                    sessionId,
+                    new PasswordChangeRequest("wrong-current-password", "fresh-new-password-12345"),
+                    new LoginContext("ip", "ua")))
+        .isInstanceOf(InvalidCredentialsException.class)
+        .hasMessage("Invalid credentials");
+
+    // No mutations on wrong-current.
+    verify(userRepository, never()).save(any());
+    verify(sessionRepository, never()).save(any());
+    verify(eventPublisher, never()).publishEvent(any());
+  }
+
+  @Test
+  void changePassword_rejectsNewPasswordEqualToUsername() {
+    AuthServiceImpl service = service();
+    UUID sessionId = UUID.randomUUID();
+    UUID userId = UUID.randomUUID();
+    User user =
+        AuthTestData.user()
+            .withId(userId)
+            .withUsername("alice-equality")
+            .withPasswordHash(passwordHasher.hash("the-real-current-password"))
+            .build();
+    Session session = AuthTestData.session().withId(sessionId).withUserId(userId).build();
+    when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(session));
+    when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+
+    assertThatThrownBy(
+            () ->
+                service.changePassword(
+                    sessionId,
+                    new PasswordChangeRequest("the-real-current-password", "Alice-Equality"),
+                    new LoginContext("ip", "ua")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("MATCHES_USERNAME");
+
+    // Strength failure happens AFTER currentPassword verify but BEFORE any state mutation.
+    verify(userRepository, never()).save(any());
+    verify(sessionRepository, never()).save(any());
+    verify(eventPublisher, never()).publishEvent(any());
+  }
+
+  @Test
+  void changePassword_happyPath_revokesOthers_reissuesCallingSession_publishesEvent() {
+    AuthServiceImpl service = service();
+    UUID sessionId = UUID.randomUUID();
+    UUID userId = UUID.randomUUID();
+    String oldRawHash = passwordHasher.hash("the-real-current-password");
+    User user =
+        AuthTestData.user()
+            .withId(userId)
+            .withUsername("alice-happy")
+            .withPasswordHash(oldRawHash)
+            .build();
+    Session callingSession = AuthTestData.session().withId(sessionId).withUserId(userId).build();
+    when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(callingSession));
+    when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+    when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(sessionRepository.save(any(Session.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(sessionRepository.revokeAllActiveForUserExcept(
+            userId, sessionId, Instant.parse("2026-05-07T12:00:00Z")))
+        .thenReturn(3);
+
+    LoginOutcome outcome =
+        service.changePassword(
+            sessionId,
+            new PasswordChangeRequest("the-real-current-password", "fresh-new-password-12345"),
+            new LoginContext("203.0.113.5", "ua"));
+
+    // 1. Password fields updated.
+    assertThat(user.getPasswordHash()).isNotEqualTo(oldRawHash).startsWith("$2");
+    assertThat(passwordHasher.verify("fresh-new-password-12345", user.getPasswordHash())).isTrue();
+    assertThat(user.getPasswordUpdatedAt()).isEqualTo(Instant.parse("2026-05-07T12:00:00Z"));
+
+    // 2. Bulk revoke went out for OTHER sessions only (calling session excluded).
+    verify(sessionRepository)
+        .revokeAllActiveForUserExcept(userId, sessionId, Instant.parse("2026-05-07T12:00:00Z"));
+
+    // 3. Calling session revoked — old token is unusable.
+    assertThat(callingSession.getRevokedAt()).isEqualTo(Instant.parse("2026-05-07T12:00:00Z"));
+
+    // 4. New session row issued.
+    ArgumentCaptor<Session> savedSessions = ArgumentCaptor.forClass(Session.class);
+    verify(sessionRepository, org.mockito.Mockito.times(2)).save(savedSessions.capture());
+    Session newSession = savedSessions.getAllValues().get(1);
+    assertThat(newSession.getId()).isNotEqualTo(sessionId);
+    assertThat(newSession.getUserId()).isEqualTo(userId);
+    assertThat(newSession.getTokenHash()).hasSize(64);
+    assertThat(newSession.getRevokedAt()).isNull();
+    assertThat(outcome.sessionId()).isEqualTo(newSession.getId());
+    assertThat(outcome.rawSessionToken()).isNotBlank();
+
+    // 5. Event carries the count of OTHER sessions revoked.
+    ArgumentCaptor<Object> event = ArgumentCaptor.forClass(Object.class);
+    verify(eventPublisher).publishEvent(event.capture());
+    assertThat(event.getValue()).isInstanceOf(UserPasswordChangedEvent.class);
+    UserPasswordChangedEvent published = (UserPasswordChangedEvent) event.getValue();
+    assertThat(published.userId()).isEqualTo(userId);
+    assertThat(published.sessionsRevokedCount()).isEqualTo(3);
+  }
+
+  @Test
+  void changePassword_throwsInvalidCredentials_whenSessionUnknown() {
+    AuthServiceImpl service = service();
+    UUID sessionId = UUID.randomUUID();
+    when(sessionRepository.findById(sessionId)).thenReturn(Optional.empty());
+
+    assertThatThrownBy(
+            () ->
+                service.changePassword(
+                    sessionId,
+                    new PasswordChangeRequest("any-current", "fresh-new-password-12345"),
+                    new LoginContext("ip", "ua")))
+        .isInstanceOf(InvalidCredentialsException.class);
+
+    verify(userRepository, never()).save(any());
+    verify(eventPublisher, never()).publishEvent(any());
   }
 
   // ---------------- query ----------------

@@ -90,6 +90,31 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/UserDto' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/auth/password:
+    put:
+      tags: [Auth]
+      operationId: changePassword
+      summary: Rotate password; revoke other sessions; re-issue current.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordChangeRequest' }
+      responses:
+        '200':
+          description: Password changed; new session cookie issued; other sessions revoked.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: Re-issued AUTH_SESSION cookie carrying a fresh token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserDto' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
   # ===== decision-log =====
   /api/v1/admin/decision-log/{decisionId}:
     get:
@@ -192,6 +217,15 @@ components:
       properties:
         userId: { type: string, format: uuid }
         username: { type: string }
+    PasswordChangeRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string }
+        newPassword:
+          type: string
+          minLength: 12
+          maxLength: 128
     UserDto:
       type: object
       required: [userId, username, createdAt]
