@@ -11,8 +11,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.Type;
-import org.springframework.data.annotation.CreatedDate;
 
 /**
  * JPA entity for the {@code decision_log} table. Append-only — no {@code @Version}, no {@code
@@ -79,7 +79,7 @@ public class DecisionLog {
   @Column(name = "duration_ms", updatable = false)
   private Integer durationMs;
 
-  @CreatedDate
+  @CreationTimestamp
   @Column(name = "created_at", updatable = false, nullable = false)
   private Instant createdAt;
 
