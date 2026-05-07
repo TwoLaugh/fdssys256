@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -13,23 +14,30 @@ import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.api.dto.UserDto;
 import com.example.mealprep.auth.api.mapper.UserMapper;
 import com.example.mealprep.auth.config.AuthProperties;
+import com.example.mealprep.auth.domain.entity.LoginAttempt;
+import com.example.mealprep.auth.domain.entity.LoginFailureReason;
 import com.example.mealprep.auth.domain.entity.Session;
 import com.example.mealprep.auth.domain.entity.User;
+import com.example.mealprep.auth.domain.repository.LoginAttemptRepository;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.domain.service.LoginContext;
 import com.example.mealprep.auth.domain.service.LoginOutcome;
 import com.example.mealprep.auth.domain.service.internal.AuthServiceImpl;
+import com.example.mealprep.auth.domain.service.internal.LoginThrottleService;
 import com.example.mealprep.auth.domain.service.internal.PasswordHasher;
 import com.example.mealprep.auth.domain.service.internal.PasswordStrengthValidator;
 import com.example.mealprep.auth.domain.service.internal.SessionTokenGenerator;
 import com.example.mealprep.auth.event.UserLoggedInEvent;
 import com.example.mealprep.auth.event.UserPasswordChangedEvent;
 import com.example.mealprep.auth.event.UserRegisteredEvent;
+import com.example.mealprep.auth.exception.AccountLockedException;
 import com.example.mealprep.auth.exception.InvalidCredentialsException;
+import com.example.mealprep.auth.exception.LoginThrottledException;
 import com.example.mealprep.auth.exception.UsernameAlreadyExistsException;
 import com.example.mealprep.auth.testdata.AuthTestData;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -44,14 +52,16 @@ import org.springframework.dao.DataIntegrityViolationException;
 
 /**
  * Unit test for {@link AuthServiceImpl}. {@link PasswordHasher} and {@link SessionTokenGenerator}
- * are real (cheap, no I/O); repositories and event publisher are mocked because they are at the
- * module boundary.
+ * are real (cheap, no I/O); repositories, throttle service, and event publisher are mocked because
+ * they are at the module boundary.
  */
 @ExtendWith(MockitoExtension.class)
 class AuthServiceImplTest {
 
   @Mock private UserRepository userRepository;
   @Mock private SessionRepository sessionRepository;
+  @Mock private LoginAttemptRepository loginAttemptRepository;
+  @Mock private LoginThrottleService loginThrottleService;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final AuthProperties properties =
@@ -68,10 +78,12 @@ class AuthServiceImplTest {
     return new AuthServiceImpl(
         userRepository,
         sessionRepository,
+        loginAttemptRepository,
         userMapper,
         passwordHasher,
         strengthValidator,
         tokenGenerator,
+        loginThrottleService,
         eventPublisher,
         properties,
         fixedClock);
@@ -113,6 +125,9 @@ class AuthServiceImplTest {
     UserRegisteredEvent published = (UserRegisteredEvent) event.getValue();
     assertThat(published.userId()).isEqualTo(user.getId());
     assertThat(published.username()).isEqualTo("Alice");
+
+    // Register does NOT write a LoginAttempt row — registration is not a login.
+    verify(loginAttemptRepository, never()).save(any());
   }
 
   @Test
@@ -151,7 +166,7 @@ class AuthServiceImplTest {
   // ---------------- login ----------------
 
   @Test
-  void login_succeeds_andResetsFailedCount_andSetsLastLogin() {
+  void login_succeeds_andResetsFailedCount_andSetsLastLogin_andClearsLockout() {
     AuthServiceImpl service = service();
     User user =
         AuthTestData.user()
@@ -159,6 +174,7 @@ class AuthServiceImplTest {
             .withPasswordHash(passwordHasher.hash("correct-horse-battery"))
             .build();
     user.setFailedLoginCount(3);
+    user.setLockedUntil(null); // not locked but had prior failures
     when(userRepository.findByUsernameNormalisedAndDeletedAtIsNull("alice"))
         .thenReturn(Optional.of(user));
     when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -170,6 +186,7 @@ class AuthServiceImplTest {
             new LoginContext("203.0.113.5", "ua"));
 
     assertThat(user.getFailedLoginCount()).isZero();
+    assertThat(user.getLockedUntil()).isNull();
     assertThat(user.getLastLoginAt()).isEqualTo(Instant.parse("2026-05-07T12:00:00Z"));
     assertThat(user.getLastLoginIp()).isEqualTo("203.0.113.5");
     assertThat(outcome.rawSessionToken()).isNotBlank();
@@ -181,10 +198,18 @@ class AuthServiceImplTest {
     UserLoggedInEvent published = (UserLoggedInEvent) event.getValue();
     assertThat(published.userId()).isEqualTo(user.getId());
     assertThat(published.ipAddress()).isEqualTo("203.0.113.5");
+
+    // Audit row written, succeeded=true, no failureReason.
+    ArgumentCaptor<LoginAttempt> attempt = ArgumentCaptor.forClass(LoginAttempt.class);
+    verify(loginAttemptRepository).save(attempt.capture());
+    assertThat(attempt.getValue().isSucceeded()).isTrue();
+    assertThat(attempt.getValue().getFailureReason()).isNull();
+    assertThat(attempt.getValue().getUserId()).isEqualTo(user.getId());
+    assertThat(attempt.getValue().getSourceIp()).isEqualTo("203.0.113.5");
   }
 
   @Test
-  void login_throwsInvalidCredentials_andSuppressesEvent_forUnknownUser() {
+  void login_throwsInvalidCredentials_andRunsDummyVerify_andWritesUnknownUserAudit() {
     AuthServiceImpl service = service();
     when(userRepository.findByUsernameNormalisedAndDeletedAtIsNull("alice"))
         .thenReturn(Optional.empty());
@@ -193,12 +218,28 @@ class AuthServiceImplTest {
             () ->
                 service.login(
                     new LoginRequest("alice", "correct-horse-battery"),
-                    new LoginContext("ip", "ua")))
+                    new LoginContext("203.0.113.5", "ua")))
         .isInstanceOf(InvalidCredentialsException.class)
         .hasMessage("Invalid credentials");
 
     verify(sessionRepository, never()).save(any());
     verify(eventPublisher, never()).publishEvent(any());
+
+    ArgumentCaptor<LoginAttempt> attempt = ArgumentCaptor.forClass(LoginAttempt.class);
+    verify(loginAttemptRepository).save(attempt.capture());
+    assertThat(attempt.getValue().isSucceeded()).isFalse();
+    assertThat(attempt.getValue().getFailureReason()).isEqualTo(LoginFailureReason.UNKNOWN_USER);
+    assertThat(attempt.getValue().getUserId()).isNull();
+    assertThat(attempt.getValue().getUsernameNormalised()).isEqualTo("alice");
+  }
+
+  @Test
+  void login_dummyHashIsValidBcryptFormat() {
+    // The hardcoded dummy hash must parse — otherwise the unknown-user path short-circuits and the
+    // timing-parity guarantee dissolves. We exercise the same encoder used at runtime.
+    boolean matches = passwordHasher.verify("anything", AuthServiceImpl.DUMMY_BCRYPT_HASH);
+    assertThat(matches).isFalse();
+    assertThat(AuthServiceImpl.DUMMY_BCRYPT_HASH).startsWith("$2").hasSize(60);
   }
 
   @Test
@@ -211,6 +252,7 @@ class AuthServiceImplTest {
             .build();
     when(userRepository.findByUsernameNormalisedAndDeletedAtIsNull("alice"))
         .thenReturn(Optional.of(user));
+    when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
     assertThatThrownBy(
             () ->
@@ -221,6 +263,123 @@ class AuthServiceImplTest {
 
     verify(sessionRepository, never()).save(any());
     verify(eventPublisher, never()).publishEvent(any());
+
+    // failedLoginCount incremented and BAD_PASSWORD audit row written.
+    assertThat(user.getFailedLoginCount()).isEqualTo(1);
+    ArgumentCaptor<LoginAttempt> attempt = ArgumentCaptor.forClass(LoginAttempt.class);
+    verify(loginAttemptRepository).save(attempt.capture());
+    assertThat(attempt.getValue().getFailureReason()).isEqualTo(LoginFailureReason.BAD_PASSWORD);
+    assertThat(attempt.getValue().getUserId()).isEqualTo(user.getId());
+  }
+
+  @Test
+  void login_locksUser_onThresholdReached() {
+    AuthServiceImpl service = service();
+    User user =
+        AuthTestData.user()
+            .withUsername("alice")
+            .withPasswordHash(passwordHasher.hash("correct-horse-battery"))
+            .build();
+    user.setFailedLoginCount(4); // one shy of threshold (5)
+    when(userRepository.findByUsernameNormalisedAndDeletedAtIsNull("alice"))
+        .thenReturn(Optional.of(user));
+    when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+    assertThatThrownBy(
+            () ->
+                service.login(
+                    new LoginRequest("alice", "the-wrong-password"),
+                    new LoginContext("203.0.113.5", "ua")))
+        .isInstanceOf(InvalidCredentialsException.class);
+
+    assertThat(user.getFailedLoginCount()).isEqualTo(5);
+    assertThat(user.getLockedUntil())
+        .isEqualTo(Instant.parse("2026-05-07T12:00:00Z").plus(Duration.ofMinutes(15)));
+  }
+
+  @Test
+  void login_throwsAccountLocked_whenLockedUntilInFuture_andWritesAccountLockedAudit() {
+    AuthServiceImpl service = service();
+    Instant lockedUntil = Instant.parse("2026-05-07T12:00:00Z").plus(Duration.ofMinutes(10));
+    User user =
+        AuthTestData.user()
+            .withUsername("alice")
+            .withPasswordHash(passwordHasher.hash("correct-horse-battery"))
+            .build();
+    user.setLockedUntil(lockedUntil);
+    when(userRepository.findByUsernameNormalisedAndDeletedAtIsNull("alice"))
+        .thenReturn(Optional.of(user));
+
+    assertThatThrownBy(
+            () ->
+                service.login(
+                    new LoginRequest("alice", "correct-horse-battery"),
+                    new LoginContext("203.0.113.5", "ua")))
+        .isInstanceOf(AccountLockedException.class)
+        .matches(ex -> ((AccountLockedException) ex).lockedUntil().equals(lockedUntil));
+
+    verify(userRepository, never()).save(any());
+    verify(sessionRepository, never()).save(any());
+
+    ArgumentCaptor<LoginAttempt> attempt = ArgumentCaptor.forClass(LoginAttempt.class);
+    verify(loginAttemptRepository).save(attempt.capture());
+    assertThat(attempt.getValue().getFailureReason()).isEqualTo(LoginFailureReason.ACCOUNT_LOCKED);
+  }
+
+  @Test
+  void login_throwsLoginThrottled_whenUsernameThrottled_andDoesNotLookupUser() {
+    AuthServiceImpl service = service();
+    when(loginThrottleService.shouldThrottleByUsername(any(), any())).thenReturn(true);
+    when(loginThrottleService.retryAfterForUsername(any(), any()))
+        .thenReturn(Duration.ofSeconds(120));
+
+    assertThatThrownBy(
+            () ->
+                service.login(
+                    new LoginRequest("alice", "correct-horse-battery"),
+                    new LoginContext("203.0.113.5", "ua")))
+        .isInstanceOf(LoginThrottledException.class)
+        .matches(ex -> ((LoginThrottledException) ex).retryAfter().equals(Duration.ofSeconds(120)));
+
+    // Critical security invariant: throttle short-circuits BEFORE the user lookup.
+    verify(userRepository, never()).findByUsernameNormalisedAndDeletedAtIsNull(any());
+    verify(loginAttemptRepository, times(1)).save(any());
+  }
+
+  @Test
+  void login_throwsLoginThrottled_whenIpThrottled_andDoesNotLookupUser() {
+    AuthServiceImpl service = service();
+    when(loginThrottleService.shouldThrottleByUsername(any(), any())).thenReturn(false);
+    when(loginThrottleService.shouldThrottleByIp(any(), any())).thenReturn(true);
+    when(loginThrottleService.retryAfterForIp(any(), any())).thenReturn(Duration.ofSeconds(60));
+
+    assertThatThrownBy(
+            () ->
+                service.login(
+                    new LoginRequest("alice", "correct-horse-battery"),
+                    new LoginContext("203.0.113.5", "ua")))
+        .isInstanceOf(LoginThrottledException.class);
+
+    verify(userRepository, never()).findByUsernameNormalisedAndDeletedAtIsNull(any());
+  }
+
+  @Test
+  void login_unknownUserDoesNotIncrementAnyCounter() {
+    // Lockout counts BAD_PASSWORD only — never UNKNOWN_USER. Otherwise an attacker could lock out
+    // a real user by cycling random usernames. Since the user does not exist, there's no row to
+    // update, so this is verified by the absence of any userRepository.save call.
+    AuthServiceImpl service = service();
+    when(userRepository.findByUsernameNormalisedAndDeletedAtIsNull("ghost"))
+        .thenReturn(Optional.empty());
+
+    assertThatThrownBy(
+            () ->
+                service.login(
+                    new LoginRequest("ghost", "correct-horse-battery"),
+                    new LoginContext("203.0.113.5", "ua")))
+        .isInstanceOf(InvalidCredentialsException.class);
+
+    verify(userRepository, never()).save(any());
   }
 
   // ---------------- logout ----------------

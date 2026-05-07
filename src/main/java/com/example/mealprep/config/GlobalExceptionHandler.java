@@ -1,13 +1,19 @@
 package com.example.mealprep.config;
 
+import com.example.mealprep.auth.exception.AccountLockedException;
 import com.example.mealprep.auth.exception.InvalidCredentialsException;
+import com.example.mealprep.auth.exception.LoginThrottledException;
 import com.example.mealprep.auth.exception.UsernameAlreadyExistsException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import java.net.URI;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -29,6 +35,21 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 public class GlobalExceptionHandler {
 
   private static final String PROBLEM_BASE = "https://mealprep.example.com/problems/";
+
+  /**
+   * Used for {@code Retry-After} computation on 423 / 429 responses. Defaults to system UTC; tests
+   * that need a deterministic clock substitute a fixed one via {@link #withClock(Clock)} or
+   * package-private setter access. Not a Spring-injected bean — keeping it self-contained avoids
+   * pulling a {@code Clock} bean dependency into every web slice (the {@code @WebMvcTest}-based
+   * controller ITs don't import {@code AuthSecurityConfig} and would otherwise fail to load).
+   */
+  private Clock clock = Clock.systemUTC();
+
+  /** Test seam — reset the clock used by Retry-After computations. */
+  public GlobalExceptionHandler withClock(Clock clock) {
+    this.clock = clock;
+    return this;
+  }
 
   @ExceptionHandler(IllegalArgumentException.class)
   public ProblemDetail handleIllegalArgument(IllegalArgumentException ex, HttpServletRequest req) {
@@ -119,6 +140,62 @@ public class GlobalExceptionHandler {
     return ResponseEntity.status(HttpStatus.CONFLICT)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
+  }
+
+  /**
+   * 423 — user locked due to consecutive failed logins. {@code Retry-After} is computed from {@code
+   * lockedUntil}; floor of one second so we never advise a zero-second retry.
+   */
+  @ExceptionHandler(AccountLockedException.class)
+  public ResponseEntity<ProblemDetail> handleAccountLocked(
+      AccountLockedException ex, HttpServletRequest req) {
+    long retryAfterSeconds = retryAfterSeconds(ex.lockedUntil());
+    ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.LOCKED, "Account locked");
+    pd.setType(URI.create(PROBLEM_BASE + "account-locked"));
+    pd.setTitle("Account locked");
+    pd.setInstance(URI.create(req.getRequestURI()));
+    return ResponseEntity.status(HttpStatus.LOCKED)
+        .header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds))
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  /**
+   * 429 — login attempts exceeded the per-username or per-IP throttle. {@code Retry-After} is the
+   * duration carried on the exception, rounded up to whole seconds, never zero.
+   */
+  @ExceptionHandler(LoginThrottledException.class)
+  public ResponseEntity<ProblemDetail> handleLoginThrottled(
+      LoginThrottledException ex, HttpServletRequest req) {
+    long retryAfterSeconds = clampToWholeSeconds(ex.retryAfter());
+    ProblemDetail pd =
+        ProblemDetail.forStatusAndDetail(HttpStatus.TOO_MANY_REQUESTS, "Login throttled");
+    pd.setType(URI.create(PROBLEM_BASE + "login-throttled"));
+    pd.setTitle("Login throttled");
+    pd.setInstance(URI.create(req.getRequestURI()));
+    return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+        .header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds))
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  private long retryAfterSeconds(Instant target) {
+    if (target == null) {
+      return 1L;
+    }
+    Duration remaining = Duration.between(Instant.now(clock), target);
+    return clampToWholeSeconds(remaining);
+  }
+
+  private long clampToWholeSeconds(Duration duration) {
+    if (duration == null || duration.isNegative() || duration.isZero()) {
+      return 1L;
+    }
+    long seconds = duration.toSeconds();
+    if (duration.minusSeconds(seconds).toNanos() > 0) {
+      seconds += 1;
+    }
+    return Math.max(seconds, 1L);
   }
 
   /**

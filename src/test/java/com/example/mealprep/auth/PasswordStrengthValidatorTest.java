@@ -94,4 +94,37 @@ class PasswordStrengthValidatorTest {
     assertThat(validator.minLength()).isEqualTo(12);
     assertThat(validator.maxLength()).isEqualTo(128);
   }
+
+  // ---------------- breach-list ----------------
+
+  @Test
+  void evaluate_rejectsPasswordOnBreachList() {
+    // "password123456" is in src/main/resources/auth/breached-passwords.txt and is long enough
+    // to pass the length check, so the breach rule is the only thing rejecting it.
+    String password = "password123456";
+
+    assertThat(validator.evaluate(password, "alice")).contains(Reason.BREACHED);
+  }
+
+  @Test
+  void evaluate_rejectsPasswordOnBreachList_caseInsensitive() {
+    // The breach list is stored lowercase; mixed-case input must still be matched.
+    String password = "Password123456";
+
+    assertThat(validator.evaluate(password, "alice")).contains(Reason.BREACHED);
+  }
+
+  @Test
+  void evaluate_acceptsPasswordNotOnBreachList() {
+    // A long, clearly-not-on-the-list password should pass every rule.
+    String password = "purple-elephant-archipelago-22";
+
+    assertThat(validator.evaluate(password, "alice")).isEmpty();
+  }
+
+  @Test
+  void breachListLoaded_andContainsExpectedSampleEntries() {
+    // Sanity check: the loader picked up entries from the resource file, not an empty Set.
+    assertThat(validator.breachListSize()).isGreaterThan(50);
+  }
 }
