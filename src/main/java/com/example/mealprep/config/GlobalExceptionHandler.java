@@ -4,6 +4,7 @@ import com.example.mealprep.auth.exception.AccountLockedException;
 import com.example.mealprep.auth.exception.InvalidCredentialsException;
 import com.example.mealprep.auth.exception.LoginThrottledException;
 import com.example.mealprep.auth.exception.UsernameAlreadyExistsException;
+import com.example.mealprep.preference.exception.HardConstraintsNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import java.net.URI;
@@ -88,6 +89,19 @@ public class GlobalExceptionHandler {
         .forEach(fe -> fieldErrors.add(new FieldError(fe.getField(), fe.getDefaultMessage())));
     pd.setProperty("errors", fieldErrors);
     return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  /** 404 — hard-constraints aggregate not yet initialised for the calling user. */
+  @ExceptionHandler(HardConstraintsNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleHardConstraintsNotFound(
+      HardConstraintsNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+    pd.setType(URI.create(PROBLEM_BASE + "hard-constraints-not-found"));
+    pd.setTitle("Hard constraints not found");
+    pd.setInstance(URI.create(req.getRequestURI()));
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }
