@@ -60,8 +60,13 @@ jobs:
     name: Mutation testing (Pitest)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # Skip mutation testing on PRs marked WIP — fast feedback for in-progress work.
-    if: ${{ !contains(github.event.pull_request.title, 'WIP') && !contains(github.event.pull_request.labels.*.name, 'wip') }}
+    # Run on main pushes (post-merge regressions) and on PRs labelled `mutation` (when an
+    # individual ticket wants pre-merge mutation gating). Default PR runs skip Pitest to
+    # keep the build-test-lint cycle under 4 minutes — saves 5-7 min per PR. Trade-off:
+    # mutation regressions land on main, surface on the next push, fix forward.
+    if: |
+      github.event_name == 'push'
+      || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'mutation'))
     steps:
       - name: Checkout
         uses: actions/checkout@v4
