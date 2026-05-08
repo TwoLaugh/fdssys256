@@ -288,6 +288,18 @@ The auth-01 pilot logged the four parent fixes that the new self-verify loop wou
 - 01b: `DUMMY_BCRYPT_HASH` test access → compile failure; `PasswordStrengthValidator` constructor ambiguity → context-load failure; `GlobalExceptionHandler` Clock dep → context-load failure
 - 01c: clean — no parent fixes needed (one-shot)
 
+### What the self-verify loop misses (preference-01a trial, 2026-05-08)
+
+The first ticket built around the loop converged in 1 iteration on `./mvnw -DskipITs test` (121 unit tests green). But three issues surfaced only at CI when ITs ran against real Postgres:
+
+1. **`MultipleBagFetchException`** from `@EntityGraph(attributePaths = {"a", "b", "c"})` over three `@OneToMany List<>` collections. Hibernate 6 only fetches one bag at a time. The unit-test repos are mocked, so the entity graph is never exercised.
+2. **`@Version` flush timing.** Service used `repository.save()` then mapped to DTO — but Hibernate increments `@Version` on flush, which doesn't happen until commit. The PUT response carried the stale version. Fix was `saveAndFlush()`.
+3. **`LazyInitializationException`** when a test method reads a child collection outside its own transaction. With `@EntityGraph` removed (fix #1), the children became lazy; the test code accessing them post-request hit a closed session.
+
+Each took the parent ~5 minutes to diagnose + push + watch CI. Three iterations to get CI green vs. one for auth-01c.
+
+**Lesson**: the loop catches Spring-layer issues (DI, web slice, ArchUnit, compile) but not Hibernate-runtime issues (lazy fetch, flush timing, JSONB roundtrips, optimistic-lock semantics). Those need `mvn verify` with Docker running — which the diagnostic agent could do but the implementation agent **could not** (sandbox apparently denies the verify goal even when Docker is up). Investigate whether the verify-phase block can be lifted; until then, accept that ~40% of fix iterations still go through the parent-via-CI path.
+
 ### What the parent still does
 
 - **Review the agent's report** before merging — security-critical changes get extra eyeballing.
