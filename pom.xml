@@ -119,6 +119,12 @@
             <version>${openai-java.version}</version>
         </dependency>
 
+        <!-- Caffeine: in-memory cache for embedding responses (ai module) -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- ===== Test scope ===== -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

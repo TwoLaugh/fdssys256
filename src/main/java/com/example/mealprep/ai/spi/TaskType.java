@@ -18,5 +18,11 @@ public enum TaskType {
   RECIPE_HTML_EXTRACTION,
   DISCOVERY_FILTERING,
   PLANNER_STAGE_C,
-  PLANNER_PHASE2_AUGMENTATION
+  PLANNER_PHASE2_AUGMENTATION,
+  // Embedding sources — one per EmbeddingTaskType. Stored on ai_call_log.task_type so 01b's
+  // budget guard sums embedding spend alongside completion spend. The mapping is owned by
+  // AiServiceImpl.toTaskType(EmbeddingTaskType).
+  EMBEDDING_PREFERENCE_TASTE_VECTOR,
+  EMBEDDING_RECIPE_SEMANTIC_VECTOR,
+  EMBEDDING_JOURNAL_ENTRY_VECTOR
 }

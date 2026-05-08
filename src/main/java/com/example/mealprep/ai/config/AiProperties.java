@@ -9,9 +9,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * Externalised configuration for the AI module — bound to the {@code mealprep.ai.*} prefix.
  *
- * <p>{@link #anthropicApiKey} is sensitive: never logged, never echoed in error messages. {@code
- * toString} is overridden on the redacted-string accessor so accidental log lines surface {@code
- * <redacted>} rather than the raw key.
+ * <p>{@link #anthropicApiKey} and {@link #openaiApiKey} are sensitive: never logged, never echoed
+ * in error messages.
  */
 @ConfigurationProperties(prefix = "mealprep.ai")
 public record AiProperties(
@@ -21,7 +20,9 @@ public record AiProperties(
     String tierMidModel,
     String tierHighModel,
     Integer timeoutSeconds,
-    Integer maxRetries) {
+    Integer maxRetries,
+    String openaiApiKey,
+    Embedding embedding) {
 
   public AiProperties {
     if (anthropicBaseUrl == null || anthropicBaseUrl.isBlank()) {
@@ -42,6 +43,9 @@ public record AiProperties(
     if (maxRetries == null || maxRetries < 0) {
       maxRetries = 3;
     }
+    if (embedding == null) {
+      embedding = new Embedding(null, null, null);
+    }
   }
 
   /** Resolve a model id for a tier. Throws if the tier is unmapped (defensive — all three set). */
@@ -59,5 +63,25 @@ public record AiProperties(
 
   public Duration timeout() {
     return Duration.ofSeconds(timeoutSeconds);
+  }
+
+  /**
+   * Embedding-side configuration. {@link #model} is the OpenAI model id ({@code
+   * text-embedding-3-small} for v1, 1536-dim). {@link #cacheSize} caps the in-memory Caffeine
+   * cache; {@link #cacheTtlHours} is the per-entry expiry.
+   */
+  public record Embedding(String model, Integer cacheSize, Integer cacheTtlHours) {
+
+    public Embedding {
+      if (model == null || model.isBlank()) {
+        model = "text-embedding-3-small";
+      }
+      if (cacheSize == null || cacheSize <= 0) {
+        cacheSize = 10_000;
+      }
+      if (cacheTtlHours == null || cacheTtlHours <= 0) {
+        cacheTtlHours = 24;
+      }
+    }
   }
 }
