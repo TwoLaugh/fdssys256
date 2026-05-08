@@ -6,6 +6,7 @@ import com.example.mealprep.ai.domain.entity.CallStatus;
 import com.example.mealprep.ai.domain.repository.AiCallLogRepository;
 import com.example.mealprep.ai.spi.AiTask;
 import com.example.mealprep.ai.spi.ModelTier;
+import com.example.mealprep.ai.spi.TaskType;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.UUID;
@@ -46,6 +47,22 @@ public class AiCallRecorder {
             task.prompt().name(),
             task.prompt().version(),
             CallStatus.PENDING);
+    repository.save(row);
+    return callId;
+  }
+
+  /**
+   * Insert a PENDING row for an embedding call. Embeddings have no prompt-template ref so {@code
+   * promptRefName} / {@code promptRefVersion} stay null; everything else funnels through the same
+   * row shape so 01b's per-user budget guard automatically counts embedding spend.
+   */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public UUID recordEmbeddingPending(
+      UUID userId, UUID traceId, TaskType taskType, ModelTier tier, String modelId) {
+    UUID callId = UUID.randomUUID();
+    AiCallLog row =
+        new AiCallLog(
+            callId, userId, traceId, taskType, tier, modelId, null, null, CallStatus.PENDING);
     repository.save(row);
     return callId;
   }

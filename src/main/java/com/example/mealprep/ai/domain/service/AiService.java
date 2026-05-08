@@ -4,6 +4,7 @@ import com.example.mealprep.ai.exception.AiInvalidRequestException;
 import com.example.mealprep.ai.exception.AiInvalidResponseException;
 import com.example.mealprep.ai.exception.AiUnavailableException;
 import com.example.mealprep.ai.spi.AiTask;
+import com.example.mealprep.ai.spi.EmbeddingTask;
 
 /**
  * Cross-module dispatcher. The single Java seam every module crosses to reach Anthropic. The
@@ -33,4 +34,17 @@ public interface AiService {
    * @throws AiInvalidResponseException response could not be parsed into the task's output type.
    */
   <T> T execute(AiTask<T> task);
+
+  /**
+   * Compute an embedding vector for {@code task.inputText()}. Returns a {@code float[]} sized to
+   * the configured embedding model (1536 for {@code text-embedding-3-small}). Identical input text
+   * is cached for {@code mealprep.ai.embedding.cache-ttl-hours} so repeat embeds of the same text
+   * incur no cost; cache hits return the SAME {@code float[]} instance.
+   *
+   * @throws IllegalArgumentException task is null or input text is empty / blank
+   * @throws AiUnavailableException retries exhausted on transient OpenAI failures
+   * @throws AiInvalidRequestException 4xx from OpenAI (bad input, no auth, etc.)
+   * @throws AiInvalidResponseException OpenAI returned a malformed embedding payload
+   */
+  float[] embed(EmbeddingTask task);
 }
