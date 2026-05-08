@@ -33,6 +33,7 @@
         <openai-java.version>0.20.0</openai-java.version>
         <swagger-request-validator.version>2.40.0</swagger-request-validator.version>
         <archunit.version>1.3.0</archunit.version>
+        <networknt-json-schema.version>1.4.0</networknt-json-schema.version>
 
         <!-- Plugin versions -->
         <spotless.version>2.43.0</spotless.version>
@@ -125,6 +126,13 @@
             <artifactId>caffeine</artifactId>
         </dependency>
 
+        <!-- JSON Schema validator — used by StructuredOutputParser to validate AI responses -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+            <version>${networknt-json-schema.version}</version>
+        </dependency>
+
         <!-- ===== Test scope ===== -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -190,6 +198,24 @@
     </dependencyManagement>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+            </resource>
+            <!-- Mirror lld/prompts/ onto the runtime classpath under /prompts/. The
+                 PromptTemplateLoader scans the default location classpath:prompts/*.md
+                 at startup. Tests may override mealprep.ai.prompt-templates-source-path
+                 to point at src/test/resources/prompts/ instead. -->
+            <resource>
+                <directory>${project.basedir}/lld/prompts</directory>
+                <targetPath>prompts</targetPath>
+                <filtering>false</filtering>
+                <includes>
+                    <include>*.md</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <!-- Spring Boot -->
             <plugin>
