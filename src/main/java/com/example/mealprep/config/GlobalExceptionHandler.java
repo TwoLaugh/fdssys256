@@ -1,5 +1,8 @@
 package com.example.mealprep.config;
 
+import com.example.mealprep.ai.exception.AiInvalidRequestException;
+import com.example.mealprep.ai.exception.AiInvalidResponseException;
+import com.example.mealprep.ai.exception.AiUnavailableException;
 import com.example.mealprep.auth.exception.AccountLockedException;
 import com.example.mealprep.auth.exception.InvalidCredentialsException;
 import com.example.mealprep.auth.exception.LoginThrottledException;
@@ -210,6 +213,48 @@ public class GlobalExceptionHandler {
       seconds += 1;
     }
     return Math.max(seconds, 1L);
+  }
+
+  /** 503 — AI provider unavailable / retries exhausted. */
+  @ExceptionHandler(AiUnavailableException.class)
+  public ResponseEntity<ProblemDetail> handleAiUnavailable(
+      AiUnavailableException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, "AI service unavailable");
+    pd.setType(URI.create(PROBLEM_BASE + "ai-unavailable"));
+    pd.setTitle("AI unavailable");
+    pd.setInstance(URI.create(req.getRequestURI()));
+    return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  /** 400 — AI provider rejected the request shape (caller bug). */
+  @ExceptionHandler(AiInvalidRequestException.class)
+  public ResponseEntity<ProblemDetail> handleAiInvalidRequest(
+      AiInvalidRequestException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "AI request rejected");
+    pd.setType(URI.create(PROBLEM_BASE + "ai-invalid-request"));
+    pd.setTitle("AI request invalid");
+    pd.setInstance(URI.create(req.getRequestURI()));
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  /** 502 — AI provider returned a body we cannot parse. */
+  @ExceptionHandler(AiInvalidResponseException.class)
+  public ResponseEntity<ProblemDetail> handleAiInvalidResponse(
+      AiInvalidResponseException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY, "AI response invalid");
+    pd.setType(URI.create(PROBLEM_BASE + "ai-invalid-response"));
+    pd.setTitle("AI response invalid");
+    pd.setInstance(URI.create(req.getRequestURI()));
+    return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
   }
 
   /**

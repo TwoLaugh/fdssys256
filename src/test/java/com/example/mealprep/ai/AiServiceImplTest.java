@@ -1,0 +1,200 @@
+package com.example.mealprep.ai;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.example.mealprep.ai.config.AiProperties;
+import com.example.mealprep.ai.domain.entity.CallErrorKind;
+import com.example.mealprep.ai.domain.service.internal.AiCallRecorder;
+import com.example.mealprep.ai.domain.service.internal.AiServiceImpl;
+import com.example.mealprep.ai.domain.service.internal.AnthropicClient;
+import com.example.mealprep.ai.domain.service.internal.AnthropicResponse;
+import com.example.mealprep.ai.event.AiCallFailedEvent;
+import com.example.mealprep.ai.event.AiCallSucceededEvent;
+import com.example.mealprep.ai.exception.AiInvalidRequestException;
+import com.example.mealprep.ai.exception.AiInvalidResponseException;
+import com.example.mealprep.ai.exception.AiUnavailableException;
+import com.example.mealprep.ai.spi.AiTask;
+import com.example.mealprep.ai.spi.ModelTier;
+import com.example.mealprep.ai.spi.TaskType;
+import com.example.mealprep.ai.testdata.AiTestData;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+
+/**
+ * Unit tests for {@link AiServiceImpl}. {@link AnthropicClient} and {@link AiCallRecorder} are
+ * mocked at the seam; the real {@link ObjectMapper} stays in.
+ */
+@ExtendWith(MockitoExtension.class)
+class AiServiceImplTest {
+
+  @Mock private AnthropicClient anthropicClient;
+  @Mock private AiCallRecorder recorder;
+  @Mock private ApplicationEventPublisher eventPublisher;
+
+  private final AiProperties properties =
+      new AiProperties("k", null, "haiku-id", "sonnet-id", "opus-id", 60, 3);
+  private final ObjectMapper objectMapper = new ObjectMapper();
+  private final Clock fixedClock =
+      Clock.fixed(Instant.parse("2026-05-08T12:00:00Z"), ZoneOffset.UTC);
+
+  private AiServiceImpl service() {
+    return new AiServiceImpl(
+        anthropicClient, recorder, eventPublisher, properties, objectMapper, fixedClock);
+  }
+
+  @Test
+  void execute_happyPath_writesPendingThenSuccess_andPublishesEvent() {
+    UUID callId = UUID.randomUUID();
+    AiTask<String> task =
+        AiTestData.task(String.class).ofType(TaskType.FEEDBACK_CLASSIFICATION).build();
+    when(recorder.recordPending(eq(task), eq(ModelTier.CHEAP), eq("haiku-id"))).thenReturn(callId);
+    when(anthropicClient.call(eq(task), eq("haiku-id")))
+        .thenReturn(new AnthropicResponse("ok", 12, 4, "haiku-id"));
+
+    String result = service().execute(task);
+
+    assertThat(result).isEqualTo("ok");
+    verify(recorder).recordPending(task, ModelTier.CHEAP, "haiku-id");
+    verify(recorder).recordSuccess(eq(callId), eq(12), eq(4), anyInt());
+    verify(recorder, never()).recordFailure(any(), any(), anyInt());
+    ArgumentCaptor<Object> events = ArgumentCaptor.forClass(Object.class);
+    verify(eventPublisher).publishEvent(events.capture());
+    assertThat(events.getValue()).isInstanceOf(AiCallSucceededEvent.class);
+    AiCallSucceededEvent ev = (AiCallSucceededEvent) events.getValue();
+    assertThat(ev.callId()).isEqualTo(callId);
+    assertThat(ev.taskType()).isEqualTo(TaskType.FEEDBACK_CLASSIFICATION);
+    assertThat(ev.costMicroPence()).isEqualTo(0L);
+  }
+
+  @Test
+  void execute_propagatesTraceIdToEvent() {
+    UUID callId = UUID.randomUUID();
+    UUID traceId = UUID.randomUUID();
+    AiTask<String> task =
+        AiTestData.task(String.class)
+            .ofType(TaskType.FEEDBACK_CLASSIFICATION)
+            .withTraceId(traceId)
+            .build();
+    when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
+    when(anthropicClient.call(any(), any()))
+        .thenReturn(new AnthropicResponse("ok", null, null, "haiku-id"));
+
+    service().execute(task);
+
+    ArgumentCaptor<Object> events = ArgumentCaptor.forClass(Object.class);
+    verify(eventPublisher).publishEvent(events.capture());
+    AiCallSucceededEvent ev = (AiCallSucceededEvent) events.getValue();
+    assertThat(ev.traceId()).isEqualTo(traceId);
+  }
+
+  @Test
+  void execute_4xxFromUpstream_recordsFailure_publishesFailedEvent_rethrows() {
+    UUID callId = UUID.randomUUID();
+    AiTask<String> task = AiTestData.task(String.class).build();
+    when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
+    when(anthropicClient.call(any(), any()))
+        .thenThrow(new AiInvalidRequestException("bad request"));
+
+    assertThatThrownBy(() -> service().execute(task)).isInstanceOf(AiInvalidRequestException.class);
+
+    verify(recorder).recordFailure(eq(callId), eq(CallErrorKind.INVALID_REQUEST), anyInt());
+    ArgumentCaptor<Object> events = ArgumentCaptor.forClass(Object.class);
+    verify(eventPublisher).publishEvent(events.capture());
+    assertThat(events.getValue()).isInstanceOf(AiCallFailedEvent.class);
+    assertThat(((AiCallFailedEvent) events.getValue()).errorKind())
+        .isEqualTo(CallErrorKind.INVALID_REQUEST);
+  }
+
+  @Test
+  void execute_5xxAfterRetries_recordsAiUnavailable() {
+    UUID callId = UUID.randomUUID();
+    AiTask<String> task = AiTestData.task(String.class).build();
+    when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
+    when(anthropicClient.call(any(), any()))
+        .thenThrow(new AiUnavailableException("retries exhausted"));
+
+    assertThatThrownBy(() -> service().execute(task)).isInstanceOf(AiUnavailableException.class);
+    verify(recorder).recordFailure(eq(callId), eq(CallErrorKind.AI_UNAVAILABLE), anyInt());
+  }
+
+  @Test
+  void execute_responseDoesNotDeserialise_recordsInvalidResponse() {
+    UUID callId = UUID.randomUUID();
+    AiTask<TypedPayload> task =
+        AiTestData.task(TypedPayload.class).ofType(TaskType.RECIPE_ADAPTATION).build();
+    when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
+    when(anthropicClient.call(any(), any()))
+        .thenReturn(new AnthropicResponse("not-json", null, null, "haiku-id"));
+
+    assertThatThrownBy(() -> service().execute(task))
+        .isInstanceOf(AiInvalidResponseException.class);
+    verify(recorder).recordFailure(eq(callId), eq(CallErrorKind.INVALID_RESPONSE), anyInt());
+  }
+
+  @Test
+  void execute_typedDeserialise_succeeds() {
+    UUID callId = UUID.randomUUID();
+    AiTask<TypedPayload> task = AiTestData.task(TypedPayload.class).build();
+    when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
+    when(anthropicClient.call(any(), any()))
+        .thenReturn(new AnthropicResponse("{\"answer\":\"42\"}", 1, 1, "haiku-id"));
+
+    TypedPayload result = service().execute(task);
+    assertThat(result.answer()).isEqualTo("42");
+  }
+
+  @Test
+  void execute_recorderFailureOnFinalize_doesNotMaskOriginal() {
+    UUID callId = UUID.randomUUID();
+    AiTask<String> task = AiTestData.task(String.class).build();
+    when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
+    when(anthropicClient.call(any(), any()))
+        .thenThrow(new AiUnavailableException("upstream blew up"));
+    org.mockito.Mockito.doThrow(new RuntimeException("audit save failed"))
+        .when(recorder)
+        .recordFailure(any(), any(), anyInt());
+
+    assertThatThrownBy(() -> service().execute(task))
+        .isInstanceOf(AiUnavailableException.class)
+        .hasMessageContaining("upstream blew up");
+    // Event still publishes; the recorder failure was logged, not surfaced.
+    verify(eventPublisher, times(1)).publishEvent(any(AiCallFailedEvent.class));
+  }
+
+  @Test
+  void execute_nullTask_throwsIllegalArgument() {
+    assertThatThrownBy(() -> service().execute(null)).isInstanceOf(IllegalArgumentException.class);
+  }
+
+  /** Minimal Jackson-compatible payload for typed-deserialisation cases. */
+  public static final class TypedPayload {
+    private String answer;
+
+    public TypedPayload() {}
+
+    public String answer() {
+      return answer;
+    }
+
+    public void setAnswer(String answer) {
+      this.answer = answer;
+    }
+  }
+}
