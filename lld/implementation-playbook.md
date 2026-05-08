@@ -298,11 +298,32 @@ The first ticket built around the loop converged in 1 iteration on `./mvnw -Dski
 
 Each took the parent ~5 minutes to diagnose + push + watch CI. Three iterations to get CI green vs. one for auth-01c.
 
-**Lesson**: the loop catches Spring-layer issues (DI, web slice, ArchUnit, compile) but not Hibernate-runtime issues (lazy fetch, flush timing, JSONB roundtrips, optimistic-lock semantics). Those need `mvn verify` with Docker running.
+**Lesson** (initial): the loop catches Spring-layer issues (DI, web slice, ArchUnit, compile) but not Hibernate-runtime issues (lazy fetch, flush timing, JSONB roundtrips, optimistic-lock semantics). Those need `mvn verify` with Docker running.
 
-A follow-up diagnostic (2026-05-08) confirmed: **the sandbox does NOT block `mvn verify`** — the implementation agent's "denied at harness level" claim was a misread of a normal Maven failure. The actual blocker is host-side: on Windows, Docker Desktop exposes its daemon over named pipes, and the Docker Java SDK (which Testcontainers wraps) can't reach the daemon from inside the JVM even though the bash `docker` CLI can. Tried `~/.testcontainers.properties` with `docker.host=npipe:////./pipe/docker_engine` and `DOCKER_HOST=npipe:...` env var; neither helped. CI Linux dodges this because the daemon is at `unix:///var/run/docker.sock` natively.
+**Update — 2026-05-08, evening**: the IT-runtime gap is now closed. Root cause was a docker-java / Docker Desktop API mismatch — Docker Desktop 29.x rejected the Docker API version that docker-java 3.3.6 (transitive from Testcontainers 1.19.8) defaulted to, returning HTTP 400 to the `info` ping. Single-line fix:
 
-Net: agents and parent are equivalent on this Windows host — both can run `verify`, both fail ITs at the Testcontainers/Docker-discovery layer. Until the host config is fixed (or development moves to Linux/WSL), CI is the IT verifier and ~40% of fix iterations come back from CI rather than from the agent's local loop.
+```
+# src/test/resources/docker-java.properties
+api.version=1.44
+```
+
+Pinning the API version forces a known-supported handshake. Verified: full `./mvnw verify` runs green locally (182 tests including all ITs). The diagnostic earlier confirmed agents can run `mvn verify` to completion, so agents now have full self-verify including the IT layer. No need for CI roundtrips on Hibernate-runtime issues — the agent's local loop catches them.
+
+Drop `docker-java.properties` once Testcontainers upgrades to a version whose docker-java default already targets a Docker 29-compatible API.
+
+**Updated standard agent prompt verify loop** (replaces the previous `-DskipITs` pattern):
+
+```
+After writing the code, loop:
+  1. ./mvnw -Dspotless.check.skip=true verify
+  2. On failures: read errors, fix smallest possible thing, goto 1
+  3. Cap at 5 iterations; STOP and report if still red after 5
+  4. ./mvnw spotless:apply
+  5. ./mvnw spotless:check
+Report what was fixed across iterations.
+```
+
+Net per-ticket cost: ~30 min agent-side (full verify takes 5-7 min, fix iterations are tight) vs. ~1 hr previously (parent + CI roundtrips dominated). For ~70-80 remaining tickets, this saves 30-40 hours of clock time across the project.
 
 ### What the parent still does
 
@@ -615,14 +636,11 @@ Use existing modules in this repo as shape references:
 <security-critical or otherwise non-obvious correctness requirements per LLD>
 
 ## Verify loop  (do this AFTER writing the code)
-1. ./mvnw -DskipITs -Dspotless.check.skip=true test
+1. ./mvnw -Dspotless.check.skip=true verify
 2. On failures: read errors, fix smallest possible thing, goto 1
 3. Cap at 5 iterations; STOP and report if still red after 5
 4. ./mvnw spotless:apply
-5. ./mvnw -DskipITs spotless:check
-If Docker is up on the host, also run `./mvnw verify` (no -DskipITs) once
-at the end to exercise the IT layer. If it fails on a Docker-related
-error rather than a code error, note it in the report and continue.
+5. ./mvnw spotless:check
 Do NOT git commit or git push.
 
 ## Output format
