@@ -190,6 +190,74 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  # ===== preference / hard constraints =====
+  /api/v1/preferences/hard-constraints:
+    get:
+      tags: [Preferences]
+      operationId: getHardConstraints
+      summary: Read the calling user's hard-constraints aggregate.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: The user's hard-constraints aggregate.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HardConstraintsDto' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Preferences]
+      operationId: updateHardConstraints
+      summary: Replace the calling user's hard-constraints aggregate.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateHardConstraintsRequest' }
+      responses:
+        '200':
+          description: The updated hard-constraints aggregate.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HardConstraintsDto' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/preferences/hard-constraints/audit-log:
+    get:
+      tags: [Preferences]
+      operationId: getHardConstraintsAuditLog
+      summary: Paginated audit log of hard-constraints changes; newest-first.
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 0, default: 0 }
+        - in: query
+          name: size
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Page of audit-log entries; empty content when no changes (or no aggregate yet).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items: { $ref: '#/components/schemas/HardConstraintsAuditEntryDto' }
+                  totalElements: { type: integer }
+                  totalPages: { type: integer }
+                  number: { type: integer }
+                  size: { type: integer }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 components:
   securitySchemes:
     cookieAuth:
@@ -283,6 +351,87 @@ components:
         cycleDetected:
           type: boolean
           description: True when the walk hit maxDepth — caller should investigate the parent chain.
+    DietaryIdentityExceptionDto:
+      type: object
+      required: [allows, context]
+      properties:
+        allows: { type: string, maxLength: 64 }
+        frequency: { type: string, maxLength: 32, nullable: true }
+        context: { type: string, maxLength: 32 }
+    DietaryIdentityDto:
+      type: object
+      required: [base, exceptions]
+      properties:
+        base: { type: string, maxLength: 32 }
+        labelForDisplay: { type: string, maxLength: 64, nullable: true }
+        exceptions:
+          type: array
+          items: { $ref: '#/components/schemas/DietaryIdentityExceptionDto' }
+    HardIntoleranceDto:
+      type: object
+      required: [substance, severity]
+      properties:
+        substance: { type: string, maxLength: 64 }
+        severity: { type: string, maxLength: 32 }
+        notes: { type: string, maxLength: 255, nullable: true }
+    AgeRestrictionDto:
+      type: object
+      required: [ruleKey, autoPopulated]
+      properties:
+        ruleKey: { type: string, maxLength: 64 }
+        autoPopulated: { type: boolean }
+    HardConstraintsDto:
+      type: object
+      required: [id, userId, allergies, dietaryIdentity, medicalDiets, intolerances, ageRestrictions, version]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        allergies:
+          type: array
+          items: { type: string }
+        dietaryIdentity: { $ref: '#/components/schemas/DietaryIdentityDto' }
+        medicalDiets:
+          type: array
+          items: { type: string }
+        intolerances:
+          type: array
+          items: { $ref: '#/components/schemas/HardIntoleranceDto' }
+        ageRestrictions:
+          type: array
+          items: { $ref: '#/components/schemas/AgeRestrictionDto' }
+        version: { type: integer, format: int64 }
+    UpdateHardConstraintsRequest:
+      type: object
+      required: [allergies, dietaryIdentity, medicalDiets, intolerances, ageRestrictions, expectedVersion]
+      properties:
+        allergies:
+          type: array
+          items: { type: string, maxLength: 64 }
+        dietaryIdentity: { $ref: '#/components/schemas/DietaryIdentityDto' }
+        medicalDiets:
+          type: array
+          items: { type: string, maxLength: 64 }
+        intolerances:
+          type: array
+          items: { $ref: '#/components/schemas/HardIntoleranceDto' }
+        ageRestrictions:
+          type: array
+          items: { $ref: '#/components/schemas/AgeRestrictionDto' }
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 0
+    HardConstraintsAuditEntryDto:
+      type: object
+      required: [id, hardConstraintsId, actorUserId, fieldChanged, previousValueJson, newValueJson, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        hardConstraintsId: { type: string, format: uuid }
+        actorUserId: { type: string, format: uuid }
+        fieldChanged: { type: string }
+        previousValueJson: {}
+        newValueJson: {}
+        occurredAt: { type: string, format: date-time }
     ProblemDetail:
       type: object
       description: RFC 9457 ProblemDetail; the canonical error shape across all endpoints.

@@ -83,6 +83,20 @@ class ModuleBoundaryTest {
                   + " cross-module callers go through AuthQueryService / CurrentUserResolver.")
           .allowEmptyShould(true);
 
+  @ArchTest
+  static final ArchRule preferenceReposAreInternalToPreference =
+      noClasses()
+          .that()
+          .resideOutsideOfPackage("com.example.mealprep.preference..")
+          .should()
+          .dependOnClassesThat()
+          .resideInAPackage("com.example.mealprep.preference.domain.repository..")
+          .as(
+              "preference repos are accessible only within the preference module —"
+                  + " cross-module callers go through PreferenceQueryService /"
+                  + " PreferenceUpdateService.")
+          .allowEmptyShould(true);
+
   /**
    * Entities must live in {@code domain.entity}, never leak into {@code api/} — except the {@code
    * api.mapper} sub-package, which exists precisely to bridge entities and DTOs. Controllers and
