@@ -22,7 +22,8 @@ public record AiProperties(
     Integer timeoutSeconds,
     Integer maxRetries,
     String openaiApiKey,
-    Embedding embedding) {
+    Embedding embedding,
+    Budget budget) {
 
   public AiProperties {
     if (anthropicBaseUrl == null || anthropicBaseUrl.isBlank()) {
@@ -45,6 +46,9 @@ public record AiProperties(
     }
     if (embedding == null) {
       embedding = new Embedding(null, null, null);
+    }
+    if (budget == null) {
+      budget = new Budget(null, null, null);
     }
   }
 
@@ -82,6 +86,29 @@ public record AiProperties(
       if (cacheTtlHours == null || cacheTtlHours <= 0) {
         cacheTtlHours = 24;
       }
+    }
+  }
+
+  /**
+   * Per-user rolling-window cost cap. {@code enabled=false} short-circuits the {@code
+   * CostBudgetGuard} entirely — useful for dev / test convenience when the call log isn't seeded.
+   */
+  public record Budget(Boolean enabled, Long dailyPencePerUser, Integer windowHours) {
+
+    public Budget {
+      if (enabled == null) {
+        enabled = true;
+      }
+      if (dailyPencePerUser == null || dailyPencePerUser < 0) {
+        dailyPencePerUser = 50L;
+      }
+      if (windowHours == null || windowHours <= 0) {
+        windowHours = 24;
+      }
+    }
+
+    public Duration window() {
+      return Duration.ofHours(windowHours);
     }
   }
 }

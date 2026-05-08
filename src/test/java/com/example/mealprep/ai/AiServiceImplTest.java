@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -16,9 +17,13 @@ import com.example.mealprep.ai.domain.service.internal.AiCallRecorder;
 import com.example.mealprep.ai.domain.service.internal.AiServiceImpl;
 import com.example.mealprep.ai.domain.service.internal.AnthropicClient;
 import com.example.mealprep.ai.domain.service.internal.AnthropicResponse;
+import com.example.mealprep.ai.domain.service.internal.CostBudgetGuard;
+import com.example.mealprep.ai.domain.service.internal.CostCalculator;
 import com.example.mealprep.ai.domain.service.internal.OpenAiEmbeddingClient;
 import com.example.mealprep.ai.event.AiCallFailedEvent;
 import com.example.mealprep.ai.event.AiCallSucceededEvent;
+import com.example.mealprep.ai.event.CostBudgetExceededEvent;
+import com.example.mealprep.ai.exception.AiCostBudgetExceededException;
 import com.example.mealprep.ai.exception.AiInvalidRequestException;
 import com.example.mealprep.ai.exception.AiInvalidResponseException;
 import com.example.mealprep.ai.exception.AiUnavailableException;
@@ -27,20 +32,25 @@ import com.example.mealprep.ai.spi.ModelTier;
 import com.example.mealprep.ai.spi.TaskType;
 import com.example.mealprep.ai.testdata.AiTestData;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 /**
- * Unit tests for {@link AiServiceImpl}. {@link AnthropicClient} and {@link AiCallRecorder} are
- * mocked at the seam; the real {@link ObjectMapper} stays in.
+ * Unit tests for {@link AiServiceImpl}. {@link AnthropicClient}, {@link AiCallRecorder}, and {@link
+ * CostBudgetGuard} are mocked at the seam; the real {@link ObjectMapper} and {@link CostCalculator}
+ * stay in.
  */
 @ExtendWith(MockitoExtension.class)
 class AiServiceImplTest {
@@ -49,12 +59,14 @@ class AiServiceImplTest {
   @Mock private OpenAiEmbeddingClient embeddingClient;
   @Mock private AiCallRecorder recorder;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private CostBudgetGuard budgetGuard;
 
   private final AiProperties properties =
-      new AiProperties("k", null, "haiku-id", "sonnet-id", "opus-id", 60, 3, null, null);
+      new AiProperties("k", null, "haiku-id", "sonnet-id", "opus-id", 60, 3, null, null, null);
   private final ObjectMapper objectMapper = new ObjectMapper();
   private final Clock fixedClock =
       Clock.fixed(Instant.parse("2026-05-08T12:00:00Z"), ZoneOffset.UTC);
+  private final CostCalculator costCalculator = new CostCalculator();
 
   private AiServiceImpl service() {
     return new AiServiceImpl(
@@ -64,7 +76,9 @@ class AiServiceImplTest {
         eventPublisher,
         properties,
         objectMapper,
-        fixedClock);
+        fixedClock,
+        budgetGuard,
+        costCalculator);
   }
 
   @Test
@@ -80,7 +94,8 @@ class AiServiceImplTest {
 
     assertThat(result).isEqualTo("ok");
     verify(recorder).recordPending(task, ModelTier.CHEAP, "haiku-id");
-    verify(recorder).recordSuccess(eq(callId), eq(12), eq(4), anyInt());
+    verify(budgetGuard).checkOrThrow(task);
+    verify(recorder).recordSuccess(eq(callId), eq(12), eq(4), anyInt(), anyLong());
     verify(recorder, never()).recordFailure(any(), any(), anyInt());
     ArgumentCaptor<Object> events = ArgumentCaptor.forClass(Object.class);
     verify(eventPublisher).publishEvent(events.capture());
@@ -88,7 +103,8 @@ class AiServiceImplTest {
     AiCallSucceededEvent ev = (AiCallSucceededEvent) events.getValue();
     assertThat(ev.callId()).isEqualTo(callId);
     assertThat(ev.taskType()).isEqualTo(TaskType.FEEDBACK_CLASSIFICATION);
-    assertThat(ev.costMicroPence()).isEqualTo(0L);
+    // Haiku/CHEAP rate: 79 micropence per input token, 395 micropence per output token.
+    assertThat(ev.costMicroPence()).isEqualTo(12L * 79L + 4L * 395L);
   }
 
   @Test
@@ -175,7 +191,7 @@ class AiServiceImplTest {
     when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
     when(anthropicClient.call(any(), any()))
         .thenThrow(new AiUnavailableException("upstream blew up"));
-    org.mockito.Mockito.doThrow(new RuntimeException("audit save failed"))
+    Mockito.doThrow(new RuntimeException("audit save failed"))
         .when(recorder)
         .recordFailure(any(), any(), anyInt());
 
@@ -336,6 +352,72 @@ class AiServiceImplTest {
     public java.util.Optional<UUID> traceId() {
       return java.util.Optional.ofNullable(traceId);
     }
+  }
+
+  @Test
+  void execute_budgetExceeded_recordsBudgetFailure_publishesBothEvents_doesNotCallAnthropic() {
+    UUID callId = UUID.randomUUID();
+    UUID userId = UUID.randomUUID();
+    AiTask<String> task = AiTestData.task(String.class).withUserId(userId).build();
+    when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
+    AiCostBudgetExceededException budgetEx =
+        new AiCostBudgetExceededException(
+            userId,
+            new BigDecimal("48.00"),
+            new BigDecimal("50.00"),
+            Duration.ofHours(24),
+            Duration.ofSeconds(3600));
+    Mockito.doThrow(budgetEx).when(budgetGuard).checkOrThrow(task);
+
+    assertThatThrownBy(() -> service().execute(task))
+        .isInstanceOf(AiCostBudgetExceededException.class);
+
+    // PENDING row written first, then budget rejection finalises it FAILED with BUDGET_EXCEEDED.
+    verify(recorder).recordPending(task, ModelTier.CHEAP, "haiku-id");
+    verify(recorder).recordFailure(eq(callId), eq(CallErrorKind.BUDGET_EXCEEDED), anyInt());
+    // Anthropic was never called.
+    verify(anthropicClient, never()).call(any(), any());
+    // recordSuccess is never called for a budget rejection.
+    verify(recorder, never()).recordSuccess(any(), any(), any(), anyInt());
+    verify(recorder, never()).recordSuccess(any(), any(), any(), anyInt(), anyLong());
+
+    ArgumentCaptor<Object> events = ArgumentCaptor.forClass(Object.class);
+    verify(eventPublisher, times(2)).publishEvent(events.capture());
+    List<Object> captured = events.getAllValues();
+    assertThat(captured).hasSize(2);
+    assertThat(captured.get(0)).isInstanceOf(AiCallFailedEvent.class);
+    assertThat(((AiCallFailedEvent) captured.get(0)).errorKind())
+        .isEqualTo(CallErrorKind.BUDGET_EXCEEDED);
+    assertThat(captured.get(1)).isInstanceOf(CostBudgetExceededEvent.class);
+    CostBudgetExceededEvent budgetEvent = (CostBudgetExceededEvent) captured.get(1);
+    assertThat(budgetEvent.userId()).isEqualTo(userId);
+    assertThat(budgetEvent.spentPence()).isEqualByComparingTo(new BigDecimal("48.00"));
+    assertThat(budgetEvent.limitPence()).isEqualByComparingTo(new BigDecimal("50.00"));
+  }
+
+  @Test
+  void execute_budgetExceededAndRecorderFails_doesNotMaskException() {
+    UUID callId = UUID.randomUUID();
+    UUID userId = UUID.randomUUID();
+    AiTask<String> task = AiTestData.task(String.class).withUserId(userId).build();
+    when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
+    AiCostBudgetExceededException budgetEx =
+        new AiCostBudgetExceededException(
+            userId,
+            new BigDecimal("50.00"),
+            new BigDecimal("50.00"),
+            Duration.ofHours(24),
+            Duration.ofSeconds(60));
+    Mockito.doThrow(budgetEx).when(budgetGuard).checkOrThrow(task);
+    Mockito.doThrow(new RuntimeException("audit save failed"))
+        .when(recorder)
+        .recordFailure(any(), any(), anyInt());
+
+    assertThatThrownBy(() -> service().execute(task))
+        .isInstanceOf(AiCostBudgetExceededException.class);
+    // Both events still publish even when the audit-row update fails.
+    verify(eventPublisher, times(1)).publishEvent(any(AiCallFailedEvent.class));
+    verify(eventPublisher, times(1)).publishEvent(any(CostBudgetExceededEvent.class));
   }
 
   /** Minimal Jackson-compatible payload for typed-deserialisation cases. */

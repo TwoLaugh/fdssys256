@@ -5,6 +5,8 @@ import com.example.mealprep.ai.domain.entity.CallErrorKind;
 import com.example.mealprep.ai.domain.service.AiService;
 import com.example.mealprep.ai.event.AiCallFailedEvent;
 import com.example.mealprep.ai.event.AiCallSucceededEvent;
+import com.example.mealprep.ai.event.CostBudgetExceededEvent;
+import com.example.mealprep.ai.exception.AiCostBudgetExceededException;
 import com.example.mealprep.ai.exception.AiInvalidRequestException;
 import com.example.mealprep.ai.exception.AiInvalidResponseException;
 import com.example.mealprep.ai.exception.AiUnavailableException;
@@ -29,8 +31,9 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 /**
- * Production {@link AiService} dispatcher. Records a PENDING audit row, calls Anthropic via {@link
- * AnthropicClient}, then UPDATEs the row to SUCCEEDED / FAILED and publishes the matching event.
+ * Production {@link AiService} dispatcher. Records a PENDING audit row, runs the {@link
+ * CostBudgetGuard} pre-check, calls Anthropic via {@link AnthropicClient}, then UPDATEs the row to
+ * SUCCEEDED / FAILED and publishes the matching event.
  *
  * <p>Not {@code @Transactional} — the network call holds for seconds, and the audit-row writes are
  * owned by {@link AiCallRecorder}'s {@code REQUIRES_NEW} transactions so they survive caller
@@ -53,6 +56,8 @@ public class AiServiceImpl implements AiService {
   private final ObjectMapper objectMapper;
   private final Clock clock;
   private final Cache<String, float[]> embeddingCache;
+  private final CostBudgetGuard budgetGuard;
+  private final CostCalculator costCalculator;
 
   public AiServiceImpl(
       AnthropicClient anthropicClient,
@@ -61,7 +66,9 @@ public class AiServiceImpl implements AiService {
       ApplicationEventPublisher eventPublisher,
       AiProperties properties,
       ObjectMapper objectMapper,
-      Clock clock) {
+      Clock clock,
+      CostBudgetGuard budgetGuard,
+      CostCalculator costCalculator) {
     this.anthropicClient = anthropicClient;
     this.embeddingClient = embeddingClient;
     this.recorder = recorder;
@@ -75,6 +82,8 @@ public class AiServiceImpl implements AiService {
             .maximumSize(cfg.cacheSize())
             .expireAfterWrite(Duration.ofHours(cfg.cacheTtlHours()))
             .build();
+    this.budgetGuard = budgetGuard;
+    this.costCalculator = costCalculator;
   }
 
   @Override
@@ -87,26 +96,40 @@ public class AiServiceImpl implements AiService {
     UUID callId = recorder.recordPending(task, tier, modelId);
     long startNanos = System.nanoTime();
     try {
+      // Budget pre-check runs AFTER the PENDING row is written so a budget rejection still appears
+      // in the call log (status=FAILED, error_kind=BUDGET_EXCEEDED) — operationally important.
+      budgetGuard.checkOrThrow(task);
+    } catch (AiCostBudgetExceededException ex) {
+      finalizeBudgetExceeded(callId, task, ex, startNanos);
+      throw ex;
+    }
+    try {
       AnthropicResponse response = anthropicClient.call(task, modelId);
       int latencyMs = elapsedMs(startNanos);
       T payload = deserialise(response.body(), task.outputType());
+      long costMicroPence =
+          costCalculator.compute(
+              response.modelId() != null ? response.modelId() : modelId,
+              response.requestTokens() == null ? 0 : response.requestTokens(),
+              response.responseTokens() == null ? 0 : response.responseTokens());
       recorder.recordSuccess(
-          callId, response.requestTokens(), response.responseTokens(), latencyMs);
+          callId, response.requestTokens(), response.responseTokens(), latencyMs, costMicroPence);
       eventPublisher.publishEvent(
           new AiCallSucceededEvent(
               callId,
               task.type(),
               task.userId().orElse(null),
               latencyMs,
-              0L,
+              costMicroPence,
               task.traceId().orElse(null),
               Instant.now(clock)));
       log.info(
-          "ai call succeeded callId={} taskType={} tier={} latencyMs={}",
+          "ai call succeeded callId={} taskType={} tier={} latencyMs={} costMicroPence={}",
           callId,
           task.type(),
           tier,
-          latencyMs);
+          latencyMs,
+          costMicroPence);
       return payload;
     } catch (AiInvalidRequestException ex) {
       finalizeFailure(callId, task, CallErrorKind.INVALID_REQUEST, startNanos);
@@ -249,6 +272,43 @@ public class AiServiceImpl implements AiService {
         task.type(),
         errorKind,
         latencyMs);
+  }
+
+  private void finalizeBudgetExceeded(
+      UUID callId, AiTask<?> task, AiCostBudgetExceededException ex, long startNanos) {
+    int latencyMs = elapsedMs(startNanos);
+    try {
+      recorder.recordFailure(callId, CallErrorKind.BUDGET_EXCEEDED, latencyMs);
+    } catch (RuntimeException recordingEx) {
+      log.warn(
+          "failed to update ai_call_log to FAILED(BUDGET_EXCEEDED) callId={} reason={}",
+          callId,
+          recordingEx.getMessage());
+    }
+    Instant now = Instant.now(clock);
+    eventPublisher.publishEvent(
+        new AiCallFailedEvent(
+            callId,
+            task.type(),
+            task.userId().orElse(null),
+            CallErrorKind.BUDGET_EXCEEDED,
+            task.traceId().orElse(null),
+            now));
+    eventPublisher.publishEvent(
+        new CostBudgetExceededEvent(
+            ex.userId(),
+            ex.spentPence(),
+            ex.limitPence(),
+            ex.window(),
+            task.traceId().orElse(null),
+            now));
+    log.info(
+        "ai call rejected callId={} taskType={} userId={} spentPence={} limitPence={}",
+        callId,
+        task.type(),
+        ex.userId(),
+        ex.spentPence(),
+        ex.limitPence());
   }
 
   /** Map an {@link EmbeddingTaskType} onto its {@code EMBEDDING_*} {@link TaskType} sibling. */

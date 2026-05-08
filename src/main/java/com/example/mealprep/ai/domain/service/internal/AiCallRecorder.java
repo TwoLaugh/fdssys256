@@ -67,10 +67,25 @@ public class AiCallRecorder {
     return callId;
   }
 
-  /** Update an existing row to SUCCEEDED with token + latency stats. */
+  /** Update an existing row to SUCCEEDED with token + latency stats; cost defaults to {@code 0}. */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void recordSuccess(
       UUID callId, Integer requestTokens, Integer responseTokens, int latencyMs) {
+    recordSuccess(callId, requestTokens, responseTokens, latencyMs, 0L);
+  }
+
+  /**
+   * Update an existing row to SUCCEEDED with token + latency stats and {@code costMicroPence}
+   * computed by 01b's {@link CostCalculator}. Old callers that haven't yet been wired to compute
+   * cost call the four-arg overload above; the zero default is preserved for them.
+   */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public void recordSuccess(
+      UUID callId,
+      Integer requestTokens,
+      Integer responseTokens,
+      int latencyMs,
+      long costMicroPence) {
     AiCallLog row =
         repository
             .findById(callId)
@@ -80,7 +95,7 @@ public class AiCallRecorder {
     row.setResponseTokens(responseTokens);
     row.setLatencyMs(latencyMs);
     row.setCompletedAt(Instant.now(clock));
-    // costMicroPence stays 0 for 01a; 01b will recompute and update.
+    row.setCostMicroPence(Math.max(0L, costMicroPence));
     repository.save(row);
   }
 
