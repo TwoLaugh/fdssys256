@@ -25,12 +25,18 @@ import com.tngtech.archunit.lang.ArchRule;
     importOptions = {ImportOption.DoNotIncludeTests.class})
 class ModuleBoundaryTest {
 
-  /** Spring Web should not appear outside of {@code api/} packages. */
+  /**
+   * Spring Web should not appear outside of {@code api/} packages — except for outbound HTTP
+   * clients. {@code ai.domain.service.internal} hosts the {@code AnthropicClient} adapter that
+   * calls Anthropic's Messages API; a vendor adapter is the canonical use of {@code RestClient}
+   * outside an MVC controller and is structurally different from a controller leak.
+   */
   @ArchTest
   static final ArchRule springWebStaysInApi =
       noClasses()
           .that()
-          .resideOutsideOfPackages("..api..", "..config..")
+          .resideOutsideOfPackages(
+              "..api..", "..config..", "com.example.mealprep.ai.domain.service.internal..")
           .should()
           .dependOnClassesThat()
           .resideInAnyPackage(
@@ -95,6 +101,19 @@ class ModuleBoundaryTest {
               "preference repos are accessible only within the preference module —"
                   + " cross-module callers go through PreferenceQueryService /"
                   + " PreferenceUpdateService.")
+          .allowEmptyShould(true);
+
+  @ArchTest
+  static final ArchRule aiReposAreInternalToAi =
+      noClasses()
+          .that()
+          .resideOutsideOfPackage("com.example.mealprep.ai..")
+          .should()
+          .dependOnClassesThat()
+          .resideInAPackage("com.example.mealprep.ai.domain.repository..")
+          .as(
+              "ai repos are accessible only within the ai module —"
+                  + " cross-module callers go through AiService.")
           .allowEmptyShould(true);
 
   /**
