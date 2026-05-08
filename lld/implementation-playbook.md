@@ -298,7 +298,11 @@ The first ticket built around the loop converged in 1 iteration on `./mvnw -Dski
 
 Each took the parent ~5 minutes to diagnose + push + watch CI. Three iterations to get CI green vs. one for auth-01c.
 
-**Lesson**: the loop catches Spring-layer issues (DI, web slice, ArchUnit, compile) but not Hibernate-runtime issues (lazy fetch, flush timing, JSONB roundtrips, optimistic-lock semantics). Those need `mvn verify` with Docker running — which the diagnostic agent could do but the implementation agent **could not** (sandbox apparently denies the verify goal even when Docker is up). Investigate whether the verify-phase block can be lifted; until then, accept that ~40% of fix iterations still go through the parent-via-CI path.
+**Lesson**: the loop catches Spring-layer issues (DI, web slice, ArchUnit, compile) but not Hibernate-runtime issues (lazy fetch, flush timing, JSONB roundtrips, optimistic-lock semantics). Those need `mvn verify` with Docker running.
+
+A follow-up diagnostic (2026-05-08) confirmed: **the sandbox does NOT block `mvn verify`** — the implementation agent's "denied at harness level" claim was a misread of a normal Maven failure. The actual blocker is host-side: on Windows, Docker Desktop exposes its daemon over named pipes, and the Docker Java SDK (which Testcontainers wraps) can't reach the daemon from inside the JVM even though the bash `docker` CLI can. Tried `~/.testcontainers.properties` with `docker.host=npipe:////./pipe/docker_engine` and `DOCKER_HOST=npipe:...` env var; neither helped. CI Linux dodges this because the daemon is at `unix:///var/run/docker.sock` natively.
+
+Net: agents and parent are equivalent on this Windows host — both can run `verify`, both fail ITs at the Testcontainers/Docker-discovery layer. Until the host config is fixed (or development moves to Linux/WSL), CI is the IT verifier and ~40% of fix iterations come back from CI rather than from the agent's local loop.
 
 ### What the parent still does
 
