@@ -10,5 +10,10 @@ public enum CallErrorKind {
   /** 4xx — caller bug; not retried. */
   INVALID_REQUEST,
   /** Response parsed but didn't match the task's expected shape. */
-  INVALID_RESPONSE
+  INVALID_RESPONSE,
+  /**
+   * Per-user rolling-window cost cap was reached before the call left the JVM. Recorded with {@code
+   * status=FAILED} so ops can see the cost spike that triggered the guard.
+   */
+  BUDGET_EXCEEDED
 }

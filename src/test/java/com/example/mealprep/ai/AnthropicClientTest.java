@@ -39,7 +39,7 @@ class AnthropicClientTest {
   private final ObjectMapper objectMapper = new ObjectMapper();
   private final AiProperties properties =
       new AiProperties(
-          "secret-key", "https://example.test", "haiku", "sonnet", "opus", 60, 3, null, null);
+          "secret-key", "https://example.test", "haiku", "sonnet", "opus", 60, 3, null, null, null);
 
   private final Deque<RoundTrip> scripted = new ArrayDeque<>();
 

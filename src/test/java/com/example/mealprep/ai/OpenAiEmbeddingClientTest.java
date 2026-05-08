@@ -32,7 +32,7 @@ import org.springframework.beans.factory.ObjectProvider;
 class OpenAiEmbeddingClientTest {
 
   private final AiProperties properties =
-      new AiProperties("k", null, "haiku", "sonnet", "opus", 60, 3, "openai-key", null);
+      new AiProperties("k", null, "haiku", "sonnet", "opus", 60, 3, "openai-key", null, null);
 
   private final OpenAIClient openAiClient = mock(OpenAIClient.class);
   private final EmbeddingService embeddingService = mock(EmbeddingService.class);

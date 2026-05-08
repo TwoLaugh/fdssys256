@@ -1,5 +1,6 @@
 package com.example.mealprep.config;
 
+import com.example.mealprep.ai.exception.AiCostBudgetExceededException;
 import com.example.mealprep.ai.exception.AiInvalidRequestException;
 import com.example.mealprep.ai.exception.AiInvalidResponseException;
 import com.example.mealprep.ai.exception.AiUnavailableException;
@@ -213,6 +214,29 @@ public class GlobalExceptionHandler {
       seconds += 1;
     }
     return Math.max(seconds, 1L);
+  }
+
+  /**
+   * 429 — per-user AI cost cap reached for the rolling window. {@code Retry-After} is the duration
+   * carried on the exception (time until the oldest counted call exits the window), rounded up to
+   * whole seconds, never zero. Mirrors {@link #handleLoginThrottled} from auth-01b.
+   */
+  @ExceptionHandler(AiCostBudgetExceededException.class)
+  public ResponseEntity<ProblemDetail> handleAiCostBudgetExceeded(
+      AiCostBudgetExceededException ex, HttpServletRequest req) {
+    long retryAfterSeconds = clampToWholeSeconds(ex.retryAfter());
+    ProblemDetail pd =
+        ProblemDetail.forStatusAndDetail(HttpStatus.TOO_MANY_REQUESTS, "AI cost budget exceeded");
+    pd.setType(URI.create(PROBLEM_BASE + "ai-budget-exceeded"));
+    pd.setTitle("AI budget exceeded");
+    pd.setInstance(URI.create(req.getRequestURI()));
+    pd.setProperty("spentPence", ex.spentPence());
+    pd.setProperty("limitPence", ex.limitPence());
+    pd.setProperty("windowSeconds", ex.window().toSeconds());
+    return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+        .header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds))
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
   }
 
   /** 503 — AI provider unavailable / retries exhausted. */
