@@ -1,0 +1,32 @@
+HouseholdRole:
+  type: string
+  enum: [primary, member]
+HouseholdMemberDto:
+  type: object
+  required: [id, householdId, userId, role, priority, joinedAt, version]
+  properties:
+    id: { type: string, format: uuid }
+    householdId: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    role: { $ref: '#/HouseholdRole' }
+    displayName: { type: string, maxLength: 64, nullable: true }
+    priority: { type: integer, minimum: 0, maximum: 1000 }
+    joinedAt: { type: string, format: date-time }
+    version: { type: integer, format: int64 }
+HouseholdDto:
+  type: object
+  required: [id, name, createdByUserId, members, createdAt, version]
+  properties:
+    id: { type: string, format: uuid }
+    name: { type: string, maxLength: 128 }
+    createdByUserId: { type: string, format: uuid }
+    members:
+      type: array
+      items: { $ref: '#/HouseholdMemberDto' }
+    createdAt: { type: string, format: date-time }
+    version: { type: integer, format: int64 }
+CreateHouseholdRequest:
+  type: object
+  required: [name]
+  properties:
+    name: { type: string, minLength: 1, maxLength: 128 }
