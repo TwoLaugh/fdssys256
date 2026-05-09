@@ -1,0 +1,59 @@
+recipes:
+  post:
+    tags: [Recipes]
+    operationId: createRecipe
+    summary: Create a new user-catalogue recipe (manual_create trigger).
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/recipe.yaml#/CreateRecipeRequest' }
+    responses:
+      '201':
+        description: Recipe created.
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeById:
+  get:
+    tags: [Recipes]
+    operationId: getRecipe
+    summary: Fetch a recipe by id (current version body).
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: Recipe.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
