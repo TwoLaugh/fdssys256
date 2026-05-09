@@ -34,6 +34,9 @@ import org.springframework.context.annotation.Bean;
  * <p>Note: the upstream {@code swagger-request-validator-springmvc} servlet filter still targets
  * {@code javax.servlet}; on Spring 6 / Jakarta we use the {@code mockmvc} matcher style instead and
  * skip the filter entirely.
+ *
+ * <p>The validator is loaded by URL (not inline content) so swagger-parser resolves external {@code
+ * $ref}s in {@code paths/*.yaml} and {@code schemas/*.yaml} against the entry file's location.
  */
 @TestConfiguration(proxyBeanMethods = false)
 public class OpenApiValidatorConfig {
@@ -51,22 +54,15 @@ public class OpenApiValidatorConfig {
    */
   @Bean
   public OpenApiInteractionValidator openApiValidator() {
-    return OpenApiInteractionValidator.createForInlineApiSpecification(loadSpec())
+    var url = getClass().getClassLoader().getResource(specClasspath);
+    if (url == null) {
+      throw new IllegalStateException("OpenAPI spec not found on classpath: " + specClasspath);
+    }
+    return OpenApiInteractionValidator.createFor(url.toString())
         .withLevelResolver(
             LevelResolver.create()
                 .withLevel("validation.request.security.missing", ValidationReport.Level.IGNORE)
                 .build())
         .build();
-  }
-
-  private String loadSpec() {
-    try (var in = getClass().getClassLoader().getResourceAsStream(specClasspath)) {
-      if (in == null) {
-        throw new IllegalStateException("OpenAPI spec not found on classpath: " + specClasspath);
-      }
-      return new String(in.readAllBytes());
-    } catch (java.io.IOException e) {
-      throw new IllegalStateException("Failed to read OpenAPI spec at " + specClasspath, e);
-    }
   }
 }

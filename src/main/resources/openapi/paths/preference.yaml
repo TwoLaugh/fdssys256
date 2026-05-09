@@ -1,0 +1,99 @@
+hardConstraints:
+  get:
+    tags: [Preferences]
+    operationId: getHardConstraints
+    summary: Read the calling user's hard-constraints aggregate.
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: The user's hard-constraints aggregate.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/preference.yaml#/HardConstraintsDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Resource not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  put:
+    tags: [Preferences]
+    operationId: updateHardConstraints
+    summary: Replace the calling user's hard-constraints aggregate.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/preference.yaml#/UpdateHardConstraintsRequest' }
+    responses:
+      '200':
+        description: The updated hard-constraints aggregate.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/preference.yaml#/HardConstraintsDto' }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Resource not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Conflict.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+hardConstraintsAuditLog:
+  get:
+    tags: [Preferences]
+    operationId: getHardConstraintsAuditLog
+    summary: Paginated audit log of hard-constraints changes; newest-first.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of audit-log entries; empty content when no changes (or no aggregate yet).
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: array
+                  items: { $ref: '../schemas/preference.yaml#/HardConstraintsAuditEntryDto' }
+                totalElements: { type: integer }
+                totalPages: { type: integer }
+                number: { type: integer }
+                size: { type: integer }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

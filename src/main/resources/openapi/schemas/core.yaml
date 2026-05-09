@@ -1,0 +1,41 @@
+DecisionLogDto:
+  type: object
+  required: [decisionId, traceId, scopeKind, scopeId, scale, triggeredBy, inputs, iteration, createdAt]
+  properties:
+    decisionId: { type: string, format: uuid }
+    traceId: { type: string, format: uuid }
+    parentDecisionId: { type: string, format: uuid, nullable: true }
+    scopeKind: { type: string, example: "plan-week" }
+    scopeId: { type: string, format: uuid }
+    scale: { type: string, enum: [WEEK, RECIPE, OTHER] }
+    triggeredBy: { type: string, example: "user-initiated" }
+    actorUserId: { type: string, format: uuid, nullable: true }
+    inputs:
+      type: object
+      additionalProperties: true
+    candidates:
+      type: object
+      nullable: true
+      additionalProperties: true
+    chosen:
+      type: object
+      nullable: true
+      additionalProperties: true
+    reasoning: { type: string, nullable: true }
+    emittedDirective:
+      type: object
+      nullable: true
+      additionalProperties: true
+    iteration: { type: integer, minimum: 0 }
+    durationMs: { type: integer, nullable: true }
+    createdAt: { type: string, format: date-time }
+AncestryResponse:
+  type: object
+  required: [ancestors, cycleDetected]
+  properties:
+    ancestors:
+      type: array
+      items: { $ref: '#/DecisionLogDto' }
+    cycleDetected:
+      type: boolean
+      description: True when the walk hit maxDepth — caller should investigate the parent chain.
