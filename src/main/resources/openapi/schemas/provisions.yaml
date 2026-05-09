@@ -1,0 +1,161 @@
+StorageLocation:
+  type: string
+  enum: [FRIDGE, FREEZER, CUPBOARD, SPICE_RACK]
+TrackingMode:
+  type: string
+  enum: [QUANTITY, STATUS]
+StapleStatus:
+  type: string
+  enum: [STOCKED, LOW, OUT]
+ItemSource:
+  type: string
+  enum: [TESCO_ORDER, OTHER_SHOP, MANUAL_ADD, BATCH_COOK, GIFT]
+ItemLifecycleStatus:
+  type: string
+  enum: [ACTIVE, EXHAUSTED, SPOILED, WASTED]
+DefrostMethod:
+  type: string
+  enum: [OVERNIGHT_FRIDGE, ROOM_TEMP, MICROWAVE, QUICK_DEFROST]
+FreezerExtensionDto:
+  type: object
+  properties:
+    frozenAt: { type: string, format: date, nullable: true }
+    maxFreezeWeeks: { type: integer, minimum: 0, nullable: true }
+    defrostMethod: { $ref: '#/DefrostMethod', nullable: true }
+    defrostLeadTimeHours: { type: integer, minimum: 0, nullable: true }
+    sourceRecipeId: { type: string, format: uuid, nullable: true }
+InventoryItemDto:
+  type: object
+  required:
+    - id
+    - userId
+    - name
+    - category
+    - storageLocation
+    - trackingMode
+    - isStaple
+    - source
+    - itemStatus
+    - createdAt
+    - updatedAt
+    - version
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    name: { type: string, maxLength: 128 }
+    category: { type: string, maxLength: 64 }
+    storageLocation: { $ref: '#/StorageLocation' }
+    trackingMode: { $ref: '#/TrackingMode' }
+    quantity: { type: number, nullable: true }
+    unit: { type: string, maxLength: 16, nullable: true }
+    costPaid: { type: number, nullable: true }
+    status:
+      type: string
+      enum: [STOCKED, LOW, OUT]
+      nullable: true
+    isStaple: { type: boolean }
+    expiryDate: { type: string, format: date, nullable: true }
+    ingredientMappingKey: { type: string, maxLength: 128, nullable: true }
+    notes: { type: string, maxLength: 255, nullable: true }
+    source: { $ref: '#/ItemSource' }
+    sourceRef: { type: string, maxLength: 128, nullable: true }
+    itemStatus: { $ref: '#/ItemLifecycleStatus' }
+    freezerExtension:
+      type: object
+      nullable: true
+      properties:
+        frozenAt: { type: string, format: date, nullable: true }
+        maxFreezeWeeks: { type: integer, minimum: 0, nullable: true }
+        defrostMethod:
+          type: string
+          enum: [OVERNIGHT_FRIDGE, ROOM_TEMP, MICROWAVE, QUICK_DEFROST]
+          nullable: true
+        defrostLeadTimeHours: { type: integer, minimum: 0, nullable: true }
+        sourceRecipeId: { type: string, format: uuid, nullable: true }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+    version: { type: integer, format: int64 }
+InventoryItemDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/InventoryItemDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+CreateInventoryItemRequest:
+  type: object
+  required: [name, category, storageLocation, trackingMode, source]
+  properties:
+    name: { type: string, minLength: 1, maxLength: 128 }
+    category: { type: string, minLength: 1, maxLength: 64 }
+    storageLocation: { $ref: '#/StorageLocation' }
+    trackingMode: { $ref: '#/TrackingMode' }
+    quantity: { type: number, nullable: true }
+    unit: { type: string, maxLength: 16, nullable: true }
+    costPaid: { type: number, nullable: true }
+    status:
+      type: string
+      enum: [STOCKED, LOW, OUT]
+      nullable: true
+    isStaple: { type: boolean, default: false }
+    expiryDate: { type: string, format: date, nullable: true }
+    ingredientMappingKey: { type: string, maxLength: 128, nullable: true }
+    notes: { type: string, maxLength: 255, nullable: true }
+    source: { $ref: '#/ItemSource' }
+    sourceRef: { type: string, maxLength: 128, nullable: true }
+    freezerExtension:
+      type: object
+      nullable: true
+      properties:
+        frozenAt: { type: string, format: date, nullable: true }
+        maxFreezeWeeks: { type: integer, minimum: 0, nullable: true }
+        defrostMethod:
+          type: string
+          enum: [OVERNIGHT_FRIDGE, ROOM_TEMP, MICROWAVE, QUICK_DEFROST]
+          nullable: true
+        defrostLeadTimeHours: { type: integer, minimum: 0, nullable: true }
+        sourceRecipeId: { type: string, format: uuid, nullable: true }
+UpdateInventoryItemRequest:
+  type: object
+  required: [name, category, storageLocation, trackingMode, source, itemStatus, expectedVersion]
+  properties:
+    name: { type: string, minLength: 1, maxLength: 128 }
+    category: { type: string, minLength: 1, maxLength: 64 }
+    storageLocation: { $ref: '#/StorageLocation' }
+    trackingMode: { $ref: '#/TrackingMode' }
+    quantity: { type: number, nullable: true }
+    unit: { type: string, maxLength: 16, nullable: true }
+    costPaid: { type: number, nullable: true }
+    status:
+      type: string
+      enum: [STOCKED, LOW, OUT]
+      nullable: true
+    isStaple: { type: boolean, default: false }
+    expiryDate: { type: string, format: date, nullable: true }
+    ingredientMappingKey: { type: string, maxLength: 128, nullable: true }
+    notes: { type: string, maxLength: 255, nullable: true }
+    source: { $ref: '#/ItemSource' }
+    sourceRef: { type: string, maxLength: 128, nullable: true }
+    itemStatus: { $ref: '#/ItemLifecycleStatus' }
+    freezerExtension:
+      type: object
+      nullable: true
+      properties:
+        frozenAt: { type: string, format: date, nullable: true }
+        maxFreezeWeeks: { type: integer, minimum: 0, nullable: true }
+        defrostMethod:
+          type: string
+          enum: [OVERNIGHT_FRIDGE, ROOM_TEMP, MICROWAVE, QUICK_DEFROST]
+          nullable: true
+        defrostLeadTimeHours: { type: integer, minimum: 0, nullable: true }
+        sourceRecipeId: { type: string, format: uuid, nullable: true }
+    expectedVersion: { type: integer, format: int64 }

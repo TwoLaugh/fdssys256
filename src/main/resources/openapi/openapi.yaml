@@ -50,6 +50,11 @@ paths:
     $ref: 'paths/household.yaml#/households'
   /api/v1/households/current:
     $ref: 'paths/household.yaml#/currentHousehold'
+  # ===== provisions =====
+  /api/v1/provisions/inventory:
+    $ref: 'paths/provisions.yaml#/inventory'
+  /api/v1/provisions/inventory/{itemId}:
+    $ref: 'paths/provisions.yaml#/inventoryItem'
 components:
   securitySchemes:
     cookieAuth:
@@ -83,6 +88,17 @@ components:
     HouseholdDto: { $ref: 'schemas/household.yaml#/HouseholdDto' }
     HouseholdMemberDto: { $ref: 'schemas/household.yaml#/HouseholdMemberDto' }
     CreateHouseholdRequest: { $ref: 'schemas/household.yaml#/CreateHouseholdRequest' }
+    # provisions
+    StorageLocation: { $ref: 'schemas/provisions.yaml#/StorageLocation' }
+    TrackingMode: { $ref: 'schemas/provisions.yaml#/TrackingMode' }
+    StapleStatus: { $ref: 'schemas/provisions.yaml#/StapleStatus' }
+    ItemSource: { $ref: 'schemas/provisions.yaml#/ItemSource' }
+    ItemLifecycleStatus: { $ref: 'schemas/provisions.yaml#/ItemLifecycleStatus' }
+    DefrostMethod: { $ref: 'schemas/provisions.yaml#/DefrostMethod' }
+    FreezerExtensionDto: { $ref: 'schemas/provisions.yaml#/FreezerExtensionDto' }
+    InventoryItemDto: { $ref: 'schemas/provisions.yaml#/InventoryItemDto' }
+    CreateInventoryItemRequest: { $ref: 'schemas/provisions.yaml#/CreateInventoryItemRequest' }
+    UpdateInventoryItemRequest: { $ref: 'schemas/provisions.yaml#/UpdateInventoryItemRequest' }
     # ai
     TaskType: { $ref: 'schemas/ai.yaml#/TaskType' }
     ModelTier: { $ref: 'schemas/ai.yaml#/ModelTier' }
