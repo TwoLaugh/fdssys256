@@ -1,0 +1,299 @@
+Catalogue:
+  type: string
+  enum: [USER, SYSTEM]
+DataQuality:
+  type: string
+  enum: [USER_VERIFIED, IMPORTED, AI_GENERATED, WEB_DISCOVERED]
+NutritionStatus:
+  type: string
+  enum: [CALCULATED, PENDING, PARTIAL]
+VersionTrigger:
+  type: string
+  enum: [MANUAL_CREATE, MANUAL_EDIT, IMPORT, ADAPTATION_PIPELINE, SUBSTITUTION_PROMOTION, BRANCH_CREATION, REVERT]
+Complexity:
+  type: string
+  enum: [MINIMAL, MODERATE, INVOLVED]
+MealType:
+  type: string
+  enum: [BREAKFAST, LUNCH, DINNER, SNACK]
+IngredientDto:
+  type: object
+  required: [id, lineOrder, ingredientMappingKey, displayName, optional, needsReview]
+  properties:
+    id: { type: string, format: uuid }
+    lineOrder: { type: integer, minimum: 0 }
+    ingredientMappingKey: { type: string, maxLength: 160 }
+    displayName: { type: string, maxLength: 160 }
+    quantity: { type: number, format: double, nullable: true }
+    unit: { type: string, maxLength: 16, nullable: true }
+    preparation: { type: string, maxLength: 80, nullable: true }
+    optional: { type: boolean }
+    needsReview: { type: boolean }
+    mappingConfidence: { type: number, format: double, nullable: true }
+MethodStepDto:
+  type: object
+  required: [id, stepNumber, instruction]
+  properties:
+    id: { type: string, format: uuid }
+    stepNumber: { type: integer, minimum: 1 }
+    instruction: { type: string }
+    durationMinutes: { type: integer, nullable: true }
+RecipeMetadataDto:
+  type: object
+  required: [servings, prepTimeMins, cookTimeMins, totalTimeMins, equipmentRequired, packable, mealTypes]
+  properties:
+    servings: { type: integer, minimum: 1 }
+    prepTimeMins: { type: integer, minimum: 0 }
+    cookTimeMins: { type: integer, minimum: 0 }
+    totalTimeMins: { type: integer, minimum: 0 }
+    equipmentRequired:
+      type: array
+      items: { type: string }
+    fridgeDays: { type: integer, nullable: true }
+    freezerWeeks: { type: integer, nullable: true }
+    packable: { type: boolean }
+    cuisine: { type: string, maxLength: 64, nullable: true }
+    mealTypes:
+      type: array
+      items: { type: string }
+RecipeTagsDto:
+  type: object
+  required: [flavourProfile, dietaryFlags]
+  properties:
+    protein: { type: string, maxLength: 64, nullable: true }
+    cookingMethod: { type: string, maxLength: 64, nullable: true }
+    complexity:
+      type: string
+      enum: [MINIMAL, MODERATE, INVOLVED]
+      nullable: true
+    flavourProfile:
+      type: array
+      items: { type: string }
+    dietaryFlags:
+      type: array
+      items: { type: string }
+RecipeVersionDto:
+  type: object
+  required: [id, branchId, versionNumber, trigger, embeddingStatus, createdAt, createdByActor, ingredients, methodSteps]
+  properties:
+    id: { type: string, format: uuid }
+    branchId: { type: string, format: uuid }
+    versionNumber: { type: integer, minimum: 1 }
+    parentVersionId: { type: string, format: uuid, nullable: true }
+    trigger: { $ref: '#/VersionTrigger' }
+    changeReason: { type: string, nullable: true }
+    embeddingStatus: { type: string, maxLength: 16 }
+    createdAt: { type: string, format: date-time }
+    createdByActor: { type: string, maxLength: 64 }
+    adapterTraceId: { type: string, format: uuid, nullable: true }
+    ingredients:
+      type: array
+      items: { $ref: '#/IngredientDto' }
+    methodSteps:
+      type: array
+      items: { $ref: '#/MethodStepDto' }
+    metadata:
+      type: object
+      nullable: true
+      required: [servings, prepTimeMins, cookTimeMins, totalTimeMins, equipmentRequired, packable, mealTypes]
+      properties:
+        servings: { type: integer, minimum: 1 }
+        prepTimeMins: { type: integer, minimum: 0 }
+        cookTimeMins: { type: integer, minimum: 0 }
+        totalTimeMins: { type: integer, minimum: 0 }
+        equipmentRequired:
+          type: array
+          items: { type: string }
+        fridgeDays: { type: integer, nullable: true }
+        freezerWeeks: { type: integer, nullable: true }
+        packable: { type: boolean }
+        cuisine: { type: string, maxLength: 64, nullable: true }
+        mealTypes:
+          type: array
+          items: { type: string }
+    tags:
+      type: object
+      nullable: true
+      required: [flavourProfile, dietaryFlags]
+      properties:
+        protein: { type: string, maxLength: 64, nullable: true }
+        cookingMethod: { type: string, maxLength: 64, nullable: true }
+        complexity:
+          type: string
+          enum: [MINIMAL, MODERATE, INVOLVED]
+          nullable: true
+        flavourProfile:
+          type: array
+          items: { type: string }
+        dietaryFlags:
+          type: array
+          items: { type: string }
+RecipeDto:
+  type: object
+  required:
+    - id
+    - userId
+    - catalogue
+    - name
+    - currentVersion
+    - dataQuality
+    - nutritionStatus
+    - optimisticVersion
+    - createdAt
+    - updatedAt
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    catalogue: { $ref: '#/Catalogue' }
+    name: { type: string, maxLength: 160 }
+    description: { type: string, nullable: true }
+    currentVersion: { type: integer, minimum: 1 }
+    currentBranchId: { type: string, format: uuid, nullable: true }
+    dataQuality: { $ref: '#/DataQuality' }
+    nutritionStatus: { $ref: '#/NutritionStatus' }
+    forkedFromRecipeId: { type: string, format: uuid, nullable: true }
+    lastUsedInPlanAt: { type: string, format: date-time, nullable: true }
+    archivedAt: { type: string, format: date-time, nullable: true }
+    deletedAt: { type: string, format: date-time, nullable: true }
+    optimisticVersion: { type: integer, format: int64 }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+    currentVersionBody:
+      type: object
+      nullable: true
+      required: [id, branchId, versionNumber, trigger, embeddingStatus, createdAt, createdByActor, ingredients, methodSteps]
+      properties:
+        id: { type: string, format: uuid }
+        branchId: { type: string, format: uuid }
+        versionNumber: { type: integer, minimum: 1 }
+        parentVersionId: { type: string, format: uuid, nullable: true }
+        trigger: { $ref: '#/VersionTrigger' }
+        changeReason: { type: string, nullable: true }
+        embeddingStatus: { type: string, maxLength: 16 }
+        createdAt: { type: string, format: date-time }
+        createdByActor: { type: string, maxLength: 64 }
+        adapterTraceId: { type: string, format: uuid, nullable: true }
+        ingredients:
+          type: array
+          items: { $ref: '#/IngredientDto' }
+        methodSteps:
+          type: array
+          items: { $ref: '#/MethodStepDto' }
+        metadata:
+          type: object
+          nullable: true
+          required: [servings, prepTimeMins, cookTimeMins, totalTimeMins, equipmentRequired, packable, mealTypes]
+          properties:
+            servings: { type: integer, minimum: 1 }
+            prepTimeMins: { type: integer, minimum: 0 }
+            cookTimeMins: { type: integer, minimum: 0 }
+            totalTimeMins: { type: integer, minimum: 0 }
+            equipmentRequired:
+              type: array
+              items: { type: string }
+            fridgeDays: { type: integer, nullable: true }
+            freezerWeeks: { type: integer, nullable: true }
+            packable: { type: boolean }
+            cuisine: { type: string, maxLength: 64, nullable: true }
+            mealTypes:
+              type: array
+              items: { type: string }
+        tags:
+          type: object
+          nullable: true
+          required: [flavourProfile, dietaryFlags]
+          properties:
+            protein: { type: string, maxLength: 64, nullable: true }
+            cookingMethod: { type: string, maxLength: 64, nullable: true }
+            complexity:
+              type: string
+              enum: [MINIMAL, MODERATE, INVOLVED]
+              nullable: true
+            flavourProfile:
+              type: array
+              items: { type: string }
+            dietaryFlags:
+              type: array
+              items: { type: string }
+CreateIngredientRequest:
+  type: object
+  required: [lineOrder, ingredientMappingKey, displayName]
+  properties:
+    lineOrder: { type: integer, minimum: 0 }
+    ingredientMappingKey: { type: string, minLength: 1, maxLength: 160 }
+    displayName: { type: string, minLength: 1, maxLength: 160 }
+    quantity: { type: number, format: double, nullable: true }
+    unit: { type: string, maxLength: 16, nullable: true }
+    preparation: { type: string, maxLength: 80, nullable: true }
+    optional: { type: boolean, nullable: true }
+CreateMethodStepRequest:
+  type: object
+  required: [stepNumber, instruction]
+  properties:
+    stepNumber: { type: integer, minimum: 1 }
+    instruction: { type: string, minLength: 1 }
+    durationMinutes: { type: integer, nullable: true }
+CreateRecipeMetadataRequest:
+  type: object
+  required: [servings, prepTimeMins, cookTimeMins, totalTimeMins]
+  properties:
+    servings: { type: integer, minimum: 1 }
+    prepTimeMins: { type: integer, minimum: 0 }
+    cookTimeMins: { type: integer, minimum: 0 }
+    totalTimeMins: { type: integer, minimum: 0 }
+    equipmentRequired:
+      type: array
+      items: { type: string, maxLength: 64 }
+    fridgeDays: { type: integer, nullable: true }
+    freezerWeeks: { type: integer, nullable: true }
+    packable: { type: boolean, nullable: true }
+    cuisine: { type: string, maxLength: 64, nullable: true }
+    mealTypes:
+      type: array
+      items: { type: string, maxLength: 32 }
+CreateRecipeTagsRequest:
+  type: object
+  properties:
+    protein: { type: string, maxLength: 64, nullable: true }
+    cookingMethod: { type: string, maxLength: 64, nullable: true }
+    complexity:
+      type: string
+      enum: [MINIMAL, MODERATE, INVOLVED]
+      nullable: true
+    flavourProfile:
+      type: array
+      items: { type: string, maxLength: 32 }
+    dietaryFlags:
+      type: array
+      items: { type: string, maxLength: 32 }
+CreateRecipeRequest:
+  type: object
+  required: [name, ingredients, method, metadata]
+  properties:
+    name: { type: string, minLength: 1, maxLength: 160 }
+    description: { type: string, maxLength: 2000, nullable: true }
+    ingredients:
+      type: array
+      minItems: 1
+      items: { $ref: '#/CreateIngredientRequest' }
+    method:
+      type: array
+      minItems: 1
+      items: { $ref: '#/CreateMethodStepRequest' }
+    metadata: { $ref: '#/CreateRecipeMetadataRequest' }
+    tags:
+      type: object
+      nullable: true
+      properties:
+        protein: { type: string, maxLength: 64, nullable: true }
+        cookingMethod: { type: string, maxLength: 64, nullable: true }
+        complexity:
+          type: string
+          enum: [MINIMAL, MODERATE, INVOLVED]
+          nullable: true
+        flavourProfile:
+          type: array
+          items: { type: string, maxLength: 32 }
+        dietaryFlags:
+          type: array
+          items: { type: string, maxLength: 32 }

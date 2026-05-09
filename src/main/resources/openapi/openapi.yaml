@@ -60,6 +60,11 @@ paths:
     $ref: 'paths/nutrition.yaml#/targets'
   /api/v1/nutrition/targets/audit-log:
     $ref: 'paths/nutrition.yaml#/targetsAuditLog'
+  # ===== recipe =====
+  /api/v1/recipes:
+    $ref: 'paths/recipe.yaml#/recipes'
+  /api/v1/recipes/{recipeId}:
+    $ref: 'paths/recipe.yaml#/recipeById'
 components:
   securitySchemes:
     cookieAuth:
@@ -119,6 +124,24 @@ components:
     TargetsDto: { $ref: 'schemas/nutrition.yaml#/TargetsDto' }
     UpdateTargetsRequest: { $ref: 'schemas/nutrition.yaml#/UpdateTargetsRequest' }
     NutritionTargetsAuditEntryDto: { $ref: 'schemas/nutrition.yaml#/NutritionTargetsAuditEntryDto' }
+    # recipe
+    Catalogue: { $ref: 'schemas/recipe.yaml#/Catalogue' }
+    DataQuality: { $ref: 'schemas/recipe.yaml#/DataQuality' }
+    NutritionStatus: { $ref: 'schemas/recipe.yaml#/NutritionStatus' }
+    VersionTrigger: { $ref: 'schemas/recipe.yaml#/VersionTrigger' }
+    Complexity: { $ref: 'schemas/recipe.yaml#/Complexity' }
+    MealType: { $ref: 'schemas/recipe.yaml#/MealType' }
+    IngredientDto: { $ref: 'schemas/recipe.yaml#/IngredientDto' }
+    MethodStepDto: { $ref: 'schemas/recipe.yaml#/MethodStepDto' }
+    RecipeMetadataDto: { $ref: 'schemas/recipe.yaml#/RecipeMetadataDto' }
+    RecipeTagsDto: { $ref: 'schemas/recipe.yaml#/RecipeTagsDto' }
+    RecipeVersionDto: { $ref: 'schemas/recipe.yaml#/RecipeVersionDto' }
+    RecipeDto: { $ref: 'schemas/recipe.yaml#/RecipeDto' }
+    CreateIngredientRequest: { $ref: 'schemas/recipe.yaml#/CreateIngredientRequest' }
+    CreateMethodStepRequest: { $ref: 'schemas/recipe.yaml#/CreateMethodStepRequest' }
+    CreateRecipeMetadataRequest: { $ref: 'schemas/recipe.yaml#/CreateRecipeMetadataRequest' }
+    CreateRecipeTagsRequest: { $ref: 'schemas/recipe.yaml#/CreateRecipeTagsRequest' }
+    CreateRecipeRequest: { $ref: 'schemas/recipe.yaml#/CreateRecipeRequest' }
     # ai
     TaskType: { $ref: 'schemas/ai.yaml#/TaskType' }
     ModelTier: { $ref: 'schemas/ai.yaml#/ModelTier' }
