@@ -55,6 +55,11 @@ paths:
     $ref: 'paths/provisions.yaml#/inventory'
   /api/v1/provisions/inventory/{itemId}:
     $ref: 'paths/provisions.yaml#/inventoryItem'
+  # ===== nutrition =====
+  /api/v1/nutrition/targets:
+    $ref: 'paths/nutrition.yaml#/targets'
+  /api/v1/nutrition/targets/audit-log:
+    $ref: 'paths/nutrition.yaml#/targetsAuditLog'
 components:
   securitySchemes:
     cookieAuth:
@@ -99,6 +104,21 @@ components:
     InventoryItemDto: { $ref: 'schemas/provisions.yaml#/InventoryItemDto' }
     CreateInventoryItemRequest: { $ref: 'schemas/provisions.yaml#/CreateInventoryItemRequest' }
     UpdateInventoryItemRequest: { $ref: 'schemas/provisions.yaml#/UpdateInventoryItemRequest' }
+    # nutrition
+    Goal: { $ref: 'schemas/nutrition.yaml#/Goal' }
+    EnforcementDirection: { $ref: 'schemas/nutrition.yaml#/EnforcementDirection' }
+    MealSlot: { $ref: 'schemas/nutrition.yaml#/MealSlot' }
+    ActivityLevel: { $ref: 'schemas/nutrition.yaml#/ActivityLevel' }
+    ActorKind: { $ref: 'schemas/nutrition.yaml#/ActorKind' }
+    CalorieTargetDto: { $ref: 'schemas/nutrition.yaml#/CalorieTargetDto' }
+    MacroTargetDto: { $ref: 'schemas/nutrition.yaml#/MacroTargetDto' }
+    PerMealDistributionDto: { $ref: 'schemas/nutrition.yaml#/PerMealDistributionDto' }
+    MicroTargetDto: { $ref: 'schemas/nutrition.yaml#/MicroTargetDto' }
+    EatingWindowDto: { $ref: 'schemas/nutrition.yaml#/EatingWindowDto' }
+    ActivityAdjustmentDto: { $ref: 'schemas/nutrition.yaml#/ActivityAdjustmentDto' }
+    TargetsDto: { $ref: 'schemas/nutrition.yaml#/TargetsDto' }
+    UpdateTargetsRequest: { $ref: 'schemas/nutrition.yaml#/UpdateTargetsRequest' }
+    NutritionTargetsAuditEntryDto: { $ref: 'schemas/nutrition.yaml#/NutritionTargetsAuditEntryDto' }
     # ai
     TaskType: { $ref: 'schemas/ai.yaml#/TaskType' }
     ModelTier: { $ref: 'schemas/ai.yaml#/ModelTier' }
