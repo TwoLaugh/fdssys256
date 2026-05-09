@@ -45,6 +45,11 @@ paths:
     $ref: 'paths/preference.yaml#/hardConstraints'
   /api/v1/preferences/hard-constraints/audit-log:
     $ref: 'paths/preference.yaml#/hardConstraintsAuditLog'
+  # ===== household =====
+  /api/v1/households:
+    $ref: 'paths/household.yaml#/households'
+  /api/v1/households/current:
+    $ref: 'paths/household.yaml#/currentHousehold'
 components:
   securitySchemes:
     cookieAuth:
@@ -73,6 +78,11 @@ components:
     HardConstraintsDto: { $ref: 'schemas/preference.yaml#/HardConstraintsDto' }
     UpdateHardConstraintsRequest: { $ref: 'schemas/preference.yaml#/UpdateHardConstraintsRequest' }
     HardConstraintsAuditEntryDto: { $ref: 'schemas/preference.yaml#/HardConstraintsAuditEntryDto' }
+    # household
+    HouseholdRole: { $ref: 'schemas/household.yaml#/HouseholdRole' }
+    HouseholdDto: { $ref: 'schemas/household.yaml#/HouseholdDto' }
+    HouseholdMemberDto: { $ref: 'schemas/household.yaml#/HouseholdMemberDto' }
+    CreateHouseholdRequest: { $ref: 'schemas/household.yaml#/CreateHouseholdRequest' }
     # ai
     TaskType: { $ref: 'schemas/ai.yaml#/TaskType' }
     ModelTier: { $ref: 'schemas/ai.yaml#/ModelTier' }

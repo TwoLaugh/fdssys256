@@ -1,0 +1,59 @@
+households:
+  post:
+    tags: [Households]
+    operationId: createHousehold
+    summary: Create a new household; the calling user becomes its primary member.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/household.yaml#/CreateHouseholdRequest' }
+    responses:
+      '201':
+        description: Household created.
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/household.yaml#/HouseholdDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: User already a member of a household.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+currentHousehold:
+  get:
+    tags: [Households]
+    operationId: getCurrentHousehold
+    summary: Return the calling user's household, or 404 if none.
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: The calling user's household.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/household.yaml#/HouseholdDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: User is not in any household.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
