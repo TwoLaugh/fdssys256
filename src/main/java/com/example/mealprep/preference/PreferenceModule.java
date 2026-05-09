@@ -1,5 +1,6 @@
 package com.example.mealprep.preference;
 
+import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
 import com.example.mealprep.preference.domain.service.PreferenceQueryService;
 import com.example.mealprep.preference.domain.service.PreferenceUpdateService;
 import org.springframework.stereotype.Component;
@@ -10,20 +11,23 @@ import org.springframework.stereotype.Component;
  * directly.
  *
  * <p>Mirrors {@code AuthModule} and {@code CoreModule}; thin and carries no business logic. 01a
- * exposes only the partial query/update surfaces (hard constraints); taste profile, lifestyle
- * config, and {@code HardConstraintFilterService} land in subsequent tickets.
+ * landed the hard-constraints query / update surfaces; 01b adds {@link
+ * HardConstraintFilterService}, the hot-path read every food-output module calls.
  */
 @Component
 public class PreferenceModule {
 
   private final PreferenceQueryService preferenceQueryService;
   private final PreferenceUpdateService preferenceUpdateService;
+  private final HardConstraintFilterService hardConstraintFilterService;
 
   public PreferenceModule(
       PreferenceQueryService preferenceQueryService,
-      PreferenceUpdateService preferenceUpdateService) {
+      PreferenceUpdateService preferenceUpdateService,
+      HardConstraintFilterService hardConstraintFilterService) {
     this.preferenceQueryService = preferenceQueryService;
     this.preferenceUpdateService = preferenceUpdateService;
+    this.hardConstraintFilterService = hardConstraintFilterService;
   }
 
   public PreferenceQueryService query() {
@@ -32,5 +36,9 @@ public class PreferenceModule {
 
   public PreferenceUpdateService update() {
     return preferenceUpdateService;
+  }
+
+  public HardConstraintFilterService filter() {
+    return hardConstraintFilterService;
   }
 }
