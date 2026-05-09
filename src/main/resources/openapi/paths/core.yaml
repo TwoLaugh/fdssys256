@@ -1,0 +1,89 @@
+decisionById:
+  get:
+    tags: [DecisionLog]
+    operationId: getDecisionLogEntry
+    summary: Get a single decision-log entry by ID.
+    security:
+      - cookieAuth: [admin]
+    parameters:
+      - in: path
+        name: decisionId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The decision-log entry.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/core.yaml#/DecisionLogDto' }
+      '404':
+        description: Resource not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+decisionsByTrace:
+  get:
+    tags: [DecisionLog]
+    operationId: getDecisionLogByTrace
+    summary: Get all decision-log entries for a trace, ordered by creation time.
+    security:
+      - cookieAuth: [admin]
+    parameters:
+      - in: path
+        name: traceId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: Decisions in the trace; empty list if none exist.
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/core.yaml#/DecisionLogDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+decisionAncestry:
+  get:
+    tags: [DecisionLog]
+    operationId: getDecisionAncestry
+    summary: Walk parent_decision_id recursively up to maxDepth.
+    security:
+      - cookieAuth: [admin]
+    parameters:
+      - in: path
+        name: decisionId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: maxDepth
+        schema: { type: integer, minimum: 1, maximum: 32, default: 32 }
+    responses:
+      '200':
+        description: Ancestor chain ordered root-first; cycleDetected is true if the depth cap was hit.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/core.yaml#/AncestryResponse' }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Resource not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

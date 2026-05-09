@@ -1,0 +1,86 @@
+TaskType:
+  type: string
+  enum:
+    - PREFERENCE_DELTA_UPDATE
+    - INGREDIENT_MAPPING
+    - INTAKE_PARSE
+    - FEEDBACK_CLASSIFICATION
+    - RECIPE_ADAPTATION
+    - RECIPE_HTML_EXTRACTION
+    - DISCOVERY_FILTERING
+    - PLANNER_STAGE_C
+    - PLANNER_PHASE2_AUGMENTATION
+ModelTier:
+  type: string
+  enum: [CHEAP, MID, HIGH]
+AiCallLogDto:
+  type: object
+  required: [id, taskType, modelTier, modelId, costMicroPence, status, createdAt]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid, nullable: true }
+    traceId: { type: string, format: uuid, nullable: true }
+    taskType: { $ref: '#/TaskType' }
+    modelTier: { $ref: '#/ModelTier' }
+    modelId: { type: string }
+    promptRefName: { type: string, nullable: true }
+    promptRefVersion: { type: integer, nullable: true }
+    requestTokens: { type: integer, nullable: true }
+    responseTokens: { type: integer, nullable: true }
+    costMicroPence: { type: integer, format: int64 }
+    status:
+      type: string
+      enum: [PENDING, SUCCEEDED, FAILED]
+    errorKind:
+      type: string
+      nullable: true
+      enum: [AI_UNAVAILABLE, INVALID_REQUEST, INVALID_RESPONSE]
+    latencyMs: { type: integer, nullable: true }
+    createdAt: { type: string, format: date-time }
+    completedAt: { type: string, format: date-time, nullable: true }
+PromptTemplateDto:
+  type: object
+  required:
+    - id
+    - name
+    - version
+    - modelTier
+    - systemPrompt
+    - userPromptTemplate
+    - sourceFile
+    - sourceHash
+    - createdAt
+  properties:
+    id: { type: string, format: uuid }
+    name: { type: string }
+    version: { type: integer, minimum: 1 }
+    modelTier: { $ref: '#/ModelTier' }
+    systemPrompt: { type: string }
+    userPromptTemplate: { type: string }
+    outputSchema:
+      nullable: true
+      description: JSON Schema for the structured response; null for free-text outputs.
+    tools:
+      nullable: true
+      description: Anthropic tool-use definitions; null when no tools are bound.
+    notes: { type: string, nullable: true }
+    sourceFile: { type: string }
+    sourceHash: { type: string, minLength: 64, maxLength: 64 }
+    createdAt: { type: string, format: date-time }
+CostSummaryUserEntry:
+  type: object
+  required: [userId, calls, costMicroPence]
+  properties:
+    userId: { type: string, format: uuid }
+    calls: { type: integer, format: int64 }
+    costMicroPence: { type: integer, format: int64 }
+CostSummaryDto:
+  type: object
+  required: [windowHours, totalCalls, totalMicroPence, topUsers]
+  properties:
+    windowHours: { type: integer }
+    totalCalls: { type: integer, format: int64 }
+    totalMicroPence: { type: integer, format: int64 }
+    topUsers:
+      type: array
+      items: { $ref: '#/CostSummaryUserEntry' }

@@ -3,7 +3,6 @@ info:
   title: MealPrep AI
   description: |
     Backend API for the MealPrep AI personal meal-planning system.
-
     See the architectural docs in `design/` and the LLDs in `lld/`.
   version: 0.1.0
   contact:
@@ -16,363 +15,36 @@ servers:
 paths:
   # ===== auth =====
   /api/v1/auth/register:
-    post:
-      tags: [Auth]
-      operationId: register
-      summary: Create a new user account and auto-log in.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RegisterRequest' }
-      responses:
-        '201':
-          description: User created; session cookie issued.
-          headers:
-            Set-Cookie:
-              schema: { type: string }
-              description: AUTH_SESSION cookie.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/UserDto' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '409': { $ref: '#/components/responses/Conflict' }
+    $ref: 'paths/auth.yaml#/register'
   /api/v1/auth/login:
-    post:
-      tags: [Auth]
-      operationId: login
-      summary: Authenticate; receive session cookie.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/LoginRequest' }
-      responses:
-        '200':
-          description: Logged in; session cookie issued.
-          headers:
-            Set-Cookie:
-              schema: { type: string }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/LoginResponse' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401':
-          description: Invalid credentials (generic; never distinguishes unknown user from wrong password).
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/ProblemDetail' }
-        '423':
-          description: User locked due to consecutive failed attempts.
-          headers:
-            Retry-After:
-              schema: { type: integer }
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/ProblemDetail' }
-        '429': { $ref: '#/components/responses/TooManyRequests' }
+    $ref: 'paths/auth.yaml#/login'
   /api/v1/auth/logout:
-    post:
-      tags: [Auth]
-      operationId: logout
-      summary: Revoke the current session.
-      security:
-        - cookieAuth: []
-      responses:
-        '204':
-          description: Logged out; cookie cleared.
-          headers:
-            Set-Cookie:
-              schema: { type: string }
-              description: Cleared AUTH_SESSION cookie.
+    $ref: 'paths/auth.yaml#/logout'
   /api/v1/auth/me:
-    get:
-      tags: [Auth]
-      operationId: getCurrentUser
-      summary: Probe authentication state.
-      security:
-        - cookieAuth: []
-      responses:
-        '200':
-          description: Authenticated user details.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/UserDto' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+    $ref: 'paths/auth.yaml#/me'
   /api/v1/auth/password:
-    put:
-      tags: [Auth]
-      operationId: changePassword
-      summary: Rotate password; revoke other sessions; re-issue current.
-      security:
-        - cookieAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/PasswordChangeRequest' }
-      responses:
-        '200':
-          description: Password changed; new session cookie issued; other sessions revoked.
-          headers:
-            Set-Cookie:
-              schema: { type: string }
-              description: Re-issued AUTH_SESSION cookie carrying a fresh token.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/UserDto' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '409': { $ref: '#/components/responses/Conflict' }
-  # ===== decision-log =====
+    $ref: 'paths/auth.yaml#/password'
+  # ===== core / decision-log =====
   /api/v1/admin/decision-log/{decisionId}:
-    get:
-      tags: [DecisionLog]
-      operationId: getDecisionLogEntry
-      summary: Get a single decision-log entry by ID.
-      security:
-        - cookieAuth: [admin]
-      parameters:
-        - in: path
-          name: decisionId
-          required: true
-          schema: { type: string, format: uuid }
-      responses:
-        '200':
-          description: The decision-log entry.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DecisionLogDto' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+    $ref: 'paths/core.yaml#/decisionById'
   /api/v1/admin/decision-log/trace/{traceId}:
-    get:
-      tags: [DecisionLog]
-      operationId: getDecisionLogByTrace
-      summary: Get all decision-log entries for a trace, ordered by creation time.
-      security:
-        - cookieAuth: [admin]
-      parameters:
-        - in: path
-          name: traceId
-          required: true
-          schema: { type: string, format: uuid }
-      responses:
-        '200':
-          description: Decisions in the trace; empty list if none exist.
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/DecisionLogDto' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+    $ref: 'paths/core.yaml#/decisionsByTrace'
   /api/v1/admin/decision-log/{decisionId}/ancestry:
-    get:
-      tags: [DecisionLog]
-      operationId: getDecisionAncestry
-      summary: Walk parent_decision_id recursively up to maxDepth.
-      security:
-        - cookieAuth: [admin]
-      parameters:
-        - in: path
-          name: decisionId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: query
-          name: maxDepth
-          schema: { type: integer, minimum: 1, maximum: 32, default: 32 }
-      responses:
-        '200':
-          description: Ancestor chain ordered root-first; cycleDetected is true if the depth cap was hit.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/AncestryResponse' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+    $ref: 'paths/core.yaml#/decisionAncestry'
   # ===== admin / ai =====
   /api/v1/admin/ai/cost-summary:
-    get:
-      tags: [AdminAi]
-      operationId: getAiCostSummary
-      summary: Sum AI costs across all users + per-user breakdown for top 20 spenders.
-      security:
-        - cookieAuth: [admin]
-      parameters:
-        - in: query
-          name: windowHours
-          schema: { type: integer, minimum: 1, maximum: 720, default: 24 }
-      responses:
-        '200':
-          description: Cost rollup over the requested window.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/CostSummaryDto' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+    $ref: 'paths/ai.yaml#/costSummary'
   /api/v1/admin/ai/call-log:
-    get:
-      tags: [AdminAi]
-      operationId: getAiCallLog
-      summary: Paginated AI call audit log; newest-first.
-      security:
-        - cookieAuth: [admin]
-      parameters:
-        - in: query
-          name: page
-          schema: { type: integer, minimum: 0, default: 0 }
-        - in: query
-          name: size
-          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
-        - in: query
-          name: taskType
-          schema: { $ref: '#/components/schemas/TaskType' }
-        - in: query
-          name: userId
-          schema: { type: string, format: uuid }
-      responses:
-        '200':
-          description: Page of call-log entries; newest-first.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-                properties:
-                  content:
-                    type: array
-                    items: { $ref: '#/components/schemas/AiCallLogDto' }
-                  totalElements: { type: integer }
-                  totalPages: { type: integer }
-                  number: { type: integer }
-                  size: { type: integer }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+    $ref: 'paths/ai.yaml#/callLog'
   /api/v1/admin/ai/prompt-templates:
-    get:
-      tags: [AdminAi]
-      operationId: listAiPromptTemplates
-      summary: Paginated list of all prompt template versions.
-      security:
-        - cookieAuth: [admin]
-      parameters:
-        - in: query
-          name: page
-          schema: { type: integer, minimum: 0, default: 0 }
-        - in: query
-          name: size
-          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
-      responses:
-        '200':
-          description: Page of prompt template versions.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-                properties:
-                  content:
-                    type: array
-                    items: { $ref: '#/components/schemas/PromptTemplateDto' }
-                  totalElements: { type: integer }
-                  totalPages: { type: integer }
-                  number: { type: integer }
-                  size: { type: integer }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+    $ref: 'paths/ai.yaml#/promptTemplates'
   /api/v1/admin/ai/prompt-templates/{name}/{version}:
-    get:
-      tags: [AdminAi]
-      operationId: getAiPromptTemplate
-      summary: Get a single prompt template by (name, version).
-      security:
-        - cookieAuth: [admin]
-      parameters:
-        - in: path
-          name: name
-          required: true
-          schema: { type: string }
-        - in: path
-          name: version
-          required: true
-          schema: { type: integer, minimum: 1 }
-      responses:
-        '200':
-          description: The prompt template.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/PromptTemplateDto' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-  # ===== preference / hard constraints =====
+    $ref: 'paths/ai.yaml#/promptTemplateByNameAndVersion'
+  # ===== preference =====
   /api/v1/preferences/hard-constraints:
-    get:
-      tags: [Preferences]
-      operationId: getHardConstraints
-      summary: Read the calling user's hard-constraints aggregate.
-      security:
-        - cookieAuth: []
-      responses:
-        '200':
-          description: The user's hard-constraints aggregate.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/HardConstraintsDto' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-    put:
-      tags: [Preferences]
-      operationId: updateHardConstraints
-      summary: Replace the calling user's hard-constraints aggregate.
-      security:
-        - cookieAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/UpdateHardConstraintsRequest' }
-      responses:
-        '200':
-          description: The updated hard-constraints aggregate.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/HardConstraintsDto' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+    $ref: 'paths/preference.yaml#/hardConstraints'
   /api/v1/preferences/hard-constraints/audit-log:
-    get:
-      tags: [Preferences]
-      operationId: getHardConstraintsAuditLog
-      summary: Paginated audit log of hard-constraints changes; newest-first.
-      security:
-        - cookieAuth: []
-      parameters:
-        - in: query
-          name: page
-          schema: { type: integer, minimum: 0, default: 0 }
-        - in: query
-          name: size
-          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
-      responses:
-        '200':
-          description: Page of audit-log entries; empty content when no changes (or no aggregate yet).
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  content:
-                    type: array
-                    items: { $ref: '#/components/schemas/HardConstraintsAuditEntryDto' }
-                  totalElements: { type: integer }
-                  totalPages: { type: integer }
-                  number: { type: integer }
-                  size: { type: integer }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+    $ref: 'paths/preference.yaml#/hardConstraintsAuditLog'
 components:
   securitySchemes:
     cookieAuth:
@@ -384,290 +56,34 @@ components:
         Auth-01a: anonymous access is rejected outside the whitelisted paths.
         Auth-roles-followup will tighten ROLE_ADMIN gating on admin endpoints.
   schemas:
-    RegisterRequest:
-      type: object
-      required: [username, password]
-      properties:
-        username:
-          type: string
-          minLength: 3
-          maxLength: 32
-          pattern: '^[a-zA-Z0-9_-]+$'
-        password:
-          type: string
-          minLength: 12
-          maxLength: 128
-    LoginRequest:
-      type: object
-      required: [username, password]
-      properties:
-        username: { type: string }
-        password: { type: string }
-    LoginResponse:
-      type: object
-      required: [userId, username]
-      properties:
-        userId: { type: string, format: uuid }
-        username: { type: string }
-    PasswordChangeRequest:
-      type: object
-      required: [currentPassword, newPassword]
-      properties:
-        currentPassword: { type: string }
-        newPassword:
-          type: string
-          minLength: 12
-          maxLength: 128
-    UserDto:
-      type: object
-      required: [userId, username, createdAt]
-      properties:
-        userId: { type: string, format: uuid }
-        username: { type: string }
-        createdAt: { type: string, format: date-time }
-    DecisionLogDto:
-      type: object
-      required: [decisionId, traceId, scopeKind, scopeId, scale, triggeredBy, inputs, iteration, createdAt]
-      properties:
-        decisionId: { type: string, format: uuid }
-        traceId: { type: string, format: uuid }
-        parentDecisionId: { type: string, format: uuid, nullable: true }
-        scopeKind: { type: string, example: "plan-week" }
-        scopeId: { type: string, format: uuid }
-        scale: { type: string, enum: [WEEK, RECIPE, OTHER] }
-        triggeredBy: { type: string, example: "user-initiated" }
-        actorUserId: { type: string, format: uuid, nullable: true }
-        inputs:
-          type: object
-          additionalProperties: true
-        candidates:
-          type: object
-          nullable: true
-          additionalProperties: true
-        chosen:
-          type: object
-          nullable: true
-          additionalProperties: true
-        reasoning: { type: string, nullable: true }
-        emittedDirective:
-          type: object
-          nullable: true
-          additionalProperties: true
-        iteration: { type: integer, minimum: 0 }
-        durationMs: { type: integer, nullable: true }
-        createdAt: { type: string, format: date-time }
-    AncestryResponse:
-      type: object
-      required: [ancestors, cycleDetected]
-      properties:
-        ancestors:
-          type: array
-          items: { $ref: '#/components/schemas/DecisionLogDto' }
-        cycleDetected:
-          type: boolean
-          description: True when the walk hit maxDepth — caller should investigate the parent chain.
-    DietaryIdentityExceptionDto:
-      type: object
-      required: [allows, context]
-      properties:
-        allows: { type: string, maxLength: 64 }
-        frequency: { type: string, maxLength: 32, nullable: true }
-        context: { type: string, maxLength: 32 }
-    DietaryIdentityDto:
-      type: object
-      required: [base, exceptions]
-      properties:
-        base: { type: string, maxLength: 32 }
-        labelForDisplay: { type: string, maxLength: 64, nullable: true }
-        exceptions:
-          type: array
-          items: { $ref: '#/components/schemas/DietaryIdentityExceptionDto' }
-    HardIntoleranceDto:
-      type: object
-      required: [substance, severity]
-      properties:
-        substance: { type: string, maxLength: 64 }
-        severity: { type: string, maxLength: 32 }
-        notes: { type: string, maxLength: 255, nullable: true }
-    AgeRestrictionDto:
-      type: object
-      required: [ruleKey, autoPopulated]
-      properties:
-        ruleKey: { type: string, maxLength: 64 }
-        autoPopulated: { type: boolean }
-    HardConstraintsDto:
-      type: object
-      required: [id, userId, allergies, dietaryIdentity, medicalDiets, intolerances, ageRestrictions, version]
-      properties:
-        id: { type: string, format: uuid }
-        userId: { type: string, format: uuid }
-        allergies:
-          type: array
-          items: { type: string }
-        dietaryIdentity: { $ref: '#/components/schemas/DietaryIdentityDto' }
-        medicalDiets:
-          type: array
-          items: { type: string }
-        intolerances:
-          type: array
-          items: { $ref: '#/components/schemas/HardIntoleranceDto' }
-        ageRestrictions:
-          type: array
-          items: { $ref: '#/components/schemas/AgeRestrictionDto' }
-        version: { type: integer, format: int64 }
-    UpdateHardConstraintsRequest:
-      type: object
-      required: [allergies, dietaryIdentity, medicalDiets, intolerances, ageRestrictions, expectedVersion]
-      properties:
-        allergies:
-          type: array
-          items: { type: string, maxLength: 64 }
-        dietaryIdentity: { $ref: '#/components/schemas/DietaryIdentityDto' }
-        medicalDiets:
-          type: array
-          items: { type: string, maxLength: 64 }
-        intolerances:
-          type: array
-          items: { $ref: '#/components/schemas/HardIntoleranceDto' }
-        ageRestrictions:
-          type: array
-          items: { $ref: '#/components/schemas/AgeRestrictionDto' }
-        expectedVersion:
-          type: integer
-          format: int64
-          minimum: 0
-    HardConstraintsAuditEntryDto:
-      type: object
-      required: [id, hardConstraintsId, actorUserId, fieldChanged, previousValueJson, newValueJson, occurredAt]
-      properties:
-        id: { type: string, format: uuid }
-        hardConstraintsId: { type: string, format: uuid }
-        actorUserId: { type: string, format: uuid }
-        fieldChanged: { type: string }
-        previousValueJson: {}
-        newValueJson: {}
-        occurredAt: { type: string, format: date-time }
-    TaskType:
-      type: string
-      enum:
-        - PREFERENCE_DELTA_UPDATE
-        - INGREDIENT_MAPPING
-        - INTAKE_PARSE
-        - FEEDBACK_CLASSIFICATION
-        - RECIPE_ADAPTATION
-        - RECIPE_HTML_EXTRACTION
-        - DISCOVERY_FILTERING
-        - PLANNER_STAGE_C
-        - PLANNER_PHASE2_AUGMENTATION
-    ModelTier:
-      type: string
-      enum: [CHEAP, MID, HIGH]
-    AiCallLogDto:
-      type: object
-      required: [id, taskType, modelTier, modelId, costMicroPence, status, createdAt]
-      properties:
-        id: { type: string, format: uuid }
-        userId: { type: string, format: uuid, nullable: true }
-        traceId: { type: string, format: uuid, nullable: true }
-        taskType: { $ref: '#/components/schemas/TaskType' }
-        modelTier: { $ref: '#/components/schemas/ModelTier' }
-        modelId: { type: string }
-        promptRefName: { type: string, nullable: true }
-        promptRefVersion: { type: integer, nullable: true }
-        requestTokens: { type: integer, nullable: true }
-        responseTokens: { type: integer, nullable: true }
-        costMicroPence: { type: integer, format: int64 }
-        status:
-          type: string
-          enum: [PENDING, SUCCEEDED, FAILED]
-        errorKind:
-          type: string
-          nullable: true
-          enum: [AI_UNAVAILABLE, INVALID_REQUEST, INVALID_RESPONSE]
-        latencyMs: { type: integer, nullable: true }
-        createdAt: { type: string, format: date-time }
-        completedAt: { type: string, format: date-time, nullable: true }
-    PromptTemplateDto:
-      type: object
-      required:
-        - id
-        - name
-        - version
-        - modelTier
-        - systemPrompt
-        - userPromptTemplate
-        - sourceFile
-        - sourceHash
-        - createdAt
-      properties:
-        id: { type: string, format: uuid }
-        name: { type: string }
-        version: { type: integer, minimum: 1 }
-        modelTier: { $ref: '#/components/schemas/ModelTier' }
-        systemPrompt: { type: string }
-        userPromptTemplate: { type: string }
-        outputSchema:
-          nullable: true
-          description: JSON Schema for the structured response; null for free-text outputs.
-        tools:
-          nullable: true
-          description: Anthropic tool-use definitions; null when no tools are bound.
-        notes: { type: string, nullable: true }
-        sourceFile: { type: string }
-        sourceHash: { type: string, minLength: 64, maxLength: 64 }
-        createdAt: { type: string, format: date-time }
-    CostSummaryUserEntry:
-      type: object
-      required: [userId, calls, costMicroPence]
-      properties:
-        userId: { type: string, format: uuid }
-        calls: { type: integer, format: int64 }
-        costMicroPence: { type: integer, format: int64 }
-    CostSummaryDto:
-      type: object
-      required: [windowHours, totalCalls, totalMicroPence, topUsers]
-      properties:
-        windowHours: { type: integer }
-        totalCalls: { type: integer, format: int64 }
-        totalMicroPence: { type: integer, format: int64 }
-        topUsers:
-          type: array
-          items: { $ref: '#/components/schemas/CostSummaryUserEntry' }
-    ProblemDetail:
-      type: object
-      description: RFC 9457 ProblemDetail; the canonical error shape across all endpoints.
-      required: [type, title, status]
-      properties:
-        type:
-          type: string
-          format: uri
-          description: A URI identifying the problem type.
-          example: https://mealprep.example.com/problems/validation-error
-        title:
-          type: string
-          description: Short human-readable summary.
-          example: Validation failed
-        status:
-          type: integer
-          description: HTTP status code.
-          example: 400
-        detail:
-          type: string
-          description: Human-readable explanation specific to this occurrence.
-        instance:
-          type: string
-          format: uri
-          description: A URI identifying the specific occurrence.
-        errors:
-          type: array
-          description: Optional field-level validation errors.
-          items:
-            type: object
-            properties:
-              field: { type: string }
-              message: { type: string }
-              rejectedValue: {}
+    # auth
+    RegisterRequest: { $ref: 'schemas/auth.yaml#/RegisterRequest' }
+    LoginRequest: { $ref: 'schemas/auth.yaml#/LoginRequest' }
+    LoginResponse: { $ref: 'schemas/auth.yaml#/LoginResponse' }
+    PasswordChangeRequest: { $ref: 'schemas/auth.yaml#/PasswordChangeRequest' }
+    UserDto: { $ref: 'schemas/auth.yaml#/UserDto' }
+    # core
+    DecisionLogDto: { $ref: 'schemas/core.yaml#/DecisionLogDto' }
+    AncestryResponse: { $ref: 'schemas/core.yaml#/AncestryResponse' }
+    # preference
+    DietaryIdentityExceptionDto: { $ref: 'schemas/preference.yaml#/DietaryIdentityExceptionDto' }
+    DietaryIdentityDto: { $ref: 'schemas/preference.yaml#/DietaryIdentityDto' }
+    HardIntoleranceDto: { $ref: 'schemas/preference.yaml#/HardIntoleranceDto' }
+    AgeRestrictionDto: { $ref: 'schemas/preference.yaml#/AgeRestrictionDto' }
+    HardConstraintsDto: { $ref: 'schemas/preference.yaml#/HardConstraintsDto' }
+    UpdateHardConstraintsRequest: { $ref: 'schemas/preference.yaml#/UpdateHardConstraintsRequest' }
+    HardConstraintsAuditEntryDto: { $ref: 'schemas/preference.yaml#/HardConstraintsAuditEntryDto' }
+    # ai
+    TaskType: { $ref: 'schemas/ai.yaml#/TaskType' }
+    ModelTier: { $ref: 'schemas/ai.yaml#/ModelTier' }
+    AiCallLogDto: { $ref: 'schemas/ai.yaml#/AiCallLogDto' }
+    PromptTemplateDto: { $ref: 'schemas/ai.yaml#/PromptTemplateDto' }
+    CostSummaryUserEntry: { $ref: 'schemas/ai.yaml#/CostSummaryUserEntry' }
+    CostSummaryDto: { $ref: 'schemas/ai.yaml#/CostSummaryDto' }
+    # common (cross-module)
+    ProblemDetail: { $ref: 'schemas/common.yaml#/ProblemDetail' }
   responses:
+    # Cross-module re-usable responses kept inline (these are tiny and rarely change).
     BadRequest:
       description: Validation or syntactic error.
       content:

@@ -1,0 +1,150 @@
+costSummary:
+  get:
+    tags: [AdminAi]
+    operationId: getAiCostSummary
+    summary: Sum AI costs across all users + per-user breakdown for top 20 spenders.
+    security:
+      - cookieAuth: [admin]
+    parameters:
+      - in: query
+        name: windowHours
+        schema: { type: integer, minimum: 1, maximum: 720, default: 24 }
+    responses:
+      '200':
+        description: Cost rollup over the requested window.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/ai.yaml#/CostSummaryDto' }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+callLog:
+  get:
+    tags: [AdminAi]
+    operationId: getAiCallLog
+    summary: Paginated AI call audit log; newest-first.
+    security:
+      - cookieAuth: [admin]
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - in: query
+        name: taskType
+        schema: { $ref: '../schemas/ai.yaml#/TaskType' }
+      - in: query
+        name: userId
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: Page of call-log entries; newest-first.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              properties:
+                content:
+                  type: array
+                  items: { $ref: '../schemas/ai.yaml#/AiCallLogDto' }
+                totalElements: { type: integer }
+                totalPages: { type: integer }
+                number: { type: integer }
+                size: { type: integer }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+promptTemplates:
+  get:
+    tags: [AdminAi]
+    operationId: listAiPromptTemplates
+    summary: Paginated list of all prompt template versions.
+    security:
+      - cookieAuth: [admin]
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of prompt template versions.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              properties:
+                content:
+                  type: array
+                  items: { $ref: '../schemas/ai.yaml#/PromptTemplateDto' }
+                totalElements: { type: integer }
+                totalPages: { type: integer }
+                number: { type: integer }
+                size: { type: integer }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+promptTemplateByNameAndVersion:
+  get:
+    tags: [AdminAi]
+    operationId: getAiPromptTemplate
+    summary: Get a single prompt template by (name, version).
+    security:
+      - cookieAuth: [admin]
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+      - in: path
+        name: version
+        required: true
+        schema: { type: integer, minimum: 1 }
+    responses:
+      '200':
+        description: The prompt template.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/ai.yaml#/PromptTemplateDto' }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Resource not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

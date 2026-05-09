@@ -1,0 +1,144 @@
+register:
+  post:
+    tags: [Auth]
+    operationId: register
+    summary: Create a new user account and auto-log in.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/auth.yaml#/RegisterRequest' }
+    responses:
+      '201':
+        description: User created; session cookie issued.
+        headers:
+          Set-Cookie:
+            schema: { type: string }
+            description: AUTH_SESSION cookie.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/auth.yaml#/UserDto' }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Conflict.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+login:
+  post:
+    tags: [Auth]
+    operationId: login
+    summary: Authenticate; receive session cookie.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/auth.yaml#/LoginRequest' }
+    responses:
+      '200':
+        description: Logged in; session cookie issued.
+        headers:
+          Set-Cookie:
+            schema: { type: string }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/auth.yaml#/LoginResponse' }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Invalid credentials (generic; never distinguishes unknown user from wrong password).
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '423':
+        description: User locked due to consecutive failed attempts.
+        headers:
+          Retry-After:
+            schema: { type: integer }
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '429':
+        description: Rate limit exceeded.
+        headers:
+          Retry-After:
+            schema: { type: integer }
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+logout:
+  post:
+    tags: [Auth]
+    operationId: logout
+    summary: Revoke the current session.
+    security:
+      - cookieAuth: []
+    responses:
+      '204':
+        description: Logged out; cookie cleared.
+        headers:
+          Set-Cookie:
+            schema: { type: string }
+            description: Cleared AUTH_SESSION cookie.
+me:
+  get:
+    tags: [Auth]
+    operationId: getCurrentUser
+    summary: Probe authentication state.
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: Authenticated user details.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/auth.yaml#/UserDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+password:
+  put:
+    tags: [Auth]
+    operationId: changePassword
+    summary: Rotate password; revoke other sessions; re-issue current.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/auth.yaml#/PasswordChangeRequest' }
+    responses:
+      '200':
+        description: Password changed; new session cookie issued; other sessions revoked.
+        headers:
+          Set-Cookie:
+            schema: { type: string }
+            description: Re-issued AUTH_SESSION cookie carrying a fresh token.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/auth.yaml#/UserDto' }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Conflict.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

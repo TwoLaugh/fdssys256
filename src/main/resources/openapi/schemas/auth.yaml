@@ -1,0 +1,41 @@
+RegisterRequest:
+  type: object
+  required: [username, password]
+  properties:
+    username:
+      type: string
+      minLength: 3
+      maxLength: 32
+      pattern: '^[a-zA-Z0-9_-]+$'
+    password:
+      type: string
+      minLength: 12
+      maxLength: 128
+LoginRequest:
+  type: object
+  required: [username, password]
+  properties:
+    username: { type: string }
+    password: { type: string }
+LoginResponse:
+  type: object
+  required: [userId, username]
+  properties:
+    userId: { type: string, format: uuid }
+    username: { type: string }
+PasswordChangeRequest:
+  type: object
+  required: [currentPassword, newPassword]
+  properties:
+    currentPassword: { type: string }
+    newPassword:
+      type: string
+      minLength: 12
+      maxLength: 128
+UserDto:
+  type: object
+  required: [userId, username, createdAt]
+  properties:
+    userId: { type: string, format: uuid }
+    username: { type: string }
+    createdAt: { type: string, format: date-time }
