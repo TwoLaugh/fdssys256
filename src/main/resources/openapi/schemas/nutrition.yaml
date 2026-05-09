@@ -1,0 +1,192 @@
+Goal:
+  type: string
+  enum: [LOSE_WEIGHT, MAINTAIN, GAIN_WEIGHT]
+EnforcementDirection:
+  type: string
+  enum: [UPPER_LIMIT, LOWER_FLOOR, BOTH_BOUNDED]
+MealSlot:
+  type: string
+  enum: [BREAKFAST, LUNCH, DINNER, SNACKS]
+ActivityLevel:
+  type: string
+  enum: [REST_DAY, LIGHT_ACTIVITY, TRAINING_DAY, HEAVY_TRAINING]
+ActorKind:
+  type: string
+  enum: [USER, HEALTH_DIRECTIVE, FEEDBACK]
+CalorieTargetDto:
+  type: object
+  required: [dailyTarget, toleranceUnder, toleranceOver, enforcement, direction]
+  properties:
+    dailyTarget: { type: integer, minimum: 0 }
+    toleranceUnder: { type: integer, minimum: 0 }
+    toleranceOver: { type: integer, minimum: 0 }
+    enforcement: { type: string, maxLength: 24 }
+    direction: { $ref: '#/EnforcementDirection' }
+MacroTargetDto:
+  type: object
+  required: [direction]
+  properties:
+    targetG: { type: number, format: double, minimum: 0, nullable: true }
+    floorG: { type: number, format: double, minimum: 0, nullable: true }
+    enforcement: { type: string, maxLength: 24, nullable: true }
+    direction: { $ref: '#/EnforcementDirection' }
+PerMealDistributionDto:
+  type: object
+  required: [mealSlot, calorieTarget, proteinTargetG]
+  properties:
+    mealSlot: { $ref: '#/MealSlot' }
+    calorieTarget: { type: integer, minimum: 0 }
+    proteinTargetG: { type: number, format: double, minimum: 0 }
+MicroTargetDto:
+  type: object
+  required: [nutrientKey]
+  properties:
+    nutrientKey: { type: string, minLength: 1, maxLength: 48 }
+    targetValue: { type: number, format: double, minimum: 0, nullable: true }
+    upperLimit: { type: number, format: double, minimum: 0, nullable: true }
+    sourcePreference: { type: string, maxLength: 24, nullable: true }
+    notes: { type: string, maxLength: 255, nullable: true }
+EatingWindowDto:
+  type: object
+  required: [enabled]
+  nullable: true
+  properties:
+    enabled: { type: boolean }
+    windowStart: { type: string, format: time, nullable: true }
+    windowEnd: { type: string, format: time, nullable: true }
+    notes: { type: string, maxLength: 255, nullable: true }
+ActivityAdjustmentDto:
+  type: object
+  required: [activityLevel, calorieModifier, carbModifierG]
+  properties:
+    activityLevel: { $ref: '#/ActivityLevel' }
+    calorieModifier: { type: integer }
+    carbModifierG: { type: integer }
+TargetsDto:
+  type: object
+  required:
+    - id
+    - userId
+    - goal
+    - calories
+    - protein
+    - carbs
+    - fat
+    - fibre
+    - satFat
+    - userOverriddenDirections
+    - perMealDistribution
+    - microTargets
+    - activityAdjustments
+    - createdAt
+    - version
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    goal: { $ref: '#/Goal' }
+    calories: { $ref: '#/CalorieTargetDto' }
+    protein: { $ref: '#/MacroTargetDto' }
+    carbs: { $ref: '#/MacroTargetDto' }
+    fat: { $ref: '#/MacroTargetDto' }
+    fibre: { $ref: '#/MacroTargetDto' }
+    satFat: { $ref: '#/MacroTargetDto' }
+    notes: { type: string, maxLength: 512, nullable: true }
+    userOverriddenDirections:
+      type: array
+      items: { type: string }
+    perMealDistribution:
+      type: array
+      items: { $ref: '#/PerMealDistributionDto' }
+    microTargets:
+      type: array
+      items: { $ref: '#/MicroTargetDto' }
+    eatingWindow:
+      type: object
+      nullable: true
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        windowStart: { type: string, format: time, nullable: true }
+        windowEnd: { type: string, format: time, nullable: true }
+        notes: { type: string, maxLength: 255, nullable: true }
+    activityAdjustments:
+      type: array
+      items: { $ref: '#/ActivityAdjustmentDto' }
+    createdAt: { type: string, format: date-time }
+    version: { type: integer, format: int64 }
+UpdateTargetsRequest:
+  type: object
+  required:
+    - goal
+    - calories
+    - protein
+    - carbs
+    - fat
+    - fibre
+    - satFat
+    - perMealDistribution
+    - microTargets
+    - activityAdjustments
+    - expectedVersion
+  properties:
+    goal: { $ref: '#/Goal' }
+    calories: { $ref: '#/CalorieTargetDto' }
+    protein: { $ref: '#/MacroTargetDto' }
+    carbs: { $ref: '#/MacroTargetDto' }
+    fat: { $ref: '#/MacroTargetDto' }
+    fibre: { $ref: '#/MacroTargetDto' }
+    satFat: { $ref: '#/MacroTargetDto' }
+    notes: { type: string, maxLength: 512, nullable: true }
+    perMealDistribution:
+      type: array
+      maxItems: 4
+      items: { $ref: '#/PerMealDistributionDto' }
+    microTargets:
+      type: array
+      maxItems: 30
+      items: { $ref: '#/MicroTargetDto' }
+    eatingWindow:
+      type: object
+      nullable: true
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        windowStart: { type: string, format: time, nullable: true }
+        windowEnd: { type: string, format: time, nullable: true }
+        notes: { type: string, maxLength: 255, nullable: true }
+    activityAdjustments:
+      type: array
+      maxItems: 4
+      items: { $ref: '#/ActivityAdjustmentDto' }
+    expectedVersion:
+      type: integer
+      format: int64
+      minimum: 0
+NutritionTargetsAuditEntryDto:
+  type: object
+  required: [id, targetsId, actorUserId, actorKind, fieldPath, previousValueJson, newValueJson, occurredAt]
+  properties:
+    id: { type: string, format: uuid }
+    targetsId: { type: string, format: uuid }
+    actorUserId: { type: string, format: uuid }
+    actorKind: { $ref: '#/ActorKind' }
+    sourceDirectiveId: { type: string, format: uuid, nullable: true }
+    fieldPath: { type: string, maxLength: 96 }
+    previousValueJson: {}
+    newValueJson: {}
+    occurredAt: { type: string, format: date-time }
+NutritionTargetsAuditEntryDtoPage:
+  type: object
+  additionalProperties: true
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/NutritionTargetsAuditEntryDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    numberOfElements: { type: integer }
+    empty: { type: boolean }

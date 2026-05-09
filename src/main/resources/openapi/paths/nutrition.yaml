@@ -1,0 +1,90 @@
+targets:
+  get:
+    tags: [Nutrition]
+    operationId: getNutritionTargets
+    summary: Return the calling user's nutrition targets, or 404 if not yet initialised.
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: Targets aggregate.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/TargetsDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not initialised.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  put:
+    tags: [Nutrition]
+    operationId: updateNutritionTargets
+    summary: Replace the calling user's nutrition targets (full replacement; expectedVersion required).
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/UpdateTargetsRequest' }
+    responses:
+      '200':
+        description: Targets updated.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/TargetsDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not initialised.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedVersion.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+targetsAuditLog:
+  get:
+    tags: [Nutrition]
+    operationId: getNutritionTargetsAuditLog
+    summary: Paginated audit log of changes to the calling user's targets.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Audit-log page.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/NutritionTargetsAuditEntryDtoPage' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not initialised.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
