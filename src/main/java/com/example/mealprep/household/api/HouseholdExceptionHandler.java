@@ -2,6 +2,8 @@ package com.example.mealprep.household.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
 import com.example.mealprep.household.exception.HouseholdNotFoundException;
+import com.example.mealprep.household.exception.HouseholdSettingsNotFoundException;
+import com.example.mealprep.household.exception.InsufficientHouseholdRoleException;
 import com.example.mealprep.household.exception.UserAlreadyInHouseholdException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
@@ -49,6 +51,36 @@ public class HouseholdExceptionHandler {
             "User already in household",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.CONFLICT)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(HouseholdSettingsNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleHouseholdSettingsNotFound(
+      HouseholdSettingsNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "household-settings-not-found",
+            "Household settings not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(InsufficientHouseholdRoleException.class)
+  public ResponseEntity<ProblemDetail> handleInsufficientHouseholdRole(
+      InsufficientHouseholdRoleException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.FORBIDDEN,
+            ex.getMessage(),
+            "insufficient-household-role",
+            "Insufficient household role",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.FORBIDDEN)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

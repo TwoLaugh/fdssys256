@@ -30,3 +30,104 @@ CreateHouseholdRequest:
   required: [name]
   properties:
     name: { type: string, minLength: 1, maxLength: 128 }
+SlotKind:
+  type: string
+  enum: [breakfast, lunch, dinner, snack, custom]
+SlotDefault:
+  type: object
+  required: [shared]
+  properties:
+    shared: { type: boolean }
+    headcount: { type: integer, minimum: 1, maximum: 16, nullable: true }
+    timeBudgetMin: { type: integer, minimum: 0, maximum: 480, nullable: true }
+CustomSlotDefinition:
+  type: object
+  required: [key, label, backedByKind, shared]
+  properties:
+    key: { type: string, minLength: 1, maxLength: 48, pattern: '^[a-z0-9-]+$' }
+    label: { type: string, minLength: 1, maxLength: 64 }
+    backedByKind: { $ref: '#/SlotKind' }
+    shared: { type: boolean }
+    headcount: { type: integer, minimum: 1, maximum: 16, nullable: true }
+    timeBudgetMin: { type: integer, minimum: 0, maximum: 480, nullable: true }
+HouseholdSchedulingPreferences:
+  type: object
+  additionalProperties: false
+  description: Reserved for v2 per-day overrides; empty object in v1.
+HouseholdSettingsDocument:
+  type: object
+  required: [slotDefaults, customSlots]
+  properties:
+    slotDefaults:
+      type: object
+      additionalProperties: { $ref: '#/SlotDefault' }
+    customSlots:
+      type: array
+      items: { $ref: '#/CustomSlotDefinition' }
+    defaultHeadcount: { type: integer, minimum: 1, maximum: 16, nullable: true }
+    scheduling: { $ref: '#/HouseholdSchedulingPreferences' }
+HouseholdSettingsDto:
+  type: object
+  required: [id, householdId, document, version, createdAt]
+  properties:
+    id: { type: string, format: uuid }
+    householdId: { type: string, format: uuid }
+    document: { $ref: '#/HouseholdSettingsDocument' }
+    version: { type: integer, format: int64 }
+    createdAt: { type: string, format: date-time }
+UpdateHouseholdSettingsRequest:
+  type: object
+  required: [document, expectedVersion]
+  properties:
+    document: { $ref: '#/HouseholdSettingsDocument' }
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+HouseholdSettingsAuditEntryDto:
+  type: object
+  required: [id, actorUserId, fieldPath, previousValue, newValue, occurredAt]
+  properties:
+    id: { type: string, format: uuid }
+    actorUserId: { type: string, format: uuid }
+    fieldPath: { type: string, maxLength: 128 }
+    previousValue: {}
+    newValue: {}
+    occurredAt: { type: string, format: date-time }
+HouseholdSettingsAuditEntryDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/HouseholdSettingsAuditEntryDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+SlotConfigEntryDto:
+  type: object
+  required: [slotKey, kind, shared, headcount, timeBudgetMin]
+  properties:
+    slotKey: { type: string, minLength: 1, maxLength: 48 }
+    kind: { $ref: '#/SlotKind' }
+    shared: { type: boolean }
+    headcount: { type: integer, minimum: 1, maximum: 16 }
+    timeBudgetMin: { type: integer, minimum: 0, maximum: 480 }
+    eaterUserIdsIfPerPerson:
+      type: array
+      items: { type: string, format: uuid }
+      nullable: true
+SlotConfigurationDto:
+  type: object
+  required: [householdId, slots, allEaterUserIds]
+  properties:
+    householdId: { type: string, format: uuid }
+    slots:
+      type: array
+      items: { $ref: '#/SlotConfigEntryDto' }
+    allEaterUserIds:
+      type: array
+      items: { type: string, format: uuid }
