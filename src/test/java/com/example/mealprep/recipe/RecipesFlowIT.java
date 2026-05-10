@@ -68,6 +68,7 @@ class RecipesFlowIT {
 
   @AfterEach
   void cleanup() {
+    jdbcTemplate.update("DELETE FROM recipe_imports");
     jdbcTemplate.update("DELETE FROM recipe_tags");
     jdbcTemplate.update("DELETE FROM recipe_metadata");
     jdbcTemplate.update("DELETE FROM recipe_method_steps");
@@ -140,6 +141,8 @@ class RecipesFlowIT {
             .andExpect(jsonPath("$.currentVersionBody.ingredients.length()").value(3))
             .andExpect(jsonPath("$.currentVersionBody.methodSteps.length()").value(3))
             .andExpect(jsonPath("$.currentVersionBody.metadata.servings").value(4))
+            .andExpect(jsonPath("$.branches.length()").value(1))
+            .andExpect(jsonPath("$.branches[0].name").value("main"))
             .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
 
@@ -278,7 +281,7 @@ class RecipesFlowIT {
         UUID.fromString(
             objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText());
 
-    // Fetch
+    // Fetch — branches[] (recipe-01b) is required and contains exactly one 'main' entry.
     mvc.perform(get("/api/v1/recipes/" + recipeId).cookie(user.cookie()))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.id").value(recipeId.toString()))
@@ -288,6 +291,9 @@ class RecipesFlowIT {
         .andExpect(jsonPath("$.currentVersionBody.methodSteps[0].stepNumber").value(1))
         .andExpect(jsonPath("$.currentVersionBody.methodSteps[1].stepNumber").value(2))
         .andExpect(jsonPath("$.currentVersionBody.methodSteps[2].stepNumber").value(3))
+        .andExpect(jsonPath("$.branches.length()").value(1))
+        .andExpect(jsonPath("$.branches[0].name").value("main"))
+        .andExpect(jsonPath("$.branches[0].recipeId").value(recipeId.toString()))
         .andExpect(openApi().isValid(openApiValidator));
   }
 

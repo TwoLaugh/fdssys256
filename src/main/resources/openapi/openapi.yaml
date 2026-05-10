@@ -81,6 +81,12 @@ paths:
     $ref: 'paths/recipe.yaml#/recipes'
   /api/v1/recipes/{recipeId}:
     $ref: 'paths/recipe.yaml#/recipeById'
+  /api/v1/recipes/imports/url:
+    $ref: 'paths/recipe.yaml#/recipeImports'
+  /api/v1/recipes/{recipeId}/import-provenance:
+    $ref: 'paths/recipe.yaml#/recipeImportProvenance'
+  /api/v1/recipes/{recipeId}/branches:
+    $ref: 'paths/recipe.yaml#/recipeBranches'
 components:
   securitySchemes:
     cookieAuth:
@@ -174,6 +180,10 @@ components:
     CreateRecipeMetadataRequest: { $ref: 'schemas/recipe.yaml#/CreateRecipeMetadataRequest' }
     CreateRecipeTagsRequest: { $ref: 'schemas/recipe.yaml#/CreateRecipeTagsRequest' }
     CreateRecipeRequest: { $ref: 'schemas/recipe.yaml#/CreateRecipeRequest' }
+    ImportSource: { $ref: 'schemas/recipe.yaml#/ImportSource' }
+    ImportRecipeFromUrlRequest: { $ref: 'schemas/recipe.yaml#/ImportRecipeFromUrlRequest' }
+    RecipeImportDto: { $ref: 'schemas/recipe.yaml#/RecipeImportDto' }
+    RecipeBranchDto: { $ref: 'schemas/recipe.yaml#/RecipeBranchDto' }
     # ai
     TaskType: { $ref: 'schemas/ai.yaml#/TaskType' }
     ModelTier: { $ref: 'schemas/ai.yaml#/ModelTier' }
