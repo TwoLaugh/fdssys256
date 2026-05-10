@@ -76,6 +76,28 @@ paths:
     $ref: 'paths/nutrition.yaml#/targets'
   /api/v1/nutrition/targets/audit-log:
     $ref: 'paths/nutrition.yaml#/targetsAuditLog'
+  /api/v1/nutrition/targets/activity:
+    $ref: 'paths/nutrition.yaml#/targetsActivityRange'
+  /api/v1/nutrition/targets/activity/{date}:
+    $ref: 'paths/nutrition.yaml#/targetsActivityByDate'
+  /api/v1/nutrition/intake/{date}:
+    $ref: 'paths/nutrition.yaml#/intakeForDay'
+  /api/v1/nutrition/intake:
+    $ref: 'paths/nutrition.yaml#/intakeRange'
+  /api/v1/nutrition/intake/{date}/slots/{mealSlot}/confirm:
+    $ref: 'paths/nutrition.yaml#/intakeSlotConfirm'
+  /api/v1/nutrition/intake/{date}/slots/{mealSlot}/override:
+    $ref: 'paths/nutrition.yaml#/intakeSlotOverride'
+  /api/v1/nutrition/intake/{date}/slots/{mealSlot}/edit:
+    $ref: 'paths/nutrition.yaml#/intakeSlotEdit'
+  /api/v1/nutrition/intake/{date}/slots/{mealSlot}/skip:
+    $ref: 'paths/nutrition.yaml#/intakeSlotSkip'
+  /api/v1/nutrition/intake/{date}/snacks:
+    $ref: 'paths/nutrition.yaml#/intakeSnacks'
+  /api/v1/nutrition/intake/{date}/snacks/{snackId}:
+    $ref: 'paths/nutrition.yaml#/intakeSnackById'
+  /api/v1/nutrition/intake/{date}/audit-log:
+    $ref: 'paths/nutrition.yaml#/intakeAuditLog'
   # ===== recipe =====
   /api/v1/recipes:
     $ref: 'paths/recipe.yaml#/recipes'
@@ -162,6 +184,22 @@ components:
     TargetsDto: { $ref: 'schemas/nutrition.yaml#/TargetsDto' }
     UpdateTargetsRequest: { $ref: 'schemas/nutrition.yaml#/UpdateTargetsRequest' }
     NutritionTargetsAuditEntryDto: { $ref: 'schemas/nutrition.yaml#/NutritionTargetsAuditEntryDto' }
+    IntakeSlotStatus: { $ref: 'schemas/nutrition.yaml#/IntakeSlotStatus' }
+    IntakeAuditAction: { $ref: 'schemas/nutrition.yaml#/IntakeAuditAction' }
+    IntakeSource: { $ref: 'schemas/nutrition.yaml#/IntakeSource' }
+    PlannedIntakeDto: { $ref: 'schemas/nutrition.yaml#/PlannedIntakeDto' }
+    ActualIntakeDto: { $ref: 'schemas/nutrition.yaml#/ActualIntakeDto' }
+    IntakeSlotDto: { $ref: 'schemas/nutrition.yaml#/IntakeSlotDto' }
+    IntakeSnackDto: { $ref: 'schemas/nutrition.yaml#/IntakeSnackDto' }
+    IntakeDayDto: { $ref: 'schemas/nutrition.yaml#/IntakeDayDto' }
+    IntakeEntryDto: { $ref: 'schemas/nutrition.yaml#/IntakeEntryDto' }
+    OverrideIntakeRequest: { $ref: 'schemas/nutrition.yaml#/OverrideIntakeRequest' }
+    LogSnackRequest: { $ref: 'schemas/nutrition.yaml#/LogSnackRequest' }
+    IntakeAuditEntryDto: { $ref: 'schemas/nutrition.yaml#/IntakeAuditEntryDto' }
+    IntakeAuditEntryDtoPage: { $ref: 'schemas/nutrition.yaml#/IntakeAuditEntryDtoPage' }
+    DailyActivityDto: { $ref: 'schemas/nutrition.yaml#/DailyActivityDto' }
+    UpsertDailyActivityRequest: { $ref: 'schemas/nutrition.yaml#/UpsertDailyActivityRequest' }
+    PlannedSlotInputDto: { $ref: 'schemas/nutrition.yaml#/PlannedSlotInputDto' }
     # recipe
     Catalogue: { $ref: 'schemas/recipe.yaml#/Catalogue' }
     DataQuality: { $ref: 'schemas/recipe.yaml#/DataQuality' }

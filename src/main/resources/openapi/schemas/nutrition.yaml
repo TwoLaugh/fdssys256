@@ -190,3 +190,186 @@ NutritionTargetsAuditEntryDtoPage:
     last: { type: boolean }
     numberOfElements: { type: integer }
     empty: { type: boolean }
+IntakeSlotStatus:
+  type: string
+  enum: [PENDING, CONFIRMED, OVERRIDDEN, EDITED, SKIPPED]
+IntakeAuditAction:
+  type: string
+  enum: [PREFILL, CONFIRM, OVERRIDE, EDIT, SKIP, SNACK_ADD, SNACK_REMOVE]
+IntakeSource:
+  type: string
+  enum: [USDA, OPEN_FOOD_FACTS, MANUAL, PREFERENCE_ACCOMPANIMENT]
+PlannedIntakeDto:
+  type: object
+  properties:
+    recipeId: { type: string, format: uuid, nullable: true }
+    calories: { type: integer, minimum: 0, nullable: true }
+    proteinG: { type: number, format: double, minimum: 0, nullable: true }
+    carbsG: { type: number, format: double, minimum: 0, nullable: true }
+    fatG: { type: number, format: double, minimum: 0, nullable: true }
+    fibreG: { type: number, format: double, minimum: 0, nullable: true }
+    micros:
+      type: object
+      additionalProperties: { type: number, format: double }
+      nullable: true
+ActualIntakeDto:
+  type: object
+  required: [status, needsAiParse]
+  properties:
+    status: { $ref: '#/IntakeSlotStatus' }
+    calories: { type: integer, minimum: 0, nullable: true }
+    proteinG: { type: number, format: double, minimum: 0, nullable: true }
+    carbsG: { type: number, format: double, minimum: 0, nullable: true }
+    fatG: { type: number, format: double, minimum: 0, nullable: true }
+    fibreG: { type: number, format: double, minimum: 0, nullable: true }
+    micros:
+      type: object
+      additionalProperties: { type: number, format: double }
+      nullable: true
+    overrideFreeText: { type: string, maxLength: 512, nullable: true }
+    overriddenAt: { type: string, format: date-time, nullable: true }
+    needsAiParse: { type: boolean }
+IntakeSlotDto:
+  type: object
+  required: [id, mealSlot, planned, actual]
+  properties:
+    id: { type: string, format: uuid }
+    mealSlot: { $ref: '#/MealSlot' }
+    planned: { $ref: '#/PlannedIntakeDto' }
+    actual: { $ref: '#/ActualIntakeDto' }
+IntakeSnackDto:
+  type: object
+  required: [id, freeText, quantityG, calories, proteinG, carbsG, fatG, source, loggedAt]
+  properties:
+    id: { type: string, format: uuid }
+    ingredientMappingKey: { type: string, maxLength: 255, nullable: true }
+    freeText: { type: string, minLength: 1, maxLength: 255 }
+    quantityG: { type: number, format: double, minimum: 0 }
+    calories: { type: integer, minimum: 0 }
+    proteinG: { type: number, format: double, minimum: 0 }
+    carbsG: { type: number, format: double, minimum: 0 }
+    fatG: { type: number, format: double, minimum: 0 }
+    fibreG: { type: number, format: double, minimum: 0, nullable: true }
+    micros:
+      type: object
+      additionalProperties: { type: number, format: double }
+      nullable: true
+    source: { $ref: '#/IntakeSource' }
+    loggedAt: { type: string, format: date-time }
+IntakeDayDto:
+  type: object
+  required: [id, userId, onDate, slots, snacks, version]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    onDate: { type: string, format: date }
+    planId: { type: string, format: uuid, nullable: true }
+    slots:
+      type: array
+      items: { $ref: '#/IntakeSlotDto' }
+    snacks:
+      type: array
+      items: { $ref: '#/IntakeSnackDto' }
+    version: { type: integer, format: int64 }
+IntakeEntryDto:
+  type: object
+  required: [calories, proteinG, carbsG, fatG]
+  properties:
+    calories: { type: integer, minimum: 0 }
+    proteinG: { type: number, format: double, minimum: 0 }
+    carbsG: { type: number, format: double, minimum: 0 }
+    fatG: { type: number, format: double, minimum: 0 }
+    fibreG: { type: number, format: double, minimum: 0, nullable: true }
+    micros:
+      type: object
+      additionalProperties: { type: number, format: double }
+      nullable: true
+OverrideIntakeRequest:
+  type: object
+  required: [freeText]
+  properties:
+    freeText: { type: string, minLength: 1, maxLength: 512 }
+LogSnackRequest:
+  type: object
+  required: [freeText, quantityG, calories, proteinG, carbsG, fatG, source]
+  properties:
+    freeText: { type: string, minLength: 1, maxLength: 255 }
+    ingredientMappingKey: { type: string, maxLength: 255, nullable: true }
+    quantityG: { type: number, format: double, minimum: 0 }
+    calories: { type: integer, minimum: 0 }
+    proteinG: { type: number, format: double, minimum: 0 }
+    carbsG: { type: number, format: double, minimum: 0 }
+    fatG: { type: number, format: double, minimum: 0 }
+    fibreG: { type: number, format: double, minimum: 0, nullable: true }
+    micros:
+      type: object
+      additionalProperties: { type: number, format: double }
+      nullable: true
+    source: { $ref: '#/IntakeSource' }
+    deductFromPantry:
+      type: boolean
+      default: false
+      nullable: true
+      description: Reserved for nutrition-01l. Currently a no-op.
+IntakeAuditEntryDto:
+  type: object
+  required: [id, intakeDayId, actorUserId, action, occurredAt]
+  properties:
+    id: { type: string, format: uuid }
+    intakeDayId: { type: string, format: uuid }
+    actorUserId: { type: string, format: uuid }
+    action: { $ref: '#/IntakeAuditAction' }
+    mealSlot:
+      type: string
+      enum: [BREAKFAST, LUNCH, DINNER, SNACKS]
+      nullable: true
+    snackId: { type: string, format: uuid, nullable: true }
+    previousValue: {}
+    newValue: {}
+    occurredAt: { type: string, format: date-time }
+IntakeAuditEntryDtoPage:
+  type: object
+  additionalProperties: true
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/IntakeAuditEntryDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    numberOfElements: { type: integer }
+    empty: { type: boolean }
+DailyActivityDto:
+  type: object
+  required: [id, userId, onDate, activityLevel, createdAt]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    onDate: { type: string, format: date }
+    activityLevel: { $ref: '#/ActivityLevel' }
+    notes: { type: string, maxLength: 255, nullable: true }
+    createdAt: { type: string, format: date-time }
+UpsertDailyActivityRequest:
+  type: object
+  required: [activityLevel]
+  properties:
+    activityLevel: { $ref: '#/ActivityLevel' }
+    notes: { type: string, maxLength: 255, nullable: true }
+PlannedSlotInputDto:
+  type: object
+  required: [mealSlot]
+  properties:
+    mealSlot: { $ref: '#/MealSlot' }
+    plannedRecipeId: { type: string, format: uuid, nullable: true }
+    plannedCalories: { type: integer, minimum: 0, nullable: true }
+    plannedProteinG: { type: number, format: double, minimum: 0, nullable: true }
+    plannedCarbsG: { type: number, format: double, minimum: 0, nullable: true }
+    plannedFatG: { type: number, format: double, minimum: 0, nullable: true }
+    plannedFibreG: { type: number, format: double, minimum: 0, nullable: true }
+    plannedMicros:
+      type: object
+      additionalProperties: { type: number, format: double }
+      nullable: true
