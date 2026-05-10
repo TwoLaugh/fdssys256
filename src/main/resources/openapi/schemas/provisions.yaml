@@ -212,3 +212,68 @@ InventoryAuditEntryDtoPage:
     last: { type: boolean }
     empty: { type: boolean }
     numberOfElements: { type: integer }
+PriceSensitivity:
+  type: string
+  enum: [low, moderate, high]
+BudgetSpendTrackingDto:
+  type: object
+  description: Reserved for v1.5; populated by provisions-01f/01h. v1 leaves this null on every BudgetDto.
+  required: [currentWeekTarget, currentWeekActual, currentWeekRemaining, rollingFourWeekAverage]
+  properties:
+    currentWeekTarget: { type: number, format: double }
+    currentWeekActual: { type: number, format: double }
+    currentWeekRemaining: { type: number, format: double }
+    currentWeekOrders:
+      type: array
+      items: { $ref: '#/BudgetOrderRefDto' }
+    rollingFourWeekAverage: { type: number, format: double }
+BudgetOrderRefDto:
+  type: object
+  required: [supplier, orderRef, totalCost, deliveredOn]
+  properties:
+    supplier: { type: string, maxLength: 32 }
+    orderRef: { type: string, maxLength: 128 }
+    totalCost: { type: number, format: double }
+    deliveredOn: { type: string, format: date }
+BudgetDto:
+  type: object
+  required: [id, userId, weeklyTarget, currency, toleranceOver, priceSensitivity, enabled, version]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    weeklyTarget: { type: number, format: double, exclusiveMinimum: true, minimum: 0 }
+    currency:
+      type: string
+      minLength: 3
+      maxLength: 3
+      pattern: '^[A-Z]{3}$'
+    toleranceOver: { type: number, format: double, minimum: 0 }
+    priceSensitivity: { $ref: '#/PriceSensitivity' }
+    enabled: { type: boolean }
+    spendTracking:
+      type: object
+      nullable: true
+      description: Always null in v1 (provisions-01c). Populated by 01f/01h once order history is wired.
+      properties:
+        currentWeekTarget: { type: number, format: double }
+        currentWeekActual: { type: number, format: double }
+        currentWeekRemaining: { type: number, format: double }
+        currentWeekOrders:
+          type: array
+          items: { $ref: '#/BudgetOrderRefDto' }
+        rollingFourWeekAverage: { type: number, format: double }
+    version: { type: integer, format: int64 }
+UpdateBudgetRequest:
+  type: object
+  required: [weeklyTarget, currency, priceSensitivity, expectedVersion]
+  properties:
+    weeklyTarget: { type: number, format: double, exclusiveMinimum: true, minimum: 0 }
+    currency:
+      type: string
+      minLength: 3
+      maxLength: 3
+      pattern: '^[A-Z]{3}$'
+    toleranceOver: { type: number, format: double, minimum: 0, default: 0 }
+    priceSensitivity: { $ref: '#/PriceSensitivity' }
+    enabled: { type: boolean, default: true, nullable: true }
+    expectedVersion: { type: integer, format: int64, minimum: 0, default: 0 }

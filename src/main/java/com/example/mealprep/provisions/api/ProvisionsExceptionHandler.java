@@ -1,6 +1,8 @@
 package com.example.mealprep.provisions.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.provisions.exception.BudgetCurrencyChangeException;
+import com.example.mealprep.provisions.exception.BudgetNotFoundException;
 import com.example.mealprep.provisions.exception.EquipmentNotFoundException;
 import com.example.mealprep.provisions.exception.InvalidInventoryQuantityException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
@@ -65,6 +67,36 @@ public class ProvisionsExceptionHandler {
             "Equipment not found",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(BudgetNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleBudgetNotFound(
+      BudgetNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "budget-not-found",
+            "Budget not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(BudgetCurrencyChangeException.class)
+  public ResponseEntity<ProblemDetail> handleBudgetCurrencyChange(
+      BudgetCurrencyChangeException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "budget-currency-change-rejected",
+            "Budget currency change rejected",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

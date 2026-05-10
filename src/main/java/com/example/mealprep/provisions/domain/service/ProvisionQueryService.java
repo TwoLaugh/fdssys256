@@ -1,5 +1,6 @@
 package com.example.mealprep.provisions.domain.service;
 
+import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.InventoryAuditEntryDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
@@ -42,4 +43,19 @@ public interface ProvisionQueryService {
    */
   Page<InventoryAuditEntryDto> getInventoryAuditLog(
       UUID itemId, UUID requestingUserId, Pageable pageable);
+
+  /**
+   * Return the budget aggregate for {@code userId}, or empty if no row exists yet. {@code
+   * spendTracking} on the returned DTO is always {@code null} in v1 (provisions-01c) — populated by
+   * 01f/01h.
+   */
+  Optional<BudgetDto> getBudget(UUID userId);
+
+  /**
+   * Batch budget read for cross-module callers (e.g. 01f's planner-bundle aggregator). Single
+   * round-trip; returns one {@link BudgetDto} per persisted row (rows missing for a given userId
+   * are simply absent from the response — callers must handle the partial). {@code spendTracking}
+   * on every entry is always {@code null} in v1.
+   */
+  List<BudgetDto> getBudgetsByUserIds(List<UUID> userIds);
 }

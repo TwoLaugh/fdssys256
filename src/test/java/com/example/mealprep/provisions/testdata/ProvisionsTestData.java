@@ -2,8 +2,11 @@ package com.example.mealprep.provisions.testdata;
 
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
+import com.example.mealprep.provisions.api.dto.PriceSensitivity;
+import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
+import com.example.mealprep.provisions.domain.entity.Budget;
 import com.example.mealprep.provisions.domain.entity.DefrostMethod;
 import com.example.mealprep.provisions.domain.entity.Equipment;
 import com.example.mealprep.provisions.domain.entity.InventoryItem;
@@ -172,5 +175,39 @@ public final class ProvisionsTestData {
         ItemLifecycleStatus.ACTIVE,
         null,
         expectedVersion);
+  }
+
+  // ---------------- Budget builders & request factories ----------------
+
+  public static Budget.BudgetBuilder budget(UUID userId) {
+    return Budget.builder()
+        .id(UUID.randomUUID())
+        .userId(userId)
+        .weeklyTarget(new BigDecimal("75.00"))
+        .currency("GBP")
+        .toleranceOver(new BigDecimal("5.00"))
+        .priceSensitivity(PriceSensitivity.moderate)
+        .enabled(true);
+  }
+
+  public static UpdateBudgetRequest updateBudgetRequestForCreate() {
+    return new UpdateBudgetRequest(
+        new BigDecimal("75.00"),
+        "GBP",
+        new BigDecimal("5.00"),
+        PriceSensitivity.moderate,
+        true,
+        0L);
+  }
+
+  public static UpdateBudgetRequest updateBudgetRequest(
+      BigDecimal weeklyTarget,
+      String currency,
+      BigDecimal toleranceOver,
+      PriceSensitivity priceSensitivity,
+      Boolean enabled,
+      Long expectedVersion) {
+    return new UpdateBudgetRequest(
+        weeklyTarget, currency, toleranceOver, priceSensitivity, enabled, expectedVersion);
   }
 }

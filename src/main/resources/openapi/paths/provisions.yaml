@@ -332,3 +332,63 @@ inventoryItemAuditLog:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+provisionsBudget:
+  get:
+    tags: [Provisions]
+    operationId: getProvisionsBudget
+    summary: Return the calling user's budget configuration, or 404 if not yet initialised.
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: Budget configuration; spendTracking is null in v1 (derivation deferred to provisions-01f/01h).
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/BudgetDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Budget not initialised for the calling user.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  put:
+    tags: [Provisions]
+    operationId: upsertProvisionsBudget
+    summary: Insert or update the calling user's budget configuration.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/provisions.yaml#/UpdateBudgetRequest' }
+    responses:
+      '200':
+        description: Budget upserted (insert and update both return 200).
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/BudgetDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedVersion (update path only).
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: Currency change rejected (use an explicit reset endpoint when one lands).
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

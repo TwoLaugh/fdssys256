@@ -13,6 +13,7 @@ import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
+import com.example.mealprep.provisions.api.mapper.BudgetMapper;
 import com.example.mealprep.provisions.api.mapper.EquipmentMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryAuditMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryItemMapper;
@@ -25,6 +26,7 @@ import com.example.mealprep.provisions.domain.entity.ItemSource;
 import com.example.mealprep.provisions.domain.entity.StapleStatus;
 import com.example.mealprep.provisions.domain.entity.StorageLocation;
 import com.example.mealprep.provisions.domain.entity.TrackingMode;
+import com.example.mealprep.provisions.domain.repository.BudgetRepository;
 import com.example.mealprep.provisions.domain.repository.EquipmentRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryAuditLogRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryItemRepository;
@@ -63,12 +65,14 @@ class ProvisionServiceImplTest {
   @Mock private InventoryItemRepository inventoryItemRepository;
   @Mock private InventoryAuditLogRepository auditLogRepository;
   @Mock private EquipmentRepository equipmentRepository;
+  @Mock private BudgetRepository budgetRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final InventoryItemMapper mapper =
       new com.example.mealprep.provisions.api.mapper.InventoryItemMapperImpl();
   private final EquipmentMapper equipmentMapper =
       new com.example.mealprep.provisions.api.mapper.EquipmentMapperImpl();
+  private final BudgetMapper budgetMapper = new BudgetMapper() {};
   private final InventoryAuditMapper inventoryAuditMapper =
       new com.example.mealprep.provisions.api.mapper.InventoryAuditMapperImpl();
 
@@ -84,8 +88,10 @@ class ProvisionServiceImplTest {
         inventoryItemRepository,
         auditLogRepository,
         equipmentRepository,
+        budgetRepository,
         mapper,
         equipmentMapper,
+        budgetMapper,
         inventoryAuditMapper,
         eventPublisher,
         objectMapper,
