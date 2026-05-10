@@ -1,9 +1,11 @@
 package com.example.mealprep.household.domain.service;
 
 import com.example.mealprep.household.api.dto.HouseholdDto;
+import com.example.mealprep.household.api.dto.HouseholdInviteDto;
 import com.example.mealprep.household.api.dto.HouseholdSettingsAuditEntryDto;
 import com.example.mealprep.household.api.dto.HouseholdSettingsDto;
 import com.example.mealprep.household.api.dto.SlotConfigurationDto;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -45,4 +47,19 @@ public interface HouseholdQueryService {
    * settings row exists, {@code HouseholdNotFoundException} if the household itself is missing.
    */
   SlotConfigurationDto getSlotConfiguration(UUID householdId, UUID callerUserId);
+
+  /**
+   * List the pending (neither accepted nor revoked) invites for a household, newest first. The
+   * returned DTOs always have {@code inviteCode = null} — the code is bearer-only secrecy and is
+   * surfaced only on the create response.
+   */
+  List<HouseholdInviteDto> listPendingInvites(UUID householdId);
+
+  /**
+   * Cross-module facade: look up an invite by its raw code. Used internally by the accept-flow and
+   * exposed for a future notification module that wants to render "you have a pending invite"
+   * state. No HTTP endpoint surfaces a raw lookup-by-code; only {@code POST /invites/accept}
+   * accepts the code.
+   */
+  Optional<HouseholdInviteDto> getInviteByCode(String inviteCode);
 }

@@ -77,6 +77,7 @@ class HouseholdSettingsFlowIT {
 
   @AfterEach
   void cleanup() {
+    jdbcTemplate.update("DELETE FROM household_invite");
     jdbcTemplate.update("DELETE FROM household_settings_audit");
     jdbcTemplate.update("DELETE FROM household_settings");
     jdbcTemplate.update("DELETE FROM household_member");
