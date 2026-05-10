@@ -1,6 +1,7 @@
 package com.example.mealprep.nutrition.domain.service;
 
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
+import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.NutritionTargetsAuditEntryDto;
@@ -53,4 +54,23 @@ public interface NutritionQueryService {
 
   /** Range read of daily activity entries in {@code [from, to]} inclusive, max 35 days. */
   List<DailyActivityDto> getDailyActivityRange(UUID userId, LocalDate from, LocalDate to);
+
+  /**
+   * Read the user's food/mood journal entries for a single date, sorted by {@code loggedAt} ASC.
+   * Returns an empty list when no entries exist (not 404).
+   */
+  List<FoodMoodEntryDto> getJournalEntriesForDay(UUID userId, LocalDate onDate);
+
+  /**
+   * Paginated read of the user's recent journal entries, newest-first ({@code loggedAt DESC}).
+   * Default size 20, max 100; clamping is enforced at the controller boundary.
+   */
+  Page<FoodMoodEntryDto> getRecentJournalEntries(UUID userId, Pageable pageable);
+
+  /**
+   * Cross-module read helper for the (future) Feedback System: returns the top 20 journal entries
+   * for {@code userId} sorted newest-first. No HTTP exposure — invoked in-process when the feedback
+   * module lands.
+   */
+  List<FoodMoodEntryDto> getJournalEntriesForFeedbackContext(UUID userId);
 }

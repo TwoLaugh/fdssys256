@@ -401,3 +401,163 @@ targetsActivityByDate:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionJournalDay:
+  get:
+    tags: [Nutrition]
+    operationId: getNutritionJournalForDay
+    summary: List the calling user's food/mood journal entries for a date, oldest first.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: date
+        required: true
+        schema: { type: string, format: date }
+    responses:
+      '200':
+        description: Journal entries for the day (possibly empty).
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/nutrition.yaml#/FoodMoodEntryDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  post:
+    tags: [Nutrition]
+    operationId: createNutritionJournalEntry
+    summary: Create a food/mood journal entry for the calling user.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: date
+        required: true
+        schema: { type: string, format: date }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/UpsertFoodMoodEntryRequest' }
+    responses:
+      '201':
+        description: Entry created.
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/FoodMoodEntryDto' }
+      '400':
+        description: Validation error / path-body date mismatch.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: A slot-tied entry already exists for (userId, onDate, mealSlot).
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionJournalEntry:
+  put:
+    tags: [Nutrition]
+    operationId: updateNutritionJournalEntry
+    summary: Update an existing food/mood journal entry.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: date
+        required: true
+        schema: { type: string, format: date }
+      - in: path
+        name: entryId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/UpsertFoodMoodEntryRequest' }
+    responses:
+      '200':
+        description: Entry updated.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/FoodMoodEntryDto' }
+      '400':
+        description: Validation error / path mismatch.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Entry not found / not owned / wrong date.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedVersion.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  delete:
+    tags: [Nutrition]
+    operationId: deleteNutritionJournalEntry
+    summary: Hard-delete a food/mood journal entry.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: date
+        required: true
+        schema: { type: string, format: date }
+      - in: path
+        name: entryId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '204':
+        description: Entry deleted.
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Entry not found / not owned / wrong date.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionJournalRecent:
+  get:
+    tags: [Nutrition]
+    operationId: getRecentNutritionJournalEntries
+    summary: Paginated recent journal entries newest-first.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of journal entries.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/FoodMoodEntryDtoPage' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

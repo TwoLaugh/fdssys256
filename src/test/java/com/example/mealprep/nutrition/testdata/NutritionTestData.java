@@ -9,6 +9,7 @@ import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
 import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
 import com.example.mealprep.nutrition.api.dto.PlannedSlotInputDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
+import com.example.mealprep.nutrition.api.dto.UpsertFoodMoodEntryRequest;
 import com.example.mealprep.nutrition.domain.entity.ActivityAdjustment;
 import com.example.mealprep.nutrition.domain.entity.ActivityLevel;
 import com.example.mealprep.nutrition.domain.entity.EatingWindow;
@@ -20,6 +21,8 @@ import com.example.mealprep.nutrition.domain.entity.MicroTarget;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargets;
 import com.example.mealprep.nutrition.domain.entity.PerMealDistributionEntry;
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -141,6 +144,21 @@ public final class NutritionTestData {
             BigDecimal.valueOf(12.0),
             null));
     return out;
+  }
+
+  // ---------------- 01c: journal fixtures ----------------
+
+  /** A reasonable {@code UpsertFoodMoodEntryRequest} tied to a meal slot. */
+  public static UpsertFoodMoodEntryRequest defaultJournalRequest(LocalDate onDate) {
+    return new UpsertFoodMoodEntryRequest(
+        onDate, MealSlot.LUNCH, "felt good after lunch", Instant.parse("2026-05-09T12:30:00Z"), 0L);
+  }
+
+  /** A journal request with a specific meal slot (or null for untied). */
+  public static UpsertFoodMoodEntryRequest journalRequest(
+      LocalDate onDate, MealSlot mealSlot, String text, long expectedVersion) {
+    return new UpsertFoodMoodEntryRequest(
+        onDate, mealSlot, text, Instant.parse("2026-05-09T12:30:00Z"), expectedVersion);
   }
 
   // ---------------- Entity builders (for unit tests) ----------------

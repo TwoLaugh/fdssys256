@@ -106,6 +106,12 @@ paths:
     $ref: 'paths/nutrition.yaml#/intakeSnackById'
   /api/v1/nutrition/intake/{date}/audit-log:
     $ref: 'paths/nutrition.yaml#/intakeAuditLog'
+  /api/v1/nutrition/journal/{date}:
+    $ref: 'paths/nutrition.yaml#/nutritionJournalDay'
+  /api/v1/nutrition/journal/{date}/entries/{entryId}:
+    $ref: 'paths/nutrition.yaml#/nutritionJournalEntry'
+  /api/v1/nutrition/journal:
+    $ref: 'paths/nutrition.yaml#/nutritionJournalRecent'
   # ===== recipe =====
   /api/v1/recipes:
     $ref: 'paths/recipe.yaml#/recipes'
@@ -217,6 +223,10 @@ components:
     DailyActivityDto: { $ref: 'schemas/nutrition.yaml#/DailyActivityDto' }
     UpsertDailyActivityRequest: { $ref: 'schemas/nutrition.yaml#/UpsertDailyActivityRequest' }
     PlannedSlotInputDto: { $ref: 'schemas/nutrition.yaml#/PlannedSlotInputDto' }
+    FoodMoodEntryDto: { $ref: 'schemas/nutrition.yaml#/FoodMoodEntryDto' }
+    FoodMoodEntryDtoPage: { $ref: 'schemas/nutrition.yaml#/FoodMoodEntryDtoPage' }
+    JournalAction: { $ref: 'schemas/nutrition.yaml#/JournalAction' }
+    UpsertFoodMoodEntryRequest: { $ref: 'schemas/nutrition.yaml#/UpsertFoodMoodEntryRequest' }
     # recipe
     Catalogue: { $ref: 'schemas/recipe.yaml#/Catalogue' }
     DataQuality: { $ref: 'schemas/recipe.yaml#/DataQuality' }

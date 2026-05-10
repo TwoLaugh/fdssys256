@@ -1,12 +1,14 @@
 package com.example.mealprep.nutrition.domain.service;
 
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
+import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.IntakeEntryDto;
 import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
 import com.example.mealprep.nutrition.api.dto.PlannedSlotInputDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
+import com.example.mealprep.nutrition.api.dto.UpsertFoodMoodEntryRequest;
 import com.example.mealprep.nutrition.domain.entity.ActivityLevel;
 import com.example.mealprep.nutrition.domain.entity.MealSlot;
 import java.time.LocalDate;
@@ -80,4 +82,25 @@ public interface NutritionUpdateService {
    */
   DailyActivityDto upsertDailyActivity(
       UUID userId, LocalDate onDate, ActivityLevel level, String notes);
+
+  /**
+   * Create a new food/mood journal entry. {@code expectedVersion} on the request is ignored on
+   * insert. Slot-tied collision on {@code (userId, onDate, mealSlot)} (with non-null slot) is left
+   * to the DB unique constraint and surfaces as 409.
+   */
+  FoodMoodEntryDto upsertJournalEntry(UUID userId, UpsertFoodMoodEntryRequest request);
+
+  /**
+   * Update an existing food/mood journal entry. {@code request.onDate} must equal the entity's
+   * {@code onDate} (cross-day moves require DELETE + POST). Cross-user / wrong-date access surfaces
+   * as 404 to avoid leaking existence; stale {@code expectedVersion} surfaces as 409.
+   */
+  FoodMoodEntryDto updateJournalEntry(
+      UUID userId, UUID entryId, UpsertFoodMoodEntryRequest request);
+
+  /**
+   * Hard-delete a food/mood journal entry. 404 on missing / not-owned. The {@code AFTER_COMMIT}
+   * event carries {@code action = DELETED}.
+   */
+  void deleteJournalEntry(UUID userId, UUID entryId);
 }

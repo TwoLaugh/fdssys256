@@ -4,9 +4,11 @@ import com.example.mealprep.nutrition.api.dto.ActivityAdjustmentDto;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
 import com.example.mealprep.nutrition.api.dto.EatingWindowDto;
+import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.IntakeEntryDto;
+import com.example.mealprep.nutrition.api.dto.JournalAction;
 import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
 import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
@@ -15,14 +17,17 @@ import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
 import com.example.mealprep.nutrition.api.dto.PlannedSlotInputDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
+import com.example.mealprep.nutrition.api.dto.UpsertFoodMoodEntryRequest;
 import com.example.mealprep.nutrition.api.mapper.DailyActivityMapper;
 import com.example.mealprep.nutrition.api.mapper.IntakeMapper;
+import com.example.mealprep.nutrition.api.mapper.JournalMapper;
 import com.example.mealprep.nutrition.api.mapper.TargetsMapper;
 import com.example.mealprep.nutrition.domain.entity.ActivityAdjustment;
 import com.example.mealprep.nutrition.domain.entity.ActivityLevel;
 import com.example.mealprep.nutrition.domain.entity.ActorKind;
 import com.example.mealprep.nutrition.domain.entity.DailyActivityLog;
 import com.example.mealprep.nutrition.domain.entity.EatingWindow;
+import com.example.mealprep.nutrition.domain.entity.FoodMoodJournalEntry;
 import com.example.mealprep.nutrition.domain.entity.Goal;
 import com.example.mealprep.nutrition.domain.entity.IntakeAuditAction;
 import com.example.mealprep.nutrition.domain.entity.IntakeAuditLog;
@@ -36,18 +41,21 @@ import com.example.mealprep.nutrition.domain.entity.NutritionTargets;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargetsAuditLog;
 import com.example.mealprep.nutrition.domain.entity.PerMealDistributionEntry;
 import com.example.mealprep.nutrition.domain.repository.DailyActivityLogRepository;
+import com.example.mealprep.nutrition.domain.repository.FoodMoodJournalRepository;
 import com.example.mealprep.nutrition.domain.repository.IntakeAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.IntakeDayRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsRepository;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.nutrition.domain.service.NutritionUpdateService;
+import com.example.mealprep.nutrition.event.FoodMoodEntryWrittenEvent;
 import com.example.mealprep.nutrition.event.IntakeLoggedEvent;
 import com.example.mealprep.nutrition.event.NutritionTargetsChangedEvent;
 import com.example.mealprep.nutrition.exception.IntakeDayNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
 import com.example.mealprep.nutrition.exception.InvalidIntakeRangeException;
+import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -129,9 +137,11 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
   private final IntakeDayRepository intakeDayRepository;
   private final IntakeAuditRepository intakeAuditRepository;
   private final DailyActivityLogRepository dailyActivityLogRepository;
+  private final FoodMoodJournalRepository journalRepository;
   private final TargetsMapper mapper;
   private final IntakeMapper intakeMapper;
   private final DailyActivityMapper dailyActivityMapper;
+  private final JournalMapper journalMapper;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -142,9 +152,11 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
       IntakeDayRepository intakeDayRepository,
       IntakeAuditRepository intakeAuditRepository,
       DailyActivityLogRepository dailyActivityLogRepository,
+      FoodMoodJournalRepository journalRepository,
       TargetsMapper mapper,
       IntakeMapper intakeMapper,
       DailyActivityMapper dailyActivityMapper,
+      JournalMapper journalMapper,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
@@ -153,9 +165,11 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
     this.intakeDayRepository = intakeDayRepository;
     this.intakeAuditRepository = intakeAuditRepository;
     this.dailyActivityLogRepository = dailyActivityLogRepository;
+    this.journalRepository = journalRepository;
     this.mapper = mapper;
     this.intakeMapper = intakeMapper;
     this.dailyActivityMapper = dailyActivityMapper;
+    this.journalMapper = journalMapper;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -1163,6 +1177,130 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
     row.setNotes(notes);
     DailyActivityLog saved = dailyActivityLogRepository.saveAndFlush(row);
     return dailyActivityMapper.toDto(saved);
+  }
+
+  // =================================================================================
+  // Food/mood journal (01c)
+  // =================================================================================
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<FoodMoodEntryDto> getJournalEntriesForDay(UUID userId, LocalDate onDate) {
+    return journalMapper.toDtos(
+        journalRepository.findByUserIdAndOnDateOrderByLoggedAtAsc(userId, onDate));
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Page<FoodMoodEntryDto> getRecentJournalEntries(UUID userId, Pageable pageable) {
+    return journalRepository
+        .findByUserIdOrderByLoggedAtDesc(userId, pageable)
+        .map(journalMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<FoodMoodEntryDto> getJournalEntriesForFeedbackContext(UUID userId) {
+    return journalMapper.toDtos(journalRepository.findTop20ByUserIdOrderByLoggedAtDesc(userId));
+  }
+
+  @Override
+  @Transactional
+  public FoodMoodEntryDto upsertJournalEntry(UUID userId, UpsertFoodMoodEntryRequest request) {
+    // Create-only on POST per the LLD's REST table — slot-tied collisions on (userId, onDate,
+    // mealSlot) fall through to the DB unique constraint and surface as 409 via the module
+    // DataIntegrityViolationException handler.
+    FoodMoodJournalEntry entry =
+        FoodMoodJournalEntry.builder()
+            .id(UUID.randomUUID())
+            .userId(userId)
+            .onDate(request.onDate())
+            .mealSlot(request.mealSlot())
+            .journalEntry(request.journalEntry())
+            .loggedAt(request.loggedAt())
+            .optimisticVersion(0L)
+            .build();
+    // saveAndFlush so the @CreationTimestamp / @Version-driven response carries the materialised
+    // values (createdAt, optimisticVersion) — same gotcha as targets / intake / activity paths.
+    FoodMoodJournalEntry saved = journalRepository.saveAndFlush(entry);
+    Instant now = Instant.now(clock);
+    eventPublisher.publishEvent(
+        new FoodMoodEntryWrittenEvent(
+            saved.getId(),
+            saved.getUserId(),
+            saved.getOnDate(),
+            saved.getMealSlot(),
+            JournalAction.CREATED,
+            UUID.randomUUID(),
+            now));
+    log.info(
+        "journal entry created userId={} entryId={} onDate={} mealSlot={}",
+        userId,
+        saved.getId(),
+        saved.getOnDate(),
+        saved.getMealSlot());
+    return journalMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public FoodMoodEntryDto updateJournalEntry(
+      UUID userId, UUID entryId, UpsertFoodMoodEntryRequest request) {
+    FoodMoodJournalEntry existing =
+        journalRepository
+            .findById(entryId)
+            .filter(e -> e.getUserId().equals(userId))
+            .orElseThrow(() -> new JournalEntryNotFoundException(entryId));
+    if (!existing.getOnDate().equals(request.onDate())) {
+      // Path-body / cross-day mismatches surface as 404 — entries cannot move across days via PUT
+      // (the natural key includes onDate); to move, DELETE then POST.
+      throw new JournalEntryNotFoundException(entryId);
+    }
+    if (existing.getOptimisticVersion() != request.expectedVersion()) {
+      throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
+          FoodMoodJournalEntry.class, existing.getId());
+    }
+
+    existing.setMealSlot(request.mealSlot());
+    existing.setJournalEntry(request.journalEntry());
+    existing.setLoggedAt(request.loggedAt());
+
+    // saveAndFlush so the @Version bump materialises before we map to the response DTO.
+    FoodMoodJournalEntry saved = journalRepository.saveAndFlush(existing);
+    Instant now = Instant.now(clock);
+    eventPublisher.publishEvent(
+        new FoodMoodEntryWrittenEvent(
+            saved.getId(),
+            saved.getUserId(),
+            saved.getOnDate(),
+            saved.getMealSlot(),
+            JournalAction.UPDATED,
+            UUID.randomUUID(),
+            now));
+    log.info(
+        "journal entry updated userId={} entryId={} version={}",
+        userId,
+        saved.getId(),
+        saved.getOptimisticVersion());
+    return journalMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public void deleteJournalEntry(UUID userId, UUID entryId) {
+    FoodMoodJournalEntry existing =
+        journalRepository
+            .findById(entryId)
+            .filter(e -> e.getUserId().equals(userId))
+            .orElseThrow(() -> new JournalEntryNotFoundException(entryId));
+    LocalDate onDate = existing.getOnDate();
+    MealSlot mealSlot = existing.getMealSlot();
+    journalRepository.delete(existing);
+    Instant now = Instant.now(clock);
+    eventPublisher.publishEvent(
+        new FoodMoodEntryWrittenEvent(
+            entryId, userId, onDate, mealSlot, JournalAction.DELETED, UUID.randomUUID(), now));
+    log.info("journal entry deleted userId={} entryId={}", userId, entryId);
   }
 
   // =================================================================================
