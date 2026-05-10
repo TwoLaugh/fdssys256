@@ -29,7 +29,7 @@ recipes:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
-recipeById:
+recipeRoot:
   get:
     tags: [Recipes]
     operationId: getRecipe
@@ -54,6 +54,94 @@ recipeById:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '404':
         description: Not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  put:
+    tags: [Recipes]
+    operationId: manualEditRecipe
+    summary: Manually edit a recipe; creates a new RecipeVersion (v2+) on the current branch.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/recipe.yaml#/UpdateRecipeManualEditRequest' }
+    responses:
+      '200':
+        description: Recipe updated; response body carries the new current version's hydrated DTO.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeDto' }
+      '400':
+        description: Validation error or no-op edit.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Recipe not found or not owned by the caller.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedOptimisticVersion.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: Manual edit attempted on a SYSTEM-catalogue recipe.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeVersionDiff:
+  get:
+    tags: [Recipes]
+    operationId: getRecipeVersionDiff
+    summary: Return the persisted change_diff between two consecutive versions on the same branch.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: fromVersionId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: toVersionId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: Structured diff between fromVersion and toVersion.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeDiffDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Recipe or version not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: Versions are non-consecutive or cross-branch.
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

@@ -12,6 +12,7 @@ import com.example.mealprep.recipe.api.mapper.IngredientMapper;
 import com.example.mealprep.recipe.api.mapper.MethodStepMapper;
 import com.example.mealprep.recipe.api.mapper.ParsedRecipeToCreateRequestMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeBranchMapper;
+import com.example.mealprep.recipe.api.mapper.RecipeDiffMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeImportMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeMetadataMapper;
@@ -32,6 +33,7 @@ import com.example.mealprep.recipe.domain.repository.RecipeVersionRepository;
 import com.example.mealprep.recipe.domain.service.internal.HtmlImportParser;
 import com.example.mealprep.recipe.domain.service.internal.HtmlImportParser.ParsedRecipe;
 import com.example.mealprep.recipe.domain.service.internal.RecipeServiceImpl;
+import com.example.mealprep.recipe.domain.service.internal.VersionDiffer;
 import com.example.mealprep.recipe.event.RecipeCreatedEvent;
 import com.example.mealprep.recipe.event.RecipeVersionCreatedEvent;
 import com.example.mealprep.recipe.testdata.RecipeTestData;
@@ -75,10 +77,12 @@ class RecipeServiceImplTest {
   private final RecipeMapper recipeMapper = new RecipeMapper();
   private final RecipeBranchMapper branchMapper = new RecipeBranchMapper();
   private final RecipeImportMapper importMapper = new RecipeImportMapper();
+  private final RecipeDiffMapper diffMapper = new RecipeDiffMapper();
   private final ObjectMapper objectMapper = new ObjectMapper();
   private final HtmlImportParser htmlImportParser = new HtmlImportParser(objectMapper);
   private final ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper =
       new ParsedRecipeToCreateRequestMapper();
+  private final VersionDiffer versionDiffer = new VersionDiffer(objectMapper);
   private final Clock fixedClock =
       Clock.fixed(Instant.parse("2026-05-09T10:00:00Z"), ZoneOffset.UTC);
 
@@ -92,9 +96,11 @@ class RecipeServiceImplTest {
         versionMapper,
         branchMapper,
         importMapper,
+        diffMapper,
         urlFetcher,
         htmlImportParser,
         parserToCreateRequestMapper,
+        versionDiffer,
         eventPublisher,
         fixedClock);
   }
@@ -190,9 +196,11 @@ class RecipeServiceImplTest {
             versionMapper,
             branchMapper,
             importMapper,
+            diffMapper,
             urlFetcher,
             stubParser,
             parserToCreateRequestMapper,
+            versionDiffer,
             eventPublisher,
             fixedClock);
 
