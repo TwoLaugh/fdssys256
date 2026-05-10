@@ -55,6 +55,16 @@ paths:
     $ref: 'paths/provisions.yaml#/inventory'
   /api/v1/provisions/inventory/{itemId}:
     $ref: 'paths/provisions.yaml#/inventoryItem'
+  /api/v1/provisions/inventory/{itemId}/mark-spoiled:
+    $ref: 'paths/provisions.yaml#/inventoryItemMarkSpoiled'
+  /api/v1/provisions/inventory/{itemId}/mark-exhausted:
+    $ref: 'paths/provisions.yaml#/inventoryItemMarkExhausted'
+  /api/v1/provisions/inventory/{itemId}/audit-log:
+    $ref: 'paths/provisions.yaml#/inventoryItemAuditLog'
+  /api/v1/provisions/equipment:
+    $ref: 'paths/provisions.yaml#/equipment'
+  /api/v1/provisions/equipment/{name}:
+    $ref: 'paths/provisions.yaml#/equipmentByName'
   # ===== nutrition =====
   /api/v1/nutrition/targets:
     $ref: 'paths/nutrition.yaml#/targets'
@@ -109,6 +119,11 @@ components:
     InventoryItemDto: { $ref: 'schemas/provisions.yaml#/InventoryItemDto' }
     CreateInventoryItemRequest: { $ref: 'schemas/provisions.yaml#/CreateInventoryItemRequest' }
     UpdateInventoryItemRequest: { $ref: 'schemas/provisions.yaml#/UpdateInventoryItemRequest' }
+    EquipmentDto: { $ref: 'schemas/provisions.yaml#/EquipmentDto' }
+    UpsertEquipmentRequest: { $ref: 'schemas/provisions.yaml#/UpsertEquipmentRequest' }
+    AuditActor: { $ref: 'schemas/provisions.yaml#/AuditActor' }
+    InventoryAuditEntryDto: { $ref: 'schemas/provisions.yaml#/InventoryAuditEntryDto' }
+    InventoryAuditEntryDtoPage: { $ref: 'schemas/provisions.yaml#/InventoryAuditEntryDtoPage' }
     # nutrition
     Goal: { $ref: 'schemas/nutrition.yaml#/Goal' }
     EnforcementDirection: { $ref: 'schemas/nutrition.yaml#/EnforcementDirection' }

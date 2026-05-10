@@ -1,13 +1,19 @@
 package com.example.mealprep.provisions.domain.service.internal;
 
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
+import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
+import com.example.mealprep.provisions.api.dto.InventoryAuditEntryDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.InventorySearchCriteria;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
+import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
+import com.example.mealprep.provisions.api.mapper.EquipmentMapper;
+import com.example.mealprep.provisions.api.mapper.InventoryAuditMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryItemMapper;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
 import com.example.mealprep.provisions.domain.entity.DefrostMethod;
+import com.example.mealprep.provisions.domain.entity.Equipment;
 import com.example.mealprep.provisions.domain.entity.InventoryAuditLog;
 import com.example.mealprep.provisions.domain.entity.InventoryItem;
 import com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus;
@@ -15,11 +21,15 @@ import com.example.mealprep.provisions.domain.entity.ItemSource;
 import com.example.mealprep.provisions.domain.entity.StapleStatus;
 import com.example.mealprep.provisions.domain.entity.StorageLocation;
 import com.example.mealprep.provisions.domain.entity.TrackingMode;
+import com.example.mealprep.provisions.domain.repository.EquipmentRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryAuditLogRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryItemRepository;
 import com.example.mealprep.provisions.domain.service.ProvisionQueryService;
 import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
+import com.example.mealprep.provisions.event.EquipmentChangedEvent;
 import com.example.mealprep.provisions.event.InventoryItemUpsertedEvent;
+import com.example.mealprep.provisions.event.ItemRanOutEvent;
+import com.example.mealprep.provisions.event.ItemSpoiledEvent;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,6 +38,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -36,6 +48,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -80,7 +93,10 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
 
   private final InventoryItemRepository inventoryItemRepository;
   private final InventoryAuditLogRepository auditLogRepository;
+  private final EquipmentRepository equipmentRepository;
   private final InventoryItemMapper mapper;
+  private final EquipmentMapper equipmentMapper;
+  private final InventoryAuditMapper inventoryAuditMapper;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -88,13 +104,19 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
   public ProvisionServiceImpl(
       InventoryItemRepository inventoryItemRepository,
       InventoryAuditLogRepository auditLogRepository,
+      EquipmentRepository equipmentRepository,
       InventoryItemMapper mapper,
+      EquipmentMapper equipmentMapper,
+      InventoryAuditMapper inventoryAuditMapper,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
     this.inventoryItemRepository = inventoryItemRepository;
     this.auditLogRepository = auditLogRepository;
+    this.equipmentRepository = equipmentRepository;
     this.mapper = mapper;
+    this.equipmentMapper = equipmentMapper;
+    this.inventoryAuditMapper = inventoryAuditMapper;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -122,6 +144,35 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
             effective.isStaple(),
             pageable)
         .map(mapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<EquipmentDto> getEquipment(UUID userId) {
+    return equipmentRepository.findAllByUserIdOrderByNameAsc(userId).stream()
+        .map(equipmentMapper::toDto)
+        .toList();
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<EquipmentDto> getAvailableEquipment(UUID userId) {
+    return equipmentRepository.findAllByUserIdAndAvailableTrueOrderByNameAsc(userId).stream()
+        .map(equipmentMapper::toDto)
+        .toList();
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Page<InventoryAuditEntryDto> getInventoryAuditLog(
+      UUID itemId, UUID requestingUserId, Pageable pageable) {
+    // Authorisation: caller must own the item, else 404 (don't leak existence).
+    inventoryItemRepository
+        .findByIdAndUserId(itemId, requestingUserId)
+        .orElseThrow(() -> new InventoryItemNotFoundException(itemId));
+    return auditLogRepository
+        .findByInventoryItemIdOrderByOccurredAtDesc(itemId, pageable)
+        .map(inventoryAuditMapper::toDto);
   }
 
   // ---------------- Update ----------------
@@ -241,6 +292,162 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
         changedFields,
         saved.getVersion());
     return mapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public ProvisionUpdateService.UpsertResult<EquipmentDto> upsertEquipment(
+      UUID userId, String name, UpsertEquipmentRequest request) {
+    Instant now = Instant.now(clock);
+    Optional<Equipment> existingOpt = equipmentRepository.findByUserIdAndName(userId, name);
+    if (existingOpt.isPresent()) {
+      Equipment existing = existingOpt.get();
+      if (request.expectedVersion() == null || existing.getVersion() != request.expectedVersion()) {
+        throw new OptimisticLockingFailureException("stale expectedVersion for equipment " + name);
+      }
+      existing.setAvailable(request.available());
+      existing.setDetails(request.details());
+      // saveAndFlush so {@code @Version} bump materialises before mapping to DTO.
+      Equipment saved = equipmentRepository.saveAndFlush(existing);
+      eventPublisher.publishEvent(
+          new EquipmentChangedEvent(userId, name, saved.isAvailable(), currentTraceId(), now));
+      log.info(
+          "equipment updated userId={} name={} available={} version={}",
+          userId,
+          name,
+          saved.isAvailable(),
+          saved.getVersion());
+      return new ProvisionUpdateService.UpsertResult<>(equipmentMapper.toDto(saved), false);
+    }
+    Equipment created =
+        Equipment.builder()
+            .id(UUID.randomUUID())
+            .userId(userId)
+            .name(name)
+            .available(request.available())
+            .details(request.details())
+            .build();
+    Equipment saved = equipmentRepository.saveAndFlush(created);
+    eventPublisher.publishEvent(
+        new EquipmentChangedEvent(userId, name, saved.isAvailable(), currentTraceId(), now));
+    log.info("equipment created userId={} name={} available={}", userId, name, saved.isAvailable());
+    return new ProvisionUpdateService.UpsertResult<>(equipmentMapper.toDto(saved), true);
+  }
+
+  @Override
+  @Transactional
+  public void deleteEquipment(UUID userId, String name) {
+    Equipment existing =
+        equipmentRepository
+            .findByUserIdAndName(userId, name)
+            .orElseThrow(
+                () ->
+                    new com.example.mealprep.provisions.exception.EquipmentNotFoundException(
+                        userId, name));
+    equipmentRepository.delete(existing);
+    eventPublisher.publishEvent(
+        new EquipmentChangedEvent(userId, name, false, currentTraceId(), Instant.now(clock)));
+    log.info("equipment deleted userId={} name={}", userId, name);
+  }
+
+  @Override
+  @Transactional
+  public InventoryItemDto markSpoiled(UUID itemId, UUID actorUserId) {
+    InventoryItem item =
+        inventoryItemRepository
+            .findByIdAndUserId(itemId, actorUserId)
+            .orElseThrow(() -> new InventoryItemNotFoundException(itemId));
+    if (item.getItemStatus() == ItemLifecycleStatus.SPOILED) {
+      // Idempotent — no audit row, no event.
+      return mapper.toDto(item);
+    }
+    Instant now = Instant.now(clock);
+    ItemLifecycleStatus prev = item.getItemStatus();
+    item.setItemStatus(ItemLifecycleStatus.SPOILED);
+    InventoryItem saved = inventoryItemRepository.saveAndFlush(item);
+    auditLogRepository.save(
+        new InventoryAuditLog(
+            UUID.randomUUID(),
+            saved.getId(),
+            actorUserId,
+            AuditActor.USER,
+            actorUserId,
+            FIELD_ITEM_STATUS,
+            objectMapper.valueToTree(Map.of(FIELD_ITEM_STATUS, prev.name())),
+            objectMapper.valueToTree(Map.of(FIELD_ITEM_STATUS, ItemLifecycleStatus.SPOILED.name())),
+            now));
+    eventPublisher.publishEvent(
+        new ItemSpoiledEvent(
+            actorUserId, List.of(saved.getId()), "user_marked", currentTraceId(), now));
+    log.info("inventory item marked spoiled itemId={} userId={}", saved.getId(), actorUserId);
+    return mapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public InventoryItemDto markExhausted(UUID itemId, UUID actorUserId) {
+    InventoryItem item =
+        inventoryItemRepository
+            .findByIdAndUserId(itemId, actorUserId)
+            .orElseThrow(() -> new InventoryItemNotFoundException(itemId));
+    if (item.getItemStatus() == ItemLifecycleStatus.EXHAUSTED) {
+      return mapper.toDto(item);
+    }
+    Instant now = Instant.now(clock);
+    ItemLifecycleStatus prev = item.getItemStatus();
+    item.setItemStatus(ItemLifecycleStatus.EXHAUSTED);
+    InventoryItem saved = inventoryItemRepository.saveAndFlush(item);
+    auditLogRepository.save(
+        new InventoryAuditLog(
+            UUID.randomUUID(),
+            saved.getId(),
+            actorUserId,
+            AuditActor.USER,
+            actorUserId,
+            FIELD_ITEM_STATUS,
+            objectMapper.valueToTree(Map.of(FIELD_ITEM_STATUS, prev.name())),
+            objectMapper.valueToTree(
+                Map.of(FIELD_ITEM_STATUS, ItemLifecycleStatus.EXHAUSTED.name())),
+            now));
+    eventPublisher.publishEvent(
+        new ItemRanOutEvent(
+            actorUserId,
+            List.of(saved.getId()),
+            saved.getIngredientMappingKey(),
+            saved.isStaple(),
+            currentTraceId(),
+            now));
+    log.info("inventory item marked exhausted itemId={} userId={}", saved.getId(), actorUserId);
+    return mapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public void softDeleteInventoryItem(UUID itemId, UUID actorUserId) {
+    InventoryItem item =
+        inventoryItemRepository
+            .findByIdAndUserId(itemId, actorUserId)
+            .orElseThrow(() -> new InventoryItemNotFoundException(itemId));
+    if (item.getItemStatus() == ItemLifecycleStatus.WASTED) {
+      // Idempotent — no audit row, no event.
+      return;
+    }
+    Instant now = Instant.now(clock);
+    ItemLifecycleStatus prev = item.getItemStatus();
+    item.setItemStatus(ItemLifecycleStatus.WASTED);
+    InventoryItem saved = inventoryItemRepository.saveAndFlush(item);
+    auditLogRepository.save(
+        new InventoryAuditLog(
+            UUID.randomUUID(),
+            saved.getId(),
+            actorUserId,
+            AuditActor.USER,
+            actorUserId,
+            FIELD_ITEM_STATUS,
+            objectMapper.valueToTree(Map.of(FIELD_ITEM_STATUS, prev.name())),
+            objectMapper.valueToTree(Map.of(FIELD_ITEM_STATUS, ItemLifecycleStatus.WASTED.name())),
+            now));
+    log.info("inventory item soft-deleted itemId={} userId={}", saved.getId(), actorUserId);
   }
 
   // ---------------- helpers ----------------

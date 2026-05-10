@@ -131,3 +131,204 @@ inventoryItem:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  delete:
+    tags: [Provisions]
+    operationId: softDeleteInventoryItem
+    summary: Soft-delete an inventory item (sets itemStatus=wasted).
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: itemId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '204':
+        description: Deleted.
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found or not owned.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+equipment:
+  get:
+    tags: [Provisions]
+    operationId: listEquipment
+    summary: List the calling user's equipment.
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: Equipment list.
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/provisions.yaml#/EquipmentDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+equipmentByName:
+  put:
+    tags: [Provisions]
+    operationId: upsertEquipment
+    summary: Create or update an equipment row by canonical name.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 64, pattern: '^[a-z0-9_]+$' }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/provisions.yaml#/UpsertEquipmentRequest' }
+    responses:
+      '200':
+        description: Updated.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/EquipmentDto' }
+      '201':
+        description: Created.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/EquipmentDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedVersion.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  delete:
+    tags: [Provisions]
+    operationId: deleteEquipment
+    summary: Delete an equipment row.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 64, pattern: '^[a-z0-9_]+$' }
+    responses:
+      '204':
+        description: Deleted.
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+inventoryItemMarkSpoiled:
+  post:
+    tags: [Provisions]
+    operationId: markInventoryItemSpoiled
+    summary: Mark an inventory item as spoiled (idempotent).
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: itemId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: Marked.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/InventoryItemDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found or not owned.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+inventoryItemMarkExhausted:
+  post:
+    tags: [Provisions]
+    operationId: markInventoryItemExhausted
+    summary: Mark an inventory item as exhausted (idempotent).
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: itemId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: Marked.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/InventoryItemDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found or not owned.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+inventoryItemAuditLog:
+  get:
+    tags: [Provisions]
+    operationId: getInventoryItemAuditLog
+    summary: Paginated audit log for an inventory item.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: itemId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Audit page.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/InventoryAuditEntryDtoPage' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found or not owned.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

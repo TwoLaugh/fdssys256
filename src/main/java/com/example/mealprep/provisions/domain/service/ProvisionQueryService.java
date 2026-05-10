@@ -1,7 +1,10 @@
 package com.example.mealprep.provisions.domain.service;
 
+import com.example.mealprep.provisions.api.dto.EquipmentDto;
+import com.example.mealprep.provisions.api.dto.InventoryAuditEntryDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.InventorySearchCriteria;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -26,4 +29,17 @@ public interface ProvisionQueryService {
    */
   Page<InventoryItemDto> listActiveInventory(
       UUID userId, InventorySearchCriteria criteria, Pageable pageable);
+
+  /** Equipment rows for {@code userId}, sorted by {@code name} ascending. */
+  List<EquipmentDto> getEquipment(UUID userId);
+
+  /** Equipment rows for {@code userId} with {@code available = true}, sorted by {@code name}. */
+  List<EquipmentDto> getAvailableEquipment(UUID userId);
+
+  /**
+   * Newest-first paginated audit log for an inventory item. The caller must own the item, else a
+   * {@code InventoryItemNotFoundException} is thrown (404 — does not leak existence).
+   */
+  Page<InventoryAuditEntryDto> getInventoryAuditLog(
+      UUID itemId, UUID requestingUserId, Pageable pageable);
 }
