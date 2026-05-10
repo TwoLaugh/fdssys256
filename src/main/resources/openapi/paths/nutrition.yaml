@@ -88,3 +88,316 @@ targetsAuditLog:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+intakeForDay:
+  get:
+    tags: [Nutrition]
+    operationId: getIntakeForDay
+    summary: Return the calling user's intake for one day.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: date
+        required: true
+        schema: { type: string, format: date }
+    responses:
+      '200':
+        description: Intake day.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IntakeDayDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: No day row.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+intakeRange:
+  get:
+    tags: [Nutrition]
+    operationId: getIntakeRange
+    summary: List intake days in [from, to] (max 35 days).
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: from
+        required: true
+        schema: { type: string, format: date }
+      - in: query
+        name: to
+        required: true
+        schema: { type: string, format: date }
+    responses:
+      '200':
+        description: Intake days.
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/nutrition.yaml#/IntakeDayDto' }
+      '400':
+        description: Invalid range.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+intakeSlotConfirm:
+  post:
+    tags: [Nutrition]
+    operationId: confirmIntakeSlot
+    summary: Confirm a planned slot was eaten as planned.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - { in: path, name: date, required: true, schema: { type: string, format: date } }
+      - { in: path, name: mealSlot, required: true, schema: { $ref: '../schemas/nutrition.yaml#/MealSlot' } }
+    responses:
+      '200':
+        description: Updated.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IntakeDayDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Day or slot not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+intakeSlotOverride:
+  post:
+    tags: [Nutrition]
+    operationId: overrideIntakeSlot
+    summary: Override a slot with verbatim free text (AI parse deferred).
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - { in: path, name: date, required: true, schema: { type: string, format: date } }
+      - { in: path, name: mealSlot, required: true, schema: { $ref: '../schemas/nutrition.yaml#/MealSlot' } }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/OverrideIntakeRequest' }
+    responses:
+      '200':
+        description: Overridden.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IntakeDayDto' }
+      '400':
+        description: Validation.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Day or slot not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+intakeSlotEdit:
+  post:
+    tags: [Nutrition]
+    operationId: editIntakeSlot
+    summary: Manually set a slot's actual values.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - { in: path, name: date, required: true, schema: { type: string, format: date } }
+      - { in: path, name: mealSlot, required: true, schema: { $ref: '../schemas/nutrition.yaml#/MealSlot' } }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/IntakeEntryDto' }
+    responses:
+      '200':
+        description: Edited.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IntakeDayDto' }
+      '400':
+        description: Validation.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Day or slot not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+intakeSlotSkip:
+  post:
+    tags: [Nutrition]
+    operationId: skipIntakeSlot
+    summary: Mark a slot as skipped.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - { in: path, name: date, required: true, schema: { type: string, format: date } }
+      - { in: path, name: mealSlot, required: true, schema: { $ref: '../schemas/nutrition.yaml#/MealSlot' } }
+    responses:
+      '200':
+        description: Skipped.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IntakeDayDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Day or slot not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+intakeSnacks:
+  post:
+    tags: [Nutrition]
+    operationId: logIntakeSnack
+    summary: Log a snack on a date (auto-creates the day row).
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - { in: path, name: date, required: true, schema: { type: string, format: date } }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/LogSnackRequest' }
+    responses:
+      '201':
+        description: Logged.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IntakeDayDto' }
+      '400':
+        description: Validation.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+intakeSnackById:
+  delete:
+    tags: [Nutrition]
+    operationId: removeIntakeSnack
+    summary: Delete a snack.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - { in: path, name: date, required: true, schema: { type: string, format: date } }
+      - { in: path, name: snackId, required: true, schema: { type: string, format: uuid } }
+    responses:
+      '204':
+        description: Deleted.
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Snack not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+intakeAuditLog:
+  get:
+    tags: [Nutrition]
+    operationId: getIntakeAuditLog
+    summary: Paginated audit log for a day.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - { in: path, name: date, required: true, schema: { type: string, format: date } }
+      - { in: query, name: page, schema: { type: integer, minimum: 0, default: 0 } }
+      - { in: query, name: size, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+    responses:
+      '200':
+        description: Audit page.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IntakeAuditEntryDtoPage' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Day not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+targetsActivityRange:
+  get:
+    tags: [Nutrition]
+    operationId: getDailyActivityRange
+    summary: List daily activity log entries in [from, to].
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - { in: query, name: from, required: true, schema: { type: string, format: date } }
+      - { in: query, name: to,   required: true, schema: { type: string, format: date } }
+    responses:
+      '200':
+        description: Activity entries.
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/nutrition.yaml#/DailyActivityDto' }
+      '400':
+        description: Invalid range.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+targetsActivityByDate:
+  put:
+    tags: [Nutrition]
+    operationId: upsertDailyActivity
+    summary: Upsert the activity entry for a date.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - { in: path, name: date, required: true, schema: { type: string, format: date } }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/UpsertDailyActivityRequest' }
+    responses:
+      '200':
+        description: Upserted.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/DailyActivityDto' }
+      '400':
+        description: Validation.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

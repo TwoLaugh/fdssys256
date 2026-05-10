@@ -11,9 +11,14 @@ import static org.mockito.Mockito.when;
 
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
+import com.example.mealprep.nutrition.api.mapper.DailyActivityMapper;
+import com.example.mealprep.nutrition.api.mapper.IntakeMapper;
 import com.example.mealprep.nutrition.api.mapper.TargetsMapper;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargets;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargetsAuditLog;
+import com.example.mealprep.nutrition.domain.repository.DailyActivityLogRepository;
+import com.example.mealprep.nutrition.domain.repository.IntakeAuditRepository;
+import com.example.mealprep.nutrition.domain.repository.IntakeDayRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsRepository;
 import com.example.mealprep.nutrition.domain.service.internal.NutritionServiceImpl;
@@ -44,17 +49,34 @@ class NutritionServiceImplTest {
 
   @Mock private NutritionTargetsRepository targetsRepository;
   @Mock private NutritionTargetsAuditRepository auditRepository;
+  @Mock private IntakeDayRepository intakeDayRepository;
+  @Mock private IntakeAuditRepository intakeAuditRepository;
+  @Mock private DailyActivityLogRepository dailyActivityLogRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final TargetsMapper mapper =
       new com.example.mealprep.nutrition.api.mapper.TargetsMapperImpl();
+  private final IntakeMapper intakeMapper =
+      new com.example.mealprep.nutrition.api.mapper.IntakeMapperImpl();
+  private final DailyActivityMapper dailyActivityMapper =
+      new com.example.mealprep.nutrition.api.mapper.DailyActivityMapperImpl();
   private final ObjectMapper objectMapper = new ObjectMapper();
   private final Clock fixedClock =
       Clock.fixed(Instant.parse("2026-05-09T10:00:00Z"), ZoneOffset.UTC);
 
   private NutritionServiceImpl service() {
     return new NutritionServiceImpl(
-        targetsRepository, auditRepository, mapper, eventPublisher, objectMapper, fixedClock);
+        targetsRepository,
+        auditRepository,
+        intakeDayRepository,
+        intakeAuditRepository,
+        dailyActivityLogRepository,
+        mapper,
+        intakeMapper,
+        dailyActivityMapper,
+        eventPublisher,
+        objectMapper,
+        fixedClock);
   }
 
   // ---------------- getTargets ----------------

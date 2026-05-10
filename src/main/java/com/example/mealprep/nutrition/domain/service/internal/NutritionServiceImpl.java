@@ -2,37 +2,65 @@ package com.example.mealprep.nutrition.domain.service.internal;
 
 import com.example.mealprep.nutrition.api.dto.ActivityAdjustmentDto;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
+import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
 import com.example.mealprep.nutrition.api.dto.EatingWindowDto;
+import com.example.mealprep.nutrition.api.dto.IntakeAuditEntryDto;
+import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
+import com.example.mealprep.nutrition.api.dto.IntakeEntryDto;
+import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
 import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
 import com.example.mealprep.nutrition.api.dto.NutritionTargetsAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
+import com.example.mealprep.nutrition.api.dto.PlannedSlotInputDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
+import com.example.mealprep.nutrition.api.mapper.DailyActivityMapper;
+import com.example.mealprep.nutrition.api.mapper.IntakeMapper;
 import com.example.mealprep.nutrition.api.mapper.TargetsMapper;
 import com.example.mealprep.nutrition.domain.entity.ActivityAdjustment;
+import com.example.mealprep.nutrition.domain.entity.ActivityLevel;
 import com.example.mealprep.nutrition.domain.entity.ActorKind;
+import com.example.mealprep.nutrition.domain.entity.DailyActivityLog;
 import com.example.mealprep.nutrition.domain.entity.EatingWindow;
 import com.example.mealprep.nutrition.domain.entity.Goal;
+import com.example.mealprep.nutrition.domain.entity.IntakeAuditAction;
+import com.example.mealprep.nutrition.domain.entity.IntakeAuditLog;
+import com.example.mealprep.nutrition.domain.entity.IntakeDay;
+import com.example.mealprep.nutrition.domain.entity.IntakeSlot;
+import com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus;
+import com.example.mealprep.nutrition.domain.entity.IntakeSnack;
+import com.example.mealprep.nutrition.domain.entity.MealSlot;
 import com.example.mealprep.nutrition.domain.entity.MicroTarget;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargets;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargetsAuditLog;
 import com.example.mealprep.nutrition.domain.entity.PerMealDistributionEntry;
+import com.example.mealprep.nutrition.domain.repository.DailyActivityLogRepository;
+import com.example.mealprep.nutrition.domain.repository.IntakeAuditRepository;
+import com.example.mealprep.nutrition.domain.repository.IntakeDayRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsRepository;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.nutrition.domain.service.NutritionUpdateService;
+import com.example.mealprep.nutrition.event.IntakeLoggedEvent;
 import com.example.mealprep.nutrition.event.NutritionTargetsChangedEvent;
+import com.example.mealprep.nutrition.exception.IntakeDayNotFoundException;
+import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
+import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
+import com.example.mealprep.nutrition.exception.InvalidIntakeRangeException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -94,9 +122,16 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
   static final String FIELD_EATING_WINDOW = "eatingWindow";
   static final String FIELD_ACTIVITY_ADJUSTMENTS = "activityAdjustments";
 
+  private static final int RANGE_MAX_DAYS = 35;
+
   private final NutritionTargetsRepository targetsRepository;
   private final NutritionTargetsAuditRepository auditRepository;
+  private final IntakeDayRepository intakeDayRepository;
+  private final IntakeAuditRepository intakeAuditRepository;
+  private final DailyActivityLogRepository dailyActivityLogRepository;
   private final TargetsMapper mapper;
+  private final IntakeMapper intakeMapper;
+  private final DailyActivityMapper dailyActivityMapper;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -104,13 +139,23 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
   public NutritionServiceImpl(
       NutritionTargetsRepository targetsRepository,
       NutritionTargetsAuditRepository auditRepository,
+      IntakeDayRepository intakeDayRepository,
+      IntakeAuditRepository intakeAuditRepository,
+      DailyActivityLogRepository dailyActivityLogRepository,
       TargetsMapper mapper,
+      IntakeMapper intakeMapper,
+      DailyActivityMapper dailyActivityMapper,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
     this.targetsRepository = targetsRepository;
     this.auditRepository = auditRepository;
+    this.intakeDayRepository = intakeDayRepository;
+    this.intakeAuditRepository = intakeAuditRepository;
+    this.dailyActivityLogRepository = dailyActivityLogRepository;
     this.mapper = mapper;
+    this.intakeMapper = intakeMapper;
+    this.dailyActivityMapper = dailyActivityMapper;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -742,6 +787,486 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
               ActivityAdjustmentDto::activityLevel,
               java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())));
       return result;
+    }
+  }
+
+  // =================================================================================
+  // Intake — query (01b)
+  // =================================================================================
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<IntakeDayDto> getIntakeForDay(UUID userId, LocalDate onDate) {
+    return intakeDayRepository
+        .findByUserIdAndOnDate(userId, onDate)
+        .map(
+            day -> {
+              // Force lazy load of slots + snacks inside the read-only tx (audit log lazy-loads
+              // separately on its own paginated query, so we don't touch it here).
+              day.getSlots().size();
+              day.getSnacks().size();
+              return intakeMapper.toDto(day);
+            });
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<IntakeDayDto> getIntakeRange(UUID userId, LocalDate from, LocalDate to) {
+    validateRange(from, to);
+    List<IntakeDay> days = intakeDayRepository.findByUserIdAndOnDateBetween(userId, from, to);
+    List<IntakeDayDto> out = new ArrayList<>(days.size());
+    for (IntakeDay day : days) {
+      day.getSlots().size();
+      day.getSnacks().size();
+      out.add(intakeMapper.toDto(day));
+    }
+    return out;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Page<IntakeAuditEntryDto> getIntakeAuditLog(
+      UUID userId, LocalDate onDate, Pageable pageable) {
+    Optional<IntakeDay> day = intakeDayRepository.findByUserIdAndOnDate(userId, onDate);
+    if (day.isEmpty()) {
+      return Page.empty(pageable);
+    }
+    return intakeAuditRepository
+        .findByIntakeDayIdOrderByOccurredAtDesc(day.get().getId(), pageable)
+        .map(intakeMapper::toAuditEntryDto);
+  }
+
+  // =================================================================================
+  // Intake — write (01b)
+  // =================================================================================
+
+  @Override
+  @Transactional
+  public IntakeDayDto prefillFromPlan(
+      UUID userId, LocalDate onDate, UUID planId, List<PlannedSlotInputDto> slots) {
+    IntakeDay day =
+        intakeDayRepository
+            .findByUserIdAndOnDate(userId, onDate)
+            .orElseGet(() -> newIntakeDay(userId, onDate, planId));
+    day.setPlanId(planId);
+    // Force lazy load before mutating (avoid unique-constraint flush race for already-prefilled).
+    day.getSlots().size();
+
+    // Replace slots wholesale: delete existing, insert new. Compute change-set from the desired
+    // slots' meal-slot keys; we don't need a sophisticated diff because pre-fill is a system-only
+    // path with planner-controlled inputs.
+    Map<MealSlot, IntakeSlot> existing = new LinkedHashMap<>();
+    for (IntakeSlot s : day.getSlots()) {
+      existing.put(s.getMealSlot(), s);
+    }
+    // Wipe current slots; the planner snapshot is authoritative.
+    day.getSlots().clear();
+    if (slots != null) {
+      for (PlannedSlotInputDto in : slots) {
+        IntakeSlot slot =
+            IntakeSlot.builder()
+                .id(UUID.randomUUID())
+                .mealSlot(in.mealSlot())
+                .plannedRecipeId(in.plannedRecipeId())
+                .plannedCalories(in.plannedCalories())
+                .plannedProteinG(in.plannedProteinG())
+                .plannedCarbsG(in.plannedCarbsG())
+                .plannedFatG(in.plannedFatG())
+                .plannedFibreG(in.plannedFibreG())
+                .plannedMicros(in.plannedMicros())
+                .actualStatus(IntakeSlotStatus.PENDING)
+                .needsAiParse(false)
+                .build();
+        day.addSlot(slot);
+      }
+    }
+
+    intakeDayRepository.saveAndFlush(day);
+    Instant now = Instant.now(clock);
+    appendAudit(
+        day,
+        userId,
+        IntakeAuditAction.PREFILL,
+        null,
+        null,
+        objectMapper.valueToTree(Map.of("slotCount", existing.size())),
+        objectMapper.valueToTree(Map.of("slotCount", day.getSlots().size(), "planId", planId)),
+        now);
+    publishIntakeEvent(userId, day, IntakeAuditAction.PREFILL, null, null, now);
+    return intakeMapper.toDto(day);
+  }
+
+  @Override
+  @Transactional
+  public IntakeDayDto confirmFromPlan(UUID userId, LocalDate onDate, MealSlot mealSlot) {
+    IntakeDay day = requireDay(userId, onDate);
+    IntakeSlot slot = requireSlot(day, userId, onDate, mealSlot);
+    if (slot.getActualStatus() == IntakeSlotStatus.CONFIRMED) {
+      // Idempotent — no audit row, no event.
+      return intakeMapper.toDto(day);
+    }
+    IntakeSlotStatus prev = slot.getActualStatus();
+    slot.setActualStatus(IntakeSlotStatus.CONFIRMED);
+    slot.setActualCalories(slot.getPlannedCalories());
+    slot.setActualProteinG(slot.getPlannedProteinG());
+    slot.setActualCarbsG(slot.getPlannedCarbsG());
+    slot.setActualFatG(slot.getPlannedFatG());
+    slot.setActualFibreG(slot.getPlannedFibreG());
+    slot.setActualMicros(slot.getPlannedMicros());
+    slot.setNeedsAiParse(false);
+
+    intakeDayRepository.saveAndFlush(day);
+    Instant now = Instant.now(clock);
+    appendAudit(
+        day,
+        userId,
+        IntakeAuditAction.CONFIRM,
+        mealSlot,
+        null,
+        objectMapper.valueToTree(Map.of("status", prev.name())),
+        objectMapper.valueToTree(Map.of("status", IntakeSlotStatus.CONFIRMED.name())),
+        now);
+    publishIntakeEvent(userId, day, IntakeAuditAction.CONFIRM, mealSlot, null, now);
+    return intakeMapper.toDto(day);
+  }
+
+  @Override
+  @Transactional
+  public IntakeDayDto overrideIntakeFromFreeText(
+      UUID userId, LocalDate onDate, MealSlot mealSlot, String freeText) {
+    IntakeDay day = requireDay(userId, onDate);
+    IntakeSlot slot = requireSlot(day, userId, onDate, mealSlot);
+
+    IntakeSlotStatus prev = slot.getActualStatus();
+    slot.setOverrideFreeText(freeText);
+    slot.setOverriddenAt(Instant.now(clock));
+    slot.setActualStatus(IntakeSlotStatus.OVERRIDDEN);
+    slot.setNeedsAiParse(true); // 01k listener picks this up
+    // Stub: zero actuals so aggregations stay sane until the AI parse lands.
+    slot.setActualCalories(0);
+    slot.setActualProteinG(BigDecimal.ZERO);
+    slot.setActualCarbsG(BigDecimal.ZERO);
+    slot.setActualFatG(BigDecimal.ZERO);
+    slot.setActualFibreG(BigDecimal.ZERO);
+    slot.setActualMicros(null);
+
+    intakeDayRepository.saveAndFlush(day);
+    Instant now = Instant.now(clock);
+    appendAudit(
+        day,
+        userId,
+        IntakeAuditAction.OVERRIDE,
+        mealSlot,
+        null,
+        objectMapper.valueToTree(Map.of("status", prev.name())),
+        objectMapper.valueToTree(
+            Map.of("status", IntakeSlotStatus.OVERRIDDEN.name(), "freeText", freeText)),
+        now);
+    publishIntakeEvent(userId, day, IntakeAuditAction.OVERRIDE, mealSlot, null, now);
+    return intakeMapper.toDto(day);
+  }
+
+  @Override
+  @Transactional
+  public IntakeDayDto editIntakeManually(
+      UUID userId, LocalDate onDate, MealSlot mealSlot, IntakeEntryDto entry) {
+    IntakeDay day = requireDay(userId, onDate);
+    IntakeSlot slot = requireSlot(day, userId, onDate, mealSlot);
+
+    IntakeSlotStatus prev = slot.getActualStatus();
+    slot.setActualStatus(IntakeSlotStatus.EDITED);
+    slot.setActualCalories(entry.calories());
+    slot.setActualProteinG(entry.proteinG());
+    slot.setActualCarbsG(entry.carbsG());
+    slot.setActualFatG(entry.fatG());
+    slot.setActualFibreG(entry.fibreG());
+    slot.setActualMicros(entry.micros());
+    slot.setNeedsAiParse(false);
+    slot.setOverrideFreeText(null);
+    slot.setOverriddenAt(null);
+
+    intakeDayRepository.saveAndFlush(day);
+    Instant now = Instant.now(clock);
+    appendAudit(
+        day,
+        userId,
+        IntakeAuditAction.EDIT,
+        mealSlot,
+        null,
+        objectMapper.valueToTree(Map.of("status", prev.name())),
+        objectMapper.valueToTree(
+            Map.of("status", IntakeSlotStatus.EDITED.name(), "calories", entry.calories())),
+        now);
+    publishIntakeEvent(userId, day, IntakeAuditAction.EDIT, mealSlot, null, now);
+    return intakeMapper.toDto(day);
+  }
+
+  @Override
+  @Transactional
+  public IntakeDayDto skipMeal(UUID userId, LocalDate onDate, MealSlot mealSlot) {
+    IntakeDay day = requireDay(userId, onDate);
+    IntakeSlot slot = requireSlot(day, userId, onDate, mealSlot);
+
+    IntakeSlotStatus prev = slot.getActualStatus();
+    slot.setActualStatus(IntakeSlotStatus.SKIPPED);
+    slot.setActualCalories(0);
+    slot.setActualProteinG(BigDecimal.ZERO);
+    slot.setActualCarbsG(BigDecimal.ZERO);
+    slot.setActualFatG(BigDecimal.ZERO);
+    slot.setActualFibreG(BigDecimal.ZERO);
+    slot.setActualMicros(null);
+    slot.setNeedsAiParse(false);
+
+    intakeDayRepository.saveAndFlush(day);
+    Instant now = Instant.now(clock);
+    appendAudit(
+        day,
+        userId,
+        IntakeAuditAction.SKIP,
+        mealSlot,
+        null,
+        objectMapper.valueToTree(Map.of("status", prev.name())),
+        objectMapper.valueToTree(Map.of("status", IntakeSlotStatus.SKIPPED.name())),
+        now);
+    publishIntakeEvent(userId, day, IntakeAuditAction.SKIP, mealSlot, null, now);
+    return intakeMapper.toDto(day);
+  }
+
+  @Override
+  @Transactional
+  public IntakeDayDto logSnack(UUID userId, LocalDate onDate, LogSnackRequest request) {
+    if (Boolean.TRUE.equals(request.deductFromPantry())) {
+      // 01b no-op stub: the cross-module pantry-deduct lands in nutrition-01l.
+      log.info(
+          "logSnack deductFromPantry=true requested but no-op'd in 01b userId={} onDate={}",
+          userId,
+          onDate);
+    }
+
+    IntakeDay day = findOrCreateDay(userId, onDate);
+    Instant now = Instant.now(clock);
+    IntakeSnack snack =
+        IntakeSnack.builder()
+            .id(UUID.randomUUID())
+            .freeText(request.freeText())
+            .ingredientMappingKey(request.ingredientMappingKey())
+            .quantityG(request.quantityG())
+            .calories(request.calories())
+            .proteinG(request.proteinG())
+            .carbsG(request.carbsG())
+            .fatG(request.fatG())
+            .fibreG(request.fibreG())
+            .micros(request.micros())
+            .source(request.source())
+            .loggedAt(now)
+            .build();
+    day.addSnack(snack);
+
+    intakeDayRepository.saveAndFlush(day);
+    appendAudit(
+        day,
+        userId,
+        IntakeAuditAction.SNACK_ADD,
+        null,
+        snack.getId(),
+        objectMapper.nullNode(),
+        objectMapper.valueToTree(
+            Map.of(
+                "freeText", request.freeText(),
+                "calories", request.calories())),
+        now);
+    publishIntakeEvent(userId, day, IntakeAuditAction.SNACK_ADD, null, snack.getId(), now);
+    return intakeMapper.toDto(day);
+  }
+
+  @Override
+  @Transactional
+  public IntakeDayDto removeSnack(UUID userId, LocalDate onDate, UUID snackId) {
+    IntakeDay day =
+        intakeDayRepository
+            .findByUserIdAndOnDate(userId, onDate)
+            .orElseThrow(() -> new IntakeSnackNotFoundException(userId, onDate, snackId));
+    // Force load before searching.
+    day.getSnacks().size();
+    IntakeSnack target = null;
+    for (IntakeSnack s : day.getSnacks()) {
+      if (s.getId().equals(snackId)) {
+        target = s;
+        break;
+      }
+    }
+    if (target == null) {
+      throw new IntakeSnackNotFoundException(userId, onDate, snackId);
+    }
+    day.getSnacks().remove(target);
+
+    intakeDayRepository.saveAndFlush(day);
+    Instant now = Instant.now(clock);
+    appendAudit(
+        day,
+        userId,
+        IntakeAuditAction.SNACK_REMOVE,
+        null,
+        snackId,
+        objectMapper.valueToTree(
+            Map.of(
+                "freeText", target.getFreeText(),
+                "calories", target.getCalories())),
+        objectMapper.nullNode(),
+        now);
+    publishIntakeEvent(userId, day, IntakeAuditAction.SNACK_REMOVE, null, snackId, now);
+    return intakeMapper.toDto(day);
+  }
+
+  // =================================================================================
+  // Daily activity (01b)
+  // =================================================================================
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<DailyActivityDto> getDailyActivity(UUID userId, LocalDate onDate) {
+    return dailyActivityLogRepository
+        .findByUserIdAndOnDate(userId, onDate)
+        .map(dailyActivityMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<DailyActivityDto> getDailyActivityRange(UUID userId, LocalDate from, LocalDate to) {
+    validateRange(from, to);
+    List<DailyActivityLog> rows =
+        dailyActivityLogRepository.findByUserIdAndOnDateBetween(userId, from, to);
+    List<DailyActivityDto> out = new ArrayList<>(rows.size());
+    for (DailyActivityLog row : rows) {
+      out.add(dailyActivityMapper.toDto(row));
+    }
+    return out;
+  }
+
+  @Override
+  @Transactional
+  public DailyActivityDto upsertDailyActivity(
+      UUID userId, LocalDate onDate, ActivityLevel level, String notes) {
+    DailyActivityLog row =
+        dailyActivityLogRepository
+            .findByUserIdAndOnDate(userId, onDate)
+            .orElseGet(
+                () ->
+                    DailyActivityLog.builder()
+                        .id(UUID.randomUUID())
+                        .userId(userId)
+                        .onDate(onDate)
+                        .activityLevel(level)
+                        .notes(notes)
+                        .build());
+    row.setActivityLevel(level);
+    row.setNotes(notes);
+    DailyActivityLog saved = dailyActivityLogRepository.saveAndFlush(row);
+    return dailyActivityMapper.toDto(saved);
+  }
+
+  // =================================================================================
+  // Intake helpers
+  // =================================================================================
+
+  private IntakeDay newIntakeDay(UUID userId, LocalDate onDate, UUID planId) {
+    return IntakeDay.builder()
+        .id(UUID.randomUUID())
+        .userId(userId)
+        .onDate(onDate)
+        .planId(planId)
+        .slots(new ArrayList<>())
+        .snacks(new ArrayList<>())
+        .auditLog(new ArrayList<>())
+        .build();
+  }
+
+  private IntakeDay findOrCreateDay(UUID userId, LocalDate onDate) {
+    return intakeDayRepository
+        .findByUserIdAndOnDate(userId, onDate)
+        .orElseGet(
+            () -> {
+              IntakeDay fresh = newIntakeDay(userId, onDate, null);
+              IntakeDay persisted = intakeDayRepository.saveAndFlush(fresh);
+              // Force lazy load so subsequent addSnack / addSlot mutate the managed collections.
+              persisted.getSlots().size();
+              persisted.getSnacks().size();
+              return persisted;
+            });
+  }
+
+  private IntakeDay requireDay(UUID userId, LocalDate onDate) {
+    IntakeDay day =
+        intakeDayRepository
+            .findByUserIdAndOnDate(userId, onDate)
+            .orElseThrow(() -> new IntakeDayNotFoundException(userId, onDate));
+    day.getSlots().size();
+    day.getSnacks().size();
+    return day;
+  }
+
+  private static IntakeSlot requireSlot(
+      IntakeDay day, UUID userId, LocalDate onDate, MealSlot mealSlot) {
+    for (IntakeSlot s : day.getSlots()) {
+      if (s.getMealSlot() == mealSlot) {
+        return s;
+      }
+    }
+    throw new IntakeSlotNotFoundException(userId, onDate, mealSlot);
+  }
+
+  private void appendAudit(
+      IntakeDay day,
+      UUID actorUserId,
+      IntakeAuditAction action,
+      MealSlot mealSlot,
+      UUID snackId,
+      JsonNode previousValue,
+      JsonNode newValue,
+      Instant occurredAt) {
+    intakeAuditRepository.save(
+        new IntakeAuditLog(
+            UUID.randomUUID(),
+            day,
+            actorUserId,
+            action,
+            mealSlot,
+            snackId,
+            previousValue,
+            newValue,
+            occurredAt));
+  }
+
+  private void publishIntakeEvent(
+      UUID userId,
+      IntakeDay day,
+      IntakeAuditAction action,
+      MealSlot mealSlot,
+      UUID snackId,
+      Instant occurredAt) {
+    eventPublisher.publishEvent(
+        new IntakeLoggedEvent(
+            userId,
+            day.getId(),
+            day.getOnDate(),
+            action,
+            mealSlot,
+            snackId,
+            UUID.randomUUID(),
+            occurredAt));
+  }
+
+  private static void validateRange(LocalDate from, LocalDate to) {
+    if (from == null || to == null) {
+      throw new InvalidIntakeRangeException("from and to are required");
+    }
+    if (from.isAfter(to)) {
+      throw new InvalidIntakeRangeException("from must be on or before to");
+    }
+    long days = java.time.temporal.ChronoUnit.DAYS.between(from, to) + 1L;
+    if (days > RANGE_MAX_DAYS) {
+      throw new InvalidIntakeRangeException(
+          "range must be at most " + RANGE_MAX_DAYS + " days (got " + days + ")");
     }
   }
 }

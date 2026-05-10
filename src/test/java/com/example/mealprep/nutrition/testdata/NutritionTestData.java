@@ -3,15 +3,18 @@ package com.example.mealprep.nutrition.testdata;
 import com.example.mealprep.nutrition.api.dto.ActivityAdjustmentDto;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
 import com.example.mealprep.nutrition.api.dto.EatingWindowDto;
+import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
 import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
 import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
+import com.example.mealprep.nutrition.api.dto.PlannedSlotInputDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.domain.entity.ActivityAdjustment;
 import com.example.mealprep.nutrition.domain.entity.ActivityLevel;
 import com.example.mealprep.nutrition.domain.entity.EatingWindow;
 import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
 import com.example.mealprep.nutrition.domain.entity.Goal;
+import com.example.mealprep.nutrition.domain.entity.IntakeSource;
 import com.example.mealprep.nutrition.domain.entity.MealSlot;
 import com.example.mealprep.nutrition.domain.entity.MicroTarget;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargets;
@@ -84,6 +87,60 @@ public final class NutritionTestData {
     list.add(new ActivityAdjustmentDto(ActivityLevel.REST_DAY, -200, -30));
     list.add(new ActivityAdjustmentDto(ActivityLevel.TRAINING_DAY, 300, 50));
     return list;
+  }
+
+  // ---------------- 01b: intake + activity fixtures ----------------
+
+  /** A reasonable {@code LogSnackRequest} with all required fields populated. */
+  public static LogSnackRequest defaultSnackRequest() {
+    return new LogSnackRequest(
+        "almonds",
+        null,
+        BigDecimal.valueOf(30.0),
+        180,
+        BigDecimal.valueOf(7.0),
+        BigDecimal.valueOf(6.0),
+        BigDecimal.valueOf(15.0),
+        BigDecimal.valueOf(3.0),
+        null,
+        IntakeSource.MANUAL,
+        null);
+  }
+
+  /** A reasonable list of planned-slot inputs covering all four meal slots. */
+  public static List<PlannedSlotInputDto> defaultPlannedSlots() {
+    List<PlannedSlotInputDto> out = new ArrayList<>();
+    out.add(
+        new PlannedSlotInputDto(
+            MealSlot.BREAKFAST,
+            null,
+            500,
+            BigDecimal.valueOf(30.0),
+            BigDecimal.valueOf(60.0),
+            BigDecimal.valueOf(15.0),
+            BigDecimal.valueOf(8.0),
+            null));
+    out.add(
+        new PlannedSlotInputDto(
+            MealSlot.LUNCH,
+            null,
+            600,
+            BigDecimal.valueOf(40.0),
+            BigDecimal.valueOf(70.0),
+            BigDecimal.valueOf(20.0),
+            BigDecimal.valueOf(10.0),
+            null));
+    out.add(
+        new PlannedSlotInputDto(
+            MealSlot.DINNER,
+            null,
+            700,
+            BigDecimal.valueOf(40.0),
+            BigDecimal.valueOf(80.0),
+            BigDecimal.valueOf(25.0),
+            BigDecimal.valueOf(12.0),
+            null));
+    return out;
   }
 
   // ---------------- Entity builders (for unit tests) ----------------
