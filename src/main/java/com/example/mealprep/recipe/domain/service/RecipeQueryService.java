@@ -1,6 +1,7 @@
 package com.example.mealprep.recipe.domain.service;
 
 import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
+import com.example.mealprep.recipe.api.dto.RecipeDiffDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeImportDto;
 import java.util.List;
@@ -34,4 +35,14 @@ public interface RecipeQueryService {
    * recipe-import-not-found}, and "recipe missing" → 404 with {@code recipe-not-found}.
    */
   Optional<RecipeImportDto> getImportProvenance(UUID recipeId);
+
+  /**
+   * Return the persisted change-diff between two consecutive versions on the same branch. Pure
+   * key-value lookup — no recompute. Throws {@code RecipeVersionNotFoundException} if either
+   * version id is missing or {@code toVersion.recipeId} doesn't match {@code recipeId}; throws
+   * {@code RecipeDiffCrossBranchException} if the two versions sit on different branches; throws
+   * {@code RecipeDiffNotComputedException} if the two versions are non-consecutive on the same
+   * branch.
+   */
+  RecipeDiffDto diff(UUID recipeId, UUID fromVersionId, UUID toVersionId);
 }

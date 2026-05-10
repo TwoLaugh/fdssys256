@@ -343,3 +343,119 @@ RecipeBranchDto:
     createdByActor: { type: string, maxLength: 64 }
     adapterTraceId: { type: string, format: uuid, nullable: true }
     version: { type: integer, format: int64 }
+ChangeAction:
+  type: string
+  enum: [ADDED, REMOVED, MODIFIED]
+IngredientChangeDto:
+  type: object
+  required: [action]
+  properties:
+    action: { $ref: '#/ChangeAction' }
+    from:
+      type: object
+      nullable: true
+      description: The ingredient as it was in the parent version. Null on ADDED.
+      properties:
+        ingredientMappingKey: { type: string, maxLength: 160 }
+        displayName: { type: string, maxLength: 160 }
+        quantity: { type: number, format: double, nullable: true }
+        unit: { type: string, maxLength: 16, nullable: true }
+        preparation: { type: string, maxLength: 80, nullable: true }
+        optional: { type: boolean }
+        lineOrder: { type: integer }
+    to:
+      type: object
+      nullable: true
+      description: The ingredient as it is in the new version. Null on REMOVED.
+      properties:
+        ingredientMappingKey: { type: string, maxLength: 160 }
+        displayName: { type: string, maxLength: 160 }
+        quantity: { type: number, format: double, nullable: true }
+        unit: { type: string, maxLength: 16, nullable: true }
+        preparation: { type: string, maxLength: 80, nullable: true }
+        optional: { type: boolean }
+        lineOrder: { type: integer }
+    fieldChanged:
+      type: string
+      maxLength: 32
+      nullable: true
+      description: Set on MODIFIED only; identifies which scalar field differs.
+MethodChangeDto:
+  type: object
+  required: [action, step]
+  properties:
+    action: { $ref: '#/ChangeAction' }
+    step: { type: integer, minimum: 1 }
+    from:
+      type: string
+      nullable: true
+    to:
+      type: string
+      nullable: true
+MetadataChangeDto:
+  type: object
+  required: [action, field]
+  properties:
+    action: { $ref: '#/ChangeAction' }
+    field: { type: string, maxLength: 64 }
+    from: {}
+    to: {}
+TagChangeDto:
+  type: object
+  required: [action, dimension]
+  properties:
+    action: { $ref: '#/ChangeAction' }
+    dimension: { type: string, maxLength: 32 }
+    from: {}
+    to: {}
+RecipeDiffDto:
+  type: object
+  required: [fromVersionId, toVersionId, ingredientChanges, methodChanges, metadataChanges, tagChanges]
+  properties:
+    fromVersionId: { type: string, format: uuid }
+    toVersionId: { type: string, format: uuid }
+    ingredientChanges:
+      type: array
+      items: { $ref: '#/IngredientChangeDto' }
+    methodChanges:
+      type: array
+      items: { $ref: '#/MethodChangeDto' }
+    metadataChanges:
+      type: array
+      items: { $ref: '#/MetadataChangeDto' }
+    tagChanges:
+      type: array
+      items: { $ref: '#/TagChangeDto' }
+UpdateRecipeManualEditRequest:
+  type: object
+  required: [name, ingredients, method, metadata, changeReason, expectedOptimisticVersion]
+  properties:
+    name: { type: string, minLength: 1, maxLength: 160 }
+    description: { type: string, maxLength: 2000, nullable: true }
+    ingredients:
+      type: array
+      minItems: 1
+      items: { $ref: '#/CreateIngredientRequest' }
+    method:
+      type: array
+      minItems: 1
+      items: { $ref: '#/CreateMethodStepRequest' }
+    metadata: { $ref: '#/CreateRecipeMetadataRequest' }
+    tags:
+      type: object
+      nullable: true
+      properties:
+        protein: { type: string, maxLength: 64, nullable: true }
+        cookingMethod: { type: string, maxLength: 64, nullable: true }
+        complexity:
+          type: string
+          enum: [MINIMAL, MODERATE, INVOLVED]
+          nullable: true
+        flavourProfile:
+          type: array
+          items: { type: string, maxLength: 32 }
+        dietaryFlags:
+          type: array
+          items: { type: string, maxLength: 32 }
+    changeReason: { type: string, minLength: 1, maxLength: 2000 }
+    expectedOptimisticVersion: { type: integer, format: int64, minimum: 0 }

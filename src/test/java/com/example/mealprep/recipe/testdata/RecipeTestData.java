@@ -5,6 +5,7 @@ import com.example.mealprep.recipe.api.dto.CreateMethodStepRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeMetadataRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeTagsRequest;
+import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
 import com.example.mealprep.recipe.domain.entity.Complexity;
 import java.math.BigDecimal;
 import java.util.List;
@@ -72,5 +73,42 @@ public final class RecipeTestData {
   public static CreateRecipeTagsRequest defaultTags() {
     return new CreateRecipeTagsRequest(
         "beef", "stovetop", Complexity.MODERATE, List.of("savoury", "umami"), List.of());
+  }
+
+  /**
+   * Default manual-edit request — same body as the 01a default create request, but with the second
+   * method step's duration bumped from 25 to 35 minutes (so the diff is non-empty), {@code
+   * changeReason} populated, and {@code expectedOptimisticVersion} taken from the caller.
+   */
+  public static UpdateRecipeManualEditRequest defaultManualEditRequest(
+      long expectedOptimisticVersion) {
+    List<CreateMethodStepRequest> editedMethod =
+        List.of(
+            new CreateMethodStepRequest(1, "Brown the mince in a wide pan.", 8),
+            new CreateMethodStepRequest(2, "Add passata and simmer for 35 minutes.", 35),
+            new CreateMethodStepRequest(3, "Cook spaghetti to al dente; drain.", 9));
+    return new UpdateRecipeManualEditRequest(
+        "Spaghetti Bolognese",
+        "Hearty weeknight pasta.",
+        defaultIngredients(),
+        editedMethod,
+        defaultMetadata(),
+        defaultTags(),
+        "Simmer longer for deeper flavour.",
+        expectedOptimisticVersion);
+  }
+
+  /** Same body as {@link #defaultCreateRequest()}, mapped into a manual-edit request shape. */
+  public static UpdateRecipeManualEditRequest noopManualEditRequest(
+      long expectedOptimisticVersion) {
+    return new UpdateRecipeManualEditRequest(
+        "Spaghetti Bolognese",
+        "Hearty weeknight pasta.",
+        defaultIngredients(),
+        defaultMethod(),
+        defaultMetadata(),
+        defaultTags(),
+        "Should reject as no-op.",
+        expectedOptimisticVersion);
   }
 }

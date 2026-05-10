@@ -116,13 +116,15 @@ paths:
   /api/v1/recipes:
     $ref: 'paths/recipe.yaml#/recipes'
   /api/v1/recipes/{recipeId}:
-    $ref: 'paths/recipe.yaml#/recipeById'
+    $ref: 'paths/recipe.yaml#/recipeRoot'
   /api/v1/recipes/imports/url:
     $ref: 'paths/recipe.yaml#/recipeImports'
   /api/v1/recipes/{recipeId}/import-provenance:
     $ref: 'paths/recipe.yaml#/recipeImportProvenance'
   /api/v1/recipes/{recipeId}/branches:
     $ref: 'paths/recipe.yaml#/recipeBranches'
+  /api/v1/recipes/{recipeId}/versions/{fromVersionId}/diff/{toVersionId}:
+    $ref: 'paths/recipe.yaml#/recipeVersionDiff'
 components:
   securitySchemes:
     cookieAuth:
@@ -249,6 +251,13 @@ components:
     ImportRecipeFromUrlRequest: { $ref: 'schemas/recipe.yaml#/ImportRecipeFromUrlRequest' }
     RecipeImportDto: { $ref: 'schemas/recipe.yaml#/RecipeImportDto' }
     RecipeBranchDto: { $ref: 'schemas/recipe.yaml#/RecipeBranchDto' }
+    ChangeAction: { $ref: 'schemas/recipe.yaml#/ChangeAction' }
+    IngredientChangeDto: { $ref: 'schemas/recipe.yaml#/IngredientChangeDto' }
+    MetadataChangeDto: { $ref: 'schemas/recipe.yaml#/MetadataChangeDto' }
+    MethodChangeDto: { $ref: 'schemas/recipe.yaml#/MethodChangeDto' }
+    RecipeDiffDto: { $ref: 'schemas/recipe.yaml#/RecipeDiffDto' }
+    TagChangeDto: { $ref: 'schemas/recipe.yaml#/TagChangeDto' }
+    UpdateRecipeManualEditRequest: { $ref: 'schemas/recipe.yaml#/UpdateRecipeManualEditRequest' }
     # ai
     TaskType: { $ref: 'schemas/ai.yaml#/TaskType' }
     ModelTier: { $ref: 'schemas/ai.yaml#/ModelTier' }

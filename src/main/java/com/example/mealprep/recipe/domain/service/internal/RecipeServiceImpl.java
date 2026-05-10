@@ -7,11 +7,14 @@ import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeTagsRequest;
 import com.example.mealprep.recipe.api.dto.ImportRecipeFromUrlRequest;
 import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
+import com.example.mealprep.recipe.api.dto.RecipeDiffDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeImportDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
+import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
 import com.example.mealprep.recipe.api.mapper.ParsedRecipeToCreateRequestMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeBranchMapper;
+import com.example.mealprep.recipe.api.mapper.RecipeDiffMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeImportMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeVersionMapper;
@@ -36,9 +39,16 @@ import com.example.mealprep.recipe.domain.repository.RecipeVersionRepository;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import com.example.mealprep.recipe.domain.service.RecipeUpdateService;
 import com.example.mealprep.recipe.event.RecipeCreatedEvent;
+import com.example.mealprep.recipe.event.RecipeUpdatedEvent;
 import com.example.mealprep.recipe.event.RecipeVersionCreatedEvent;
+import com.example.mealprep.recipe.exception.NoChangesException;
+import com.example.mealprep.recipe.exception.RecipeCatalogueViolationException;
+import com.example.mealprep.recipe.exception.RecipeDiffCrossBranchException;
+import com.example.mealprep.recipe.exception.RecipeDiffNotComputedException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
+import com.example.mealprep.recipe.exception.RecipeVersionNotFoundException;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -50,6 +60,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -89,9 +100,11 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
   private final RecipeVersionMapper versionMapper;
   private final RecipeBranchMapper branchMapper;
   private final RecipeImportMapper importMapper;
+  private final RecipeDiffMapper diffMapper;
   private final UrlFetcher urlFetcher;
   private final HtmlImportParser htmlImportParser;
   private final ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper;
+  private final VersionDiffer versionDiffer;
   private final ApplicationEventPublisher eventPublisher;
   private final Clock clock;
 
@@ -104,9 +117,11 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
       RecipeVersionMapper versionMapper,
       RecipeBranchMapper branchMapper,
       RecipeImportMapper importMapper,
+      RecipeDiffMapper diffMapper,
       UrlFetcher urlFetcher,
       HtmlImportParser htmlImportParser,
       ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper,
+      VersionDiffer versionDiffer,
       ApplicationEventPublisher eventPublisher,
       Clock clock) {
     this.recipeRepository = recipeRepository;
@@ -117,9 +132,11 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
     this.versionMapper = versionMapper;
     this.branchMapper = branchMapper;
     this.importMapper = importMapper;
+    this.diffMapper = diffMapper;
     this.urlFetcher = urlFetcher;
     this.htmlImportParser = htmlImportParser;
     this.parserToCreateRequestMapper = parserToCreateRequestMapper;
+    this.versionDiffer = versionDiffer;
     this.eventPublisher = eventPublisher;
     this.clock = clock;
   }
@@ -183,6 +200,31 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
     return importRepository.findByRecipeId(recipeId).map(importMapper::toDto);
   }
 
+  @Override
+  @Transactional(readOnly = true)
+  public RecipeDiffDto diff(UUID recipeId, UUID fromVersionId, UUID toVersionId) {
+    RecipeVersion to =
+        versionRepository
+            .findById(toVersionId)
+            .orElseThrow(() -> new RecipeVersionNotFoundException(toVersionId));
+    if (to.getRecipe() == null || !to.getRecipe().getId().equals(recipeId)) {
+      throw new RecipeVersionNotFoundException(toVersionId);
+    }
+    RecipeVersion from =
+        versionRepository
+            .findById(fromVersionId)
+            .orElseThrow(() -> new RecipeVersionNotFoundException(fromVersionId));
+    if (from.getBranch() == null
+        || to.getBranch() == null
+        || !from.getBranch().getId().equals(to.getBranch().getId())) {
+      throw new RecipeDiffCrossBranchException();
+    }
+    if (!fromVersionId.equals(to.getParentVersionId())) {
+      throw new RecipeDiffNotComputedException();
+    }
+    return diffMapper.fromJsonNode(fromVersionId, toVersionId, to.getChangeDiff());
+  }
+
   // ---------------- Update ----------------
 
   @Override
@@ -216,6 +258,148 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
     importRepository.save(provenance);
     // Re-hydrate so branches[] reflects the just-created 'main' branch via the same mapper path.
     return getById(created.id()).orElse(created);
+  }
+
+  @Override
+  @Transactional
+  public RecipeDto manualEdit(
+      UUID recipeId, UpdateRecipeManualEditRequest request, UUID actorUserId) {
+    Recipe recipe =
+        recipeRepository
+            .findByIdAndDeletedAtIsNull(recipeId)
+            .orElseThrow(() -> new RecipeNotFoundException(recipeId));
+
+    if (recipe.getCatalogue() == Catalogue.SYSTEM) {
+      throw new RecipeCatalogueViolationException(
+          "Manual edit is not allowed on a SYSTEM-catalogue recipe; promote to USER first.");
+    }
+    if (!recipe.getUserId().equals(actorUserId)) {
+      // Don't leak existence; mirrors the get-by-id ownership rule.
+      throw new RecipeNotFoundException(recipeId);
+    }
+    if (recipe.getOptimisticVersion() != request.expectedOptimisticVersion()) {
+      throw new OptimisticLockingFailureException(
+          "Stale expectedOptimisticVersion for recipe " + recipeId);
+    }
+
+    UUID currentVersionId =
+        versionRepository
+            .findCurrentVersionId(
+                recipe.getId(), recipe.getCurrentBranchId(), recipe.getCurrentVersion())
+            .orElseThrow(
+                () ->
+                    new IllegalStateException(
+                        "Recipe inconsistent: no current version row for recipe " + recipeId));
+    RecipeVersion parent =
+        versionRepository
+            .findById(currentVersionId)
+            .orElseThrow(
+                () ->
+                    new IllegalStateException(
+                        "Recipe inconsistent: current version missing: " + currentVersionId));
+    // Force lazy-load of body collections inside the active transaction.
+    parent.getIngredients().size();
+    parent.getMethodSteps().size();
+    @SuppressWarnings("unused")
+    RecipeMetadata parentMetadata = parent.getMetadata();
+    @SuppressWarnings("unused")
+    RecipeTags parentTags = parent.getTags();
+    if (parentMetadata != null) {
+      parentMetadata.getEquipmentRequired().size();
+      parentMetadata.getMealTypes().size();
+    }
+    if (parentTags != null) {
+      parentTags.getFlavourProfile().size();
+      parentTags.getDietaryFlags().size();
+    }
+
+    NewVersionInput requested =
+        new NewVersionInput(
+            request.ingredients(), request.method(), request.metadata(), request.tags());
+    ObjectNode changeDiff = versionDiffer.diff(parent, requested);
+    if (versionDiffer.isEmpty(changeDiff)) {
+      throw new NoChangesException("Manual edit produced no diff against the current version.");
+    }
+
+    RecipeBranch currentBranch =
+        branchRepository
+            .findById(recipe.getCurrentBranchId())
+            .orElseThrow(
+                () ->
+                    new IllegalStateException(
+                        "Recipe inconsistent: current branch missing: "
+                            + recipe.getCurrentBranchId()));
+    int newVersionNumber = parent.getVersionNumber() + 1;
+    UUID newVersionId = UUID.randomUUID();
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    String createdByActor = "user:" + actorUserId;
+
+    RecipeVersion newVersion =
+        RecipeVersion.builder()
+            .id(newVersionId)
+            .recipe(recipe)
+            .branch(currentBranch)
+            .versionNumber(newVersionNumber)
+            .parentVersionId(parent.getId())
+            .changeDiff(changeDiff)
+            .changeReason(request.changeReason())
+            .trigger(VersionTrigger.MANUAL_EDIT)
+            .characterFingerprint(null)
+            .nutritionPerServing(null)
+            .embeddingStatus(EMBEDDING_STATUS_PENDING)
+            .createdByActor(createdByActor)
+            .adapterTraceId(null)
+            .ingredients(new ArrayList<>())
+            .methodSteps(new ArrayList<>())
+            .build();
+
+    populateIngredients(newVersion, request.ingredients());
+    populateMethodSteps(newVersion, request.method());
+    newVersion.setMetadata(buildMetadata(newVersion, request.metadata()));
+    newVersion.setTags(buildTags(newVersion, request.tags()));
+
+    RecipeVersion savedNewVersion = versionRepository.saveAndFlush(newVersion);
+
+    // Update pointers — recipe + branch.
+    recipe.setCurrentVersion(newVersionNumber);
+    recipe.setName(request.name());
+    recipe.setDescription(request.description());
+    Recipe savedRecipe = recipeRepository.saveAndFlush(recipe);
+
+    currentBranch.setCurrentVersion(newVersionNumber);
+    RecipeBranch savedBranch = branchRepository.saveAndFlush(currentBranch);
+
+    eventPublisher.publishEvent(
+        new RecipeVersionCreatedEvent(
+            savedNewVersion.getId(),
+            savedRecipe.getId(),
+            savedBranch.getId(),
+            savedNewVersion.getVersionNumber(),
+            traceId,
+            now));
+    eventPublisher.publishEvent(
+        new RecipeUpdatedEvent(
+            savedRecipe.getId(),
+            savedBranch.getId(),
+            savedNewVersion.getId(),
+            savedNewVersion.getVersionNumber(),
+            VersionTrigger.MANUAL_EDIT,
+            traceId,
+            now));
+
+    log.info(
+        "recipe manualEdit recipeId={} branchId={} newVersionId={} versionNumber={} userId={}",
+        savedRecipe.getId(),
+        savedBranch.getId(),
+        savedNewVersion.getId(),
+        savedNewVersion.getVersionNumber(),
+        actorUserId);
+
+    RecipeVersionDto versionDto = versionMapper.toDto(savedNewVersion);
+    List<RecipeBranchDto> branches =
+        branchMapper.toDtoList(branchRepository.findAllByRecipeId(savedRecipe.getId()));
+    return recipeMapper.toDto(savedRecipe, versionDto, branches);
   }
 
   /**

@@ -1,9 +1,14 @@
 package com.example.mealprep.recipe.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.recipe.exception.NoChangesException;
+import com.example.mealprep.recipe.exception.RecipeCatalogueViolationException;
+import com.example.mealprep.recipe.exception.RecipeDiffCrossBranchException;
+import com.example.mealprep.recipe.exception.RecipeDiffNotComputedException;
 import com.example.mealprep.recipe.exception.RecipeImportFailureException;
 import com.example.mealprep.recipe.exception.RecipeImportNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
+import com.example.mealprep.recipe.exception.RecipeVersionNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -66,6 +71,81 @@ public class RecipeExceptionHandler {
             "Recipe import provenance not found",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeVersionNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeVersionNotFound(
+      RecipeVersionNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "recipe-version-not-found",
+            "Recipe version not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeCatalogueViolationException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeCatalogueViolation(
+      RecipeCatalogueViolationException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "recipe-catalogue-violation",
+            "Recipe catalogue violation",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(NoChangesException.class)
+  public ResponseEntity<ProblemDetail> handleNoChanges(
+      NoChangesException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.BAD_REQUEST,
+            ex.getMessage(),
+            "no-changes",
+            "No changes",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeDiffNotComputedException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeDiffNotComputed(
+      RecipeDiffNotComputedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "recipe-diff-not-computed",
+            "Recipe diff not computed",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeDiffCrossBranchException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeDiffCrossBranch(
+      RecipeDiffCrossBranchException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "recipe-diff-cross-branch",
+            "Recipe diff cross branch",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }
