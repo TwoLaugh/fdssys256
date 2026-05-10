@@ -13,10 +13,12 @@ import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.api.mapper.DailyActivityMapper;
 import com.example.mealprep.nutrition.api.mapper.IntakeMapper;
+import com.example.mealprep.nutrition.api.mapper.JournalMapper;
 import com.example.mealprep.nutrition.api.mapper.TargetsMapper;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargets;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargetsAuditLog;
 import com.example.mealprep.nutrition.domain.repository.DailyActivityLogRepository;
+import com.example.mealprep.nutrition.domain.repository.FoodMoodJournalRepository;
 import com.example.mealprep.nutrition.domain.repository.IntakeAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.IntakeDayRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsAuditRepository;
@@ -52,6 +54,7 @@ class NutritionServiceImplTest {
   @Mock private IntakeDayRepository intakeDayRepository;
   @Mock private IntakeAuditRepository intakeAuditRepository;
   @Mock private DailyActivityLogRepository dailyActivityLogRepository;
+  @Mock private FoodMoodJournalRepository journalRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final TargetsMapper mapper =
@@ -60,6 +63,7 @@ class NutritionServiceImplTest {
       new com.example.mealprep.nutrition.api.mapper.IntakeMapperImpl();
   private final DailyActivityMapper dailyActivityMapper =
       new com.example.mealprep.nutrition.api.mapper.DailyActivityMapperImpl();
+  private final JournalMapper journalMapper = new JournalMapper() {};
   private final ObjectMapper objectMapper = new ObjectMapper();
   private final Clock fixedClock =
       Clock.fixed(Instant.parse("2026-05-09T10:00:00Z"), ZoneOffset.UTC);
@@ -71,9 +75,11 @@ class NutritionServiceImplTest {
         intakeDayRepository,
         intakeAuditRepository,
         dailyActivityLogRepository,
+        journalRepository,
         mapper,
         intakeMapper,
         dailyActivityMapper,
+        journalMapper,
         eventPublisher,
         objectMapper,
         fixedClock);
