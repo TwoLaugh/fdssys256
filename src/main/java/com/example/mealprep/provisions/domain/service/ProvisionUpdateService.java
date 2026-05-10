@@ -1,8 +1,10 @@
 package com.example.mealprep.provisions.domain.service;
 
+import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
+import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
@@ -65,4 +67,34 @@ public interface ProvisionUpdateService {
    * when the caller does not own the item.
    */
   void softDeleteInventoryItem(UUID itemId, UUID actorUserId);
+
+  /**
+   * PUT-as-upsert for the budget aggregate (provisions-01c collapses the LLD's separate {@code
+   * initialiseBudget} / {@code updateBudget} entry-points into one — see the {@code @Deprecated}
+   * default forwarders below). On insert {@code expectedVersion} is ignored; on update a stale
+   * value triggers {@code OptimisticLockingFailureException} (mapped to 409). A re-PUT with no
+   * field change is a no-op — no version bump and no event. Currency cannot be changed on the
+   * update path: throws {@code BudgetCurrencyChangeException} (mapped to 422).
+   */
+  BudgetDto upsertBudget(UUID userId, UpdateBudgetRequest request);
+
+  /**
+   * @deprecated 01c collapses to {@link #upsertBudget(UUID, UpdateBudgetRequest)}. Kept as a
+   *     default forwarder so any caller that follows the LLD's two-method signature verbatim keeps
+   *     compiling.
+   */
+  @Deprecated
+  default BudgetDto initialiseBudget(UUID userId, UpdateBudgetRequest request) {
+    return upsertBudget(userId, request);
+  }
+
+  /**
+   * @deprecated 01c collapses to {@link #upsertBudget(UUID, UpdateBudgetRequest)}. Kept as a
+   *     default forwarder so any caller that follows the LLD's two-method signature verbatim keeps
+   *     compiling.
+   */
+  @Deprecated
+  default BudgetDto updateBudget(UUID userId, UpdateBudgetRequest request) {
+    return upsertBudget(userId, request);
+  }
 }

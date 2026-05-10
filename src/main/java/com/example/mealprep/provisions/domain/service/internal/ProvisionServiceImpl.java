@@ -1,17 +1,21 @@
 package com.example.mealprep.provisions.domain.service.internal;
 
+import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
 import com.example.mealprep.provisions.api.dto.InventoryAuditEntryDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.InventorySearchCriteria;
+import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
+import com.example.mealprep.provisions.api.mapper.BudgetMapper;
 import com.example.mealprep.provisions.api.mapper.EquipmentMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryAuditMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryItemMapper;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
+import com.example.mealprep.provisions.domain.entity.Budget;
 import com.example.mealprep.provisions.domain.entity.DefrostMethod;
 import com.example.mealprep.provisions.domain.entity.Equipment;
 import com.example.mealprep.provisions.domain.entity.InventoryAuditLog;
@@ -21,15 +25,18 @@ import com.example.mealprep.provisions.domain.entity.ItemSource;
 import com.example.mealprep.provisions.domain.entity.StapleStatus;
 import com.example.mealprep.provisions.domain.entity.StorageLocation;
 import com.example.mealprep.provisions.domain.entity.TrackingMode;
+import com.example.mealprep.provisions.domain.repository.BudgetRepository;
 import com.example.mealprep.provisions.domain.repository.EquipmentRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryAuditLogRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryItemRepository;
 import com.example.mealprep.provisions.domain.service.ProvisionQueryService;
 import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
+import com.example.mealprep.provisions.event.BudgetChangedEvent;
 import com.example.mealprep.provisions.event.EquipmentChangedEvent;
 import com.example.mealprep.provisions.event.InventoryItemUpsertedEvent;
 import com.example.mealprep.provisions.event.ItemRanOutEvent;
 import com.example.mealprep.provisions.event.ItemSpoiledEvent;
+import com.example.mealprep.provisions.exception.BudgetCurrencyChangeException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -94,8 +101,10 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
   private final InventoryItemRepository inventoryItemRepository;
   private final InventoryAuditLogRepository auditLogRepository;
   private final EquipmentRepository equipmentRepository;
+  private final BudgetRepository budgetRepository;
   private final InventoryItemMapper mapper;
   private final EquipmentMapper equipmentMapper;
+  private final BudgetMapper budgetMapper;
   private final InventoryAuditMapper inventoryAuditMapper;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
@@ -105,8 +114,10 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
       InventoryItemRepository inventoryItemRepository,
       InventoryAuditLogRepository auditLogRepository,
       EquipmentRepository equipmentRepository,
+      BudgetRepository budgetRepository,
       InventoryItemMapper mapper,
       EquipmentMapper equipmentMapper,
+      BudgetMapper budgetMapper,
       InventoryAuditMapper inventoryAuditMapper,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
@@ -114,8 +125,10 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
     this.inventoryItemRepository = inventoryItemRepository;
     this.auditLogRepository = auditLogRepository;
     this.equipmentRepository = equipmentRepository;
+    this.budgetRepository = budgetRepository;
     this.mapper = mapper;
     this.equipmentMapper = equipmentMapper;
+    this.budgetMapper = budgetMapper;
     this.inventoryAuditMapper = inventoryAuditMapper;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
@@ -173,6 +186,21 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
     return auditLogRepository
         .findByInventoryItemIdOrderByOccurredAtDesc(itemId, pageable)
         .map(inventoryAuditMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<BudgetDto> getBudget(UUID userId) {
+    return budgetRepository.findByUserId(userId).map(budgetMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<BudgetDto> getBudgetsByUserIds(List<UUID> userIds) {
+    if (userIds == null || userIds.isEmpty()) {
+      return List.of();
+    }
+    return budgetMapper.toDtos(budgetRepository.findAllByUserIdIn(userIds));
   }
 
   // ---------------- Update ----------------
@@ -448,6 +476,78 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
             objectMapper.valueToTree(Map.of(FIELD_ITEM_STATUS, ItemLifecycleStatus.WASTED.name())),
             now));
     log.info("inventory item soft-deleted itemId={} userId={}", saved.getId(), actorUserId);
+  }
+
+  @Override
+  @Transactional
+  public BudgetDto upsertBudget(UUID userId, UpdateBudgetRequest request) {
+    Instant now = Instant.now(clock);
+    Optional<Budget> existingOpt = budgetRepository.findByUserId(userId);
+    BigDecimal previousWeeklyTarget;
+    Budget saved;
+    if (existingOpt.isPresent()) {
+      Budget existing = existingOpt.get();
+      if (existing.getVersion() != request.expectedVersionOrZero()) {
+        throw new OptimisticLockingFailureException(
+            "stale expectedVersion for budget userId=" + userId);
+      }
+      if (!existing.getCurrency().equals(request.currency())) {
+        throw new BudgetCurrencyChangeException(
+            "Currency change is rejected — switching from "
+                + existing.getCurrency()
+                + " to "
+                + request.currency()
+                + " requires an explicit reset endpoint (deferred).");
+      }
+      BigDecimal requestedToleranceOver = request.toleranceOverOrZero();
+      boolean requestedEnabled = request.enabledOrDefault();
+      boolean noChange =
+          existing.getWeeklyTarget().compareTo(request.weeklyTarget()) == 0
+              && existing.getToleranceOver().compareTo(requestedToleranceOver) == 0
+              && existing.getPriceSensitivity() == request.priceSensitivity()
+              && existing.isEnabled() == requestedEnabled;
+      if (noChange) {
+        // No-op PUT: no version bump, no event.
+        log.info("budget PUT was a no-op userId={} version={}", userId, existing.getVersion());
+        return budgetMapper.toDto(existing);
+      }
+      previousWeeklyTarget = existing.getWeeklyTarget();
+      existing.setWeeklyTarget(request.weeklyTarget());
+      existing.setToleranceOver(requestedToleranceOver);
+      existing.setPriceSensitivity(request.priceSensitivity());
+      existing.setEnabled(requestedEnabled);
+      // saveAndFlush so {@code @Version} bump materialises before mapping to DTO.
+      saved = budgetRepository.saveAndFlush(existing);
+    } else {
+      previousWeeklyTarget = null;
+      Budget created =
+          Budget.builder()
+              .id(UUID.randomUUID())
+              .userId(userId)
+              .weeklyTarget(request.weeklyTarget())
+              .currency(request.currency())
+              .toleranceOver(request.toleranceOverOrZero())
+              .priceSensitivity(request.priceSensitivity())
+              .enabled(request.enabledOrDefault())
+              .build();
+      // saveAndFlush so {@code @CreationTimestamp} / {@code @Version} populate before mapping.
+      saved = budgetRepository.saveAndFlush(created);
+    }
+    eventPublisher.publishEvent(
+        new BudgetChangedEvent(
+            userId,
+            previousWeeklyTarget,
+            saved.getWeeklyTarget(),
+            saved.getPriceSensitivity(),
+            currentTraceId(),
+            now));
+    log.info(
+        "budget upserted userId={} weeklyTarget={} priceSensitivity={} version={}",
+        userId,
+        saved.getWeeklyTarget(),
+        saved.getPriceSensitivity(),
+        saved.getVersion());
+    return budgetMapper.toDto(saved);
   }
 
   // ---------------- helpers ----------------

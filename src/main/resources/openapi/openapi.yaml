@@ -71,6 +71,8 @@ paths:
     $ref: 'paths/provisions.yaml#/equipment'
   /api/v1/provisions/equipment/{name}:
     $ref: 'paths/provisions.yaml#/equipmentByName'
+  /api/v1/provisions/budget:
+    $ref: 'paths/provisions.yaml#/provisionsBudget'
   # ===== nutrition =====
   /api/v1/nutrition/targets:
     $ref: 'paths/nutrition.yaml#/targets'
@@ -169,6 +171,11 @@ components:
     AuditActor: { $ref: 'schemas/provisions.yaml#/AuditActor' }
     InventoryAuditEntryDto: { $ref: 'schemas/provisions.yaml#/InventoryAuditEntryDto' }
     InventoryAuditEntryDtoPage: { $ref: 'schemas/provisions.yaml#/InventoryAuditEntryDtoPage' }
+    BudgetDto: { $ref: 'schemas/provisions.yaml#/BudgetDto' }
+    BudgetOrderRefDto: { $ref: 'schemas/provisions.yaml#/BudgetOrderRefDto' }
+    BudgetSpendTrackingDto: { $ref: 'schemas/provisions.yaml#/BudgetSpendTrackingDto' }
+    PriceSensitivity: { $ref: 'schemas/provisions.yaml#/PriceSensitivity' }
+    UpdateBudgetRequest: { $ref: 'schemas/provisions.yaml#/UpdateBudgetRequest' }
     # nutrition
     Goal: { $ref: 'schemas/nutrition.yaml#/Goal' }
     EnforcementDirection: { $ref: 'schemas/nutrition.yaml#/EnforcementDirection' }
