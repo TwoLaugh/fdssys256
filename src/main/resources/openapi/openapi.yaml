@@ -56,6 +56,12 @@ paths:
     $ref: 'paths/household.yaml#/householdSettingsAuditLog'
   /api/v1/households/{householdId}/slot-configuration:
     $ref: 'paths/household.yaml#/householdSlotConfiguration'
+  /api/v1/households/current/invites:
+    $ref: 'paths/household.yaml#/householdInvitesCurrent'
+  /api/v1/households/current/invites/{inviteId}:
+    $ref: 'paths/household.yaml#/householdInviteRevoke'
+  /api/v1/invites/accept:
+    $ref: 'paths/household.yaml#/inviteAccept'
   # ===== provisions =====
   /api/v1/provisions/inventory:
     $ref: 'paths/provisions.yaml#/inventory'
@@ -155,6 +161,10 @@ components:
     HouseholdSettingsAuditEntryDtoPage: { $ref: 'schemas/household.yaml#/HouseholdSettingsAuditEntryDtoPage' }
     SlotConfigEntryDto: { $ref: 'schemas/household.yaml#/SlotConfigEntryDto' }
     SlotConfigurationDto: { $ref: 'schemas/household.yaml#/SlotConfigurationDto' }
+    AcceptInviteRequest: { $ref: 'schemas/household.yaml#/AcceptInviteRequest' }
+    CreateInviteRequest: { $ref: 'schemas/household.yaml#/CreateInviteRequest' }
+    HouseholdInviteDto: { $ref: 'schemas/household.yaml#/HouseholdInviteDto' }
+    InviteStatus: { $ref: 'schemas/household.yaml#/InviteStatus' }
     # provisions
     StorageLocation: { $ref: 'schemas/provisions.yaml#/StorageLocation' }
     TrackingMode: { $ref: 'schemas/provisions.yaml#/TrackingMode' }

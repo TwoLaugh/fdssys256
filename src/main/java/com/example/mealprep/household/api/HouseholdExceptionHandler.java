@@ -1,6 +1,10 @@
 package com.example.mealprep.household.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.household.exception.HouseholdInviteAlreadyAcceptedException;
+import com.example.mealprep.household.exception.HouseholdInviteExpiredException;
+import com.example.mealprep.household.exception.HouseholdInviteNotFoundException;
+import com.example.mealprep.household.exception.HouseholdInviteRevokedException;
 import com.example.mealprep.household.exception.HouseholdNotFoundException;
 import com.example.mealprep.household.exception.HouseholdSettingsNotFoundException;
 import com.example.mealprep.household.exception.InsufficientHouseholdRoleException;
@@ -81,6 +85,66 @@ public class HouseholdExceptionHandler {
             "Insufficient household role",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.FORBIDDEN)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(HouseholdInviteNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleHouseholdInviteNotFound(
+      HouseholdInviteNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "household-invite-not-found",
+            "Household invite not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(HouseholdInviteExpiredException.class)
+  public ResponseEntity<ProblemDetail> handleHouseholdInviteExpired(
+      HouseholdInviteExpiredException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.GONE,
+            ex.getMessage(),
+            "household-invite-expired",
+            "Household invite expired",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.GONE)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(HouseholdInviteRevokedException.class)
+  public ResponseEntity<ProblemDetail> handleHouseholdInviteRevoked(
+      HouseholdInviteRevokedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.GONE,
+            ex.getMessage(),
+            "household-invite-revoked",
+            "Household invite revoked",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.GONE)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(HouseholdInviteAlreadyAcceptedException.class)
+  public ResponseEntity<ProblemDetail> handleHouseholdInviteAlreadyAccepted(
+      HouseholdInviteAlreadyAcceptedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "household-invite-already-accepted",
+            "Household invite already accepted or revoked",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

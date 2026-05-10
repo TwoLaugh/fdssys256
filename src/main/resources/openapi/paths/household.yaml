@@ -134,3 +134,82 @@ householdSlotConfiguration:
       '200': { description: Resolved configuration, content: { application/json: { schema: { $ref: '../schemas/household.yaml#/SlotConfigurationDto' } } } }
       '401': { description: Unauthenticated, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
       '404': { description: Household not found or caller not a member, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+householdInvitesCurrent:
+  get:
+    tags: [Households]
+    operationId: listPendingHouseholdInvites
+    summary: List the calling user's household's pending invites (codes redacted).
+    security: [{ cookieAuth: [] }]
+    responses:
+      '200':
+        description: Pending invites; inviteCode is null on every entry.
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/household.yaml#/HouseholdInviteDto' }
+      '401': { description: Unauthenticated, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '404': { description: Caller not in any household, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+  post:
+    tags: [Households]
+    operationId: createHouseholdInvite
+    summary: Create an invite for the calling user's household (PRIMARY only).
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/household.yaml#/CreateInviteRequest' }
+    responses:
+      '201':
+        description: Invite created; the response carries the inviteCode (the only response that does).
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/household.yaml#/HouseholdInviteDto' }
+      '400': { description: Validation error, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '401': { description: Unauthenticated, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '403': { description: Caller not primary, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '404': { description: Caller not in any household, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+householdInviteRevoke:
+  delete:
+    tags: [Households]
+    operationId: revokeHouseholdInvite
+    summary: Revoke a pending invite (PRIMARY only).
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: inviteId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '204': { description: Invite revoked. }
+      '401': { description: Unauthenticated, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '403': { description: Caller not primary, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '404': { description: Invite not found / belongs to another household, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '409': { description: Invite already accepted or already revoked, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+inviteAccept:
+  post:
+    tags: [Households]
+    operationId: acceptHouseholdInvite
+    summary: Accept an invite by code; the accepter joins the inviting household.
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/household.yaml#/AcceptInviteRequest' }
+    responses:
+      '200':
+        description: Invite accepted; returns the new HouseholdMemberDto for the accepter.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/household.yaml#/HouseholdMemberDto' }
+      '400': { description: Validation error, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '401': { description: Unauthenticated, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '403': { description: Invite issued for a different user, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '404': { description: Invite code not found, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '409': { description: Already accepted or accepter already in a household, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '410': { description: Invite expired or revoked, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }

@@ -2,6 +2,7 @@ package com.example.mealprep.household.testdata;
 
 import com.example.mealprep.household.api.dto.CreateHouseholdRequest;
 import com.example.mealprep.household.domain.entity.Household;
+import com.example.mealprep.household.domain.entity.HouseholdInvite;
 import com.example.mealprep.household.domain.entity.HouseholdMember;
 import com.example.mealprep.household.domain.entity.HouseholdRole;
 import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument;
@@ -9,6 +10,7 @@ import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument.Ho
 import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument.SlotDefault;
 import com.example.mealprep.household.domain.entity.SlotKind;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,6 +31,10 @@ public final class HouseholdTestData {
 
   public static MemberBuilder member() {
     return new MemberBuilder();
+  }
+
+  public static InviteBuilder invite() {
+    return new InviteBuilder();
   }
 
   public static CreateHouseholdRequest createRequest() {
@@ -141,6 +147,85 @@ public final class HouseholdTestData {
           .displayName(displayName)
           .priority(priority)
           .joinedAt(joinedAt)
+          .build();
+    }
+  }
+
+  /** Builder for {@link HouseholdInvite} fixtures. */
+  public static final class InviteBuilder {
+    private UUID id = UUID.randomUUID();
+    private UUID householdId = UUID.randomUUID();
+    private String inviteCode = "TESTCODE12345678";
+    private UUID issuedByUserId = UUID.randomUUID();
+    private UUID issuedForUserId;
+    private HouseholdRole intendedRole = HouseholdRole.member;
+    private Instant expiresAt = Instant.parse("2026-06-08T10:00:00Z").plus(7, ChronoUnit.DAYS);
+    private Instant acceptedAt;
+    private UUID acceptedByUserId;
+    private Instant revokedAt;
+
+    public InviteBuilder withId(UUID id) {
+      this.id = id;
+      return this;
+    }
+
+    public InviteBuilder withHouseholdId(UUID householdId) {
+      this.householdId = householdId;
+      return this;
+    }
+
+    public InviteBuilder withInviteCode(String inviteCode) {
+      this.inviteCode = inviteCode;
+      return this;
+    }
+
+    public InviteBuilder withIssuedByUserId(UUID issuedByUserId) {
+      this.issuedByUserId = issuedByUserId;
+      return this;
+    }
+
+    public InviteBuilder withIssuedForUserId(UUID issuedForUserId) {
+      this.issuedForUserId = issuedForUserId;
+      return this;
+    }
+
+    public InviteBuilder withIntendedRole(HouseholdRole intendedRole) {
+      this.intendedRole = intendedRole;
+      return this;
+    }
+
+    public InviteBuilder withExpiresAt(Instant expiresAt) {
+      this.expiresAt = expiresAt;
+      return this;
+    }
+
+    public InviteBuilder withAcceptedAt(Instant acceptedAt) {
+      this.acceptedAt = acceptedAt;
+      return this;
+    }
+
+    public InviteBuilder withAcceptedByUserId(UUID acceptedByUserId) {
+      this.acceptedByUserId = acceptedByUserId;
+      return this;
+    }
+
+    public InviteBuilder withRevokedAt(Instant revokedAt) {
+      this.revokedAt = revokedAt;
+      return this;
+    }
+
+    public HouseholdInvite build() {
+      return HouseholdInvite.builder()
+          .id(id)
+          .householdId(householdId)
+          .inviteCode(inviteCode)
+          .issuedByUserId(issuedByUserId)
+          .issuedForUserId(issuedForUserId)
+          .intendedRole(intendedRole)
+          .expiresAt(expiresAt)
+          .acceptedAt(acceptedAt)
+          .acceptedByUserId(acceptedByUserId)
+          .revokedAt(revokedAt)
           .build();
     }
   }

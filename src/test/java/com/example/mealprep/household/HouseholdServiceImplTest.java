@@ -10,18 +10,22 @@ import static org.mockito.Mockito.when;
 
 import com.example.mealprep.household.api.dto.CreateHouseholdRequest;
 import com.example.mealprep.household.api.dto.HouseholdDto;
+import com.example.mealprep.household.api.mapper.HouseholdInviteMapper;
 import com.example.mealprep.household.api.mapper.HouseholdMapper;
+import com.example.mealprep.household.api.mapper.HouseholdMemberMapper;
 import com.example.mealprep.household.api.mapper.HouseholdSettingsAuditMapper;
 import com.example.mealprep.household.api.mapper.HouseholdSettingsMapper;
 import com.example.mealprep.household.domain.entity.Household;
 import com.example.mealprep.household.domain.entity.HouseholdMember;
 import com.example.mealprep.household.domain.entity.HouseholdRole;
+import com.example.mealprep.household.domain.repository.HouseholdInviteRepository;
 import com.example.mealprep.household.domain.repository.HouseholdMemberRepository;
 import com.example.mealprep.household.domain.repository.HouseholdRepository;
 import com.example.mealprep.household.domain.repository.HouseholdSettingsAuditLogRepository;
 import com.example.mealprep.household.domain.repository.HouseholdSettingsRepository;
 import com.example.mealprep.household.domain.service.internal.HouseholdServiceImpl;
 import com.example.mealprep.household.domain.service.internal.HouseholdSettingsDiffer;
+import com.example.mealprep.household.domain.service.internal.InviteCodeGenerator;
 import com.example.mealprep.household.domain.service.internal.SlotConfigurationResolver;
 import com.example.mealprep.household.event.HouseholdCreatedEvent;
 import com.example.mealprep.household.exception.UserAlreadyInHouseholdException;
@@ -51,17 +55,23 @@ class HouseholdServiceImplTest {
   @Mock private HouseholdMemberRepository householdMemberRepository;
   @Mock private HouseholdSettingsRepository householdSettingsRepository;
   @Mock private HouseholdSettingsAuditLogRepository householdSettingsAuditLogRepository;
+  @Mock private HouseholdInviteRepository householdInviteRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final HouseholdMapper mapper =
       new com.example.mealprep.household.api.mapper.HouseholdMapperImpl();
+  private final HouseholdMemberMapper memberMapper =
+      new com.example.mealprep.household.api.mapper.HouseholdMemberMapperImpl();
   private final HouseholdSettingsMapper settingsMapper =
       new com.example.mealprep.household.api.mapper.HouseholdSettingsMapperImpl();
   private final HouseholdSettingsAuditMapper settingsAuditMapper =
       new com.example.mealprep.household.api.mapper.HouseholdSettingsAuditMapperImpl();
+  private final HouseholdInviteMapper inviteMapper =
+      new com.example.mealprep.household.api.mapper.HouseholdInviteMapperImpl();
   private final HouseholdSettingsDiffer differ = new HouseholdSettingsDiffer(new ObjectMapper());
   private final SlotConfigurationResolver slotConfigurationResolver =
       new SlotConfigurationResolver();
+  private final InviteCodeGenerator inviteCodeGenerator = new InviteCodeGenerator();
 
   private final Clock fixedClock =
       Clock.fixed(Instant.parse("2026-05-08T10:00:00Z"), ZoneOffset.UTC);
@@ -72,11 +82,15 @@ class HouseholdServiceImplTest {
         householdMemberRepository,
         householdSettingsRepository,
         householdSettingsAuditLogRepository,
+        householdInviteRepository,
         mapper,
+        memberMapper,
         settingsMapper,
         settingsAuditMapper,
+        inviteMapper,
         differ,
         slotConfigurationResolver,
+        inviteCodeGenerator,
         eventPublisher,
         fixedClock);
   }

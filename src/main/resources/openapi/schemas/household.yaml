@@ -131,3 +131,55 @@ SlotConfigurationDto:
     allEaterUserIds:
       type: array
       items: { type: string, format: uuid }
+InviteStatus:
+  type: string
+  enum: [PENDING, ACCEPTED, REVOKED, EXPIRED]
+  description: Derived from acceptedAt / revokedAt / expiresAt; never persisted.
+HouseholdInviteDto:
+  type: object
+  required: [id, householdId, issuedByUserId, intendedRole, expiresAt, status]
+  properties:
+    id: { type: string, format: uuid }
+    householdId: { type: string, format: uuid }
+    inviteCode:
+      type: string
+      maxLength: 32
+      nullable: true
+      description: Returned non-null ONLY on the create response. Always null on list / accept responses.
+    issuedByUserId: { type: string, format: uuid }
+    issuedForUserId:
+      type: string
+      format: uuid
+      nullable: true
+    intendedRole: { $ref: '#/HouseholdRole' }
+    expiresAt: { type: string, format: date-time }
+    acceptedAt:
+      type: string
+      format: date-time
+      nullable: true
+    revokedAt:
+      type: string
+      format: date-time
+      nullable: true
+    status: { $ref: '#/InviteStatus' }
+CreateInviteRequest:
+  type: object
+  required: [intendedRole, expiresAt]
+  properties:
+    issuedForUserId:
+      type: string
+      format: uuid
+      nullable: true
+    intendedRole: { $ref: '#/HouseholdRole' }
+    expiresAt:
+      type: string
+      format: date-time
+      description: Must be in the future. Server caps at now + 30 days; values beyond the cap are silently truncated.
+AcceptInviteRequest:
+  type: object
+  required: [inviteCode]
+  properties:
+    inviteCode:
+      type: string
+      minLength: 1
+      maxLength: 32
