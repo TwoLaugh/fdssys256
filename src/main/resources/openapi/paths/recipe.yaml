@@ -57,3 +57,97 @@ recipeById:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeImports:
+  post:
+    tags: [Recipes]
+    operationId: importRecipeFromUrl
+    summary: Import a recipe by fetching and parsing a URL.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/recipe.yaml#/ImportRecipeFromUrlRequest' }
+    responses:
+      '201':
+        description: Recipe imported.
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: Import failed (fetch error or extraction failure).
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeImportProvenance:
+  get:
+    tags: [Recipes]
+    operationId: getRecipeImportProvenance
+    summary: Return import provenance (source URL, extraction method, raw payload) for a recipe.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: Provenance.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeImportDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Recipe or provenance not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeBranches:
+  get:
+    tags: [Recipes]
+    operationId: listRecipeBranches
+    summary: List a recipe's branches (always at least 'main').
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: Branch list.
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/recipe.yaml#/RecipeBranchDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Recipe not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

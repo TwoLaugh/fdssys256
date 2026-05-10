@@ -5,15 +5,24 @@ import com.example.mealprep.recipe.api.dto.CreateMethodStepRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeMetadataRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeTagsRequest;
+import com.example.mealprep.recipe.api.dto.ImportRecipeFromUrlRequest;
+import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
+import com.example.mealprep.recipe.api.dto.RecipeImportDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
+import com.example.mealprep.recipe.api.mapper.ParsedRecipeToCreateRequestMapper;
+import com.example.mealprep.recipe.api.mapper.RecipeBranchMapper;
+import com.example.mealprep.recipe.api.mapper.RecipeImportMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeVersionMapper;
+import com.example.mealprep.recipe.config.UrlFetcher;
 import com.example.mealprep.recipe.domain.entity.Catalogue;
 import com.example.mealprep.recipe.domain.entity.DataQuality;
+import com.example.mealprep.recipe.domain.entity.ImportSource;
 import com.example.mealprep.recipe.domain.entity.NutritionStatus;
 import com.example.mealprep.recipe.domain.entity.Recipe;
 import com.example.mealprep.recipe.domain.entity.RecipeBranch;
+import com.example.mealprep.recipe.domain.entity.RecipeImport;
 import com.example.mealprep.recipe.domain.entity.RecipeIngredient;
 import com.example.mealprep.recipe.domain.entity.RecipeMetadata;
 import com.example.mealprep.recipe.domain.entity.RecipeMethodStep;
@@ -21,12 +30,14 @@ import com.example.mealprep.recipe.domain.entity.RecipeTags;
 import com.example.mealprep.recipe.domain.entity.RecipeVersion;
 import com.example.mealprep.recipe.domain.entity.VersionTrigger;
 import com.example.mealprep.recipe.domain.repository.RecipeBranchRepository;
+import com.example.mealprep.recipe.domain.repository.RecipeImportRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeVersionRepository;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import com.example.mealprep.recipe.domain.service.RecipeUpdateService;
 import com.example.mealprep.recipe.event.RecipeCreatedEvent;
 import com.example.mealprep.recipe.event.RecipeVersionCreatedEvent;
+import com.example.mealprep.recipe.exception.RecipeNotFoundException;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -54,6 +65,12 @@ import org.springframework.transaction.annotation.Transactional;
  * recipe.setCurrentBranchId(branch.id)} — JPA dirty-check picks it up; one extra UPDATE on commit.
  * Version + body insert next, all in the same transaction. {@code saveAndFlush} so
  * {@code @CreationTimestamp} and {@code @Version} materialise before the response DTO.
+ *
+ * <p>recipe-01b layered on URL imports + the branches lookup endpoint. {@link #importFromUrl}
+ * reuses the manual-create write path via the {@link #createRecipeInternal} overload (which lets
+ * callers override {@code dataQuality} + {@code VersionTrigger}), then writes a single {@code
+ * RecipeImport} provenance row in the same transaction. {@link #getById} now also runs {@code
+ * findAllByRecipeId} so {@code branches[]} is populated on every read.
  */
 @Service
 public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateService {
@@ -67,8 +84,14 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
   private final RecipeRepository recipeRepository;
   private final RecipeBranchRepository branchRepository;
   private final RecipeVersionRepository versionRepository;
+  private final RecipeImportRepository importRepository;
   private final RecipeMapper recipeMapper;
   private final RecipeVersionMapper versionMapper;
+  private final RecipeBranchMapper branchMapper;
+  private final RecipeImportMapper importMapper;
+  private final UrlFetcher urlFetcher;
+  private final HtmlImportParser htmlImportParser;
+  private final ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper;
   private final ApplicationEventPublisher eventPublisher;
   private final Clock clock;
 
@@ -76,15 +99,27 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
       RecipeRepository recipeRepository,
       RecipeBranchRepository branchRepository,
       RecipeVersionRepository versionRepository,
+      RecipeImportRepository importRepository,
       RecipeMapper recipeMapper,
       RecipeVersionMapper versionMapper,
+      RecipeBranchMapper branchMapper,
+      RecipeImportMapper importMapper,
+      UrlFetcher urlFetcher,
+      HtmlImportParser htmlImportParser,
+      ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper,
       ApplicationEventPublisher eventPublisher,
       Clock clock) {
     this.recipeRepository = recipeRepository;
     this.branchRepository = branchRepository;
     this.versionRepository = versionRepository;
+    this.importRepository = importRepository;
     this.recipeMapper = recipeMapper;
     this.versionMapper = versionMapper;
+    this.branchMapper = branchMapper;
+    this.importMapper = importMapper;
+    this.urlFetcher = urlFetcher;
+    this.htmlImportParser = htmlImportParser;
+    this.parserToCreateRequestMapper = parserToCreateRequestMapper;
     this.eventPublisher = eventPublisher;
     this.clock = clock;
   }
@@ -98,15 +133,17 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
         .findByIdAndDeletedAtIsNull(recipeId)
         .map(
             recipe -> {
+              List<RecipeBranchDto> branches =
+                  branchMapper.toDtoList(branchRepository.findAllByRecipeId(recipe.getId()));
               if (recipe.getCurrentBranchId() == null) {
                 // Should never happen for a created-via-API recipe; defensive.
-                return recipeMapper.toDto(recipe, null);
+                return recipeMapper.toDto(recipe, null, branches);
               }
               Optional<RecipeVersion> versionOpt =
                   versionRepository.findFirstByRecipeIdAndBranchIdAndVersionNumber(
                       recipe.getId(), recipe.getCurrentBranchId(), recipe.getCurrentVersion());
               if (versionOpt.isEmpty()) {
-                return recipeMapper.toDto(recipe, null);
+                return recipeMapper.toDto(recipe, null, branches);
               }
               RecipeVersion version = versionOpt.get();
               // Force lazy-load of the two list children + the two @OneToOne children inside the
@@ -126,8 +163,24 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
                 tags.getDietaryFlags().size();
               }
               RecipeVersionDto versionDto = versionMapper.toDto(version);
-              return recipeMapper.toDto(recipe, versionDto);
+              return recipeMapper.toDto(recipe, versionDto, branches);
             });
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<RecipeBranchDto> getBranches(UUID recipeId) {
+    Recipe recipe =
+        recipeRepository
+            .findByIdAndDeletedAtIsNull(recipeId)
+            .orElseThrow(() -> new RecipeNotFoundException(recipeId));
+    return branchMapper.toDtoList(branchRepository.findAllByRecipeId(recipe.getId()));
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<RecipeImportDto> getImportProvenance(UUID recipeId) {
+    return importRepository.findByRecipeId(recipeId).map(importMapper::toDto);
   }
 
   // ---------------- Update ----------------
@@ -135,6 +188,42 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
   @Override
   @Transactional
   public RecipeDto createRecipe(UUID userId, CreateRecipeRequest request) {
+    return createRecipeInternal(
+        userId, request, DataQuality.USER_VERIFIED, VersionTrigger.MANUAL_CREATE);
+  }
+
+  @Override
+  @Transactional
+  public RecipeDto importFromUrl(UUID userId, ImportRecipeFromUrlRequest request) {
+    String html = urlFetcher.fetch(request.url());
+    HtmlImportParser.ParsedRecipe parsed = htmlImportParser.parse(html, request.url());
+    CreateRecipeRequest mapped = parserToCreateRequestMapper.map(parsed);
+    // TODO recipe-01g — dedupe on import (DeduplicationFingerprintHasher).
+    RecipeDto created =
+        createRecipeInternal(userId, mapped, DataQuality.IMPORTED, VersionTrigger.IMPORT);
+    RecipeImport provenance =
+        RecipeImport.builder()
+            .id(UUID.randomUUID())
+            .recipeId(created.id())
+            .sourceType(ImportSource.URL)
+            .sourceUrl(request.url())
+            .sourcePayload(parsed.rawPayload())
+            .extractionMethod(parsed.extractionMethod())
+            .duplicateOfRecipeId(null)
+            .importedAt(Instant.now(clock))
+            .importedByUserId(userId)
+            .build();
+    importRepository.save(provenance);
+    // Re-hydrate so branches[] reflects the just-created 'main' branch via the same mapper path.
+    return getById(created.id()).orElse(created);
+  }
+
+  /**
+   * Internal write path used by both the public {@link #createRecipe} (manual_create) and {@link
+   * #importFromUrl} (URL import). Caller picks the {@link DataQuality} and {@link VersionTrigger}.
+   */
+  private RecipeDto createRecipeInternal(
+      UUID userId, CreateRecipeRequest request, DataQuality dataQuality, VersionTrigger trigger) {
     Instant now = Instant.now(clock);
     UUID recipeId = UUID.randomUUID();
     UUID branchId = UUID.randomUUID();
@@ -142,8 +231,6 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
     UUID traceId = currentTraceId();
     String createdByActor = "user:" + userId;
 
-    // 1) Recipe root with currentBranchId=null first — the FK can only be set once the branch
-    //    insert has committed an id. Same transaction ⇒ one trip; no separate tx needed.
     Recipe recipe =
         Recipe.builder()
             .id(recipeId)
@@ -153,12 +240,11 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
             .description(request.description())
             .currentVersion(1)
             .currentBranchId(null)
-            .dataQuality(DataQuality.USER_VERIFIED)
+            .dataQuality(dataQuality)
             .nutritionStatus(NutritionStatus.PENDING)
             .build();
     recipe = recipeRepository.save(recipe);
 
-    // 2) RecipeBranch ('main', auto-created internal-only branch).
     RecipeBranch branch =
         RecipeBranch.builder()
             .id(branchId)
@@ -175,11 +261,8 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
             .build();
     branch = branchRepository.save(branch);
 
-    // 3) Atomic dirty-check update: set currentBranchId on the (managed) Recipe — flushed on tx
-    //    commit. No follow-up transaction.
     recipe.setCurrentBranchId(branch.getId());
 
-    // 4) RecipeVersion + body (cascades to ingredients/methodSteps/metadata/tags).
     RecipeVersion version =
         RecipeVersion.builder()
             .id(versionId)
@@ -189,7 +272,7 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
             .parentVersionId(null)
             .changeDiff(JsonNodeFactory.instance.objectNode())
             .changeReason(null)
-            .trigger(VersionTrigger.MANUAL_CREATE)
+            .trigger(trigger)
             .characterFingerprint(null)
             .nutritionPerServing(null)
             .embeddingStatus(EMBEDDING_STATUS_PENDING)
@@ -204,13 +287,9 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
     version.setMetadata(buildMetadata(version, request.metadata()));
     version.setTags(buildTags(version, request.tags()));
 
-    // saveAndFlush so @CreationTimestamp on the version + the bumped @Version on the recipe
-    // (from the currentBranchId update) materialise before mapping to DTO.
     RecipeVersion savedVersion = versionRepository.saveAndFlush(version);
     Recipe savedRecipe = recipeRepository.saveAndFlush(recipe);
 
-    // After-commit events — one for the recipe, one for the v1 version (the latter is required
-    // by recipe-01h's async embedding listener).
     eventPublisher.publishEvent(
         new RecipeCreatedEvent(savedRecipe.getId(), savedRecipe.getCatalogue(), traceId, now));
     eventPublisher.publishEvent(
@@ -223,15 +302,16 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
             now));
 
     log.info(
-        "recipe created recipeId={} branchId={} versionId={} userId={}",
+        "recipe created recipeId={} branchId={} versionId={} userId={} trigger={}",
         savedRecipe.getId(),
         branch.getId(),
         savedVersion.getId(),
-        userId);
+        userId,
+        trigger);
 
-    // Build response DTO — version body is already loaded (we just built it).
     RecipeVersionDto versionDto = versionMapper.toDto(savedVersion);
-    return recipeMapper.toDto(savedRecipe, versionDto);
+    List<RecipeBranchDto> branches = List.of(branchMapper.toDto(branch));
+    return recipeMapper.toDto(savedRecipe, versionDto, branches);
   }
 
   // ---------------- Helpers ----------------

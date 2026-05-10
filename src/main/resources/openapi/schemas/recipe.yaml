@@ -141,6 +141,7 @@ RecipeDto:
     - optimisticVersion
     - createdAt
     - updatedAt
+    - branches
   properties:
     id: { type: string, format: uuid }
     userId: { type: string, format: uuid }
@@ -215,6 +216,9 @@ RecipeDto:
             dietaryFlags:
               type: array
               items: { type: string }
+    branches:
+      type: array
+      items: { $ref: '#/RecipeBranchDto' }
 CreateIngredientRequest:
   type: object
   required: [lineOrder, ingredientMappingKey, displayName]
@@ -297,3 +301,45 @@ CreateRecipeRequest:
         dietaryFlags:
           type: array
           items: { type: string, maxLength: 32 }
+ImportSource:
+  type: string
+  enum: [manual, url, ai_generated, web_discovered]
+ImportRecipeFromUrlRequest:
+  type: object
+  required: [url]
+  properties:
+    url: { type: string, format: uri, minLength: 1, maxLength: 2048 }
+    catalogue: { $ref: '#/Catalogue' }
+RecipeImportDto:
+  type: object
+  required: [id, recipeId, sourceType, importedAt, importedByUserId]
+  properties:
+    id: { type: string, format: uuid }
+    recipeId: { type: string, format: uuid }
+    sourceType: { $ref: '#/ImportSource' }
+    sourceUrl: { type: string, format: uri, maxLength: 2048, nullable: true }
+    sourcePayload: {}
+    extractionMethod:
+      type: string
+      maxLength: 32
+      nullable: true
+    duplicateOfRecipeId: { type: string, format: uuid, nullable: true }
+    importedAt: { type: string, format: date-time }
+    importedByUserId: { type: string, format: uuid }
+RecipeBranchDto:
+  type: object
+  required: [id, recipeId, name, currentVersion, divergenceScore, createdAt, createdByActor, version]
+  properties:
+    id: { type: string, format: uuid }
+    recipeId: { type: string, format: uuid }
+    parentBranchId: { type: string, format: uuid, nullable: true }
+    branchPointVersionId: { type: string, format: uuid, nullable: true }
+    name: { type: string, minLength: 1, maxLength: 64 }
+    label: { type: string, maxLength: 120, nullable: true }
+    reason: { type: string, nullable: true }
+    currentVersion: { type: integer, minimum: 1 }
+    divergenceScore: { type: number, format: double, minimum: 0, maximum: 1 }
+    createdAt: { type: string, format: date-time }
+    createdByActor: { type: string, maxLength: 64 }
+    adapterTraceId: { type: string, format: uuid, nullable: true }
+    version: { type: integer, format: int64 }

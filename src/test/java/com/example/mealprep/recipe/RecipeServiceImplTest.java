@@ -6,26 +6,42 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.recipe.api.dto.ImportRecipeFromUrlRequest;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.mapper.IngredientMapper;
 import com.example.mealprep.recipe.api.mapper.MethodStepMapper;
+import com.example.mealprep.recipe.api.mapper.ParsedRecipeToCreateRequestMapper;
+import com.example.mealprep.recipe.api.mapper.RecipeBranchMapper;
+import com.example.mealprep.recipe.api.mapper.RecipeImportMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeMetadataMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeTagsMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeVersionMapper;
+import com.example.mealprep.recipe.config.UrlFetcher;
+import com.example.mealprep.recipe.domain.entity.DataQuality;
+import com.example.mealprep.recipe.domain.entity.ImportSource;
 import com.example.mealprep.recipe.domain.entity.Recipe;
 import com.example.mealprep.recipe.domain.entity.RecipeBranch;
+import com.example.mealprep.recipe.domain.entity.RecipeImport;
 import com.example.mealprep.recipe.domain.entity.RecipeVersion;
+import com.example.mealprep.recipe.domain.entity.VersionTrigger;
 import com.example.mealprep.recipe.domain.repository.RecipeBranchRepository;
+import com.example.mealprep.recipe.domain.repository.RecipeImportRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeVersionRepository;
+import com.example.mealprep.recipe.domain.service.internal.HtmlImportParser;
+import com.example.mealprep.recipe.domain.service.internal.HtmlImportParser.ParsedRecipe;
 import com.example.mealprep.recipe.domain.service.internal.RecipeServiceImpl;
 import com.example.mealprep.recipe.event.RecipeCreatedEvent;
 import com.example.mealprep.recipe.event.RecipeVersionCreatedEvent;
 import com.example.mealprep.recipe.testdata.RecipeTestData;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,6 +61,8 @@ class RecipeServiceImplTest {
   @Mock private RecipeRepository recipeRepository;
   @Mock private RecipeBranchRepository branchRepository;
   @Mock private RecipeVersionRepository versionRepository;
+  @Mock private RecipeImportRepository importRepository;
+  @Mock private UrlFetcher urlFetcher;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final IngredientMapper ingredientMapper = new IngredientMapper();
@@ -55,6 +73,12 @@ class RecipeServiceImplTest {
   private final RecipeVersionMapper versionMapper =
       new RecipeVersionMapper(ingredientMapper, methodStepMapper, metadataMapper, tagsMapper);
   private final RecipeMapper recipeMapper = new RecipeMapper();
+  private final RecipeBranchMapper branchMapper = new RecipeBranchMapper();
+  private final RecipeImportMapper importMapper = new RecipeImportMapper();
+  private final ObjectMapper objectMapper = new ObjectMapper();
+  private final HtmlImportParser htmlImportParser = new HtmlImportParser(objectMapper);
+  private final ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper =
+      new ParsedRecipeToCreateRequestMapper();
   private final Clock fixedClock =
       Clock.fixed(Instant.parse("2026-05-09T10:00:00Z"), ZoneOffset.UTC);
 
@@ -63,8 +87,14 @@ class RecipeServiceImplTest {
         recipeRepository,
         branchRepository,
         versionRepository,
+        importRepository,
         recipeMapper,
         versionMapper,
+        branchMapper,
+        importMapper,
+        urlFetcher,
+        htmlImportParser,
+        parserToCreateRequestMapper,
         eventPublisher,
         fixedClock);
   }
@@ -89,10 +119,9 @@ class RecipeServiceImplTest {
     assertThat(dto.currentVersionBody().ingredients()).hasSize(3);
     assertThat(dto.currentVersionBody().methodSteps()).hasSize(3);
     assertThat(dto.currentVersionBody().embeddingStatus()).isEqualTo("pending");
+    assertThat(dto.branches()).hasSize(1);
+    assertThat(dto.branches().get(0).name()).isEqualTo("main");
 
-    // Verify the recipe.currentBranchId mutation actually happened on the managed entity
-    // BEFORE we hand the version off — the service captures it via dirty-check, then
-    // saveAndFlush flushes the UPDATE.
     ArgumentCaptor<Recipe> recipeFlushCaptor = ArgumentCaptor.forClass(Recipe.class);
     verify(recipeRepository).saveAndFlush(recipeFlushCaptor.capture());
     assertThat(recipeFlushCaptor.getValue().getCurrentBranchId()).isNotNull();
@@ -122,5 +151,74 @@ class RecipeServiceImplTest {
     assertThat(dto.currentVersionBody().tags().complexity()).isNull();
     assertThat(dto.currentVersionBody().tags().flavourProfile()).isEmpty();
     assertThat(dto.currentVersionBody().tags().dietaryFlags()).isEmpty();
+  }
+
+  @Test
+  void importFromUrl_orchestratesFetch_parse_persist_andWritesProvenance() {
+    UUID userId = UUID.randomUUID();
+    String sourceUrl = "https://example.com/recipe";
+    String html = "<html/>";
+
+    when(urlFetcher.fetch(sourceUrl)).thenReturn(html);
+
+    HtmlImportParser stubParser =
+        new HtmlImportParser(objectMapper) {
+          @Override
+          public ParsedRecipe parse(String h, String u) {
+            return new ParsedRecipe(
+                "Imported Pasta",
+                "Quick weeknight bowl.",
+                List.of("200g spaghetti", "1 jar passata"),
+                List.of("Boil pasta.", "Heat sauce."),
+                10,
+                15,
+                25,
+                2,
+                "Italian",
+                "json_ld",
+                JsonNodeFactory.instance.objectNode());
+          }
+        };
+
+    RecipeServiceImpl impl =
+        new RecipeServiceImpl(
+            recipeRepository,
+            branchRepository,
+            versionRepository,
+            importRepository,
+            recipeMapper,
+            versionMapper,
+            branchMapper,
+            importMapper,
+            urlFetcher,
+            stubParser,
+            parserToCreateRequestMapper,
+            eventPublisher,
+            fixedClock);
+
+    when(recipeRepository.save(any(Recipe.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(branchRepository.save(any(RecipeBranch.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(versionRepository.saveAndFlush(any(RecipeVersion.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(recipeRepository.saveAndFlush(any(Recipe.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(importRepository.save(any(RecipeImport.class))).thenAnswer(inv -> inv.getArgument(0));
+    // After importFromUrl, the impl re-hydrates via getById; stub it returning empty so it falls
+    // back to the freshly-built DTO.
+    when(recipeRepository.findByIdAndDeletedAtIsNull(any(UUID.class))).thenReturn(Optional.empty());
+
+    RecipeDto dto = impl.importFromUrl(userId, new ImportRecipeFromUrlRequest(sourceUrl, null));
+
+    assertThat(dto).isNotNull();
+    assertThat(dto.name()).isEqualTo("Imported Pasta");
+    assertThat(dto.dataQuality()).isEqualTo(DataQuality.IMPORTED);
+    assertThat(dto.currentVersionBody().trigger()).isEqualTo(VersionTrigger.IMPORT);
+
+    ArgumentCaptor<RecipeImport> provCaptor = ArgumentCaptor.forClass(RecipeImport.class);
+    verify(importRepository).save(provCaptor.capture());
+    RecipeImport saved = provCaptor.getValue();
+    assertThat(saved.getSourceType()).isEqualTo(ImportSource.URL);
+    assertThat(saved.getSourceUrl()).isEqualTo(sourceUrl);
+    assertThat(saved.getExtractionMethod()).isEqualTo("json_ld");
+    assertThat(saved.getImportedByUserId()).isEqualTo(userId);
   }
 }

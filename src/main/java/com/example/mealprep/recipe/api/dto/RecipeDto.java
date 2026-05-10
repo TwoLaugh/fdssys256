@@ -4,13 +4,16 @@ import com.example.mealprep.recipe.domain.entity.Catalogue;
 import com.example.mealprep.recipe.domain.entity.DataQuality;
 import com.example.mealprep.recipe.domain.entity.NutritionStatus;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
- * Read shape of a recipe — root scalar fields plus the current version's full body.
+ * Read shape of a recipe — root scalar fields plus the current version's full body and the list of
+ * branches associated with the recipe.
  *
- * <p>01a does NOT include a {@code branches} array; the branches list (and {@code RecipeBranchDto}
- * itself) defers to recipe-01b alongside the user-facing branch creation flow.
+ * <p>The {@code branches} field landed in recipe-01b alongside {@code GET
+ * /api/v1/recipes/{recipeId}/branches}; in 01a/01b every recipe has exactly one auto-created 'main'
+ * branch — recipe-01d will introduce user-facing branch creation.
  */
 public record RecipeDto(
     UUID id,
@@ -29,4 +32,5 @@ public record RecipeDto(
     long optimisticVersion,
     Instant createdAt,
     Instant updatedAt,
-    RecipeVersionDto currentVersionBody) {}
+    RecipeVersionDto currentVersionBody,
+    List<RecipeBranchDto> branches) {}

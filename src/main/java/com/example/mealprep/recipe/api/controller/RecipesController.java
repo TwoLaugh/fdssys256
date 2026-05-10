@@ -3,8 +3,10 @@ package com.example.mealprep.recipe.api.controller;
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
 import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
+import com.example.mealprep.recipe.api.dto.RecipeImportDto;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import com.example.mealprep.recipe.domain.service.RecipeUpdateService;
+import com.example.mealprep.recipe.exception.RecipeImportNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -63,6 +65,19 @@ public class RecipesController {
   public RecipeDto getById(@PathVariable UUID recipeId) {
     requireCurrentUserId();
     return queryService.getById(recipeId).orElseThrow(() -> new RecipeNotFoundException(recipeId));
+  }
+
+  @GetMapping(path = "/{recipeId}/import-provenance", produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Return import provenance (source URL, extraction method, raw payload) for a recipe.")
+  public RecipeImportDto getImportProvenance(@PathVariable UUID recipeId) {
+    requireCurrentUserId();
+    // 404 with type=recipe-not-found if the recipe itself is missing or soft-deleted.
+    queryService.getById(recipeId).orElseThrow(() -> new RecipeNotFoundException(recipeId));
+    return queryService
+        .getImportProvenance(recipeId)
+        .orElseThrow(() -> new RecipeImportNotFoundException(recipeId));
   }
 
   private UUID requireCurrentUserId() {
