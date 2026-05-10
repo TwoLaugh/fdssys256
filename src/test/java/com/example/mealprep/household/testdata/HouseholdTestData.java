@@ -4,9 +4,15 @@ import com.example.mealprep.household.api.dto.CreateHouseholdRequest;
 import com.example.mealprep.household.domain.entity.Household;
 import com.example.mealprep.household.domain.entity.HouseholdMember;
 import com.example.mealprep.household.domain.entity.HouseholdRole;
+import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument;
+import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument.HouseholdSchedulingPreferences;
+import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument.SlotDefault;
+import com.example.mealprep.household.domain.entity.SlotKind;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -31,6 +37,20 @@ public final class HouseholdTestData {
 
   public static CreateHouseholdRequest createRequest(String name) {
     return new CreateHouseholdRequest(name);
+  }
+
+  /**
+   * Default settings document mirroring {@code HouseholdServiceImpl.buildDefaultSettings} —
+   * breakfast/lunch/dinner/snack all {@code shared=true, headcount=1, timeBudgetMin=30}.
+   */
+  public static HouseholdSettingsDocument defaultDocument() {
+    Map<SlotKind, SlotDefault> slotDefaults = new LinkedHashMap<>();
+    slotDefaults.put(SlotKind.breakfast, new SlotDefault(true, 1, 30));
+    slotDefaults.put(SlotKind.lunch, new SlotDefault(true, 1, 30));
+    slotDefaults.put(SlotKind.dinner, new SlotDefault(true, 1, 30));
+    slotDefaults.put(SlotKind.snack, new SlotDefault(true, 1, 30));
+    return new HouseholdSettingsDocument(
+        slotDefaults, new ArrayList<>(), null, new HouseholdSchedulingPreferences());
   }
 
   public static final class HouseholdBuilder {

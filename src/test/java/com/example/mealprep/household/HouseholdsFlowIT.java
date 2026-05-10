@@ -72,6 +72,8 @@ class HouseholdsFlowIT {
 
   @AfterEach
   void cleanup() {
+    jdbcTemplate.update("DELETE FROM household_settings_audit");
+    jdbcTemplate.update("DELETE FROM household_settings");
     jdbcTemplate.update("DELETE FROM household_member");
     jdbcTemplate.update("DELETE FROM household");
     sessionRepository.deleteAll();
@@ -153,6 +155,14 @@ class HouseholdsFlowIT {
     assertThat(captured.householdId()).isEqualTo(householdId);
     assertThat(captured.createdByUserId()).isEqualTo(user.userId());
     assertThat(captured.scopeKind()).isEqualTo("household");
+
+    // 01b: createHousehold writes a default settings row in the same transaction.
+    Long settingsCount =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM household_settings WHERE household_id = ?",
+            Long.class,
+            householdId);
+    assertThat(settingsCount).isEqualTo(1L);
   }
 
   @Test

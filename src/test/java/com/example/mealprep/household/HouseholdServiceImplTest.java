@@ -11,15 +11,22 @@ import static org.mockito.Mockito.when;
 import com.example.mealprep.household.api.dto.CreateHouseholdRequest;
 import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.api.mapper.HouseholdMapper;
+import com.example.mealprep.household.api.mapper.HouseholdSettingsAuditMapper;
+import com.example.mealprep.household.api.mapper.HouseholdSettingsMapper;
 import com.example.mealprep.household.domain.entity.Household;
 import com.example.mealprep.household.domain.entity.HouseholdMember;
 import com.example.mealprep.household.domain.entity.HouseholdRole;
 import com.example.mealprep.household.domain.repository.HouseholdMemberRepository;
 import com.example.mealprep.household.domain.repository.HouseholdRepository;
+import com.example.mealprep.household.domain.repository.HouseholdSettingsAuditLogRepository;
+import com.example.mealprep.household.domain.repository.HouseholdSettingsRepository;
 import com.example.mealprep.household.domain.service.internal.HouseholdServiceImpl;
+import com.example.mealprep.household.domain.service.internal.HouseholdSettingsDiffer;
+import com.example.mealprep.household.domain.service.internal.SlotConfigurationResolver;
 import com.example.mealprep.household.event.HouseholdCreatedEvent;
 import com.example.mealprep.household.exception.UserAlreadyInHouseholdException;
 import com.example.mealprep.household.testdata.HouseholdTestData;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -42,17 +49,36 @@ class HouseholdServiceImplTest {
 
   @Mock private HouseholdRepository householdRepository;
   @Mock private HouseholdMemberRepository householdMemberRepository;
+  @Mock private HouseholdSettingsRepository householdSettingsRepository;
+  @Mock private HouseholdSettingsAuditLogRepository householdSettingsAuditLogRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final HouseholdMapper mapper =
       new com.example.mealprep.household.api.mapper.HouseholdMapperImpl();
+  private final HouseholdSettingsMapper settingsMapper =
+      new com.example.mealprep.household.api.mapper.HouseholdSettingsMapperImpl();
+  private final HouseholdSettingsAuditMapper settingsAuditMapper =
+      new com.example.mealprep.household.api.mapper.HouseholdSettingsAuditMapperImpl();
+  private final HouseholdSettingsDiffer differ = new HouseholdSettingsDiffer(new ObjectMapper());
+  private final SlotConfigurationResolver slotConfigurationResolver =
+      new SlotConfigurationResolver();
 
   private final Clock fixedClock =
       Clock.fixed(Instant.parse("2026-05-08T10:00:00Z"), ZoneOffset.UTC);
 
   private HouseholdServiceImpl service() {
     return new HouseholdServiceImpl(
-        householdRepository, householdMemberRepository, mapper, eventPublisher, fixedClock);
+        householdRepository,
+        householdMemberRepository,
+        householdSettingsRepository,
+        householdSettingsAuditLogRepository,
+        mapper,
+        settingsMapper,
+        settingsAuditMapper,
+        differ,
+        slotConfigurationResolver,
+        eventPublisher,
+        fixedClock);
   }
 
   // ---------------- getById ----------------

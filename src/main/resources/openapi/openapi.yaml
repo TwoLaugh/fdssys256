@@ -50,6 +50,12 @@ paths:
     $ref: 'paths/household.yaml#/households'
   /api/v1/households/current:
     $ref: 'paths/household.yaml#/currentHousehold'
+  /api/v1/households/{householdId}/settings:
+    $ref: 'paths/household.yaml#/householdSettings'
+  /api/v1/households/{householdId}/settings/audit-log:
+    $ref: 'paths/household.yaml#/householdSettingsAuditLog'
+  /api/v1/households/{householdId}/slot-configuration:
+    $ref: 'paths/household.yaml#/householdSlotConfiguration'
   # ===== provisions =====
   /api/v1/provisions/inventory:
     $ref: 'paths/provisions.yaml#/inventory'
@@ -108,6 +114,17 @@ components:
     HouseholdDto: { $ref: 'schemas/household.yaml#/HouseholdDto' }
     HouseholdMemberDto: { $ref: 'schemas/household.yaml#/HouseholdMemberDto' }
     CreateHouseholdRequest: { $ref: 'schemas/household.yaml#/CreateHouseholdRequest' }
+    SlotKind: { $ref: 'schemas/household.yaml#/SlotKind' }
+    SlotDefault: { $ref: 'schemas/household.yaml#/SlotDefault' }
+    CustomSlotDefinition: { $ref: 'schemas/household.yaml#/CustomSlotDefinition' }
+    HouseholdSchedulingPreferences: { $ref: 'schemas/household.yaml#/HouseholdSchedulingPreferences' }
+    HouseholdSettingsDocument: { $ref: 'schemas/household.yaml#/HouseholdSettingsDocument' }
+    HouseholdSettingsDto: { $ref: 'schemas/household.yaml#/HouseholdSettingsDto' }
+    UpdateHouseholdSettingsRequest: { $ref: 'schemas/household.yaml#/UpdateHouseholdSettingsRequest' }
+    HouseholdSettingsAuditEntryDto: { $ref: 'schemas/household.yaml#/HouseholdSettingsAuditEntryDto' }
+    HouseholdSettingsAuditEntryDtoPage: { $ref: 'schemas/household.yaml#/HouseholdSettingsAuditEntryDtoPage' }
+    SlotConfigEntryDto: { $ref: 'schemas/household.yaml#/SlotConfigEntryDto' }
+    SlotConfigurationDto: { $ref: 'schemas/household.yaml#/SlotConfigurationDto' }
     # provisions
     StorageLocation: { $ref: 'schemas/provisions.yaml#/StorageLocation' }
     TrackingMode: { $ref: 'schemas/provisions.yaml#/TrackingMode' }
