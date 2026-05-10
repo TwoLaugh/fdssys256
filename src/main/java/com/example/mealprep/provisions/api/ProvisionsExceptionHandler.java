@@ -1,6 +1,7 @@
 package com.example.mealprep.provisions.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.provisions.exception.EquipmentNotFoundException;
 import com.example.mealprep.provisions.exception.InvalidInventoryQuantityException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -49,6 +50,21 @@ public class ProvisionsExceptionHandler {
             "Invalid inventory quantity",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(EquipmentNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleEquipmentNotFound(
+      EquipmentNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "equipment-not-found",
+            "Equipment not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

@@ -10,10 +10,14 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
+import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
+import com.example.mealprep.provisions.api.mapper.EquipmentMapper;
+import com.example.mealprep.provisions.api.mapper.InventoryAuditMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryItemMapper;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
+import com.example.mealprep.provisions.domain.entity.Equipment;
 import com.example.mealprep.provisions.domain.entity.InventoryAuditLog;
 import com.example.mealprep.provisions.domain.entity.InventoryItem;
 import com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus;
@@ -21,10 +25,16 @@ import com.example.mealprep.provisions.domain.entity.ItemSource;
 import com.example.mealprep.provisions.domain.entity.StapleStatus;
 import com.example.mealprep.provisions.domain.entity.StorageLocation;
 import com.example.mealprep.provisions.domain.entity.TrackingMode;
+import com.example.mealprep.provisions.domain.repository.EquipmentRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryAuditLogRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryItemRepository;
+import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
 import com.example.mealprep.provisions.domain.service.internal.ProvisionServiceImpl;
+import com.example.mealprep.provisions.event.EquipmentChangedEvent;
 import com.example.mealprep.provisions.event.InventoryItemUpsertedEvent;
+import com.example.mealprep.provisions.event.ItemRanOutEvent;
+import com.example.mealprep.provisions.event.ItemSpoiledEvent;
+import com.example.mealprep.provisions.exception.EquipmentNotFoundException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
 import com.example.mealprep.provisions.testdata.ProvisionsTestData;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -52,10 +62,15 @@ class ProvisionServiceImplTest {
 
   @Mock private InventoryItemRepository inventoryItemRepository;
   @Mock private InventoryAuditLogRepository auditLogRepository;
+  @Mock private EquipmentRepository equipmentRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final InventoryItemMapper mapper =
       new com.example.mealprep.provisions.api.mapper.InventoryItemMapperImpl();
+  private final EquipmentMapper equipmentMapper =
+      new com.example.mealprep.provisions.api.mapper.EquipmentMapperImpl();
+  private final InventoryAuditMapper inventoryAuditMapper =
+      new com.example.mealprep.provisions.api.mapper.InventoryAuditMapperImpl();
 
   // Use findAndRegisterModules() so JSR-310 (Instant, LocalDate) serializes correctly without
   // a hard import dependency on jackson-datatype-jsr310 from this test class.
@@ -68,7 +83,10 @@ class ProvisionServiceImplTest {
     return new ProvisionServiceImpl(
         inventoryItemRepository,
         auditLogRepository,
+        equipmentRepository,
         mapper,
+        equipmentMapper,
+        inventoryAuditMapper,
         eventPublisher,
         objectMapper,
         fixedClock);
@@ -287,6 +305,252 @@ class ProvisionServiceImplTest {
     verifyNoInteractions(auditLogRepository);
     verify(inventoryItemRepository, never()).saveAndFlush(any(InventoryItem.class));
     verifyNoInteractions(eventPublisher);
+  }
+
+  // ---------------- upsertEquipment ----------------
+
+  @Test
+  void upsertEquipment_whenNotPresent_createsAndPublishesEvent() {
+    UUID userId = UUID.randomUUID();
+    when(equipmentRepository.findByUserIdAndName(userId, "oven")).thenReturn(Optional.empty());
+    when(equipmentRepository.saveAndFlush(any(Equipment.class)))
+        .thenAnswer(
+            inv -> {
+              Equipment captured = inv.getArgument(0);
+              captured.setVersion(0);
+              return captured;
+            });
+
+    ProvisionUpdateService.UpsertResult<EquipmentDto> result =
+        service()
+            .upsertEquipment(userId, "oven", ProvisionsTestData.upsertEquipmentRequestForCreate());
+
+    assertThat(result.created()).isTrue();
+    assertThat(result.value().name()).isEqualTo("oven");
+    assertThat(result.value().available()).isTrue();
+    verify(equipmentRepository).saveAndFlush(any(Equipment.class));
+    verify(eventPublisher).publishEvent(any(EquipmentChangedEvent.class));
+  }
+
+  @Test
+  void upsertEquipment_whenPresentAndVersionMatches_updates() {
+    UUID userId = UUID.randomUUID();
+    Equipment existing =
+        ProvisionsTestData.equipment(userId, "oven").available(false).version(2L).build();
+    when(equipmentRepository.findByUserIdAndName(userId, "oven")).thenReturn(Optional.of(existing));
+    when(equipmentRepository.saveAndFlush(any(Equipment.class)))
+        .thenAnswer(
+            inv -> {
+              Equipment captured = inv.getArgument(0);
+              captured.setVersion(3L);
+              return captured;
+            });
+
+    ProvisionUpdateService.UpsertResult<EquipmentDto> result =
+        service()
+            .upsertEquipment(
+                userId,
+                "oven",
+                ProvisionsTestData.upsertEquipmentRequest(true, "now repaired", 2L));
+
+    assertThat(result.created()).isFalse();
+    assertThat(result.value().available()).isTrue();
+    assertThat(result.value().version()).isEqualTo(3L);
+    verify(eventPublisher).publishEvent(any(EquipmentChangedEvent.class));
+  }
+
+  @Test
+  void upsertEquipment_whenStaleExpectedVersion_throws409() {
+    UUID userId = UUID.randomUUID();
+    Equipment existing = ProvisionsTestData.equipment(userId, "oven").version(5L).build();
+    when(equipmentRepository.findByUserIdAndName(userId, "oven")).thenReturn(Optional.of(existing));
+
+    assertThatThrownBy(
+            () ->
+                service()
+                    .upsertEquipment(
+                        userId, "oven", ProvisionsTestData.upsertEquipmentRequest(true, null, 0L)))
+        .isInstanceOf(org.springframework.dao.OptimisticLockingFailureException.class);
+
+    verify(equipmentRepository, never()).saveAndFlush(any(Equipment.class));
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  void upsertEquipment_whenPresentAndExpectedVersionNull_throws409() {
+    UUID userId = UUID.randomUUID();
+    Equipment existing = ProvisionsTestData.equipment(userId, "oven").version(0L).build();
+    when(equipmentRepository.findByUserIdAndName(userId, "oven")).thenReturn(Optional.of(existing));
+
+    assertThatThrownBy(
+            () ->
+                service()
+                    .upsertEquipment(
+                        userId,
+                        "oven",
+                        ProvisionsTestData.upsertEquipmentRequest(true, null, null)))
+        .isInstanceOf(org.springframework.dao.OptimisticLockingFailureException.class);
+  }
+
+  // ---------------- deleteEquipment ----------------
+
+  @Test
+  void deleteEquipment_whenPresent_deletesAndPublishesEvent() {
+    UUID userId = UUID.randomUUID();
+    Equipment existing = ProvisionsTestData.equipment(userId, "oven").build();
+    when(equipmentRepository.findByUserIdAndName(userId, "oven")).thenReturn(Optional.of(existing));
+
+    service().deleteEquipment(userId, "oven");
+
+    verify(equipmentRepository).delete(existing);
+    ArgumentCaptor<EquipmentChangedEvent> captor =
+        ArgumentCaptor.forClass(EquipmentChangedEvent.class);
+    verify(eventPublisher).publishEvent(captor.capture());
+    assertThat(captor.getValue().nowAvailable()).isFalse();
+    assertThat(captor.getValue().equipmentName()).isEqualTo("oven");
+  }
+
+  @Test
+  void deleteEquipment_whenMissing_throws404() {
+    UUID userId = UUID.randomUUID();
+    when(equipmentRepository.findByUserIdAndName(userId, "ghost")).thenReturn(Optional.empty());
+
+    assertThatThrownBy(() -> service().deleteEquipment(userId, "ghost"))
+        .isInstanceOf(EquipmentNotFoundException.class);
+
+    verifyNoInteractions(eventPublisher);
+  }
+
+  // ---------------- markSpoiled ----------------
+
+  @Test
+  void markSpoiled_whenActive_setsStatusWritesAuditAndPublishesEvent() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item = ProvisionsTestData.quantityTrackedItem(userId).build();
+    item.setVersion(0L);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    InventoryItemDto result = service().markSpoiled(item.getId(), userId);
+
+    assertThat(result.itemStatus()).isEqualTo(ItemLifecycleStatus.SPOILED);
+    verify(auditLogRepository).save(any(InventoryAuditLog.class));
+    verify(eventPublisher).publishEvent(any(ItemSpoiledEvent.class));
+  }
+
+  @Test
+  void markSpoiled_whenAlreadySpoiled_isIdempotent() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .itemStatus(ItemLifecycleStatus.SPOILED)
+            .build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    service().markSpoiled(item.getId(), userId);
+
+    verify(inventoryItemRepository, never()).saveAndFlush(any(InventoryItem.class));
+    verifyNoInteractions(auditLogRepository);
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  void markSpoiled_whenNotOwned_throws404() {
+    UUID userId = UUID.randomUUID();
+    UUID itemId = UUID.randomUUID();
+    when(inventoryItemRepository.findByIdAndUserId(itemId, userId)).thenReturn(Optional.empty());
+
+    assertThatThrownBy(() -> service().markSpoiled(itemId, userId))
+        .isInstanceOf(InventoryItemNotFoundException.class);
+  }
+
+  // ---------------- markExhausted ----------------
+
+  @Test
+  void markExhausted_whenActive_publishesItemRanOutEventWithStapleFlag() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .isStaple(true)
+            .ingredientMappingKey("cheese:cheddar")
+            .build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    service().markExhausted(item.getId(), userId);
+
+    ArgumentCaptor<ItemRanOutEvent> captor = ArgumentCaptor.forClass(ItemRanOutEvent.class);
+    verify(eventPublisher).publishEvent(captor.capture());
+    assertThat(captor.getValue().wasStaple()).isTrue();
+    assertThat(captor.getValue().ingredientMappingKey()).isEqualTo("cheese:cheddar");
+    verify(auditLogRepository).save(any(InventoryAuditLog.class));
+  }
+
+  @Test
+  void markExhausted_whenAlreadyExhausted_isIdempotent() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .itemStatus(ItemLifecycleStatus.EXHAUSTED)
+            .build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    service().markExhausted(item.getId(), userId);
+
+    verify(inventoryItemRepository, never()).saveAndFlush(any(InventoryItem.class));
+    verifyNoInteractions(auditLogRepository);
+    verifyNoInteractions(eventPublisher);
+  }
+
+  // ---------------- softDeleteInventoryItem ----------------
+
+  @Test
+  void softDeleteInventoryItem_whenActive_setsWastedWritesAuditNoEvent() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item = ProvisionsTestData.quantityTrackedItem(userId).build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    service().softDeleteInventoryItem(item.getId(), userId);
+
+    assertThat(item.getItemStatus()).isEqualTo(ItemLifecycleStatus.WASTED);
+    verify(auditLogRepository).save(any(InventoryAuditLog.class));
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  void softDeleteInventoryItem_whenAlreadyWasted_isIdempotent() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .itemStatus(ItemLifecycleStatus.WASTED)
+            .build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    service().softDeleteInventoryItem(item.getId(), userId);
+
+    verify(inventoryItemRepository, never()).saveAndFlush(any(InventoryItem.class));
+    verifyNoInteractions(auditLogRepository);
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  void softDeleteInventoryItem_whenNotOwned_throws404() {
+    UUID userId = UUID.randomUUID();
+    UUID itemId = UUID.randomUUID();
+    when(inventoryItemRepository.findByIdAndUserId(itemId, userId)).thenReturn(Optional.empty());
+
+    assertThatThrownBy(() -> service().softDeleteInventoryItem(itemId, userId))
+        .isInstanceOf(InventoryItemNotFoundException.class);
   }
 
   @Test

@@ -159,3 +159,56 @@ UpdateInventoryItemRequest:
         defrostLeadTimeHours: { type: integer, minimum: 0, nullable: true }
         sourceRecipeId: { type: string, format: uuid, nullable: true }
     expectedVersion: { type: integer, format: int64 }
+EquipmentDto:
+  type: object
+  required: [id, userId, name, available, version]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    name: { type: string, minLength: 1, maxLength: 64, pattern: '^[a-z0-9_]+$' }
+    available: { type: boolean }
+    details: { type: string, maxLength: 255, nullable: true }
+    version: { type: integer, format: int64 }
+UpsertEquipmentRequest:
+  type: object
+  required: [available]
+  properties:
+    available: { type: boolean }
+    details: { type: string, maxLength: 255, nullable: true }
+    expectedVersion:
+      type: integer
+      format: int64
+      minimum: 0
+      nullable: true
+      description: Required for update; ignored for insert.
+AuditActor:
+  type: string
+  enum: [USER, COOK_EVENT, GROCERY_IMPORT, NUTRITION_LOGGER, SYSTEM]
+InventoryAuditEntryDto:
+  type: object
+  required: [id, inventoryItemId, actor, fieldChanged, previousValue, newValue, occurredAt]
+  properties:
+    id: { type: string, format: uuid }
+    inventoryItemId: { type: string, format: uuid }
+    actor: { $ref: '#/AuditActor' }
+    actorUserId: { type: string, format: uuid, nullable: true }
+    fieldChanged: { type: string, maxLength: 64 }
+    previousValue: {}
+    newValue: {}
+    occurredAt: { type: string, format: date-time }
+InventoryAuditEntryDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/InventoryAuditEntryDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }

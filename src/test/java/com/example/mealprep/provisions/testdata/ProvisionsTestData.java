@@ -3,7 +3,9 @@ package com.example.mealprep.provisions.testdata;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
+import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
 import com.example.mealprep.provisions.domain.entity.DefrostMethod;
+import com.example.mealprep.provisions.domain.entity.Equipment;
 import com.example.mealprep.provisions.domain.entity.InventoryItem;
 import com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus;
 import com.example.mealprep.provisions.domain.entity.ItemSource;
@@ -131,6 +133,24 @@ public final class ProvisionsTestData {
         null,
         new FreezerExtensionDto(
             LocalDate.parse("2026-04-01"), 12, DefrostMethod.OVERNIGHT_FRIDGE, 8, null));
+  }
+
+  public static Equipment.EquipmentBuilder equipment(UUID userId, String name) {
+    return Equipment.builder()
+        .id(UUID.randomUUID())
+        .userId(userId)
+        .name(name)
+        .available(true)
+        .details(null);
+  }
+
+  public static UpsertEquipmentRequest upsertEquipmentRequestForCreate() {
+    return new UpsertEquipmentRequest(true, "Stainless steel, 4-burner", null);
+  }
+
+  public static UpsertEquipmentRequest upsertEquipmentRequest(
+      boolean available, String details, Long expectedVersion) {
+    return new UpsertEquipmentRequest(available, details, expectedVersion);
   }
 
   public static UpdateInventoryItemRequest updateQuantityTrackedRequest(long expectedVersion) {
