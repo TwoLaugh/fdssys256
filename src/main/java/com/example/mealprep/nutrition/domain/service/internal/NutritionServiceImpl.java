@@ -2,6 +2,7 @@ package com.example.mealprep.nutrition.domain.service.internal;
 
 import com.example.mealprep.nutrition.api.dto.AcceptDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.ActivityAdjustmentDto;
+import com.example.mealprep.nutrition.api.dto.CalculateRecipeNutritionRequest;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
 import com.example.mealprep.nutrition.api.dto.DirectiveInstructionDocument;
@@ -25,9 +26,12 @@ import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
 import com.example.mealprep.nutrition.api.dto.NutritionTargetsAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
 import com.example.mealprep.nutrition.api.dto.PlannedSlotInputDto;
+import com.example.mealprep.nutrition.api.dto.RecipeIngredientLineDto;
+import com.example.mealprep.nutrition.api.dto.RecipeNutritionResultDto;
 import com.example.mealprep.nutrition.api.dto.RejectDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.SafetyGateVerdict;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
+import com.example.mealprep.nutrition.api.dto.UnmappedIngredientDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.api.dto.UpsertFoodMoodEntryRequest;
 import com.example.mealprep.nutrition.api.mapper.DailyActivityMapper;
@@ -64,6 +68,7 @@ import com.example.mealprep.nutrition.domain.repository.IntakeAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.IntakeDayRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsRepository;
+import com.example.mealprep.nutrition.domain.service.NutritionCalculationService;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.nutrition.domain.service.NutritionUpdateService;
 import com.example.mealprep.nutrition.event.FoodMoodEntryWrittenEvent;
@@ -86,12 +91,14 @@ import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundExceptio
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -122,7 +129,8 @@ import org.springframework.transaction.annotation.Transactional;
  * "perMealDistribution"}).
  */
 @Service
-public class NutritionServiceImpl implements NutritionQueryService, NutritionUpdateService {
+public class NutritionServiceImpl
+    implements NutritionQueryService, NutritionUpdateService, NutritionCalculationService {
 
   private static final Logger log = LoggerFactory.getLogger(NutritionServiceImpl.class);
 
@@ -1746,5 +1754,161 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
       throw new HealthDirectiveNotFoundException(directiveId);
     }
     return directive;
+  }
+
+  // ---------------- 01f: Recipe-version nutrition calculation ----------------
+
+  private static final BigDecimal BD_100 = BigDecimal.valueOf(100L);
+
+  @Override
+  @Transactional(readOnly = true)
+  public RecipeNutritionResultDto calculateRecipeNutrition(
+      CalculateRecipeNutritionRequest request) {
+    return computeRecipeNutrition(request, "save-time");
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public RecipeNutritionResultDto recalculateForEvolvedRecipe(
+      CalculateRecipeNutritionRequest request) {
+    return computeRecipeNutrition(request, "recalc");
+  }
+
+  /**
+   * Shared helper. Reads the {@code IngredientMapping} cache via {@link
+   * IngredientMappingRepository#findBySearchTermIn} (batch, amortises round-trips), multiplies each
+   * line's {@code gramsEstimate / 100} by the mapping's per-100g nutrition, sums, then divides by
+   * the request's {@code servings}. Status is one of {@code calculated} / {@code partial} / {@code
+   * pending} per LLD §nutritionStatus.
+   */
+  private RecipeNutritionResultDto computeRecipeNutrition(
+      CalculateRecipeNutritionRequest request, String phase) {
+    List<RecipeIngredientLineDto> lines = request.ingredients();
+
+    // First pass: normalise the lookup key per line; collect distinct keys for the batch query.
+    String[] keys = new String[lines.size()];
+    LinkedHashSet<String> distinctKeys = new LinkedHashSet<>();
+    for (int i = 0; i < lines.size(); i++) {
+      RecipeIngredientLineDto line = lines.get(i);
+      String key = line.ingredientMappingKey();
+      if (key == null || key.isBlank()) {
+        if (line.name() != null && !line.name().isBlank()) {
+          key = intakeKeyNormaliser.normalise(line.name());
+        } else {
+          key = null;
+        }
+      }
+      keys[i] = key;
+      if (key != null) {
+        distinctKeys.add(key);
+      }
+    }
+
+    Map<String, IngredientMapping> byKey = new HashMap<>();
+    if (!distinctKeys.isEmpty()) {
+      for (IngredientMapping m : ingredientMappingRepository.findBySearchTermIn(distinctKeys)) {
+        byKey.put(m.getSearchTerm(), m);
+      }
+    }
+
+    BigDecimal totalCalories = BigDecimal.ZERO;
+    BigDecimal totalProtein = BigDecimal.ZERO;
+    BigDecimal totalCarbs = BigDecimal.ZERO;
+    BigDecimal totalFat = BigDecimal.ZERO;
+    BigDecimal totalFibre = BigDecimal.ZERO;
+    Map<String, BigDecimal> totalMicros = new LinkedHashMap<>();
+    List<UnmappedIngredientDto> unmapped = new ArrayList<>();
+    boolean anyNeedsReview = false;
+    int resolvedCount = 0;
+
+    for (int i = 0; i < lines.size(); i++) {
+      RecipeIngredientLineDto line = lines.get(i);
+      String key = keys[i];
+      IngredientMapping mapping = key == null ? null : byKey.get(key);
+      if (mapping == null) {
+        unmapped.add(new UnmappedIngredientDto(line.name(), "not-in-cache", BigDecimal.ZERO));
+        continue;
+      }
+      resolvedCount++;
+      if (mapping.isNeedsReview()) {
+        anyNeedsReview = true;
+      }
+      BigDecimal grams = line.gramsEstimate() != null ? line.gramsEstimate() : BigDecimal.ZERO;
+      // factor = grams/100 — keep 6 d.p. so per-line rounding does not bias the sum.
+      BigDecimal factor = grams.divide(BD_100, 6, RoundingMode.HALF_UP);
+      IngredientNutritionDocument doc = mapping.getNutritionPer100g();
+      if (doc == null) {
+        // The cache row has no nutrition payload — treat as unmapped.
+        unmapped.add(new UnmappedIngredientDto(line.name(), "no-nutrition-doc", BigDecimal.ZERO));
+        resolvedCount--;
+        continue;
+      }
+      if (doc.calories() != null) {
+        totalCalories =
+            totalCalories.add(BigDecimal.valueOf(doc.calories().longValue()).multiply(factor));
+      }
+      if (doc.proteinG() != null) {
+        totalProtein = totalProtein.add(doc.proteinG().multiply(factor));
+      }
+      if (doc.carbsG() != null) {
+        totalCarbs = totalCarbs.add(doc.carbsG().multiply(factor));
+      }
+      if (doc.fatG() != null) {
+        totalFat = totalFat.add(doc.fatG().multiply(factor));
+      }
+      if (doc.fibreG() != null) {
+        totalFibre = totalFibre.add(doc.fibreG().multiply(factor));
+      }
+      if (doc.micros() != null) {
+        final BigDecimal lineFactor = factor;
+        doc.micros()
+            .forEach(
+                (k, v) -> {
+                  if (v != null) {
+                    totalMicros.merge(k, v.multiply(lineFactor), BigDecimal::add);
+                  }
+                });
+      }
+    }
+
+    BigDecimal servings = BigDecimal.valueOf(request.servings().longValue());
+    int caloriesPerServing =
+        totalCalories.divide(servings, 0, RoundingMode.HALF_UP).intValueExact();
+
+    Map<String, BigDecimal> microsPerServing = new LinkedHashMap<>();
+    totalMicros.forEach(
+        (k, v) -> microsPerServing.put(k, v.divide(servings, 2, RoundingMode.HALF_UP)));
+
+    String status;
+    if (resolvedCount == 0) {
+      status = "pending";
+    } else if (unmapped.isEmpty() && !anyNeedsReview) {
+      status = "calculated";
+    } else {
+      status = "partial";
+    }
+
+    RecipeNutritionResultDto result =
+        new RecipeNutritionResultDto(
+            request.recipeId(),
+            caloriesPerServing,
+            totalProtein.divide(servings, 2, RoundingMode.HALF_UP),
+            totalCarbs.divide(servings, 2, RoundingMode.HALF_UP),
+            totalFat.divide(servings, 2, RoundingMode.HALF_UP),
+            totalFibre.divide(servings, 2, RoundingMode.HALF_UP),
+            microsPerServing,
+            status,
+            List.copyOf(unmapped));
+
+    log.debug(
+        "nutrition calc phase={} recipeId={} servings={} resolved={} unmapped={} status={}",
+        phase,
+        request.recipeId(),
+        request.servings(),
+        resolvedCount,
+        unmapped.size(),
+        status);
+
+    return result;
   }
 }

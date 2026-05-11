@@ -15,6 +15,8 @@ import com.example.mealprep.nutrition.exception.InvalidDirectiveRoutingException
 import com.example.mealprep.nutrition.exception.InvalidIntakeRangeException;
 import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
+import com.example.mealprep.nutrition.exception.RecipeNutritionWriteFailedException;
+import com.example.mealprep.nutrition.exception.RecipeVersionLookupFailedException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -268,6 +270,41 @@ public class NutritionExceptionHandler {
             "directive-apply-target-unavailable",
             "Directive apply target unavailable",
             req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  // ---------------- 01f: recipe-recalc exceptions ----------------
+
+  @ExceptionHandler(RecipeVersionLookupFailedException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeVersionLookupFailed(
+      RecipeVersionLookupFailedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "recipe-version-lookup-failed",
+            "Recipe version lookup failed",
+            req.getRequestURI());
+    pd.setProperty("recipeId", ex.recipeId());
+    pd.setProperty("versionId", ex.versionId());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeNutritionWriteFailedException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeNutritionWriteFailed(
+      RecipeNutritionWriteFailedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "recipe-nutrition-write-failed",
+            "Recipe nutrition write failed",
+            req.getRequestURI());
+    pd.setProperty("versionId", ex.versionId());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);

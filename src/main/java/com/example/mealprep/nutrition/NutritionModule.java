@@ -1,5 +1,6 @@
 package com.example.mealprep.nutrition;
 
+import com.example.mealprep.nutrition.domain.service.NutritionCalculationService;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.nutrition.domain.service.NutritionUpdateService;
 import org.springframework.stereotype.Component;
@@ -18,11 +19,15 @@ public class NutritionModule {
 
   private final NutritionQueryService nutritionQueryService;
   private final NutritionUpdateService nutritionUpdateService;
+  private final NutritionCalculationService nutritionCalculationService;
 
   public NutritionModule(
-      NutritionQueryService nutritionQueryService, NutritionUpdateService nutritionUpdateService) {
+      NutritionQueryService nutritionQueryService,
+      NutritionUpdateService nutritionUpdateService,
+      NutritionCalculationService nutritionCalculationService) {
     this.nutritionQueryService = nutritionQueryService;
     this.nutritionUpdateService = nutritionUpdateService;
+    this.nutritionCalculationService = nutritionCalculationService;
   }
 
   public NutritionQueryService query() {
@@ -31,5 +36,9 @@ public class NutritionModule {
 
   public NutritionUpdateService update() {
     return nutritionUpdateService;
+  }
+
+  public NutritionCalculationService calculation() {
+    return nutritionCalculationService;
   }
 }
