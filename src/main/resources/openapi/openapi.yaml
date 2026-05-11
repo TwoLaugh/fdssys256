@@ -62,6 +62,12 @@ paths:
     $ref: 'paths/household.yaml#/householdInviteRevoke'
   /api/v1/invites/accept:
     $ref: 'paths/household.yaml#/inviteAccept'
+  /api/v1/households/current/members:
+    $ref: 'paths/household.yaml#/householdMembersCurrent'
+  /api/v1/households/current/members/{memberId}:
+    $ref: 'paths/household.yaml#/householdMember'
+  /api/v1/households/current/members/{memberId}/role:
+    $ref: 'paths/household.yaml#/householdMemberRole'
   # ===== provisions =====
   /api/v1/provisions/inventory:
     $ref: 'paths/provisions.yaml#/inventory'
@@ -173,6 +179,9 @@ components:
     CreateInviteRequest: { $ref: 'schemas/household.yaml#/CreateInviteRequest' }
     HouseholdInviteDto: { $ref: 'schemas/household.yaml#/HouseholdInviteDto' }
     InviteStatus: { $ref: 'schemas/household.yaml#/InviteStatus' }
+    AddMemberRequest: { $ref: 'schemas/household.yaml#/AddMemberRequest' }
+    ChangeRoleRequest: { $ref: 'schemas/household.yaml#/ChangeRoleRequest' }
+    UpdateMemberRequest: { $ref: 'schemas/household.yaml#/UpdateMemberRequest' }
     # provisions
     StorageLocation: { $ref: 'schemas/provisions.yaml#/StorageLocation' }
     TrackingMode: { $ref: 'schemas/provisions.yaml#/TrackingMode' }

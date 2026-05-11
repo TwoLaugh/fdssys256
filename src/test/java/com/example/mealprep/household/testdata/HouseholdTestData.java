@@ -1,6 +1,9 @@
 package com.example.mealprep.household.testdata;
 
+import com.example.mealprep.household.api.dto.AddMemberRequest;
+import com.example.mealprep.household.api.dto.ChangeRoleRequest;
 import com.example.mealprep.household.api.dto.CreateHouseholdRequest;
+import com.example.mealprep.household.api.dto.UpdateMemberRequest;
 import com.example.mealprep.household.domain.entity.Household;
 import com.example.mealprep.household.domain.entity.HouseholdInvite;
 import com.example.mealprep.household.domain.entity.HouseholdMember;
@@ -43,6 +46,28 @@ public final class HouseholdTestData {
 
   public static CreateHouseholdRequest createRequest(String name) {
     return new CreateHouseholdRequest(name);
+  }
+
+  public static AddMemberRequest addMemberRequest(UUID userId) {
+    return new AddMemberRequest(userId, HouseholdRole.member, null, null);
+  }
+
+  public static AddMemberRequest addMemberRequest(
+      UUID userId, HouseholdRole role, Integer priority, String displayName) {
+    return new AddMemberRequest(userId, role, priority, displayName);
+  }
+
+  public static UpdateMemberRequest updateMemberRequest(long expectedVersion) {
+    return new UpdateMemberRequest(null, null, expectedVersion);
+  }
+
+  public static UpdateMemberRequest updateMemberRequest(
+      Integer priority, String displayName, long expectedVersion) {
+    return new UpdateMemberRequest(priority, displayName, expectedVersion);
+  }
+
+  public static ChangeRoleRequest changeRoleRequest(HouseholdRole newRole, long expectedVersion) {
+    return new ChangeRoleRequest(newRole, expectedVersion);
   }
 
   /**

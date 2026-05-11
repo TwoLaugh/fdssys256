@@ -183,3 +183,41 @@ AcceptInviteRequest:
       type: string
       minLength: 1
       maxLength: 32
+AddMemberRequest:
+  type: object
+  required: [userId, role]
+  properties:
+    userId: { type: string, format: uuid }
+    role: { $ref: '#/HouseholdRole' }
+    priority:
+      type: integer
+      minimum: 1
+      maximum: 1000
+      default: 100
+      nullable: true
+    displayName:
+      type: string
+      maxLength: 64
+      nullable: true
+UpdateMemberRequest:
+  type: object
+  required: [expectedVersion]
+  properties:
+    priority:
+      type: integer
+      minimum: 1
+      maximum: 1000
+      nullable: true
+      description: PATCH semantics — null = no change.
+    displayName:
+      type: string
+      maxLength: 64
+      nullable: true
+      description: PATCH semantics — null = no change.
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+ChangeRoleRequest:
+  type: object
+  required: [newRole, expectedVersion]
+  properties:
+    newRole: { $ref: '#/HouseholdRole' }
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
