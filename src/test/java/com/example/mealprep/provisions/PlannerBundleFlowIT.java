@@ -59,11 +59,11 @@ class PlannerBundleFlowIT {
   @AfterEach
   void cleanup() {
     jdbcTemplate.update("DELETE FROM provision_supplier_products");
-    jdbcTemplate.update("DELETE FROM provision_inventory_audit_log");
+    jdbcTemplate.update("DELETE FROM provision_inventory_audit");
     jdbcTemplate.update("DELETE FROM provision_inventory");
     jdbcTemplate.update("DELETE FROM provision_equipment");
     jdbcTemplate.update("DELETE FROM provision_budget");
-    jdbcTemplate.update("DELETE FROM provision_waste");
+    jdbcTemplate.update("DELETE FROM provision_waste_log");
     sessionRepository.deleteAll();
     userRepository.deleteAll();
   }
