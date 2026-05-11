@@ -134,6 +134,16 @@ paths:
     $ref: 'paths/nutrition.yaml#/nutritionIngredientCorrection'
   /api/v1/nutrition/ingredients/needs-review:
     $ref: 'paths/nutrition.yaml#/nutritionIngredientNeedsReview'
+  /api/v1/nutrition/health-directives:
+    $ref: 'paths/nutrition.yaml#/nutritionHealthDirectives'
+  /api/v1/nutrition/health-directives/{directiveId}:
+    $ref: 'paths/nutrition.yaml#/nutritionHealthDirective'
+  /api/v1/nutrition/health-directives/inbound:
+    $ref: 'paths/nutrition.yaml#/nutritionHealthDirectivesInbound'
+  /api/v1/nutrition/health-directives/{directiveId}/accept:
+    $ref: 'paths/nutrition.yaml#/nutritionHealthDirectiveAccept'
+  /api/v1/nutrition/health-directives/{directiveId}/reject:
+    $ref: 'paths/nutrition.yaml#/nutritionHealthDirectiveReject'
   # ===== recipe =====
   /api/v1/recipes:
     $ref: 'paths/recipe.yaml#/recipes'
@@ -277,6 +287,19 @@ components:
     IngredientNutritionDto: { $ref: 'schemas/nutrition.yaml#/IngredientNutritionDto' }
     IngredientNutritionDtoPage: { $ref: 'schemas/nutrition.yaml#/IngredientNutritionDtoPage' }
     UnmappedIngredientDto: { $ref: 'schemas/nutrition.yaml#/UnmappedIngredientDto' }
+    AcceptDirectiveRequest: { $ref: 'schemas/nutrition.yaml#/AcceptDirectiveRequest' }
+    DirectiveConfidence: { $ref: 'schemas/nutrition.yaml#/DirectiveConfidence' }
+    DirectiveDurationDto: { $ref: 'schemas/nutrition.yaml#/DirectiveDurationDto' }
+    DirectiveInstructionDocument: { $ref: 'schemas/nutrition.yaml#/DirectiveInstructionDocument' }
+    DirectivePhaseDto: { $ref: 'schemas/nutrition.yaml#/DirectivePhaseDto' }
+    DirectiveStatus: { $ref: 'schemas/nutrition.yaml#/DirectiveStatus' }
+    DirectiveType: { $ref: 'schemas/nutrition.yaml#/DirectiveType' }
+    HealthDirectiveDto: { $ref: 'schemas/nutrition.yaml#/HealthDirectiveDto' }
+    HealthDirectiveDtoPage: { $ref: 'schemas/nutrition.yaml#/HealthDirectiveDtoPage' }
+    InboundHealthDirectiveRequest: { $ref: 'schemas/nutrition.yaml#/InboundHealthDirectiveRequest' }
+    RejectDirectiveRequest: { $ref: 'schemas/nutrition.yaml#/RejectDirectiveRequest' }
+    SafetyFindingDto: { $ref: 'schemas/nutrition.yaml#/SafetyFindingDto' }
+    SafetyGateVerdict: { $ref: 'schemas/nutrition.yaml#/SafetyGateVerdict' }
     # recipe
     Catalogue: { $ref: 'schemas/recipe.yaml#/Catalogue' }
     DataQuality: { $ref: 'schemas/recipe.yaml#/DataQuality' }

@@ -1,10 +1,15 @@
 package com.example.mealprep.nutrition.domain.service.internal;
 
+import com.example.mealprep.nutrition.api.dto.AcceptDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.ActivityAdjustmentDto;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
+import com.example.mealprep.nutrition.api.dto.DirectiveInstructionDocument;
+import com.example.mealprep.nutrition.api.dto.DirectiveStatus;
 import com.example.mealprep.nutrition.api.dto.EatingWindowDto;
 import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
+import com.example.mealprep.nutrition.api.dto.HealthDirectiveDto;
+import com.example.mealprep.nutrition.api.dto.InboundHealthDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.IngredientLookupRequest;
 import com.example.mealprep.nutrition.api.dto.IngredientLookupResultDto;
 import com.example.mealprep.nutrition.api.dto.IngredientMappingSource;
@@ -20,10 +25,13 @@ import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
 import com.example.mealprep.nutrition.api.dto.NutritionTargetsAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
 import com.example.mealprep.nutrition.api.dto.PlannedSlotInputDto;
+import com.example.mealprep.nutrition.api.dto.RejectDirectiveRequest;
+import com.example.mealprep.nutrition.api.dto.SafetyGateVerdict;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.api.dto.UpsertFoodMoodEntryRequest;
 import com.example.mealprep.nutrition.api.mapper.DailyActivityMapper;
+import com.example.mealprep.nutrition.api.mapper.HealthDirectiveMapper;
 import com.example.mealprep.nutrition.api.mapper.IngredientMappingMapper;
 import com.example.mealprep.nutrition.api.mapper.IntakeMapper;
 import com.example.mealprep.nutrition.api.mapper.JournalMapper;
@@ -35,6 +43,7 @@ import com.example.mealprep.nutrition.domain.entity.DailyActivityLog;
 import com.example.mealprep.nutrition.domain.entity.EatingWindow;
 import com.example.mealprep.nutrition.domain.entity.FoodMoodJournalEntry;
 import com.example.mealprep.nutrition.domain.entity.Goal;
+import com.example.mealprep.nutrition.domain.entity.HealthDirective;
 import com.example.mealprep.nutrition.domain.entity.IngredientMapping;
 import com.example.mealprep.nutrition.domain.entity.IntakeAuditAction;
 import com.example.mealprep.nutrition.domain.entity.IntakeAuditLog;
@@ -49,6 +58,7 @@ import com.example.mealprep.nutrition.domain.entity.NutritionTargetsAuditLog;
 import com.example.mealprep.nutrition.domain.entity.PerMealDistributionEntry;
 import com.example.mealprep.nutrition.domain.repository.DailyActivityLogRepository;
 import com.example.mealprep.nutrition.domain.repository.FoodMoodJournalRepository;
+import com.example.mealprep.nutrition.domain.repository.HealthDirectiveRepository;
 import com.example.mealprep.nutrition.domain.repository.IngredientMappingRepository;
 import com.example.mealprep.nutrition.domain.repository.IntakeAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.IntakeDayRepository;
@@ -57,9 +67,15 @@ import com.example.mealprep.nutrition.domain.repository.NutritionTargetsReposito
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.nutrition.domain.service.NutritionUpdateService;
 import com.example.mealprep.nutrition.event.FoodMoodEntryWrittenEvent;
+import com.example.mealprep.nutrition.event.HealthDirectiveAcceptedEvent;
+import com.example.mealprep.nutrition.event.HealthDirectiveReceivedEvent;
 import com.example.mealprep.nutrition.event.IngredientMappingCorrectedEvent;
 import com.example.mealprep.nutrition.event.IntakeLoggedEvent;
 import com.example.mealprep.nutrition.event.NutritionTargetsChangedEvent;
+import com.example.mealprep.nutrition.exception.DuplicateHealthDirectiveException;
+import com.example.mealprep.nutrition.exception.HealthDirectiveAlreadyDecidedException;
+import com.example.mealprep.nutrition.exception.HealthDirectiveNotFoundException;
+import com.example.mealprep.nutrition.exception.HealthDirectiveSafetyGateBlockedException;
 import com.example.mealprep.nutrition.exception.IngredientMappingNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeDayNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
@@ -150,12 +166,16 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
   private final DailyActivityLogRepository dailyActivityLogRepository;
   private final FoodMoodJournalRepository journalRepository;
   private final IngredientMappingRepository ingredientMappingRepository;
+  private final HealthDirectiveRepository healthDirectiveRepository;
   private final TargetsMapper mapper;
   private final IntakeMapper intakeMapper;
   private final DailyActivityMapper dailyActivityMapper;
   private final JournalMapper journalMapper;
   private final IngredientMappingMapper ingredientMappingMapper;
+  private final HealthDirectiveMapper healthDirectiveMapper;
   private final IntakeKeyNormaliser intakeKeyNormaliser;
+  private final DirectiveSafetyGate directiveSafetyGate;
+  private final DirectiveApplier directiveApplier;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -168,12 +188,16 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
       DailyActivityLogRepository dailyActivityLogRepository,
       FoodMoodJournalRepository journalRepository,
       IngredientMappingRepository ingredientMappingRepository,
+      HealthDirectiveRepository healthDirectiveRepository,
       TargetsMapper mapper,
       IntakeMapper intakeMapper,
       DailyActivityMapper dailyActivityMapper,
       JournalMapper journalMapper,
       IngredientMappingMapper ingredientMappingMapper,
+      HealthDirectiveMapper healthDirectiveMapper,
       IntakeKeyNormaliser intakeKeyNormaliser,
+      DirectiveSafetyGate directiveSafetyGate,
+      DirectiveApplier directiveApplier,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
@@ -184,12 +208,16 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
     this.dailyActivityLogRepository = dailyActivityLogRepository;
     this.journalRepository = journalRepository;
     this.ingredientMappingRepository = ingredientMappingRepository;
+    this.healthDirectiveRepository = healthDirectiveRepository;
     this.mapper = mapper;
     this.intakeMapper = intakeMapper;
     this.dailyActivityMapper = dailyActivityMapper;
     this.journalMapper = journalMapper;
     this.ingredientMappingMapper = ingredientMappingMapper;
+    this.healthDirectiveMapper = healthDirectiveMapper;
     this.intakeKeyNormaliser = intakeKeyNormaliser;
+    this.directiveSafetyGate = directiveSafetyGate;
+    this.directiveApplier = directiveApplier;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -1526,5 +1554,198 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
         actorUserId,
         saved.getVersion());
     return ingredientMappingMapper.toDto(saved);
+  }
+
+  // ---------------- 01e: health directives ----------------
+
+  @Override
+  @Transactional(readOnly = true)
+  public Page<HealthDirectiveDto> getDirectives(
+      UUID userId, DirectiveStatus filter, Pageable pageable) {
+    Page<HealthDirective> rows =
+        filter == null
+            ? healthDirectiveRepository.findByUserIdOrderByReceivedAtDesc(userId, pageable)
+            : healthDirectiveRepository.findByUserIdAndStatusOrderByReceivedAtDesc(
+                userId, filter, pageable);
+    return rows.map(healthDirectiveMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<HealthDirectiveDto> getDirective(UUID actorUserId, UUID directiveId) {
+    return healthDirectiveRepository
+        .findById(directiveId)
+        .filter(d -> Objects.equals(d.getUserId(), actorUserId))
+        .map(healthDirectiveMapper::toDto);
+  }
+
+  @Override
+  @Transactional
+  public HealthDirectiveDto receiveInboundDirective(
+      UUID actorUserId, InboundHealthDirectiveRequest request) {
+    // Idempotency check — re-delivery returns 409 with the existing row's id + status.
+    Optional<HealthDirective> existing =
+        healthDirectiveRepository.findBySourcePlatformAndExternalDirectiveId(
+            request.sourcePlatform(), request.externalDirectiveId());
+    if (existing.isPresent()) {
+      HealthDirective row = existing.get();
+      throw new DuplicateHealthDirectiveException(row.getId(), row.getStatus());
+    }
+
+    // Temporal-required-when-temporary check — surfaced as 400 by Spring's
+    // ResponseStatusExceptionResolver.
+    if (request.temporary() && request.autoExpiresAt() == null) {
+      throw new org.springframework.web.server.ResponseStatusException(
+          org.springframework.http.HttpStatus.BAD_REQUEST,
+          "autoExpiresAt is required when temporary=true");
+    }
+
+    Instant now = Instant.now(clock);
+    HealthDirective directive =
+        HealthDirective.builder()
+            .id(UUID.randomUUID())
+            .userId(request.userId())
+            .externalDirectiveId(request.externalDirectiveId())
+            .sourcePlatform(request.sourcePlatform())
+            .receivedAt(now)
+            .status(DirectiveStatus.PENDING_REVIEW)
+            .directiveType(request.directiveType())
+            .evidenceSummary(request.evidenceSummary())
+            .evidenceConfidence(request.evidenceConfidence())
+            .instructionPayload(request.instruction())
+            .mapsToModel(request.mapsToModel())
+            .mapsToTier(request.mapsToTier())
+            .temporary(request.temporary())
+            .autoExpiresAt(request.autoExpiresAt())
+            .build();
+
+    // saveAndFlush so @Version + timestamps materialise before mapping.
+    HealthDirective saved = healthDirectiveRepository.saveAndFlush(directive);
+
+    eventPublisher.publishEvent(
+        new HealthDirectiveReceivedEvent(
+            saved.getUserId(),
+            saved.getId(),
+            saved.getDirectiveType(),
+            saved.getSourcePlatform(),
+            saved.getReceivedAt(),
+            UUID.randomUUID(),
+            now));
+    log.info(
+        "health directive inbound persisted directiveId={} userId={} actorUserId={}",
+        saved.getId(),
+        saved.getUserId(),
+        actorUserId);
+    return healthDirectiveMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public HealthDirectiveDto acceptHealthDirective(
+      UUID actorUserId, UUID directiveId, AcceptDirectiveRequest request) {
+    HealthDirective directive = loadOwnedDirective(actorUserId, directiveId);
+
+    if (directive.getStatus() != DirectiveStatus.PENDING_REVIEW) {
+      throw new HealthDirectiveAlreadyDecidedException(directiveId, directive.getStatus());
+    }
+
+    if (directive.getOptimisticVersion() != request.expectedVersion()) {
+      throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
+          HealthDirective.class, directive.getId());
+    }
+
+    DirectiveInstructionDocument effective =
+        request.userModification() != null
+            ? request.userModification()
+            : directive.getInstructionPayload();
+
+    NutritionTargets currentTargets =
+        targetsRepository.findByUserId(directive.getUserId()).orElse(null);
+
+    SafetyGateResult gateResult =
+        directiveSafetyGate.evaluate(effective, directive, currentTargets);
+
+    // Persist gate verdict/findings regardless of outcome.
+    directive.setSafetyGateVerdict(gateResult.verdict());
+    directive.setSafetyGateFindings(gateResult.findings());
+
+    if (gateResult.verdict() == SafetyGateVerdict.BLOCKED) {
+      // Save the verdict/findings so the user can review them; status stays PENDING_REVIEW.
+      healthDirectiveRepository.saveAndFlush(directive);
+      throw new HealthDirectiveSafetyGateBlockedException(directiveId, gateResult.findings());
+    }
+
+    // Route via DirectiveApplier — joins this tx; preference_model with Noop throws 422.
+    directiveApplier.apply(directive, effective, actorUserId);
+
+    Instant now = Instant.now(clock);
+    directive.setStatus(DirectiveStatus.ACCEPTED);
+    directive.setDecidedAt(now);
+    directive.setDecidedByUserId(actorUserId);
+    directive.setUserModificationJson(request.userModification());
+
+    HealthDirective saved = healthDirectiveRepository.saveAndFlush(directive);
+
+    eventPublisher.publishEvent(
+        new HealthDirectiveAcceptedEvent(
+            saved.getUserId(),
+            saved.getId(),
+            saved.getDirectiveType(),
+            saved.getMapsToModel(),
+            saved.getMapsToTier(),
+            request.userModification() != null,
+            UUID.randomUUID(),
+            now));
+    log.info(
+        "health directive accepted directiveId={} actorUserId={} mapsToModel={} verdict={}",
+        saved.getId(),
+        actorUserId,
+        saved.getMapsToModel(),
+        saved.getSafetyGateVerdict());
+    return healthDirectiveMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public HealthDirectiveDto rejectHealthDirective(
+      UUID actorUserId, UUID directiveId, RejectDirectiveRequest request) {
+    HealthDirective directive = loadOwnedDirective(actorUserId, directiveId);
+
+    if (directive.getStatus() != DirectiveStatus.PENDING_REVIEW) {
+      throw new HealthDirectiveAlreadyDecidedException(directiveId, directive.getStatus());
+    }
+
+    if (directive.getOptimisticVersion() != request.expectedVersion()) {
+      throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
+          HealthDirective.class, directive.getId());
+    }
+
+    directive.setStatus(DirectiveStatus.REJECTED);
+    directive.setDecidedAt(Instant.now(clock));
+    directive.setDecidedByUserId(actorUserId);
+    directive.setRejectionReason(request.rejectionReason());
+
+    HealthDirective saved = healthDirectiveRepository.saveAndFlush(directive);
+    log.info(
+        "health directive rejected directiveId={} actorUserId={} reason={}",
+        saved.getId(),
+        actorUserId,
+        saved.getRejectionReason());
+    return healthDirectiveMapper.toDto(saved);
+  }
+
+  /**
+   * Resolve a directive id to its row, collapsing "not found" and "owned by another user" into a
+   * single 404 so we don't leak existence.
+   */
+  private HealthDirective loadOwnedDirective(UUID actorUserId, UUID directiveId) {
+    HealthDirective directive =
+        healthDirectiveRepository
+            .findById(directiveId)
+            .orElseThrow(() -> new HealthDirectiveNotFoundException(directiveId));
+    if (!Objects.equals(directive.getUserId(), actorUserId)) {
+      throw new HealthDirectiveNotFoundException(directiveId);
+    }
+    return directive;
   }
 }

@@ -510,3 +510,166 @@ UnmappedIngredientDto:
     name: { type: string, maxLength: 255 }
     reason: { type: string, maxLength: 128 }
     confidence: { type: number, format: double, minimum: 0, maximum: 1 }
+DirectiveStatus:
+  type: string
+  enum: [PENDING_REVIEW, ACCEPTED, REJECTED, SUPERSEDED, EXPIRED]
+DirectiveType:
+  type: string
+  enum: [INGREDIENT_RESTRICTION, TARGET_ADJUSTMENT, MACRO_REBALANCE, ELIMINATION_TRIAL, REINTRODUCTION_PROTOCOL, SENSITIVITY_DOWNGRADE]
+DirectiveConfidence:
+  type: string
+  enum: [LOW, MODERATE, HIGH]
+SafetyGateVerdict:
+  type: string
+  enum: [PASSED, BLOCKED, PASSED_WITH_WARNINGS]
+SafetyFindingDto:
+  type: object
+  required: [code, message, severity]
+  properties:
+    code: { type: string, maxLength: 64 }
+    message: { type: string, maxLength: 512 }
+    severity: { type: string, enum: [BLOCK, WARN, INFO] }
+DirectivePhaseDto:
+  type: object
+  required: [phase]
+  properties:
+    phase: { type: string, maxLength: 32 }
+    durationWeeks: { type: integer, minimum: 1, nullable: true }
+    rule: { type: string, maxLength: 256, nullable: true }
+DirectiveDurationDto:
+  type: object
+  required: [type]
+  properties:
+    type: { type: string, maxLength: 32 }
+    phases:
+      type: array
+      nullable: true
+      items: { $ref: '#/DirectivePhaseDto' }
+    durationWeeks: { type: integer, minimum: 1, nullable: true }
+DirectiveInstructionDocument:
+  type: object
+  required: [action]
+  properties:
+    action: { type: string, maxLength: 64 }
+    target: { type: string, maxLength: 160, nullable: true }
+    scope: { type: string, maxLength: 64, nullable: true }
+    duration:
+      type: object
+      nullable: true
+      properties:
+        type: { type: string, maxLength: 32 }
+        phases:
+          type: array
+          items: { $ref: '#/DirectivePhaseDto' }
+        durationWeeks: { type: integer, minimum: 1, nullable: true }
+    extras:
+      type: object
+      additionalProperties: true
+HealthDirectiveDto:
+  type: object
+  required: [id, userId, externalDirectiveId, sourcePlatform, receivedAt, status, directiveType, instruction, mapsToModel, temporary, optimisticVersion]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    externalDirectiveId: { type: string, maxLength: 128 }
+    sourcePlatform: { type: string, maxLength: 64 }
+    receivedAt: { type: string, format: date-time }
+    status: { $ref: '#/DirectiveStatus' }
+    directiveType: { $ref: '#/DirectiveType' }
+    evidenceSummary: { type: string, nullable: true }
+    evidenceConfidence:
+      type: string
+      enum: [LOW, MODERATE, HIGH]
+      nullable: true
+    instruction: { $ref: '#/DirectiveInstructionDocument' }
+    mapsToModel: { type: string, maxLength: 24 }
+    mapsToTier: { type: string, maxLength: 48, nullable: true }
+    temporary: { type: boolean }
+    autoExpiresAt:
+      type: string
+      format: date-time
+      nullable: true
+    decidedAt:
+      type: string
+      format: date-time
+      nullable: true
+    decidedByUserId:
+      type: string
+      format: uuid
+      nullable: true
+    userModification:
+      type: object
+      nullable: true
+      description: 'Same shape as instruction; supplied when the user accepted with a modification.'
+      properties:
+        action: { type: string }
+        target: { type: string, nullable: true }
+        scope: { type: string, nullable: true }
+    rejectionReason: { type: string, maxLength: 255, nullable: true }
+    safetyGateVerdict:
+      type: string
+      enum: [PASSED, BLOCKED, PASSED_WITH_WARNINGS]
+      nullable: true
+    safetyGateFindings:
+      type: array
+      nullable: true
+      items: { $ref: '#/SafetyFindingDto' }
+    optimisticVersion: { type: integer, format: int64 }
+InboundHealthDirectiveRequest:
+  type: object
+  required: [externalDirectiveId, sourcePlatform, userId, directiveType, instruction, mapsToModel, temporary]
+  properties:
+    userId: { type: string, format: uuid }
+    externalDirectiveId: { type: string, minLength: 1, maxLength: 128 }
+    sourcePlatform: { type: string, minLength: 1, maxLength: 64 }
+    directiveType: { $ref: '#/DirectiveType' }
+    evidenceSummary:
+      type: string
+      maxLength: 4000
+      nullable: true
+    evidenceConfidence:
+      type: string
+      enum: [LOW, MODERATE, HIGH]
+      nullable: true
+    instruction: { $ref: '#/DirectiveInstructionDocument' }
+    mapsToModel: { type: string, minLength: 1, maxLength: 24 }
+    mapsToTier: { type: string, maxLength: 48, nullable: true }
+    temporary: { type: boolean }
+    autoExpiresAt:
+      type: string
+      format: date-time
+      nullable: true
+AcceptDirectiveRequest:
+  type: object
+  required: [expectedVersion]
+  properties:
+    userModification:
+      type: object
+      nullable: true
+      properties:
+        action: { type: string }
+        target: { type: string, nullable: true }
+        scope: { type: string, nullable: true }
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+RejectDirectiveRequest:
+  type: object
+  required: [expectedVersion]
+  properties:
+    rejectionReason: { type: string, maxLength: 255, nullable: true }
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+HealthDirectiveDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/HealthDirectiveDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }

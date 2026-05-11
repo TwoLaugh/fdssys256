@@ -686,3 +686,182 @@ nutritionIngredientNeedsReview:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionHealthDirectives:
+  get:
+    tags: [Nutrition]
+    operationId: listHealthDirectives
+    summary: 'Paginated list of the caller''s health directives; optional status filter.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: status
+        required: false
+        schema: { type: string, enum: [PENDING_REVIEW, ACCEPTED, REJECTED, SUPERSEDED, EXPIRED] }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of directives.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/HealthDirectiveDtoPage' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionHealthDirective:
+  get:
+    tags: [Nutrition]
+    operationId: getHealthDirective
+    summary: 'Fetch a single directive.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: directiveId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'The directive.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/HealthDirectiveDto' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Directive not found / belongs to another user'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionHealthDirectivesInbound:
+  post:
+    tags: [Nutrition]
+    operationId: receiveInboundHealthDirective
+    summary: 'Health platform pushes a new directive. Idempotent on (sourcePlatform, externalDirectiveId).'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/InboundHealthDirectiveRequest' }
+    responses:
+      '201':
+        description: 'Directive persisted as PENDING_REVIEW.'
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/HealthDirectiveDto' }
+      '400':
+        description: 'Validation error'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Re-delivery of an existing directive'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionHealthDirectiveAccept:
+  post:
+    tags: [Nutrition]
+    operationId: acceptHealthDirective
+    summary: 'Accept a pending directive; runs safety gate then applies the deltas.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: directiveId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/AcceptDirectiveRequest' }
+    responses:
+      '200':
+        description: 'Directive accepted and applied.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/HealthDirectiveDto' }
+      '400':
+        description: 'Validation error'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Directive not found / belongs to another user'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Already decided (not PENDING_REVIEW) or stale expectedVersion'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Safety gate blocked / preference-model target unavailable / invalid routing'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionHealthDirectiveReject:
+  post:
+    tags: [Nutrition]
+    operationId: rejectHealthDirective
+    summary: 'Reject a pending directive; records the rejection reason.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: directiveId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/RejectDirectiveRequest' }
+    responses:
+      '200':
+        description: 'Directive rejected.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/HealthDirectiveDto' }
+      '400':
+        description: 'Validation error'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Directive not found'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Already decided or stale expectedVersion'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

@@ -58,6 +58,11 @@ class JournalServiceTest {
   @Mock private DailyActivityLogRepository dailyActivityLogRepository;
   @Mock private FoodMoodJournalRepository journalRepository;
   @Mock private IngredientMappingRepository ingredientMappingRepository;
+
+  @Mock
+  private com.example.mealprep.nutrition.domain.repository.HealthDirectiveRepository
+      healthDirectiveRepository;
+
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final TargetsMapper targetsMapper =
@@ -68,12 +73,29 @@ class JournalServiceTest {
       new com.example.mealprep.nutrition.api.mapper.DailyActivityMapperImpl();
   private final JournalMapper journalMapper = new JournalMapper() {};
   private final IngredientMappingMapper ingredientMappingMapper = new IngredientMappingMapper() {};
+  private final com.example.mealprep.nutrition.api.mapper.HealthDirectiveMapper
+      healthDirectiveMapper =
+          new com.example.mealprep.nutrition.api.mapper.HealthDirectiveMapper() {};
   private final IntakeKeyNormaliser intakeKeyNormaliser = new IntakeKeyNormaliser();
   private final ObjectMapper objectMapper = new ObjectMapper();
   private final Clock fixedClock =
       Clock.fixed(Instant.parse("2026-05-10T10:00:00Z"), ZoneOffset.UTC);
 
   private NutritionServiceImpl service() {
+    org.springframework.beans.factory.support.DefaultListableBeanFactory bf =
+        new org.springframework.beans.factory.support.DefaultListableBeanFactory();
+    org.springframework.beans.factory.ObjectProvider<
+            com.example.mealprep.nutrition.spi.DirectiveApplyTarget>
+        emptyProvider =
+            bf.getBeanProvider(com.example.mealprep.nutrition.spi.DirectiveApplyTarget.class);
+    com.example.mealprep.nutrition.domain.service.internal.DirectiveApplier directiveApplier =
+        new com.example.mealprep.nutrition.domain.service.internal.DirectiveApplier(
+            targetsRepository,
+            auditRepository,
+            emptyProvider,
+            eventPublisher,
+            objectMapper,
+            fixedClock);
     return new NutritionServiceImpl(
         targetsRepository,
         auditRepository,
@@ -82,12 +104,16 @@ class JournalServiceTest {
         dailyActivityLogRepository,
         journalRepository,
         ingredientMappingRepository,
+        healthDirectiveRepository,
         targetsMapper,
         intakeMapper,
         dailyActivityMapper,
         journalMapper,
         ingredientMappingMapper,
+        healthDirectiveMapper,
         intakeKeyNormaliser,
+        new com.example.mealprep.nutrition.domain.service.internal.DirectiveSafetyGate(),
+        directiveApplier,
         eventPublisher,
         objectMapper,
         fixedClock);

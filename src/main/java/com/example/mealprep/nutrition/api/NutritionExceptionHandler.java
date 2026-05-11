@@ -1,11 +1,17 @@
 package com.example.mealprep.nutrition.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.nutrition.exception.DirectiveApplyTargetUnavailableException;
+import com.example.mealprep.nutrition.exception.DuplicateHealthDirectiveException;
+import com.example.mealprep.nutrition.exception.HealthDirectiveAlreadyDecidedException;
+import com.example.mealprep.nutrition.exception.HealthDirectiveNotFoundException;
+import com.example.mealprep.nutrition.exception.HealthDirectiveSafetyGateBlockedException;
 import com.example.mealprep.nutrition.exception.IngredientMappingNotFoundException;
 import com.example.mealprep.nutrition.exception.IngredientMappingPipelineException;
 import com.example.mealprep.nutrition.exception.IntakeDayNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
+import com.example.mealprep.nutrition.exception.InvalidDirectiveRoutingException;
 import com.example.mealprep.nutrition.exception.InvalidIntakeRangeException;
 import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
@@ -165,6 +171,102 @@ public class NutritionExceptionHandler {
             ex.getMessage(),
             "ingredient-mapping-pipeline",
             "Ingredient mapping pipeline failure",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  // ---------------- 01e: health-directive exceptions ----------------
+
+  @ExceptionHandler(HealthDirectiveNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleHealthDirectiveNotFound(
+      HealthDirectiveNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "health-directive-not-found",
+            "Health directive not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(HealthDirectiveAlreadyDecidedException.class)
+  public ResponseEntity<ProblemDetail> handleHealthDirectiveAlreadyDecided(
+      HealthDirectiveAlreadyDecidedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "health-directive-already-decided",
+            "Health directive already decided",
+            req.getRequestURI());
+    pd.setProperty("currentStatus", ex.currentStatus());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(HealthDirectiveSafetyGateBlockedException.class)
+  public ResponseEntity<ProblemDetail> handleHealthDirectiveSafetyGateBlocked(
+      HealthDirectiveSafetyGateBlockedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "health-directive-safety-gate-blocked",
+            "Health directive blocked by safety gate",
+            req.getRequestURI());
+    pd.setProperty("findings", ex.findings());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(DuplicateHealthDirectiveException.class)
+  public ResponseEntity<ProblemDetail> handleDuplicateHealthDirective(
+      DuplicateHealthDirectiveException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "duplicate-health-directive",
+            "Duplicate health directive",
+            req.getRequestURI());
+    pd.setProperty("existingDirectiveId", ex.existingDirectiveId());
+    pd.setProperty("existingStatus", ex.existingStatus());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(InvalidDirectiveRoutingException.class)
+  public ResponseEntity<ProblemDetail> handleInvalidDirectiveRouting(
+      InvalidDirectiveRoutingException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "invalid-directive-routing",
+            "Invalid directive routing",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(DirectiveApplyTargetUnavailableException.class)
+  public ResponseEntity<ProblemDetail> handleDirectiveApplyTargetUnavailable(
+      DirectiveApplyTargetUnavailableException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "directive-apply-target-unavailable",
+            "Directive apply target unavailable",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
