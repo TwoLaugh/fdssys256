@@ -85,6 +85,10 @@ paths:
     $ref: 'paths/provisions.yaml#/equipmentByName'
   /api/v1/provisions/budget:
     $ref: 'paths/provisions.yaml#/provisionsBudget'
+  /api/v1/provisions/supplier-products:
+    $ref: 'paths/provisions.yaml#/provisionsSupplierProducts'
+  /api/v1/provisions/supplier-products/{supplierProductId}/substitutions:
+    $ref: 'paths/provisions.yaml#/provisionsSupplierProductSubstitution'
   # ===== nutrition =====
   /api/v1/nutrition/targets:
     $ref: 'paths/nutrition.yaml#/targets'
@@ -203,6 +207,11 @@ components:
     BudgetSpendTrackingDto: { $ref: 'schemas/provisions.yaml#/BudgetSpendTrackingDto' }
     PriceSensitivity: { $ref: 'schemas/provisions.yaml#/PriceSensitivity' }
     UpdateBudgetRequest: { $ref: 'schemas/provisions.yaml#/UpdateBudgetRequest' }
+    RecordSubstitutionRequest: { $ref: 'schemas/provisions.yaml#/RecordSubstitutionRequest' }
+    SubstitutionRecordDto: { $ref: 'schemas/provisions.yaml#/SubstitutionRecordDto' }
+    SupplierProductDto: { $ref: 'schemas/provisions.yaml#/SupplierProductDto' }
+    SupplierProductDtoPage: { $ref: 'schemas/provisions.yaml#/SupplierProductDtoPage' }
+    UpsertSupplierProductRequest: { $ref: 'schemas/provisions.yaml#/UpsertSupplierProductRequest' }
     # nutrition
     Goal: { $ref: 'schemas/nutrition.yaml#/Goal' }
     EnforcementDirection: { $ref: 'schemas/nutrition.yaml#/EnforcementDirection' }

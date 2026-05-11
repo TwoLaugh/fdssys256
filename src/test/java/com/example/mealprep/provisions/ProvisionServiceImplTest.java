@@ -17,6 +17,7 @@ import com.example.mealprep.provisions.api.mapper.BudgetMapper;
 import com.example.mealprep.provisions.api.mapper.EquipmentMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryAuditMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryItemMapper;
+import com.example.mealprep.provisions.api.mapper.SupplierProductMapper;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
 import com.example.mealprep.provisions.domain.entity.Equipment;
 import com.example.mealprep.provisions.domain.entity.InventoryAuditLog;
@@ -30,6 +31,7 @@ import com.example.mealprep.provisions.domain.repository.BudgetRepository;
 import com.example.mealprep.provisions.domain.repository.EquipmentRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryAuditLogRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryItemRepository;
+import com.example.mealprep.provisions.domain.repository.SupplierProductRepository;
 import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
 import com.example.mealprep.provisions.domain.service.internal.ProvisionServiceImpl;
 import com.example.mealprep.provisions.event.EquipmentChangedEvent;
@@ -66,6 +68,7 @@ class ProvisionServiceImplTest {
   @Mock private InventoryAuditLogRepository auditLogRepository;
   @Mock private EquipmentRepository equipmentRepository;
   @Mock private BudgetRepository budgetRepository;
+  @Mock private SupplierProductRepository supplierProductRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final InventoryItemMapper mapper =
@@ -75,6 +78,7 @@ class ProvisionServiceImplTest {
   private final BudgetMapper budgetMapper = new BudgetMapper() {};
   private final InventoryAuditMapper inventoryAuditMapper =
       new com.example.mealprep.provisions.api.mapper.InventoryAuditMapperImpl();
+  private final SupplierProductMapper supplierProductMapper = new SupplierProductMapper() {};
 
   // Use findAndRegisterModules() so JSR-310 (Instant, LocalDate) serializes correctly without
   // a hard import dependency on jackson-datatype-jsr310 from this test class.
@@ -89,10 +93,12 @@ class ProvisionServiceImplTest {
         auditLogRepository,
         equipmentRepository,
         budgetRepository,
+        supplierProductRepository,
         mapper,
         equipmentMapper,
         budgetMapper,
         inventoryAuditMapper,
+        supplierProductMapper,
         eventPublisher,
         objectMapper,
         fixedClock);

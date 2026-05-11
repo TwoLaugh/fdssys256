@@ -7,13 +7,17 @@ import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
 import com.example.mealprep.provisions.api.dto.InventoryAuditEntryDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.InventorySearchCriteria;
+import com.example.mealprep.provisions.api.dto.SubstitutionRecordDto;
+import com.example.mealprep.provisions.api.dto.SupplierProductDto;
 import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
+import com.example.mealprep.provisions.api.dto.UpsertSupplierProductRequest;
 import com.example.mealprep.provisions.api.mapper.BudgetMapper;
 import com.example.mealprep.provisions.api.mapper.EquipmentMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryAuditMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryItemMapper;
+import com.example.mealprep.provisions.api.mapper.SupplierProductMapper;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
 import com.example.mealprep.provisions.domain.entity.Budget;
 import com.example.mealprep.provisions.domain.entity.DefrostMethod;
@@ -24,11 +28,14 @@ import com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus;
 import com.example.mealprep.provisions.domain.entity.ItemSource;
 import com.example.mealprep.provisions.domain.entity.StapleStatus;
 import com.example.mealprep.provisions.domain.entity.StorageLocation;
+import com.example.mealprep.provisions.domain.entity.SubstitutionRecord;
+import com.example.mealprep.provisions.domain.entity.SupplierProduct;
 import com.example.mealprep.provisions.domain.entity.TrackingMode;
 import com.example.mealprep.provisions.domain.repository.BudgetRepository;
 import com.example.mealprep.provisions.domain.repository.EquipmentRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryAuditLogRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryItemRepository;
+import com.example.mealprep.provisions.domain.repository.SupplierProductRepository;
 import com.example.mealprep.provisions.domain.service.ProvisionQueryService;
 import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
 import com.example.mealprep.provisions.event.BudgetChangedEvent;
@@ -36,14 +43,20 @@ import com.example.mealprep.provisions.event.EquipmentChangedEvent;
 import com.example.mealprep.provisions.event.InventoryItemUpsertedEvent;
 import com.example.mealprep.provisions.event.ItemRanOutEvent;
 import com.example.mealprep.provisions.event.ItemSpoiledEvent;
+import com.example.mealprep.provisions.event.SubstitutionAcceptedEvent;
 import com.example.mealprep.provisions.exception.BudgetCurrencyChangeException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
+import com.example.mealprep.provisions.exception.SupplierProductNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -57,7 +70,9 @@ import org.slf4j.MDC;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -102,10 +117,12 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
   private final InventoryAuditLogRepository auditLogRepository;
   private final EquipmentRepository equipmentRepository;
   private final BudgetRepository budgetRepository;
+  private final SupplierProductRepository supplierProductRepository;
   private final InventoryItemMapper mapper;
   private final EquipmentMapper equipmentMapper;
   private final BudgetMapper budgetMapper;
   private final InventoryAuditMapper inventoryAuditMapper;
+  private final SupplierProductMapper supplierProductMapper;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -115,10 +132,12 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
       InventoryAuditLogRepository auditLogRepository,
       EquipmentRepository equipmentRepository,
       BudgetRepository budgetRepository,
+      SupplierProductRepository supplierProductRepository,
       InventoryItemMapper mapper,
       EquipmentMapper equipmentMapper,
       BudgetMapper budgetMapper,
       InventoryAuditMapper inventoryAuditMapper,
+      SupplierProductMapper supplierProductMapper,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
@@ -126,10 +145,12 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
     this.auditLogRepository = auditLogRepository;
     this.equipmentRepository = equipmentRepository;
     this.budgetRepository = budgetRepository;
+    this.supplierProductRepository = supplierProductRepository;
     this.mapper = mapper;
     this.equipmentMapper = equipmentMapper;
     this.budgetMapper = budgetMapper;
     this.inventoryAuditMapper = inventoryAuditMapper;
+    this.supplierProductMapper = supplierProductMapper;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -550,7 +571,181 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
     return budgetMapper.toDto(saved);
   }
 
+  // ---------------- Supplier products ----------------
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<SupplierProductDto> getSupplierProductByMappingKey(String key) {
+    if (key == null) {
+      return Optional.empty();
+    }
+    List<SupplierProduct> rows =
+        supplierProductRepository.findAllByIngredientMappingKeyIn(List.of(key));
+    return rows.stream().min(SUPPLIER_PRODUCT_CHEAPEST).map(supplierProductMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Map<String, SupplierProductDto> getSupplierProductsByMappingKeys(Collection<String> keys) {
+    if (keys == null || keys.isEmpty()) {
+      return Map.of();
+    }
+    List<SupplierProduct> rows = supplierProductRepository.findAllByIngredientMappingKeyIn(keys);
+    Map<String, SupplierProduct> cheapest = new HashMap<>();
+    for (SupplierProduct sp : rows) {
+      String mappingKey = sp.getIngredientMappingKey();
+      if (mappingKey == null) {
+        continue;
+      }
+      SupplierProduct incumbent = cheapest.get(mappingKey);
+      if (incumbent == null || SUPPLIER_PRODUCT_CHEAPEST.compare(sp, incumbent) < 0) {
+        cheapest.put(mappingKey, sp);
+      }
+    }
+    Map<String, SupplierProductDto> result = new HashMap<>(cheapest.size());
+    cheapest.forEach((k, v) -> result.put(k, supplierProductMapper.toDto(v)));
+    return result;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Page<SupplierProductDto> getStaleSupplierProducts(LocalDate cutoff, Pageable p) {
+    // Caller-supplied Pageable may not have a sort; pin last_checked ASC (oldest first) here.
+    // Avoid calling getPageNumber/getPageSize on Unpaged — they throw
+    // UnsupportedOperationException.
+    Pageable effective =
+        p.isPaged() && p.getSort().isUnsorted()
+            ? PageRequest.of(
+                p.getPageNumber(), p.getPageSize(), Sort.by(Sort.Order.asc("lastChecked")))
+            : p;
+    return supplierProductRepository
+        .findAllByLastCheckedBefore(cutoff, effective)
+        .map(supplierProductMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Page<SupplierProductDto> searchSupplierProducts(
+      String mappingKey, String supplier, Pageable p) {
+    Pageable effective =
+        p.isPaged() && p.getSort().isUnsorted()
+            ? PageRequest.of(
+                p.getPageNumber(), p.getPageSize(), Sort.by(Sort.Order.desc("lastChecked")))
+            : p;
+    return supplierProductRepository
+        .search(mappingKey, supplier, effective)
+        .map(supplierProductMapper::toDto);
+  }
+
+  @Override
+  @Transactional
+  public ProvisionUpdateService.UpsertResult<SupplierProductDto> upsertSupplierProduct(
+      UpsertSupplierProductRequest request) {
+    Optional<SupplierProduct> existing =
+        supplierProductRepository.findBySupplierAndProductId(
+            request.supplier(), request.productId());
+    if (existing.isPresent()) {
+      SupplierProduct e = existing.get();
+      e.setName(request.name());
+      e.setPrice(request.price());
+      e.setPricePerUnit(request.pricePerUnit());
+      e.setUnit(request.unit());
+      e.setPackSizeG(request.packSizeG());
+      e.setPackSizeUnit(request.packSizeUnit());
+      e.setCategory(request.category());
+      e.setClubcardPrice(request.clubcardPrice());
+      e.setLastChecked(request.lastChecked());
+      e.setIngredientMappingKey(request.ingredientMappingKey());
+      // substitutionHistory deliberately untouched — preserved across upserts.
+      SupplierProduct saved = supplierProductRepository.saveAndFlush(e);
+      log.info(
+          "supplier-product upserted (update) id={} supplier={} productId={} version={}",
+          saved.getId(),
+          saved.getSupplier(),
+          saved.getProductId(),
+          saved.getVersion());
+      return new ProvisionUpdateService.UpsertResult<>(supplierProductMapper.toDto(saved), false);
+    }
+    SupplierProduct toSave =
+        SupplierProduct.builder()
+            .id(UUID.randomUUID())
+            .productId(request.productId())
+            .supplier(request.supplier())
+            .name(request.name())
+            .price(request.price())
+            .pricePerUnit(request.pricePerUnit())
+            .unit(request.unit())
+            .packSizeG(request.packSizeG())
+            .packSizeUnit(request.packSizeUnit())
+            .category(request.category())
+            .clubcardPrice(request.clubcardPrice())
+            .lastChecked(request.lastChecked())
+            .ingredientMappingKey(request.ingredientMappingKey())
+            .substitutionHistory(List.of())
+            .build();
+    SupplierProduct saved = supplierProductRepository.saveAndFlush(toSave);
+    log.info(
+        "supplier-product upserted (insert) id={} supplier={} productId={}",
+        saved.getId(),
+        saved.getSupplier(),
+        saved.getProductId());
+    return new ProvisionUpdateService.UpsertResult<>(supplierProductMapper.toDto(saved), true);
+  }
+
+  @Override
+  @Transactional
+  public SupplierProductDto recordSubstitution(
+      UUID supplierProductId,
+      SubstitutionRecordDto record,
+      boolean userAccepted,
+      UUID actorUserId,
+      long expectedVersion) {
+    SupplierProduct e =
+        supplierProductRepository
+            .findById(supplierProductId)
+            .orElseThrow(() -> new SupplierProductNotFoundException(supplierProductId));
+    if (e.getVersion() != expectedVersion) {
+      throw new OptimisticLockingFailureException(
+          "stale expectedVersion for supplier product " + supplierProductId);
+    }
+    List<SubstitutionRecord> next = new ArrayList<>(e.getSubstitutionHistory());
+    next.add(
+        new SubstitutionRecord(
+            record.date(), record.substitutedWithProductId(), userAccepted, record.notes()));
+    e.setSubstitutionHistory(next);
+    SupplierProduct saved = supplierProductRepository.saveAndFlush(e);
+
+    Instant now = Instant.now(clock);
+    eventPublisher.publishEvent(
+        new SubstitutionAcceptedEvent(
+            actorUserId,
+            supplierProductId,
+            saved.getProductId(),
+            record.substitutedWithProductId(),
+            currentTraceId(),
+            now));
+    log.info(
+        "supplier-product substitution recorded id={} actorUserId={} substituteSku={} accepted={}"
+            + " version={}",
+        saved.getId(),
+        actorUserId,
+        record.substitutedWithProductId(),
+        userAccepted,
+        saved.getVersion());
+    return supplierProductMapper.toDto(saved);
+  }
+
   // ---------------- helpers ----------------
+
+  /**
+   * Cheapest-first comparator for {@link SupplierProduct}. Primary: {@code pricePerUnit} ASC, with
+   * nulls last (rows that lack pricing must not win). Tie-break: {@code lastChecked} DESC (the
+   * fresher of two same-priced rows wins).
+   */
+  private static final Comparator<SupplierProduct> SUPPLIER_PRODUCT_CHEAPEST =
+      Comparator.comparing(
+              SupplierProduct::getPricePerUnit, Comparator.nullsLast(Comparator.naturalOrder()))
+          .thenComparing(SupplierProduct::getLastChecked, Comparator.reverseOrder());
 
   private static void applyFreezerExtension(InventoryItem item, FreezerExtensionDto ext) {
     if (ext == null) {

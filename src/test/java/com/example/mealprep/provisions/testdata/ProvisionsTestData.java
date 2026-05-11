@@ -3,9 +3,12 @@ package com.example.mealprep.provisions.testdata;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
 import com.example.mealprep.provisions.api.dto.PriceSensitivity;
+import com.example.mealprep.provisions.api.dto.RecordSubstitutionRequest;
+import com.example.mealprep.provisions.api.dto.SubstitutionRecordDto;
 import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
+import com.example.mealprep.provisions.api.dto.UpsertSupplierProductRequest;
 import com.example.mealprep.provisions.domain.entity.Budget;
 import com.example.mealprep.provisions.domain.entity.DefrostMethod;
 import com.example.mealprep.provisions.domain.entity.Equipment;
@@ -14,9 +17,12 @@ import com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus;
 import com.example.mealprep.provisions.domain.entity.ItemSource;
 import com.example.mealprep.provisions.domain.entity.StapleStatus;
 import com.example.mealprep.provisions.domain.entity.StorageLocation;
+import com.example.mealprep.provisions.domain.entity.SubstitutionRecord;
+import com.example.mealprep.provisions.domain.entity.SupplierProduct;
 import com.example.mealprep.provisions.domain.entity.TrackingMode;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -209,5 +215,57 @@ public final class ProvisionsTestData {
       Long expectedVersion) {
     return new UpdateBudgetRequest(
         weeklyTarget, currency, toleranceOver, priceSensitivity, enabled, expectedVersion);
+  }
+
+  // ---------------- Supplier-product builders & request factories ----------------
+
+  public static SupplierProduct.SupplierProductBuilder supplierProduct(
+      String supplier, String productId) {
+    return SupplierProduct.builder()
+        .id(UUID.randomUUID())
+        .supplier(supplier)
+        .productId(productId)
+        .name("Onion, brown, medium, loose")
+        .price(new BigDecimal("0.30"))
+        .pricePerUnit(new BigDecimal("1.5000"))
+        .unit("kg")
+        .packSizeG(200)
+        .packSizeUnit("pcs")
+        .category("vegetables")
+        .lastChecked(LocalDate.parse("2026-05-01"))
+        .ingredientMappingKey("onion")
+        .substitutionHistory(List.of());
+  }
+
+  public static UpsertSupplierProductRequest upsertSupplierProductRequest() {
+    return new UpsertSupplierProductRequest(
+        "tesco:567-onion-medium-loose",
+        "tesco",
+        "Onion, brown, medium, loose",
+        new BigDecimal("0.30"),
+        new BigDecimal("1.5000"),
+        "kg",
+        200,
+        "pcs",
+        "vegetables",
+        null,
+        LocalDate.parse("2026-05-01"),
+        "onion");
+  }
+
+  public static SubstitutionRecordDto substitutionRecordDto(String substituteSku) {
+    return new SubstitutionRecordDto(
+        LocalDate.parse("2026-05-09"), substituteSku, true, "no red onion stock");
+  }
+
+  public static SubstitutionRecord substitutionRecord(String substituteSku) {
+    return new SubstitutionRecord(
+        LocalDate.parse("2026-05-09"), substituteSku, true, "no red onion stock");
+  }
+
+  public static RecordSubstitutionRequest recordSubstitutionRequest(
+      String substituteSku, long expectedVersion) {
+    return new RecordSubstitutionRequest(
+        substitutionRecordDto(substituteSku), true, expectedVersion);
   }
 }

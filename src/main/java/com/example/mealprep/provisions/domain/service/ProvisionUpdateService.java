@@ -4,9 +4,12 @@ import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
+import com.example.mealprep.provisions.api.dto.SubstitutionRecordDto;
+import com.example.mealprep.provisions.api.dto.SupplierProductDto;
 import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
+import com.example.mealprep.provisions.api.dto.UpsertSupplierProductRequest;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
 import java.util.UUID;
 
@@ -97,4 +100,33 @@ public interface ProvisionUpdateService {
   default BudgetDto updateBudget(UUID userId, UpdateBudgetRequest request) {
     return upsertBudget(userId, request);
   }
+
+  /**
+   * Upsert a supplier-product row keyed by {@code (supplier, productId)}. The {@code lastChecked}
+   * field is always refreshed (the freshness clock is the whole point of a no-op upsert); {@code
+   * substitutionHistory} is preserved on update. The endpoint deliberately does NOT enforce an
+   * {@code expectedVersion} — supplier-product pricing churn is high-frequency and forcing
+   * optimistic-lock collisions would surface user-facing 409s on concurrent grocery imports. The
+   * {@link UpsertResult#created()} flag distinguishes 201-create from 200-update for the
+   * controller.
+   */
+  UpsertResult<SupplierProductDto> upsertSupplierProduct(UpsertSupplierProductRequest request);
+
+  /**
+   * Append one substitution record to a supplier product's JSONB {@code substitution_history} list.
+   * Race protection is via {@code @Version} (concurrent appenders collide → loser gets 409). The
+   * {@code actorUserId} is the {@code CurrentUserResolver}-resolved caller; the supplier product
+   * itself is global reference data with no per-user ownership — the userId is only an audit trail
+   * for who recorded the decision.
+   *
+   * <p>LLD divergence: the LLD's signature is {@code (UUID, SubstitutionRecordDto, boolean)}; 01d
+   * adds {@code actorUserId} and {@code expectedVersion} for the {@link
+   * com.example.mealprep.provisions.event.SubstitutionAcceptedEvent} payload + concurrency guard.
+   */
+  SupplierProductDto recordSubstitution(
+      UUID supplierProductId,
+      SubstitutionRecordDto record,
+      boolean userAccepted,
+      UUID actorUserId,
+      long expectedVersion);
 }

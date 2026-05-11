@@ -392,3 +392,114 @@ provisionsBudget:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+provisionsSupplierProducts:
+  get:
+    tags: [Provisions]
+    operationId: searchSupplierProducts
+    summary: Paginated supplier-products search; both filters optional. Sorted last_checked DESC.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: mappingKey
+        required: false
+        schema: { type: string, maxLength: 128 }
+      - in: query
+        name: supplier
+        required: false
+        schema: { type: string, maxLength: 32 }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of supplier products.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/SupplierProductDtoPage' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  post:
+    tags: [Provisions]
+    operationId: upsertSupplierProduct
+    summary: Insert or update a supplier product. Refreshes lastChecked on every call; preserves substitutionHistory.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/provisions.yaml#/UpsertSupplierProductRequest' }
+    responses:
+      '200':
+        description: Supplier product updated.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/SupplierProductDto' }
+      '201':
+        description: Supplier product created.
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/SupplierProductDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+provisionsSupplierProductSubstitution:
+  post:
+    tags: [Provisions]
+    operationId: recordSupplierProductSubstitution
+    summary: Append a substitution event to a supplier product's history (JSONB append).
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: supplierProductId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/provisions.yaml#/RecordSubstitutionRequest' }
+    responses:
+      '200':
+        description: Substitution recorded.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/SupplierProductDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Supplier product not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedVersion.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
