@@ -70,6 +70,8 @@ paths:
     $ref: 'paths/household.yaml#/householdMemberRole'
   /api/v1/households/current/merge:
     $ref: 'paths/household.yaml#/householdMerge'
+  /api/v1/households/current/slot-configuration/planner-view:
+    $ref: 'paths/household.yaml#/householdSlotConfigurationPlannerView'
   # ===== provisions =====
   /api/v1/provisions/inventory:
     $ref: 'paths/provisions.yaml#/inventory'
@@ -213,8 +215,10 @@ components:
     UpdateHouseholdSettingsRequest: { $ref: 'schemas/household.yaml#/UpdateHouseholdSettingsRequest' }
     HouseholdSettingsAuditEntryDto: { $ref: 'schemas/household.yaml#/HouseholdSettingsAuditEntryDto' }
     HouseholdSettingsAuditEntryDtoPage: { $ref: 'schemas/household.yaml#/HouseholdSettingsAuditEntryDtoPage' }
+    PlannerSlotEntryDto: { $ref: 'schemas/household.yaml#/PlannerSlotEntryDto' }
     SlotConfigEntryDto: { $ref: 'schemas/household.yaml#/SlotConfigEntryDto' }
     SlotConfigurationDto: { $ref: 'schemas/household.yaml#/SlotConfigurationDto' }
+    SlotConfigurationPlannerViewDto: { $ref: 'schemas/household.yaml#/SlotConfigurationPlannerViewDto' }
     AcceptInviteRequest: { $ref: 'schemas/household.yaml#/AcceptInviteRequest' }
     CreateInviteRequest: { $ref: 'schemas/household.yaml#/CreateInviteRequest' }
     HouseholdInviteDto: { $ref: 'schemas/household.yaml#/HouseholdInviteDto' }
