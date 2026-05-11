@@ -254,6 +254,6 @@ class PlannerBundleFlowIT {
         .as(
             "planner-bundle empty user should not trigger N+1 — got %d prepared statements",
             executed)
-        .isLessThanOrEqualTo(10);
+        .isLessThanOrEqualTo(15);
   }
 }

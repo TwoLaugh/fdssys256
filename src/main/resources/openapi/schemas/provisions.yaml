@@ -527,7 +527,18 @@ ProvisionForPlannerBundleDto:
         toleranceOver: { type: number, format: double, minimum: 0 }
         priceSensitivity: { $ref: '#/PriceSensitivity' }
         enabled: { type: boolean }
-        spendTracking: { $ref: '#/BudgetSpendTrackingDto', nullable: true }
+        spendTracking:
+          type: object
+          nullable: true
+          description: 'Reserved for v1.5; null in v1 (OpenAPI 3.0 gotcha — inline nullable instead of $ref+nullable).'
+          properties:
+            currentWeekTarget: { type: number, format: double }
+            currentWeekActual: { type: number, format: double }
+            currentWeekRemaining: { type: number, format: double }
+            currentWeekOrders:
+              type: array
+              items: { $ref: '#/BudgetOrderRefDto' }
+            rollingFourWeekAverage: { type: number, format: double }
         version: { type: integer, format: int64 }
     supplierPricesByMappingKey:
       type: object
