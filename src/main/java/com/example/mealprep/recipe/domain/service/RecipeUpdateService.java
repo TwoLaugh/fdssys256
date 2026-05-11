@@ -1,8 +1,11 @@
 package com.example.mealprep.recipe.domain.service;
 
+import com.example.mealprep.recipe.api.dto.CreateBranchRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.ImportRecipeFromUrlRequest;
+import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
+import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
 import java.util.UUID;
 
@@ -41,4 +44,46 @@ public interface RecipeUpdateService {
    * {@code NoChangesException} (400) if the edit is a no-op.
    */
   RecipeDto manualEdit(UUID recipeId, UpdateRecipeManualEditRequest request, UUID actorUserId);
+
+  /**
+   * Fork a recipe into a new branch off a specific version. Inserts a new {@code RecipeBranch} row
+   * (with provisional jaccard-mean {@code divergenceScore}) and a new v1 {@code RecipeVersion} on
+   * that branch (trigger = {@code BRANCH_CREATION}), with the body cloned from the request's {@code
+   * body} sub-block. Does NOT mutate {@code Recipe.currentBranchId} — branch checkout is a separate
+   * flow (deferred to recipe-01g). Publishes both {@code RecipeVersionCreatedEvent} and the new
+   * {@code RecipeBranchCreatedEvent} {@code AFTER_COMMIT}.
+   *
+   * <p><b>LLD divergence</b>: LLD §RecipeUpdateService (lines 549-578) only lists {@code
+   * saveAdaptedBranch} on the SPI; 01d adds the user-facing variant. The pipeline-driven branch
+   * creation lands with recipe-01f.
+   *
+   * <p>Throws {@code RecipeNotFoundException} (404) for missing/soft-deleted/foreign-owned recipes,
+   * {@code RecipeCatalogueViolationException} (422) on SYSTEM recipes, {@code
+   * RecipeBranchPointInvalidException} (422) when the branch-point version doesn't resolve to the
+   * parent recipe, {@code RecipeBranchNameReservedException} (422) for {@code "main"}, and {@code
+   * RecipeBranchNameConflictException} (409) when the name is already taken on this recipe.
+   */
+  RecipeBranchDto createBranch(UUID recipeId, CreateBranchRequest request, UUID actorUserId);
+
+  /**
+   * Revert a branch to an earlier version by writing a new version row whose body clones the target
+   * version. {@code trigger = REVERT}; {@code parentVersionId} is set to the current version's id
+   * (not the target's) so the genealogy reflects the move. {@code Recipe.currentVersion} and {@code
+   * RecipeBranch.currentVersion} are bumped to the new row.
+   *
+   * <p>Publishes BOTH {@code RecipeVersionCreatedEvent} and {@code RecipeUpdatedEvent} ({@code
+   * trigger = REVERT}) {@code AFTER_COMMIT}, symmetric with manual-edit.
+   *
+   * <p>Throws the same exceptions as {@link #manualEdit}, plus {@code
+   * RecipeBranchNotFoundException} if the branch is missing / belongs to a different recipe, and
+   * {@code RecipeVersionNotFoundException} if the target version number doesn't exist on the
+   * branch. Throws {@code NoChangesException} (400) when the target is already the branch's current
+   * version.
+   */
+  RecipeVersionDto revertToVersion(
+      UUID recipeId,
+      UUID branchId,
+      int versionNumber,
+      UUID actorUserId,
+      long expectedRecipeOptimisticVersion);
 }

@@ -1,14 +1,19 @@
 package com.example.mealprep.recipe.testdata;
 
+import com.example.mealprep.recipe.api.dto.CharacterFingerprintDto;
+import com.example.mealprep.recipe.api.dto.CreateBranchRequest;
 import com.example.mealprep.recipe.api.dto.CreateIngredientRequest;
 import com.example.mealprep.recipe.api.dto.CreateMethodStepRequest;
+import com.example.mealprep.recipe.api.dto.CreateRecipeBodyRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeMetadataRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeTagsRequest;
+import com.example.mealprep.recipe.api.dto.RevertToVersionRequest;
 import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
 import com.example.mealprep.recipe.domain.entity.Complexity;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Test Data Builder for the recipe module. Defaults pass all 01a validators so callers tweak only
@@ -110,5 +115,59 @@ public final class RecipeTestData {
         defaultTags(),
         "Should reject as no-op.",
         expectedOptimisticVersion);
+  }
+
+  /** Recipe-body sub-block for a branch creation request — defaults are valid. */
+  public static CreateRecipeBodyRequest defaultBranchBody() {
+    return new CreateRecipeBodyRequest(
+        defaultIngredients(), defaultMethod(), defaultMetadata(), defaultTags());
+  }
+
+  /**
+   * Default branch creation request with {@code name = "gluten-free-variant"}, no fingerprint
+   * override (server derives), and the default body.
+   */
+  public static CreateBranchRequest defaultCreateBranchRequest(UUID branchPointVersionId) {
+    return new CreateBranchRequest(
+        "gluten-free-variant",
+        "Gluten-free variant",
+        "Replace pasta with gluten-free alternative.",
+        branchPointVersionId,
+        defaultBranchBody(),
+        null);
+  }
+
+  /** Branch creation request with the supplied name. */
+  public static CreateBranchRequest branchRequestWithName(String name, UUID branchPointVersionId) {
+    return new CreateBranchRequest(
+        name, null, "Forked from main.", branchPointVersionId, defaultBranchBody(), null);
+  }
+
+  /** Branch creation request carrying a fingerprint override (skips server derivation). */
+  public static CreateBranchRequest branchRequestWithOverride(
+      UUID branchPointVersionId, CharacterFingerprintDto override) {
+    return new CreateBranchRequest(
+        "spicy-variant",
+        "Spicy variant",
+        "Add chilli.",
+        branchPointVersionId,
+        defaultBranchBody(),
+        override);
+  }
+
+  public static CharacterFingerprintDto defaultFingerprint() {
+    return new CharacterFingerprintDto(
+        List.of("Spaghetti", "Lean beef mince", "Passata"),
+        List.of(),
+        List.of(),
+        List.of("savoury", "umami"),
+        Complexity.MODERATE,
+        "Italian");
+  }
+
+  /** Revert request to a given branchId / versionNumber / optimistic-version. */
+  public static RevertToVersionRequest revertRequest(
+      UUID branchId, int versionNumber, long expectedRecipeOptimisticVersion) {
+    return new RevertToVersionRequest(branchId, versionNumber, expectedRecipeOptimisticVersion);
   }
 }

@@ -1,5 +1,6 @@
 package com.example.mealprep.recipe.domain.service;
 
+import com.example.mealprep.recipe.api.dto.CharacterFingerprintDto;
 import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
 import com.example.mealprep.recipe.api.dto.RecipeDiffDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
@@ -28,6 +29,21 @@ public interface RecipeQueryService {
    * {@code RecipeNotFoundException} if the recipe doesn't exist or is soft-deleted.
    */
   List<RecipeBranchDto> getBranches(UUID recipeId);
+
+  /**
+   * Returns a single branch by id. Throws {@code RecipeBranchNotFoundException} if missing or if
+   * the branch belongs to a different recipe than {@code recipeId} (we map cross-recipe lookups to
+   * "not found" rather than 422 so we don't leak other users' branch ids).
+   */
+  Optional<RecipeBranchDto> getBranch(UUID recipeId, UUID branchId);
+
+  /**
+   * Internal cross-module helper — returns the persisted {@code CharacterFingerprintDto} for the
+   * current version of the named branch, or empty if either is missing / the fingerprint hasn't
+   * been populated yet (pre-01d main-branch v1 rows never wrote one). Not exposed via REST; future
+   * tickets (01f, 01j) inject the service to call this.
+   */
+  Optional<CharacterFingerprintDto> getFingerprint(UUID recipeId, UUID branchId);
 
   /**
    * Returns the import provenance row for a recipe, or empty if the recipe was created manually (no
