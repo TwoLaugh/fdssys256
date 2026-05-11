@@ -32,6 +32,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -111,7 +112,13 @@ class HouseholdMergeWithFakeReaderIT {
    */
   @TestConfiguration
   static class FakeReaderConfig {
+    /**
+     * @Primary so Spring picks this over the Noop when both are registered. The Noop's
+     * {@code @ConditionalOnMissingBean} doesn't reliably defer to {@code @TestConfiguration} beans
+     * because the conditional evaluates before the test config is applied.
+     */
     @Bean
+    @Primary
     SoftPreferencesReader softPreferencesReader() {
       return new FakeSoftPreferencesReader();
     }
