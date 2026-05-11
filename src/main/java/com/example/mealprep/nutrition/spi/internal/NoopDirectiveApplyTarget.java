@@ -31,9 +31,15 @@ public class NoopDirectiveApplyTarget {
 
   private static final Logger log = LoggerFactory.getLogger(NoopDirectiveApplyTarget.class);
 
+  /**
+   * Method name distinct from the enclosing class so Spring registers two different bean names
+   * ({@code noopDirectiveApplyTarget} for the config class itself, {@code
+   * defaultDirectiveApplyTarget} for the SPI binding). Otherwise: {@code
+   * BeanDefinitionOverrideException}.
+   */
   @Bean
   @ConditionalOnMissingBean(DirectiveApplyTarget.class)
-  DirectiveApplyTarget noopDirectiveApplyTarget() {
+  DirectiveApplyTarget defaultDirectiveApplyTarget() {
     return new NoopDirectiveApplyTargetImpl();
   }
 
