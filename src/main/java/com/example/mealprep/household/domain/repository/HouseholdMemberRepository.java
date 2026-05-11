@@ -16,4 +16,13 @@ public interface HouseholdMemberRepository extends JpaRepository<HouseholdMember
   Optional<HouseholdMember> findByUserId(UUID userId);
 
   boolean existsByHouseholdIdAndRole(UUID householdId, HouseholdRole role);
+
+  /** Total members in a household — used by 01d's only-member case in the last-primary guard. */
+  long countByHouseholdId(UUID householdId);
+
+  /**
+   * Member count by role within a household. 01d's last-primary guard uses this to detect the
+   * "demoting / removing the only primary while other members remain" case.
+   */
+  long countByHouseholdIdAndRole(UUID householdId, HouseholdRole role);
 }

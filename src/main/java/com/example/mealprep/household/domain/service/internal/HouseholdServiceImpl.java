@@ -1,6 +1,8 @@
 package com.example.mealprep.household.domain.service.internal;
 
 import com.example.mealprep.household.api.dto.AcceptInviteRequest;
+import com.example.mealprep.household.api.dto.AddMemberRequest;
+import com.example.mealprep.household.api.dto.ChangeRoleRequest;
 import com.example.mealprep.household.api.dto.CreateHouseholdRequest;
 import com.example.mealprep.household.api.dto.CreateInviteRequest;
 import com.example.mealprep.household.api.dto.HouseholdDto;
@@ -10,6 +12,7 @@ import com.example.mealprep.household.api.dto.HouseholdSettingsAuditEntryDto;
 import com.example.mealprep.household.api.dto.HouseholdSettingsDto;
 import com.example.mealprep.household.api.dto.SlotConfigurationDto;
 import com.example.mealprep.household.api.dto.UpdateHouseholdSettingsRequest;
+import com.example.mealprep.household.api.dto.UpdateMemberRequest;
 import com.example.mealprep.household.api.mapper.HouseholdInviteMapper;
 import com.example.mealprep.household.api.mapper.HouseholdMapper;
 import com.example.mealprep.household.api.mapper.HouseholdMemberMapper;
@@ -35,14 +38,19 @@ import com.example.mealprep.household.domain.service.HouseholdUpdateService;
 import com.example.mealprep.household.event.HouseholdCreatedEvent;
 import com.example.mealprep.household.event.HouseholdInviteAcceptedEvent;
 import com.example.mealprep.household.event.HouseholdInviteCreatedEvent;
+import com.example.mealprep.household.event.HouseholdMemberAddedEvent;
+import com.example.mealprep.household.event.HouseholdMemberRemovedEvent;
+import com.example.mealprep.household.event.HouseholdRoleChangedEvent;
 import com.example.mealprep.household.event.HouseholdSettingsChangedEvent;
 import com.example.mealprep.household.exception.HouseholdInviteAlreadyAcceptedException;
 import com.example.mealprep.household.exception.HouseholdInviteExpiredException;
 import com.example.mealprep.household.exception.HouseholdInviteNotFoundException;
 import com.example.mealprep.household.exception.HouseholdInviteRevokedException;
+import com.example.mealprep.household.exception.HouseholdMemberNotFoundException;
 import com.example.mealprep.household.exception.HouseholdNotFoundException;
 import com.example.mealprep.household.exception.HouseholdSettingsNotFoundException;
 import com.example.mealprep.household.exception.InsufficientHouseholdRoleException;
+import com.example.mealprep.household.exception.LastPrimaryRemovalException;
 import com.example.mealprep.household.exception.UserAlreadyInHouseholdException;
 import java.time.Clock;
 import java.time.Duration;
@@ -410,33 +418,16 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
             .findWithMembersById(invite.getHouseholdId())
             .orElseThrow(() -> new HouseholdNotFoundException(invite.getHouseholdId()));
 
+    // 01d refactor: share the member-insert helper with the direct-add path. The accept path still
+    // emits HouseholdInviteAcceptedEvent (NOT HouseholdMemberAddedEvent) — 01c locked that
+    // decision and 01d preserves it.
+    HouseholdMember persistedMember =
+        addMemberInternal(household, accepterUserId, invite.getIntendedRole(), 100, null);
+
     Instant now = Instant.now(clock);
-    HouseholdMember newMember =
-        HouseholdMember.builder()
-            .id(UUID.randomUUID())
-            .household(household)
-            .userId(accepterUserId)
-            .role(invite.getIntendedRole())
-            .displayName(null)
-            .priority(100)
-            .joinedAt(now)
-            .build();
-    household.getMembers().add(newMember);
-
-    // saveAndFlush so {@code @CreationTimestamp} ({@code createdAt}) and the {@code @Version}
-    // bump materialise before we map to DTO; also forces the partial unique index check on
-    // primary-per-household (which maps to 409 via GlobalExceptionHandler if violated).
-    Household savedHousehold = householdRepository.saveAndFlush(household);
-
     invite.setAcceptedAt(now);
     invite.setAcceptedByUserId(accepterUserId);
     HouseholdInvite savedInvite = householdInviteRepository.saveAndFlush(invite);
-
-    HouseholdMember persistedMember =
-        savedHousehold.getMembers().stream()
-            .filter(m -> accepterUserId.equals(m.getUserId()))
-            .findFirst()
-            .orElse(newMember);
 
     eventPublisher.publishEvent(
         new HouseholdInviteAcceptedEvent(
@@ -498,7 +489,292 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
         actorUserId);
   }
 
+  // ---------------- Member admin (01d) ----------------
+
+  @Override
+  @Transactional
+  public HouseholdMemberDto addMember(
+      UUID householdId, UUID actorUserId, AddMemberRequest request) {
+    HouseholdMember actor =
+        householdMemberRepository
+            .findByUserId(actorUserId)
+            .orElseThrow(() -> new HouseholdNotFoundException(actorUserId));
+    if (actor.getHousehold() == null || !householdId.equals(actor.getHousehold().getId())) {
+      // Caller is in a different household: surface as 404 to avoid leaking existence.
+      throw new HouseholdNotFoundException(actorUserId);
+    }
+    if (actor.getRole() != HouseholdRole.primary) {
+      throw new InsufficientHouseholdRoleException(
+          "primary role required to add a member to household " + householdId);
+    }
+
+    // Pre-check: target already in any household.
+    if (householdMemberRepository.findByUserId(request.userId()).isPresent()) {
+      throw new UserAlreadyInHouseholdException(request.userId());
+    }
+
+    Household household =
+        householdRepository
+            .findWithMembersById(householdId)
+            .orElseThrow(() -> new HouseholdNotFoundException(actorUserId));
+
+    HouseholdMember persisted =
+        addMemberInternal(
+            household,
+            request.userId(),
+            request.role(),
+            request.priority() == null ? 100 : request.priority(),
+            request.displayName());
+
+    eventPublisher.publishEvent(
+        new HouseholdMemberAddedEvent(
+            household.getId(),
+            persisted.getId(),
+            persisted.getUserId(),
+            persisted.getRole(),
+            currentTraceId(),
+            Instant.now(clock)));
+
+    log.info(
+        "household member added householdId={} memberId={} userId={} role={} actorUserId={}",
+        household.getId(),
+        persisted.getId(),
+        persisted.getUserId(),
+        persisted.getRole(),
+        actorUserId);
+    return memberMapper.toDto(persisted);
+  }
+
+  @Override
+  @Transactional
+  public HouseholdMemberDto updateMember(
+      UUID memberId, UUID actorUserId, UpdateMemberRequest request) {
+    HouseholdMember member =
+        householdMemberRepository
+            .findById(memberId)
+            .orElseThrow(() -> new HouseholdMemberNotFoundException(memberId));
+
+    UUID memberHouseholdId = member.getHousehold() == null ? null : member.getHousehold().getId();
+    if (memberHouseholdId == null) {
+      throw new HouseholdMemberNotFoundException(memberId);
+    }
+
+    HouseholdMember actor =
+        householdMemberRepository
+            .findByUserId(actorUserId)
+            .filter(
+                m -> m.getHousehold() != null && memberHouseholdId.equals(m.getHousehold().getId()))
+            .orElseThrow(() -> new HouseholdMemberNotFoundException(memberId));
+    if (actor.getRole() != HouseholdRole.primary) {
+      throw new InsufficientHouseholdRoleException(
+          "primary role required to update member " + memberId);
+    }
+
+    if (member.getVersion() != request.expectedVersion()) {
+      throw new OptimisticLockingFailureException(
+          "stale expectedVersion for household_member id=" + memberId);
+    }
+
+    boolean priorityChanges =
+        request.priority() != null && request.priority() != member.getPriority();
+    boolean displayNameChanges =
+        request.displayName() != null && !request.displayName().equals(member.getDisplayName());
+    if (!priorityChanges && !displayNameChanges) {
+      // No-op: do not bump @Version, do not emit an event.
+      return memberMapper.toDto(member);
+    }
+
+    if (priorityChanges) {
+      member.setPriority(request.priority());
+    }
+    if (displayNameChanges) {
+      member.setDisplayName(request.displayName());
+    }
+    // saveAndFlush so the bumped @Version materialises in the response payload.
+    HouseholdMember saved = householdMemberRepository.saveAndFlush(member);
+
+    log.info(
+        "household member updated memberId={} householdId={} priorityChanged={} displayNameChanged={}",
+        memberId,
+        memberHouseholdId,
+        priorityChanges,
+        displayNameChanges);
+    // No HouseholdMemberUpdatedEvent — LLD §Events 387-392 does not declare one; priority /
+    // displayName changes don't materially affect downstream planner state.
+    return memberMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public void removeMember(UUID memberId, UUID actorUserId) {
+    HouseholdMember member =
+        householdMemberRepository
+            .findById(memberId)
+            .orElseThrow(() -> new HouseholdMemberNotFoundException(memberId));
+
+    UUID memberHouseholdId = member.getHousehold() == null ? null : member.getHousehold().getId();
+    if (memberHouseholdId == null) {
+      throw new HouseholdMemberNotFoundException(memberId);
+    }
+
+    HouseholdMember actor =
+        householdMemberRepository
+            .findByUserId(actorUserId)
+            .filter(
+                m -> m.getHousehold() != null && memberHouseholdId.equals(m.getHousehold().getId()))
+            .orElseThrow(() -> new HouseholdMemberNotFoundException(memberId));
+
+    boolean isPrimary = actor.getRole() == HouseholdRole.primary;
+    boolean isSelfRemove = actorUserId.equals(member.getUserId());
+    if (!isPrimary && !isSelfRemove) {
+      throw new InsufficientHouseholdRoleException(
+          "primary role or self required to remove member " + memberId);
+    }
+
+    if (member.getRole() == HouseholdRole.primary) {
+      long totalMembers = householdMemberRepository.countByHouseholdId(memberHouseholdId);
+      long primaryCount =
+          householdMemberRepository.countByHouseholdIdAndRole(
+              memberHouseholdId, HouseholdRole.primary);
+      boolean lastPrimaryWithOthers = primaryCount == 1 && totalMembers > 1;
+      if (lastPrimaryWithOthers) {
+        throw new LastPrimaryRemovalException(
+            "promote another member to primary before removing the last primary");
+      }
+      // onlyMember case (totalMembers == 1) is permitted; empty household preserved (LLD line 418).
+    }
+
+    HouseholdRole roleAtRemoval = member.getRole();
+    UUID userId = member.getUserId();
+    householdMemberRepository.delete(member);
+
+    eventPublisher.publishEvent(
+        new HouseholdMemberRemovedEvent(
+            memberHouseholdId,
+            memberId,
+            userId,
+            roleAtRemoval,
+            currentTraceId(),
+            Instant.now(clock)));
+
+    log.info(
+        "household member removed memberId={} householdId={} userId={} roleAtRemoval={} actorUserId={}",
+        memberId,
+        memberHouseholdId,
+        userId,
+        roleAtRemoval,
+        actorUserId);
+  }
+
+  @Override
+  @Transactional
+  public HouseholdMemberDto changeRole(UUID memberId, UUID actorUserId, ChangeRoleRequest request) {
+    HouseholdMember member =
+        householdMemberRepository
+            .findById(memberId)
+            .orElseThrow(() -> new HouseholdMemberNotFoundException(memberId));
+
+    UUID memberHouseholdId = member.getHousehold() == null ? null : member.getHousehold().getId();
+    if (memberHouseholdId == null) {
+      throw new HouseholdMemberNotFoundException(memberId);
+    }
+
+    HouseholdMember actor =
+        householdMemberRepository
+            .findByUserId(actorUserId)
+            .filter(
+                m -> m.getHousehold() != null && memberHouseholdId.equals(m.getHousehold().getId()))
+            .orElseThrow(() -> new HouseholdMemberNotFoundException(memberId));
+    if (actor.getRole() != HouseholdRole.primary) {
+      throw new InsufficientHouseholdRoleException(
+          "primary role required to change role of member " + memberId);
+    }
+
+    if (member.getVersion() != request.expectedVersion()) {
+      throw new OptimisticLockingFailureException(
+          "stale expectedVersion for household_member id=" + memberId);
+    }
+
+    HouseholdRole previousRole = member.getRole();
+    if (previousRole == request.newRole()) {
+      // No-op: do not bump @Version, do not emit an event.
+      return memberMapper.toDto(member);
+    }
+
+    // Demoting the last primary while others remain.
+    if (previousRole == HouseholdRole.primary && request.newRole() != HouseholdRole.primary) {
+      long primaryCount =
+          householdMemberRepository.countByHouseholdIdAndRole(
+              memberHouseholdId, HouseholdRole.primary);
+      long totalMembers = householdMemberRepository.countByHouseholdId(memberHouseholdId);
+      if (primaryCount == 1 && totalMembers > 1) {
+        throw new LastPrimaryRemovalException(
+            "promote another member to primary before demoting the last primary");
+      }
+    }
+
+    member.setRole(request.newRole());
+    // saveAndFlush so the @Version bump materialises in the response payload, and so the
+    // one-primary partial unique index collision (if any) surfaces as DataIntegrityViolation here
+    // — mapped to 409 by HouseholdExceptionHandler.
+    HouseholdMember saved = householdMemberRepository.saveAndFlush(member);
+
+    eventPublisher.publishEvent(
+        new HouseholdRoleChangedEvent(
+            memberHouseholdId,
+            saved.getId(),
+            saved.getUserId(),
+            previousRole,
+            saved.getRole(),
+            currentTraceId(),
+            Instant.now(clock)));
+
+    log.info(
+        "household member role changed memberId={} householdId={} previousRole={} newRole={} actorUserId={}",
+        memberId,
+        memberHouseholdId,
+        previousRole,
+        saved.getRole(),
+        actorUserId);
+    return memberMapper.toDto(saved);
+  }
+
   // ---------------- helpers ----------------
+
+  /**
+   * Insert a {@link HouseholdMember} row into the given household with the supplied properties.
+   * Shared by 01d's direct-add path ({@link #addMember}) and 01c's invite-accept path ({@link
+   * #acceptInvite}); callers own the event-emission decision (the direct-add path emits {@link
+   * HouseholdMemberAddedEvent}, the accept path emits {@link HouseholdInviteAcceptedEvent} — 01c
+   * locked the no-double-emit decision).
+   *
+   * <p>{@code saveAndFlush} forces the {@code @CreationTimestamp} and the one-primary partial
+   * unique index to materialise / fire here, so the caller can rely on the persisted state and the
+   * DB-level constraint to surface as {@link DataIntegrityViolationException} (mapped to 409 by
+   * {@code HouseholdExceptionHandler}).
+   */
+  private HouseholdMember addMemberInternal(
+      Household household, UUID userId, HouseholdRole role, int priority, String displayName) {
+    Instant now = Instant.now(clock);
+    HouseholdMember newMember =
+        HouseholdMember.builder()
+            .id(UUID.randomUUID())
+            .household(household)
+            .userId(userId)
+            .role(role)
+            .displayName(displayName)
+            .priority(priority)
+            .joinedAt(now)
+            .build();
+    household.getMembers().add(newMember);
+
+    Household savedHousehold = householdRepository.saveAndFlush(household);
+
+    return savedHousehold.getMembers().stream()
+        .filter(m -> userId.equals(m.getUserId()))
+        .findFirst()
+        .orElse(newMember);
+  }
 
   /**
    * Insert a new invite row, retrying on {@link DataIntegrityViolationException} from the {@code
