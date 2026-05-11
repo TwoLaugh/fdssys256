@@ -1,6 +1,7 @@
 package com.example.mealprep.household.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.household.exception.EmptyHouseholdMergeException;
 import com.example.mealprep.household.exception.HouseholdInviteAlreadyAcceptedException;
 import com.example.mealprep.household.exception.HouseholdInviteExpiredException;
 import com.example.mealprep.household.exception.HouseholdInviteNotFoundException;
@@ -178,6 +179,21 @@ public class HouseholdExceptionHandler {
             "Cannot remove or demote the last primary while other members remain",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.CONFLICT)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(EmptyHouseholdMergeException.class)
+  public ResponseEntity<ProblemDetail> handleEmptyHouseholdMerge(
+      EmptyHouseholdMergeException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "empty-household-merge",
+            "Empty household merge",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

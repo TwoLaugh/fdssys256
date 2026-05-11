@@ -221,3 +221,100 @@ ChangeRoleRequest:
   properties:
     newRole: { $ref: '#/HouseholdRole' }
     expectedVersion: { type: integer, format: int64, minimum: 0 }
+MergeStrategy:
+  type: string
+  enum: [MEAN_WEIGHTED_BY_PRIORITY]
+TasteProfileDocument:
+  type: object
+  description: 'Lightweight stub shape; preference-01c will own the canonical record.'
+  properties:
+    ingredientLikes:
+      type: object
+      additionalProperties: { type: number, format: double, minimum: -1, maximum: 1 }
+    cuisineLikes:
+      type: object
+      additionalProperties: { type: number, format: double, minimum: -1, maximum: 1 }
+    avoidList:
+      type: array
+      items: { type: string, maxLength: 160 }
+LifestyleConfigDocument:
+  type: object
+  description: 'Lightweight stub shape; preference-01c will own the canonical record.'
+  properties:
+    mealTimingWindowStart:
+      type: string
+      pattern: '^[0-2][0-9]:[0-5][0-9]$'
+      nullable: true
+    mealTimingWindowEnd:
+      type: string
+      pattern: '^[0-2][0-9]:[0-5][0-9]$'
+      nullable: true
+    noveltyTolerancePercent:
+      type: integer
+      minimum: 0
+      maximum: 100
+      nullable: true
+    batchCookingPreferred: { type: boolean, default: false }
+SoftPreferenceBundleDto:
+  type: object
+  required: [userId]
+  properties:
+    userId: { type: string, format: uuid }
+    tasteProfile:
+      type: object
+      nullable: true
+      properties:
+        ingredientLikes:
+          type: object
+          additionalProperties: { type: number, format: double, minimum: -1, maximum: 1 }
+        cuisineLikes:
+          type: object
+          additionalProperties: { type: number, format: double, minimum: -1, maximum: 1 }
+        avoidList:
+          type: array
+          items: { type: string, maxLength: 160 }
+    lifestyleConfig:
+      type: object
+      nullable: true
+      properties:
+        mealTimingWindowStart:
+          type: string
+          pattern: '^[0-2][0-9]:[0-5][0-9]$'
+          nullable: true
+        mealTimingWindowEnd:
+          type: string
+          pattern: '^[0-2][0-9]:[0-5][0-9]$'
+          nullable: true
+        noveltyTolerancePercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+        batchCookingPreferred: { type: boolean, default: false }
+MergedSoftPreferencesDto:
+  type: object
+  required: [contributingUserIds, mergedTasteProfile, mergedLifestyleConfig, userIdsByPriority, strategy, mergedAt]
+  properties:
+    householdId:
+      type: string
+      format: uuid
+      nullable: true
+      description: 'Null for the mergeSoftPreferencesForUsers variant which bypasses household lookup.'
+    contributingUserIds:
+      type: array
+      items: { type: string, format: uuid }
+    mergedTasteProfile: { $ref: '#/TasteProfileDocument' }
+    mergedLifestyleConfig: { $ref: '#/LifestyleConfigDocument' }
+    userIdsByPriority:
+      type: array
+      items: { type: string, format: uuid }
+    strategy: { $ref: '#/MergeStrategy' }
+    mergedAt: { type: string, format: date-time }
+MergeSoftPreferencesRequest:
+  type: object
+  properties:
+    eaterUserIds:
+      type: array
+      nullable: true
+      description: 'Null or empty = all current household members.'
+      items: { type: string, format: uuid }
