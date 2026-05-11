@@ -1,7 +1,9 @@
 package com.example.mealprep.nutrition.domain.service;
 
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
+import com.example.mealprep.nutrition.api.dto.DirectiveStatus;
 import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
+import com.example.mealprep.nutrition.api.dto.HealthDirectiveDto;
 import com.example.mealprep.nutrition.api.dto.IngredientLookupRequest;
 import com.example.mealprep.nutrition.api.dto.IngredientLookupResultDto;
 import com.example.mealprep.nutrition.api.dto.IngredientNutritionDto;
@@ -102,4 +104,17 @@ public interface NutritionQueryService {
    * DESC}. Backs {@code GET /api/v1/nutrition/ingredients/needs-review}.
    */
   Page<IngredientNutritionDto> getMappingsNeedingReview(Pageable pageable);
+
+  /**
+   * Paginated list of the caller's health directives, optionally filtered by {@code
+   * DirectiveStatus}, sorted {@code received_at DESC}. Default size 20, max 100 (clamped at the
+   * controller boundary).
+   */
+  Page<HealthDirectiveDto> getDirectives(UUID userId, DirectiveStatus filter, Pageable pageable);
+
+  /**
+   * Fetch a single directive by id. Returns empty when the row doesn't exist OR when it belongs to
+   * a different user — collapsed to 404 at the controller boundary so we don't leak existence.
+   */
+  Optional<HealthDirectiveDto> getDirective(UUID actorUserId, UUID directiveId);
 }

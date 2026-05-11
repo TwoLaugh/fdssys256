@@ -1,8 +1,12 @@
 package com.example.mealprep.nutrition.testdata;
 
+import com.example.mealprep.nutrition.api.dto.AcceptDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.ActivityAdjustmentDto;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
+import com.example.mealprep.nutrition.api.dto.DirectiveInstructionDocument;
+import com.example.mealprep.nutrition.api.dto.DirectiveType;
 import com.example.mealprep.nutrition.api.dto.EatingWindowDto;
+import com.example.mealprep.nutrition.api.dto.InboundHealthDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.IngredientMappingSource;
 import com.example.mealprep.nutrition.api.dto.IngredientNutritionDocument;
 import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
@@ -10,6 +14,7 @@ import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
 import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
 import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
 import com.example.mealprep.nutrition.api.dto.PlannedSlotInputDto;
+import com.example.mealprep.nutrition.api.dto.RejectDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.api.dto.UpsertFoodMoodEntryRequest;
 import com.example.mealprep.nutrition.domain.entity.ActivityAdjustment;
@@ -23,12 +28,17 @@ import com.example.mealprep.nutrition.domain.entity.MealSlot;
 import com.example.mealprep.nutrition.domain.entity.MicroTarget;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargets;
 import com.example.mealprep.nutrition.domain.entity.PerMealDistributionEntry;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.IntNode;
+import com.fasterxml.jackson.databind.node.TextNode;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -191,6 +201,86 @@ public final class NutritionTestData {
         .confidence(BigDecimal.valueOf(confidence))
         .needsReview(confidence < 0.7)
         .build();
+  }
+
+  // ---------------- 01e: health-directive fixtures ----------------
+
+  /**
+   * Reasonable {@link InboundHealthDirectiveRequest} routed to {@code nutrition_model} with an
+   * {@code adjust_target} action on the {@code protein_floor_g} tier. Defaults pass the
+   * deterministic safety gate.
+   */
+  public static InboundHealthDirectiveRequest defaultInboundDirectiveRequest(
+      UUID userId, String externalId) {
+    return new InboundHealthDirectiveRequest(
+        userId,
+        externalId,
+        "apple-health",
+        DirectiveType.TARGET_ADJUSTMENT,
+        "Doctor recommended protein floor adjustment.",
+        null,
+        new DirectiveInstructionDocument(
+            "adjust_target",
+            "protein_floor_g",
+            null,
+            null,
+            instructionExtras("proposedFloor", new IntNode(130))),
+        "nutrition_model",
+        "protein_floor_g",
+        true,
+        Instant.parse("2026-08-01T00:00:00Z"));
+  }
+
+  /** Build a directive request override with a custom instruction. */
+  public static InboundHealthDirectiveRequest inboundDirectiveRequest(
+      UUID userId,
+      String externalId,
+      String sourcePlatform,
+      DirectiveType type,
+      DirectiveInstructionDocument instruction,
+      String mapsToModel,
+      String mapsToTier,
+      boolean temporary,
+      Instant autoExpiresAt) {
+    return new InboundHealthDirectiveRequest(
+        userId,
+        externalId,
+        sourcePlatform,
+        type,
+        null,
+        null,
+        instruction,
+        mapsToModel,
+        mapsToTier,
+        temporary,
+        autoExpiresAt);
+  }
+
+  /** Build a fixture instruction with arbitrary {@code extras} entries. */
+  public static DirectiveInstructionDocument instructionFor(
+      String action, String target, Map<String, JsonNode> extras) {
+    return new DirectiveInstructionDocument(action, target, null, null, extras);
+  }
+
+  /** Build an {@code extras} map seeded with a single entry. */
+  public static Map<String, JsonNode> instructionExtras(String key, JsonNode value) {
+    Map<String, JsonNode> map = new LinkedHashMap<>();
+    map.put(key, value);
+    return map;
+  }
+
+  /** Build an {@code extras} map that names a textual alternative for a staple restriction. */
+  public static Map<String, JsonNode> staplesAlternativeExtras(String alternativeName) {
+    return instructionExtras("alternative", new TextNode(alternativeName));
+  }
+
+  public static AcceptDirectiveRequest acceptRequest(
+      DirectiveInstructionDocument userModification, long expectedVersion) {
+    return new AcceptDirectiveRequest(userModification, expectedVersion);
+  }
+
+  public static RejectDirectiveRequest rejectRequest(String reason, long expectedVersion) {
+    return new RejectDirectiveRequest(reason, expectedVersion);
   }
 
   // ---------------- Entity builders (for unit tests) ----------------

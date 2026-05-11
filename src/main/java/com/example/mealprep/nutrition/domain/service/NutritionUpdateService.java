@@ -1,13 +1,17 @@
 package com.example.mealprep.nutrition.domain.service;
 
+import com.example.mealprep.nutrition.api.dto.AcceptDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
 import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
+import com.example.mealprep.nutrition.api.dto.HealthDirectiveDto;
+import com.example.mealprep.nutrition.api.dto.InboundHealthDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.IngredientNutritionDocument;
 import com.example.mealprep.nutrition.api.dto.IngredientNutritionDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.IntakeEntryDto;
 import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
 import com.example.mealprep.nutrition.api.dto.PlannedSlotInputDto;
+import com.example.mealprep.nutrition.api.dto.RejectDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.api.dto.UpsertFoodMoodEntryRequest;
@@ -124,4 +128,28 @@ public interface NutritionUpdateService {
       IngredientNutritionDocument override,
       long expectedVersion,
       UUID actorUserId);
+
+  /**
+   * Inbound endpoint for a health platform pushing a new directive. Idempotent on {@code
+   * (sourcePlatform, externalDirectiveId)} — a re-delivery raises {@code
+   * DuplicateHealthDirectiveException} (409). Persists the row as {@code PENDING_REVIEW} and
+   * publishes {@code HealthDirectiveReceivedEvent} AFTER_COMMIT.
+   */
+  HealthDirectiveDto receiveInboundDirective(
+      UUID actorUserId, InboundHealthDirectiveRequest request);
+
+  /**
+   * Accept a pending directive, run the deterministic safety gate, and route the deltas via {@code
+   * DirectiveApplier}. Persists the gate's verdict + findings on the directive regardless of
+   * outcome. Publishes {@code HealthDirectiveAcceptedEvent} AFTER_COMMIT.
+   */
+  HealthDirectiveDto acceptHealthDirective(
+      UUID actorUserId, UUID directiveId, AcceptDirectiveRequest request);
+
+  /**
+   * Reject a pending directive — records the reason; no safety gate, no event (LLD §Events doesn't
+   * declare a rejection event).
+   */
+  HealthDirectiveDto rejectHealthDirective(
+      UUID actorUserId, UUID directiveId, RejectDirectiveRequest request);
 }
