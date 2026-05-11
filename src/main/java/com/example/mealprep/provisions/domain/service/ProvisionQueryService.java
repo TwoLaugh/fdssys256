@@ -6,6 +6,8 @@ import com.example.mealprep.provisions.api.dto.InventoryAuditEntryDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.InventorySearchCriteria;
 import com.example.mealprep.provisions.api.dto.SupplierProductDto;
+import com.example.mealprep.provisions.api.dto.WasteEntryDto;
+import com.example.mealprep.provisions.api.dto.WasteSummaryDto;
 import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
@@ -92,4 +94,28 @@ public interface ProvisionQueryService {
    * the controller pins {@code last_checked DESC} by default.
    */
   Page<SupplierProductDto> searchSupplierProducts(String mappingKey, String supplier, Pageable p);
+
+  /**
+   * Paginated waste-log history for {@code userId} within {@code [from, to]}. Sorted by {@code
+   * occurredOn DESC}. Caller (the controller) is responsible for applying the default 90-day window
+   * if either bound is omitted.
+   */
+  Page<WasteEntryDto> getWasteEntries(UUID userId, LocalDate from, LocalDate to, Pageable p);
+
+  /**
+   * Aggregate view of waste over {@code [from, to]} for {@code userId}: total cost-estimate, total
+   * entry count, count grouped by {@link com.example.mealprep.provisions.api.dto.WasteReason}, and
+   * the top-10 most-frequently-wasted items (sorted by {@code entryCount DESC}, tie-break {@code
+   * totalCost DESC}).
+   */
+  WasteSummaryDto getWasteSummary(UUID userId, LocalDate from, LocalDate to);
+
+  /**
+   * Cross-module helper returning every waste entry for {@code userId} within {@code [from, to]}.
+   * Designed for a future analytics aggregator (deferred). Capped at 1000 rows server-side; when
+   * the cap is exceeded the first 1000 rows are returned and a {@code WARN} is logged ({@code
+   * waste-window-cap-exceeded}). Callers expecting unbounded results should switch to the paginated
+   * {@link #getWasteEntries} path.
+   */
+  List<WasteEntryDto> getWasteForUserInWindow(UUID userId, LocalDate from, LocalDate to);
 }

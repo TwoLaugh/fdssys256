@@ -400,3 +400,104 @@ SupplierProductDtoPage:
     last: { type: boolean }
     empty: { type: boolean }
     numberOfElements: { type: integer }
+WasteReason:
+  type: string
+  enum: [EXPIRED, LEFTOVER_NOT_EATEN, DIDNT_LIKE, SPOILED_EARLY, MADE_TOO_MUCH]
+WasteEntryDto:
+  type: object
+  required: [id, userId, itemName, reason, occurredOn, createdAt]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    inventoryItemId:
+      type: string
+      format: uuid
+      nullable: true
+    itemName: { type: string, maxLength: 128 }
+    quantity:
+      type: number
+      format: double
+      minimum: 0
+      nullable: true
+    unit:
+      type: string
+      maxLength: 16
+      nullable: true
+    reason: { $ref: '#/WasteReason' }
+    costEstimate:
+      type: number
+      format: double
+      minimum: 0
+      nullable: true
+    occurredOn: { type: string, format: date }
+    notes:
+      type: string
+      maxLength: 255
+      nullable: true
+    createdAt: { type: string, format: date-time }
+LogWasteRequest:
+  type: object
+  required: [itemName, reason, occurredOn]
+  properties:
+    inventoryItemId:
+      type: string
+      format: uuid
+      nullable: true
+    itemName: { type: string, minLength: 1, maxLength: 128 }
+    quantity:
+      type: number
+      format: double
+      minimum: 0
+      nullable: true
+    unit:
+      type: string
+      maxLength: 16
+      nullable: true
+    reason: { $ref: '#/WasteReason' }
+    costEstimate:
+      type: number
+      format: double
+      minimum: 0
+      nullable: true
+    occurredOn: { type: string, format: date }
+    notes:
+      type: string
+      maxLength: 255
+      nullable: true
+TopWastedItemDto:
+  type: object
+  required: [itemName, entryCount, totalCost]
+  properties:
+    itemName: { type: string, maxLength: 128 }
+    entryCount: { type: integer, format: int64, minimum: 0 }
+    totalCost: { type: number, format: double, minimum: 0 }
+WasteSummaryDto:
+  type: object
+  required: [from, to, totalCostEstimate, totalEntries, countByReason, topItems]
+  properties:
+    from: { type: string, format: date }
+    to: { type: string, format: date }
+    totalCostEstimate: { type: number, format: double, minimum: 0 }
+    totalEntries: { type: integer, format: int64, minimum: 0 }
+    countByReason:
+      type: object
+      additionalProperties: { type: integer, format: int64, minimum: 0 }
+    topItems:
+      type: array
+      items: { $ref: '#/TopWastedItemDto' }
+WasteEntryDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/WasteEntryDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
