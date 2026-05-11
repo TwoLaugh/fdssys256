@@ -11,7 +11,9 @@ import com.example.mealprep.household.api.dto.HouseholdMemberDto;
 import com.example.mealprep.household.api.dto.HouseholdSettingsAuditEntryDto;
 import com.example.mealprep.household.api.dto.HouseholdSettingsDto;
 import com.example.mealprep.household.api.dto.MergedSoftPreferencesDto;
+import com.example.mealprep.household.api.dto.PlannerSlotEntryDto;
 import com.example.mealprep.household.api.dto.SlotConfigurationDto;
+import com.example.mealprep.household.api.dto.SlotConfigurationPlannerViewDto;
 import com.example.mealprep.household.api.dto.SoftPreferenceBundleDto;
 import com.example.mealprep.household.api.dto.UpdateHouseholdSettingsRequest;
 import com.example.mealprep.household.api.dto.UpdateMemberRequest;
@@ -62,6 +64,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -233,6 +236,65 @@ public class HouseholdServiceImpl
             .findByHouseholdId(householdId)
             .orElseThrow(() -> new HouseholdSettingsNotFoundException(householdId));
     return slotConfigurationResolver.resolve(household, settings);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public SlotConfigurationPlannerViewDto getSlotConfigurationPlannerView(UUID householdId) {
+    // 01f: planner-facing one-round-trip view. Three SELECTs: household (+ eager members via the
+    // EntityGraph attribute path), settings, and we re-use the household's member collection for
+    // the priority sort — no separate findAllByHouseholdId call (the resolver also uses
+    // household.getMembers() so the data is already loaded).
+    Household household =
+        householdRepository
+            .findWithMembersById(householdId)
+            .orElseThrow(() -> new HouseholdNotFoundException(householdId));
+    HouseholdSettings settings =
+        householdSettingsRepository
+            .findByHouseholdId(householdId)
+            .orElseThrow(() -> new HouseholdSettingsNotFoundException(householdId));
+
+    SlotConfigurationDto base = slotConfigurationResolver.resolve(household, settings);
+    List<PlannerSlotEntryDto> slots =
+        base.slots().stream()
+            .map(
+                e ->
+                    new PlannerSlotEntryDto(
+                        e.slotKey(),
+                        e.kind(),
+                        e.shared(),
+                        e.headcount(),
+                        e.timeBudgetMin(),
+                        e.eaterUserIdsIfPerPerson(),
+                        // cuisinePreferenceWeight: null in v1 — settings doc has no field yet.
+                        null))
+            .toList();
+
+    List<HouseholdMember> members =
+        household.getMembers() == null ? List.of() : household.getMembers();
+    List<UUID> eaterUserIdsByPriority =
+        members.stream()
+            .sorted(
+                Comparator.comparingInt(HouseholdMember::getPriority)
+                    .reversed()
+                    .thenComparing(HouseholdMember::getUserId))
+            .map(HouseholdMember::getUserId)
+            .toList();
+
+    // HouseholdSchedulingPreferences is an empty marker record in v1 (LLD line 28). Read the
+    // windows defensively: today they are always null; when the record gains fields the planner
+    // view picks them up.
+    String windowStart = null;
+    String windowEnd = null;
+
+    return new SlotConfigurationPlannerViewDto(
+        householdId,
+        slots,
+        base.allEaterUserIds(),
+        eaterUserIdsByPriority,
+        windowStart,
+        windowEnd,
+        Instant.now(clock));
   }
 
   @Override

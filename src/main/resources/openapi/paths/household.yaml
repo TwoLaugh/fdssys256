@@ -330,3 +330,17 @@ householdMerge:
       '403': { description: 'eaterUserIds contains a user not in the caller''s household', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
       '404': { description: 'Caller not in any household', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
       '422': { description: 'Merge requested on an empty household (zero members)', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+householdSlotConfigurationPlannerView:
+  get:
+    tags: [Households]
+    operationId: getSlotConfigurationPlannerViewForCurrentHousehold
+    summary: 'Planner-friendly slot-configuration view for the calling user''s household; read-only, not persisted.'
+    security: [{ cookieAuth: [] }]
+    responses:
+      '200':
+        description: Planner-friendly slot configuration snapshot.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/household.yaml#/SlotConfigurationPlannerViewDto' }
+      '401': { description: 'Unauthenticated', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '404': { description: 'Caller not in any household, or household has no settings row', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }

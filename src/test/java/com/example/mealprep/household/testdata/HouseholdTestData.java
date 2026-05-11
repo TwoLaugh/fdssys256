@@ -5,6 +5,8 @@ import com.example.mealprep.household.api.dto.ChangeRoleRequest;
 import com.example.mealprep.household.api.dto.CreateHouseholdRequest;
 import com.example.mealprep.household.api.dto.LifestyleConfigDocument;
 import com.example.mealprep.household.api.dto.MergeSoftPreferencesRequest;
+import com.example.mealprep.household.api.dto.PlannerSlotEntryDto;
+import com.example.mealprep.household.api.dto.SlotConfigurationPlannerViewDto;
 import com.example.mealprep.household.api.dto.SoftPreferenceBundleDto;
 import com.example.mealprep.household.api.dto.TasteProfileDocument;
 import com.example.mealprep.household.api.dto.UpdateMemberRequest;
@@ -86,6 +88,18 @@ public final class HouseholdTestData {
         userId,
         new TasteProfileDocument(Map.of(ingredient, likeScore), Map.of(), List.of()),
         new LifestyleConfigDocument(null, null, null, false));
+  }
+
+  /** Builder for {@link PlannerSlotEntryDto} fixtures (01f). */
+  public static PlannerSlotEntryDto plannerSlotEntry(String slotKey, SlotKind kind) {
+    return new PlannerSlotEntryDto(slotKey, kind, true, 1, 30, null, null);
+  }
+
+  /** Builder for {@link SlotConfigurationPlannerViewDto} fixtures (01f). */
+  public static SlotConfigurationPlannerViewDto plannerView(
+      UUID householdId, List<PlannerSlotEntryDto> slots, List<UUID> allEaterUserIds) {
+    return new SlotConfigurationPlannerViewDto(
+        householdId, slots, allEaterUserIds, allEaterUserIds, null, null, Instant.now());
   }
 
   /**
