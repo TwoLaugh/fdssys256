@@ -8,6 +8,10 @@ import java.util.UUID;
 /**
  * Read shape of a recipe version's full body — ingredients ordered by {@code lineOrder}, method
  * steps ordered by {@code stepNumber}.
+ *
+ * <p>{@code appliedSubstitutionIds} is populated only by the {@code GET
+ * /api/v1/recipes/{recipeId}/versions/{versionId}/with-substitutions} endpoint (recipe-01e). It is
+ * {@code null} on every other read.
  */
 public record RecipeVersionDto(
     UUID id,
@@ -23,4 +27,5 @@ public record RecipeVersionDto(
     List<IngredientDto> ingredients,
     List<MethodStepDto> methodSteps,
     RecipeMetadataDto metadata,
-    RecipeTagsDto tags) {}
+    RecipeTagsDto tags,
+    List<UUID> appliedSubstitutionIds) {}

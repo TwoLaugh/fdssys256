@@ -151,6 +151,14 @@ paths:
     $ref: 'paths/recipe.yaml#/recipeVersionsRevert'
   /api/v1/recipes/{recipeId}/versions/{fromVersionId}/diff/{toVersionId}:
     $ref: 'paths/recipe.yaml#/recipeVersionDiff'
+  /api/v1/recipes/{recipeId}/substitutions:
+    $ref: 'paths/recipe.yaml#/recipeSubstitutions'
+  /api/v1/recipes/{recipeId}/substitutions/active:
+    $ref: 'paths/recipe.yaml#/recipeSubstitutionsActive'
+  /api/v1/recipes/{recipeId}/substitutions/{subId}/{action}:
+    $ref: 'paths/recipe.yaml#/recipeSubstitutionLifecycle'
+  /api/v1/recipes/{recipeId}/versions/{versionId}/with-substitutions:
+    $ref: 'paths/recipe.yaml#/recipeVersionWithSubstitutions'
 components:
   securitySchemes:
     cookieAuth:
@@ -310,6 +318,17 @@ components:
     CreateBranchRequest: { $ref: 'schemas/recipe.yaml#/CreateBranchRequest' }
     CreateRecipeBodyRequest: { $ref: 'schemas/recipe.yaml#/CreateRecipeBodyRequest' }
     RevertToVersionRequest: { $ref: 'schemas/recipe.yaml#/RevertToVersionRequest' }
+    AcceptSubstitutionRequest: { $ref: 'schemas/recipe.yaml#/AcceptSubstitutionRequest' }
+    CreateSubstitutionRequest: { $ref: 'schemas/recipe.yaml#/CreateSubstitutionRequest' }
+    MethodOverlayLineDto: { $ref: 'schemas/recipe.yaml#/MethodOverlayLineDto' }
+    MethodOverlayLineRequest: { $ref: 'schemas/recipe.yaml#/MethodOverlayLineRequest' }
+    PromoteSubstitutionRequest: { $ref: 'schemas/recipe.yaml#/PromoteSubstitutionRequest' }
+    RecipeSubstitutionDto: { $ref: 'schemas/recipe.yaml#/RecipeSubstitutionDto' }
+    RejectSubstitutionRequest: { $ref: 'schemas/recipe.yaml#/RejectSubstitutionRequest' }
+    SubstitutedItemDto: { $ref: 'schemas/recipe.yaml#/SubstitutedItemDto' }
+    SubstitutionItemRequest: { $ref: 'schemas/recipe.yaml#/SubstitutionItemRequest' }
+    SubstitutionReason: { $ref: 'schemas/recipe.yaml#/SubstitutionReason' }
+    SubstitutionState: { $ref: 'schemas/recipe.yaml#/SubstitutionState' }
     # ai
     TaskType: { $ref: 'schemas/ai.yaml#/TaskType' }
     ModelTier: { $ref: 'schemas/ai.yaml#/ModelTier' }

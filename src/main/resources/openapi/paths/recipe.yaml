@@ -369,3 +369,207 @@ recipeVersionsRevert:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeSubstitutions:
+  get:
+    tags: [Recipes]
+    operationId: getSubstitutionsForVersion
+    summary: 'List substitutions for a specific version (state filter: ACCEPTED).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: versionId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Active substitutions on the given version.'
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/recipe.yaml#/RecipeSubstitutionDto' }
+      '400':
+        description: 'versionId query param missing.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Recipe not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  post:
+    tags: [Recipes]
+    operationId: createRecipeSubstitution
+    summary: 'Propose a new substitution; state = PROPOSED.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/recipe.yaml#/CreateSubstitutionRequest' }
+    responses:
+      '201':
+        description: 'Substitution created in PROPOSED state.'
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeSubstitutionDto' }
+      '400':
+        description: 'Validation error.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Recipe or version not found or not owned.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Original ingredient missing on version or SYSTEM-catalogue recipe.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeSubstitutionsActive:
+  get:
+    tags: [Recipes]
+    operationId: getActiveSubstitutions
+    summary: 'List all ACCEPTED substitutions for the recipe.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Accepted substitutions for the recipe.'
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/recipe.yaml#/RecipeSubstitutionDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Recipe not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeSubstitutionLifecycle:
+  post:
+    tags: [Recipes]
+    operationId: actOnRecipeSubstitution
+    summary: 'Discriminated lifecycle action - single endpoint with action in path: accept, reject, promote-to-version.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: subId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: action
+        required: true
+        schema: { type: string, enum: [accept, reject, promote-to-version] }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - { $ref: '../schemas/recipe.yaml#/AcceptSubstitutionRequest' }
+              - { $ref: '../schemas/recipe.yaml#/RejectSubstitutionRequest' }
+              - { $ref: '../schemas/recipe.yaml#/PromoteSubstitutionRequest' }
+    responses:
+      '200':
+        description: 'Substitution acted upon; accept and reject return the substitution, promote returns the new RecipeVersion.'
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - { $ref: '../schemas/recipe.yaml#/RecipeSubstitutionDto' }
+                - { $ref: '../schemas/recipe.yaml#/RecipeVersionDto' }
+      '400':
+        description: 'Validation error or unknown action.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Substitution not found or not owned.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Stale expectedVersion.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Terminal state or promotion precondition (must be ACCEPTED).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeVersionWithSubstitutions:
+  get:
+    tags: [Recipes]
+    operationId: getRecipeVersionWithSubstitutions
+    summary: 'Fetch a version with active substitutions overlaid onto the ingredients and method.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: versionId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Version with overlays applied; carries appliedSubstitutionIds list.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeVersionDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Recipe or version not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
