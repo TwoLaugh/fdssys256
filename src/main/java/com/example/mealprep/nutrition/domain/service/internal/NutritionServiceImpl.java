@@ -1639,7 +1639,7 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
   }
 
   @Override
-  @Transactional
+  @Transactional(noRollbackFor = HealthDirectiveSafetyGateBlockedException.class)
   public HealthDirectiveDto acceptHealthDirective(
       UUID actorUserId, UUID directiveId, AcceptDirectiveRequest request) {
     HealthDirective directive = loadOwnedDirective(actorUserId, directiveId);
