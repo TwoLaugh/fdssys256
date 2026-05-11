@@ -67,6 +67,16 @@ class NutritionRecipeRecalcFlowIT {
 
   @MockBean private RecipeQueryService recipeQueryService;
 
+  // RecipeServiceImpl implements all three of: RecipeQueryService, RecipeUpdateService,
+  // RecipeSubstitutionRecorder. @MockBean on RecipeQueryService alone removes the real
+  // RecipeServiceImpl bean, leaving Spring unable to wire RecipeUpdateService into
+  // RecipeModule. Mock the other two interfaces too so Spring has stubs for everything.
+  @MockBean
+  private com.example.mealprep.recipe.domain.service.RecipeUpdateService recipeUpdateService;
+
+  @MockBean
+  private com.example.mealprep.recipe.spi.RecipeSubstitutionRecorder recipeSubstitutionRecorder;
+
   @AfterEach
   void cleanup() {
     jdbcTemplate.update("DELETE FROM nutrition_ingredient_mapping");
