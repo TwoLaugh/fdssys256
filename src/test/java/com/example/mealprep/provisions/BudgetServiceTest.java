@@ -15,11 +15,13 @@ import com.example.mealprep.provisions.api.mapper.BudgetMapper;
 import com.example.mealprep.provisions.api.mapper.EquipmentMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryAuditMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryItemMapper;
+import com.example.mealprep.provisions.api.mapper.SupplierProductMapper;
 import com.example.mealprep.provisions.domain.entity.Budget;
 import com.example.mealprep.provisions.domain.repository.BudgetRepository;
 import com.example.mealprep.provisions.domain.repository.EquipmentRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryAuditLogRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryItemRepository;
+import com.example.mealprep.provisions.domain.repository.SupplierProductRepository;
 import com.example.mealprep.provisions.domain.service.internal.ProvisionServiceImpl;
 import com.example.mealprep.provisions.event.BudgetChangedEvent;
 import com.example.mealprep.provisions.exception.BudgetCurrencyChangeException;
@@ -52,6 +54,7 @@ class BudgetServiceTest {
   @Mock private InventoryAuditLogRepository auditLogRepository;
   @Mock private EquipmentRepository equipmentRepository;
   @Mock private BudgetRepository budgetRepository;
+  @Mock private SupplierProductRepository supplierProductRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final InventoryItemMapper mapper =
@@ -61,6 +64,7 @@ class BudgetServiceTest {
   private final BudgetMapper budgetMapper = new BudgetMapper() {};
   private final InventoryAuditMapper inventoryAuditMapper =
       new com.example.mealprep.provisions.api.mapper.InventoryAuditMapperImpl();
+  private final SupplierProductMapper supplierProductMapper = new SupplierProductMapper() {};
 
   private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -73,10 +77,12 @@ class BudgetServiceTest {
         auditLogRepository,
         equipmentRepository,
         budgetRepository,
+        supplierProductRepository,
         mapper,
         equipmentMapper,
         budgetMapper,
         inventoryAuditMapper,
+        supplierProductMapper,
         eventPublisher,
         objectMapper,
         fixedClock);

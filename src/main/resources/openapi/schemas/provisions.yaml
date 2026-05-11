@@ -277,3 +277,126 @@ UpdateBudgetRequest:
     priceSensitivity: { $ref: '#/PriceSensitivity' }
     enabled: { type: boolean, default: true, nullable: true }
     expectedVersion: { type: integer, format: int64, minimum: 0, default: 0 }
+SubstitutionRecordDto:
+  type: object
+  required: [date, substitutedWithProductId, accepted]
+  properties:
+    date: { type: string, format: date }
+    substitutedWithProductId: { type: string, maxLength: 128 }
+    accepted: { type: boolean }
+    notes:
+      type: string
+      maxLength: 1000
+      nullable: true
+SupplierProductDto:
+  type: object
+  required: [id, productId, supplier, name, lastChecked, substitutionHistory, version]
+  properties:
+    id: { type: string, format: uuid }
+    productId: { type: string, maxLength: 128 }
+    supplier: { type: string, maxLength: 32 }
+    name: { type: string, maxLength: 255 }
+    price:
+      type: number
+      format: double
+      minimum: 0
+      nullable: true
+    pricePerUnit:
+      type: number
+      format: double
+      minimum: 0
+      nullable: true
+    unit:
+      type: string
+      maxLength: 16
+      nullable: true
+    packSizeG:
+      type: integer
+      nullable: true
+    packSizeUnit:
+      type: string
+      maxLength: 16
+      nullable: true
+    category:
+      type: string
+      maxLength: 64
+      nullable: true
+    clubcardPrice:
+      type: number
+      format: double
+      minimum: 0
+      nullable: true
+    lastChecked: { type: string, format: date }
+    substitutionHistory:
+      type: array
+      items: { $ref: '#/SubstitutionRecordDto' }
+    ingredientMappingKey:
+      type: string
+      maxLength: 128
+      nullable: true
+    version: { type: integer, format: int64 }
+UpsertSupplierProductRequest:
+  type: object
+  required: [productId, supplier, name, lastChecked]
+  properties:
+    productId: { type: string, minLength: 1, maxLength: 128 }
+    supplier: { type: string, minLength: 1, maxLength: 32 }
+    name: { type: string, minLength: 1, maxLength: 255 }
+    price:
+      type: number
+      format: double
+      minimum: 0
+      nullable: true
+    pricePerUnit:
+      type: number
+      format: double
+      minimum: 0
+      nullable: true
+    unit:
+      type: string
+      maxLength: 16
+      nullable: true
+    packSizeG:
+      type: integer
+      nullable: true
+    packSizeUnit:
+      type: string
+      maxLength: 16
+      nullable: true
+    category:
+      type: string
+      maxLength: 64
+      nullable: true
+    clubcardPrice:
+      type: number
+      format: double
+      minimum: 0
+      nullable: true
+    lastChecked: { type: string, format: date }
+    ingredientMappingKey:
+      type: string
+      maxLength: 128
+      nullable: true
+RecordSubstitutionRequest:
+  type: object
+  required: [record, userAccepted, expectedVersion]
+  properties:
+    record: { $ref: '#/SubstitutionRecordDto' }
+    userAccepted: { type: boolean }
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+SupplierProductDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/SupplierProductDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }

@@ -5,7 +5,11 @@ import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.InventoryAuditEntryDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.InventorySearchCriteria;
+import com.example.mealprep.provisions.api.dto.SupplierProductDto;
+import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -58,4 +62,34 @@ public interface ProvisionQueryService {
    * on every entry is always {@code null} in v1.
    */
   List<BudgetDto> getBudgetsByUserIds(List<UUID> userIds);
+
+  /**
+   * Return the single cheapest supplier-product matching {@code key} on the {@code
+   * ingredientMappingKey} column — multiple rows can share the same key (one mapping → many
+   * supplier SKUs). Tie-break order: {@code price_per_unit ASC}, then {@code last_checked DESC}
+   * (freshest first). Empty when no rows match. Internal cross-module helper — no HTTP exposure.
+   */
+  Optional<SupplierProductDto> getSupplierProductByMappingKey(String key);
+
+  /**
+   * Batch variant of {@link #getSupplierProductByMappingKey(String)} — one round-trip via {@code IN
+   * (...)}. Returns a map keyed by {@code ingredientMappingKey} with the cheapest entry per key;
+   * missing keys are silently absent. Designed for 01f's planner-bundle cost-estimation path. Empty
+   * input → empty map; no repository call.
+   */
+  Map<String, SupplierProductDto> getSupplierProductsByMappingKeys(Collection<String> keys);
+
+  /**
+   * Paginated stale-supplier-product listing — rows where {@code last_checked < cutoff}. Sorted by
+   * {@code last_checked ASC} (oldest first — the staleness UI surfaces the most stale entries
+   * first). Internal helper; the admin-staleness REST surface is deferred to 01j.
+   */
+  Page<SupplierProductDto> getStaleSupplierProducts(LocalDate cutoff, Pageable p);
+
+  /**
+   * Paginated search backing {@code GET /supplier-products?mappingKey=&supplier=}. Both filters are
+   * optional — when both are null every row matches. Sort comes from the caller's {@link Pageable};
+   * the controller pins {@code last_checked DESC} by default.
+   */
+  Page<SupplierProductDto> searchSupplierProducts(String mappingKey, String supplier, Pageable p);
 }

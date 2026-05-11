@@ -6,6 +6,7 @@ import com.example.mealprep.provisions.exception.BudgetNotFoundException;
 import com.example.mealprep.provisions.exception.EquipmentNotFoundException;
 import com.example.mealprep.provisions.exception.InvalidInventoryQuantityException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
+import com.example.mealprep.provisions.exception.SupplierProductNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -97,6 +98,21 @@ public class ProvisionsExceptionHandler {
             "Budget currency change rejected",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(SupplierProductNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleSupplierProductNotFound(
+      SupplierProductNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "supplier-product-not-found",
+            "Supplier product not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }
