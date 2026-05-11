@@ -114,7 +114,8 @@ class HouseholdMembersServiceTest {
     when(householdMemberRepository.findByUserId(actorUserId)).thenReturn(Optional.of(primary));
     when(householdMemberRepository.findByUserId(targetUserId)).thenReturn(Optional.empty());
     when(householdRepository.findWithMembersById(householdId)).thenReturn(Optional.of(household));
-    when(householdRepository.saveAndFlush(any(Household.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(householdRepository.saveAndFlush(any(Household.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
 
     AddMemberRequest req =
         HouseholdTestData.addMemberRequest(targetUserId, HouseholdRole.member, 200, "Alice");
@@ -146,7 +147,8 @@ class HouseholdMembersServiceTest {
     when(householdMemberRepository.findByUserId(actorUserId)).thenReturn(Optional.of(primary));
     when(householdMemberRepository.findByUserId(targetUserId)).thenReturn(Optional.empty());
     when(householdRepository.findWithMembersById(householdId)).thenReturn(Optional.of(household));
-    when(householdRepository.saveAndFlush(any(Household.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(householdRepository.saveAndFlush(any(Household.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
 
     AddMemberRequest req =
         HouseholdTestData.addMemberRequest(targetUserId, HouseholdRole.member, null, null);
@@ -169,9 +171,7 @@ class HouseholdMembersServiceTest {
             () ->
                 service()
                     .addMember(
-                        householdId,
-                        actorUserId,
-                        HouseholdTestData.addMemberRequest(targetUserId)))
+                        householdId, actorUserId, HouseholdTestData.addMemberRequest(targetUserId)))
         .isInstanceOf(InsufficientHouseholdRoleException.class);
     verify(eventPublisher, never()).publishEvent(any());
   }
@@ -187,9 +187,7 @@ class HouseholdMembersServiceTest {
             () ->
                 service()
                     .addMember(
-                        householdId,
-                        actorUserId,
-                        HouseholdTestData.addMemberRequest(targetUserId)))
+                        householdId, actorUserId, HouseholdTestData.addMemberRequest(targetUserId)))
         .isInstanceOf(HouseholdNotFoundException.class);
   }
 
@@ -211,9 +209,7 @@ class HouseholdMembersServiceTest {
             () ->
                 service()
                     .addMember(
-                        householdId,
-                        actorUserId,
-                        HouseholdTestData.addMemberRequest(targetUserId)))
+                        householdId, actorUserId, HouseholdTestData.addMemberRequest(targetUserId)))
         .isInstanceOf(UserAlreadyInHouseholdException.class);
   }
 
@@ -295,8 +291,7 @@ class HouseholdMembersServiceTest {
     assertThatThrownBy(
             () ->
                 service()
-                    .updateMember(
-                        memberId, actorUserId, HouseholdTestData.updateMemberRequest(0L)))
+                    .updateMember(memberId, actorUserId, HouseholdTestData.updateMemberRequest(0L)))
         .isInstanceOf(InsufficientHouseholdRoleException.class);
   }
 
@@ -318,8 +313,7 @@ class HouseholdMembersServiceTest {
     assertThatThrownBy(
             () ->
                 service()
-                    .updateMember(
-                        memberId, actorUserId, HouseholdTestData.updateMemberRequest(0L)))
+                    .updateMember(memberId, actorUserId, HouseholdTestData.updateMemberRequest(0L)))
         .isInstanceOf(HouseholdMemberNotFoundException.class);
   }
 
@@ -342,9 +336,7 @@ class HouseholdMembersServiceTest {
             () ->
                 service()
                     .updateMember(
-                        memberId,
-                        actorUserId,
-                        HouseholdTestData.updateMemberRequest(99, "x", 0L)))
+                        memberId, actorUserId, HouseholdTestData.updateMemberRequest(99, "x", 0L)))
         .isInstanceOf(OptimisticLockingFailureException.class);
   }
 

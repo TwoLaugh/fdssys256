@@ -280,10 +280,7 @@ class HouseholdMembersFlowIT {
                 post("/api/v1/households/current/members")
                     .cookie(primary.cookie())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(
-                        "{\"userId\":\""
-                            + candidate.userId()
-                            + "\",\"role\":\"member\"}"))
+                    .content("{\"userId\":\"" + candidate.userId() + "\",\"role\":\"member\"}"))
             .andExpect(status().isCreated())
             .andReturn();
     String memberId =
@@ -315,10 +312,7 @@ class HouseholdMembersFlowIT {
                 post("/api/v1/households/current/members")
                     .cookie(primary.cookie())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(
-                        "{\"userId\":\""
-                            + candidate.userId()
-                            + "\",\"role\":\"member\"}"))
+                    .content("{\"userId\":\"" + candidate.userId() + "\",\"role\":\"member\"}"))
             .andExpect(status().isCreated())
             .andReturn();
     String memberId =
@@ -345,10 +339,7 @@ class HouseholdMembersFlowIT {
                 post("/api/v1/households/current/members")
                     .cookie(primary.cookie())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(
-                        "{\"userId\":\""
-                            + candidate.userId()
-                            + "\",\"role\":\"member\"}"))
+                    .content("{\"userId\":\"" + candidate.userId() + "\",\"role\":\"member\"}"))
             .andExpect(status().isCreated())
             .andReturn();
     String memberId =
@@ -374,8 +365,7 @@ class HouseholdMembersFlowIT {
                 post("/api/v1/households/current/members")
                     .cookie(primaryA.cookie())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(
-                        "{\"userId\":\"" + candidateA.userId() + "\",\"role\":\"member\"}"))
+                    .content("{\"userId\":\"" + candidateA.userId() + "\",\"role\":\"member\"}"))
             .andExpect(status().isCreated())
             .andReturn();
     String memberId =
@@ -404,18 +394,14 @@ class HouseholdMembersFlowIT {
                 post("/api/v1/households/current/members")
                     .cookie(primary.cookie())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(
-                        "{\"userId\":\""
-                            + candidate.userId()
-                            + "\",\"role\":\"member\"}"))
+                    .content("{\"userId\":\"" + candidate.userId() + "\",\"role\":\"member\"}"))
             .andExpect(status().isCreated())
             .andReturn();
     String memberId =
         objectMapper.readTree(addResult.getResponse().getContentAsString()).get("id").asText();
     eventCapture.clear();
 
-    mvc.perform(
-            delete("/api/v1/households/current/members/" + memberId).cookie(primary.cookie()))
+    mvc.perform(delete("/api/v1/households/current/members/" + memberId).cookie(primary.cookie()))
         .andExpect(status().isNoContent());
 
     Long count =
@@ -440,17 +426,13 @@ class HouseholdMembersFlowIT {
                 post("/api/v1/households/current/members")
                     .cookie(primary.cookie())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(
-                        "{\"userId\":\""
-                            + candidate.userId()
-                            + "\",\"role\":\"member\"}"))
+                    .content("{\"userId\":\"" + candidate.userId() + "\",\"role\":\"member\"}"))
             .andExpect(status().isCreated())
             .andReturn();
     String memberId =
         objectMapper.readTree(addResult.getResponse().getContentAsString()).get("id").asText();
 
-    mvc.perform(
-            delete("/api/v1/households/current/members/" + memberId).cookie(candidate.cookie()))
+    mvc.perform(delete("/api/v1/households/current/members/" + memberId).cookie(candidate.cookie()))
         .andExpect(status().isNoContent());
   }
 
@@ -479,8 +461,7 @@ class HouseholdMembersFlowIT {
                 .cookie(primary.cookie()))
         .andExpect(status().isConflict())
         .andExpect(
-            jsonPath("$.type")
-                .value("https://mealprep.example.com/problems/last-primary-removal"));
+            jsonPath("$.type").value("https://mealprep.example.com/problems/last-primary-removal"));
     assertThat(household.id()).isNotNull(); // anchor capture
   }
 
@@ -569,8 +550,7 @@ class HouseholdMembersFlowIT {
                 .content("{\"newRole\":\"member\",\"expectedVersion\":0}"))
         .andExpect(status().isConflict())
         .andExpect(
-            jsonPath("$.type")
-                .value("https://mealprep.example.com/problems/last-primary-removal"));
+            jsonPath("$.type").value("https://mealprep.example.com/problems/last-primary-removal"));
   }
 
   @Test
@@ -650,7 +630,8 @@ class HouseholdMembersFlowIT {
         .andExpect(status().isBadRequest());
   }
 
-  // ---------------- 01c regression: accept-invite still emits only InviteAcceptedEvent ----------------
+  // ---------------- 01c regression: accept-invite still emits only InviteAcceptedEvent
+  // ----------------
 
   @Test
   void acceptInvite_afterRefactor_emitsOnlyInviteAcceptedEvent() throws Exception {
@@ -658,9 +639,7 @@ class HouseholdMembersFlowIT {
     AuthedUser invitee = registerUser("invitee");
     householdUpdateService.createHousehold(primary.userId(), new CreateHouseholdRequest("X"));
     String createBody =
-        "{\"intendedRole\":\"member\",\"expiresAt\":\""
-            + Instant.now().plusSeconds(86400)
-            + "\"}";
+        "{\"intendedRole\":\"member\",\"expiresAt\":\"" + Instant.now().plusSeconds(86400) + "\"}";
     MvcResult create =
         mvc.perform(
                 post("/api/v1/households/current/invites")
@@ -755,5 +734,4 @@ class HouseholdMembersFlowIT {
       accepted.clear();
     }
   }
-
 }

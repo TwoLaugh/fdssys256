@@ -8,9 +8,9 @@ import jakarta.validation.constraints.Size;
 import java.util.UUID;
 
 /**
- * Request body for {@code POST /api/v1/households/current/members} — direct add (PRIMARY only).
- * The actor is server-resolved via {@code CurrentUserResolver}; {@code userId} here is the target
- * being added.
+ * Request body for {@code POST /api/v1/households/current/members} — direct add (PRIMARY only). The
+ * actor is server-resolved via {@code CurrentUserResolver}; {@code userId} here is the target being
+ * added.
  *
  * @param userId target user being seated as a household member.
  * @param role intended role on join.

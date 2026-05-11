@@ -7,8 +7,8 @@ import java.util.UUID;
 
 /**
  * Published {@code AFTER_COMMIT} when a member's role is changed via {@code POST
- * /api/v1/households/current/members/{memberId}/role}. A no-op call (newRole == previousRole)
- * emits no event.
+ * /api/v1/households/current/members/{memberId}/role}. A no-op call (newRole == previousRole) emits
+ * no event.
  *
  * <p>{@code scopeKind = "household"}, {@code scopeId = householdId}.
  */

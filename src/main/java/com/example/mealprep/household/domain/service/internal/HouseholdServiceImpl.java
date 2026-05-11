@@ -562,8 +562,8 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
     HouseholdMember actor =
         householdMemberRepository
             .findByUserId(actorUserId)
-            .filter(m -> m.getHousehold() != null
-                && memberHouseholdId.equals(m.getHousehold().getId()))
+            .filter(
+                m -> m.getHousehold() != null && memberHouseholdId.equals(m.getHousehold().getId()))
             .orElseThrow(() -> new HouseholdMemberNotFoundException(memberId));
     if (actor.getRole() != HouseholdRole.primary) {
       throw new InsufficientHouseholdRoleException(
@@ -578,8 +578,7 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
     boolean priorityChanges =
         request.priority() != null && request.priority() != member.getPriority();
     boolean displayNameChanges =
-        request.displayName() != null
-            && !request.displayName().equals(member.getDisplayName());
+        request.displayName() != null && !request.displayName().equals(member.getDisplayName());
     if (!priorityChanges && !displayNameChanges) {
       // No-op: do not bump @Version, do not emit an event.
       return memberMapper.toDto(member);
@@ -621,8 +620,8 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
     HouseholdMember actor =
         householdMemberRepository
             .findByUserId(actorUserId)
-            .filter(m -> m.getHousehold() != null
-                && memberHouseholdId.equals(m.getHousehold().getId()))
+            .filter(
+                m -> m.getHousehold() != null && memberHouseholdId.equals(m.getHousehold().getId()))
             .orElseThrow(() -> new HouseholdMemberNotFoundException(memberId));
 
     boolean isPrimary = actor.getRole() == HouseholdRole.primary;
@@ -669,8 +668,7 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
 
   @Override
   @Transactional
-  public HouseholdMemberDto changeRole(
-      UUID memberId, UUID actorUserId, ChangeRoleRequest request) {
+  public HouseholdMemberDto changeRole(UUID memberId, UUID actorUserId, ChangeRoleRequest request) {
     HouseholdMember member =
         householdMemberRepository
             .findById(memberId)
@@ -684,8 +682,8 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
     HouseholdMember actor =
         householdMemberRepository
             .findByUserId(actorUserId)
-            .filter(m -> m.getHousehold() != null
-                && memberHouseholdId.equals(m.getHousehold().getId()))
+            .filter(
+                m -> m.getHousehold() != null && memberHouseholdId.equals(m.getHousehold().getId()))
             .orElseThrow(() -> new HouseholdMemberNotFoundException(memberId));
     if (actor.getRole() != HouseholdRole.primary) {
       throw new InsufficientHouseholdRoleException(
@@ -756,11 +754,7 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
    * {@code HouseholdExceptionHandler}).
    */
   private HouseholdMember addMemberInternal(
-      Household household,
-      UUID userId,
-      HouseholdRole role,
-      int priority,
-      String displayName) {
+      Household household, UUID userId, HouseholdRole role, int priority, String displayName) {
     Instant now = Instant.now(clock);
     HouseholdMember newMember =
         HouseholdMember.builder()

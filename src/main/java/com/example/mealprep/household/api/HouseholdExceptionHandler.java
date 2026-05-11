@@ -184,9 +184,9 @@ public class HouseholdExceptionHandler {
 
   /**
    * Map DB-level unique-constraint collisions raised by household-module writes (chiefly the
-   * one-primary-per-household partial index {@code idx_household_member_one_primary} and the
-   * {@code UNIQUE (user_id)} constraint on {@code household_member}) to HTTP 409. Lives here rather
-   * than in {@code GlobalExceptionHandler} so the global advice stays module-agnostic — matches the
+   * one-primary-per-household partial index {@code idx_household_member_one_primary} and the {@code
+   * UNIQUE (user_id)} constraint on {@code household_member}) to HTTP 409. Lives here rather than
+   * in {@code GlobalExceptionHandler} so the global advice stays module-agnostic — matches the
    * nutrition module's precedent (see {@code NutritionExceptionHandler}).
    */
   @ExceptionHandler(DataIntegrityViolationException.class)
