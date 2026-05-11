@@ -3,6 +3,8 @@ package com.example.mealprep.nutrition.testdata;
 import com.example.mealprep.nutrition.api.dto.ActivityAdjustmentDto;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
 import com.example.mealprep.nutrition.api.dto.EatingWindowDto;
+import com.example.mealprep.nutrition.api.dto.IngredientMappingSource;
+import com.example.mealprep.nutrition.api.dto.IngredientNutritionDocument;
 import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
 import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
@@ -15,6 +17,7 @@ import com.example.mealprep.nutrition.domain.entity.ActivityLevel;
 import com.example.mealprep.nutrition.domain.entity.EatingWindow;
 import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
 import com.example.mealprep.nutrition.domain.entity.Goal;
+import com.example.mealprep.nutrition.domain.entity.IngredientMapping;
 import com.example.mealprep.nutrition.domain.entity.IntakeSource;
 import com.example.mealprep.nutrition.domain.entity.MealSlot;
 import com.example.mealprep.nutrition.domain.entity.MicroTarget;
@@ -24,6 +27,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
 
@@ -159,6 +163,34 @@ public final class NutritionTestData {
       LocalDate onDate, MealSlot mealSlot, String text, long expectedVersion) {
     return new UpsertFoodMoodEntryRequest(
         onDate, mealSlot, text, Instant.parse("2026-05-09T12:30:00Z"), expectedVersion);
+  }
+
+  // ---------------- 01d: ingredient-mapping fixtures ----------------
+
+  public static IngredientNutritionDocument defaultNutritionDocument() {
+    return new IngredientNutritionDocument(
+        165,
+        BigDecimal.valueOf(31.0),
+        BigDecimal.valueOf(0.0),
+        BigDecimal.valueOf(3.6),
+        BigDecimal.valueOf(0.0),
+        BigDecimal.valueOf(1.0),
+        BigDecimal.valueOf(0.0),
+        new HashMap<>(),
+        new HashMap<>());
+  }
+
+  public static IngredientMapping ingredientMapping(
+      String searchTerm, IngredientMappingSource source, double confidence) {
+    return IngredientMapping.builder()
+        .id(UUID.randomUUID())
+        .searchTerm(searchTerm)
+        .source(source)
+        .externalId("12345")
+        .nutritionPer100g(defaultNutritionDocument())
+        .confidence(BigDecimal.valueOf(confidence))
+        .needsReview(confidence < 0.7)
+        .build();
   }
 
   // ---------------- Entity builders (for unit tests) ----------------

@@ -419,3 +419,94 @@ JournalAction:
   type: string
   enum: [CREATED, UPDATED, DELETED]
   description: Used internally by FoodMoodEntryWrittenEvent; not surfaced via REST.
+IngredientMappingSource:
+  type: string
+  enum: [USDA, OPEN_FOOD_FACTS, MANUAL]
+IngredientNutritionDocument:
+  type: object
+  description: JSONB blob describing nutrition per 100g. All scalars nullable (USDA / OFF returns are sparse).
+  properties:
+    calories: { type: integer, nullable: true }
+    proteinG: { type: number, format: double, nullable: true }
+    carbsG: { type: number, format: double, nullable: true }
+    fatG: { type: number, format: double, nullable: true }
+    fibreG: { type: number, format: double, nullable: true }
+    saturatedFatG: { type: number, format: double, nullable: true }
+    sugarG: { type: number, format: double, nullable: true }
+    micros:
+      type: object
+      additionalProperties: { type: number, format: double }
+    vitamins:
+      type: object
+      additionalProperties: { type: number, format: double }
+IngredientNutritionDto:
+  type: object
+  required: [searchTerm, source, nutritionPer100g, confidence, needsReview, version]
+  properties:
+    searchTerm: { type: string, maxLength: 255 }
+    source: { $ref: '#/IngredientMappingSource' }
+    externalId:
+      type: string
+      maxLength: 64
+      nullable: true
+    nutritionPer100g: { $ref: '#/IngredientNutritionDocument' }
+    defaultPieceGrams:
+      type: integer
+      nullable: true
+    confidence: { type: number, format: double, minimum: 0, maximum: 1 }
+    needsReview: { type: boolean }
+    lastVerifiedAt:
+      type: string
+      format: date-time
+      nullable: true
+    version: { type: integer, format: int64 }
+IngredientLookupRequest:
+  type: object
+  required: [query]
+  properties:
+    query: { type: string, minLength: 1, maxLength: 255 }
+    maxResults:
+      type: integer
+      minimum: 1
+      maximum: 20
+      default: 10
+      nullable: true
+IngredientLookupResultDto:
+  type: object
+  required: [hits, cacheOnly]
+  properties:
+    hits:
+      type: array
+      items: { $ref: '#/IngredientNutritionDto' }
+    cacheOnly:
+      type: boolean
+      description: True in v1 (cache-only search). False once nutrition-01m wires live USDA/OFF search.
+CorrectIngredientMappingRequest:
+  type: object
+  required: [override, expectedVersion]
+  properties:
+    override: { $ref: '#/IngredientNutritionDocument' }
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+IngredientNutritionDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/IngredientNutritionDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+UnmappedIngredientDto:
+  type: object
+  required: [name, reason, confidence]
+  properties:
+    name: { type: string, maxLength: 255 }
+    reason: { type: string, maxLength: 128 }
+    confidence: { type: number, format: double, minimum: 0, maximum: 1 }

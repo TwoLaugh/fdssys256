@@ -140,6 +140,17 @@
             <version>1.17.2</version>
         </dependency>
 
+        <!-- Resilience4j — used by nutrition-01d's USDA + OFF clients for @Retry + @RateLimiter. -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-spring-boot3</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
         <!-- ===== Test scope ===== -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -187,6 +198,14 @@
             <groupId>com.tngtech.archunit</groupId>
             <artifactId>archunit-junit5</artifactId>
             <version>${archunit.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- WireMock for stubbing USDA / OFF HTTP in IT tests (nutrition-01d). -->
+        <dependency>
+            <groupId>com.github.tomakehurst</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.0.1</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

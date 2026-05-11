@@ -2,11 +2,15 @@ package com.example.mealprep.nutrition.domain.service;
 
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
 import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
+import com.example.mealprep.nutrition.api.dto.IngredientLookupRequest;
+import com.example.mealprep.nutrition.api.dto.IngredientLookupResultDto;
+import com.example.mealprep.nutrition.api.dto.IngredientNutritionDto;
 import com.example.mealprep.nutrition.api.dto.IntakeAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.NutritionTargetsAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -73,4 +77,29 @@ public interface NutritionQueryService {
    * module lands.
    */
   List<FoodMoodEntryDto> getJournalEntriesForFeedbackContext(UUID userId);
+
+  /**
+   * Cross-module read helper: cache-only lookup of an ingredient mapping by (normalised) search
+   * term. Does NOT invoke the USDA / OFF pipeline — pure cache read. Callers that want a pipeline-
+   * resolving lookup go through the HTTP {@code GET /api/v1/nutrition/ingredients/lookup?term=}.
+   */
+  Optional<IngredientNutritionDto> lookupIngredient(String searchTerm);
+
+  /**
+   * Batch sibling of {@link #lookupIngredient(String)}: normalises each, returns only the cache
+   * hits. Issues a single SQL {@code WHERE search_term IN (...)} (no N+1).
+   */
+  List<IngredientNutritionDto> lookupIngredients(Collection<String> searchTerms);
+
+  /**
+   * UI search over the ingredient-mapping cache. {@code cacheOnly = true} in v1 — the live USDA /
+   * OFF discovery path is deferred to nutrition-01m.
+   */
+  IngredientLookupResultDto searchIngredientsForUi(IngredientLookupRequest request);
+
+  /**
+   * Paginated list of mappings whose {@code needs_review} flag is true, sorted {@code updated_at
+   * DESC}. Backs {@code GET /api/v1/nutrition/ingredients/needs-review}.
+   */
+  Page<IngredientNutritionDto> getMappingsNeedingReview(Pageable pageable);
 }

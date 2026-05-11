@@ -122,6 +122,14 @@ paths:
     $ref: 'paths/nutrition.yaml#/nutritionJournalEntry'
   /api/v1/nutrition/journal:
     $ref: 'paths/nutrition.yaml#/nutritionJournalRecent'
+  /api/v1/nutrition/ingredients/lookup:
+    $ref: 'paths/nutrition.yaml#/nutritionIngredientLookup'
+  /api/v1/nutrition/ingredients/search:
+    $ref: 'paths/nutrition.yaml#/nutritionIngredientSearch'
+  /api/v1/nutrition/ingredients/{searchTerm}/correction:
+    $ref: 'paths/nutrition.yaml#/nutritionIngredientCorrection'
+  /api/v1/nutrition/ingredients/needs-review:
+    $ref: 'paths/nutrition.yaml#/nutritionIngredientNeedsReview'
   # ===== recipe =====
   /api/v1/recipes:
     $ref: 'paths/recipe.yaml#/recipes'
@@ -251,6 +259,14 @@ components:
     FoodMoodEntryDtoPage: { $ref: 'schemas/nutrition.yaml#/FoodMoodEntryDtoPage' }
     JournalAction: { $ref: 'schemas/nutrition.yaml#/JournalAction' }
     UpsertFoodMoodEntryRequest: { $ref: 'schemas/nutrition.yaml#/UpsertFoodMoodEntryRequest' }
+    CorrectIngredientMappingRequest: { $ref: 'schemas/nutrition.yaml#/CorrectIngredientMappingRequest' }
+    IngredientLookupRequest: { $ref: 'schemas/nutrition.yaml#/IngredientLookupRequest' }
+    IngredientLookupResultDto: { $ref: 'schemas/nutrition.yaml#/IngredientLookupResultDto' }
+    IngredientMappingSource: { $ref: 'schemas/nutrition.yaml#/IngredientMappingSource' }
+    IngredientNutritionDocument: { $ref: 'schemas/nutrition.yaml#/IngredientNutritionDocument' }
+    IngredientNutritionDto: { $ref: 'schemas/nutrition.yaml#/IngredientNutritionDto' }
+    IngredientNutritionDtoPage: { $ref: 'schemas/nutrition.yaml#/IngredientNutritionDtoPage' }
+    UnmappedIngredientDto: { $ref: 'schemas/nutrition.yaml#/UnmappedIngredientDto' }
     # recipe
     Catalogue: { $ref: 'schemas/recipe.yaml#/Catalogue' }
     DataQuality: { $ref: 'schemas/recipe.yaml#/DataQuality' }
