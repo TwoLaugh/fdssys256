@@ -123,6 +123,10 @@ paths:
     $ref: 'paths/recipe.yaml#/recipeImportProvenance'
   /api/v1/recipes/{recipeId}/branches:
     $ref: 'paths/recipe.yaml#/recipeBranches'
+  /api/v1/recipes/{recipeId}/branches/{branchId}:
+    $ref: 'paths/recipe.yaml#/recipeBranch'
+  /api/v1/recipes/{recipeId}/versions/revert:
+    $ref: 'paths/recipe.yaml#/recipeVersionsRevert'
   /api/v1/recipes/{recipeId}/versions/{fromVersionId}/diff/{toVersionId}:
     $ref: 'paths/recipe.yaml#/recipeVersionDiff'
 components:
@@ -258,6 +262,10 @@ components:
     RecipeDiffDto: { $ref: 'schemas/recipe.yaml#/RecipeDiffDto' }
     TagChangeDto: { $ref: 'schemas/recipe.yaml#/TagChangeDto' }
     UpdateRecipeManualEditRequest: { $ref: 'schemas/recipe.yaml#/UpdateRecipeManualEditRequest' }
+    CharacterFingerprintDto: { $ref: 'schemas/recipe.yaml#/CharacterFingerprintDto' }
+    CreateBranchRequest: { $ref: 'schemas/recipe.yaml#/CreateBranchRequest' }
+    CreateRecipeBodyRequest: { $ref: 'schemas/recipe.yaml#/CreateRecipeBodyRequest' }
+    RevertToVersionRequest: { $ref: 'schemas/recipe.yaml#/RevertToVersionRequest' }
     # ai
     TaskType: { $ref: 'schemas/ai.yaml#/TaskType' }
     ModelTier: { $ref: 'schemas/ai.yaml#/ModelTier' }

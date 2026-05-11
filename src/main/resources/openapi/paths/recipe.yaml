@@ -239,3 +239,133 @@ recipeBranches:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  post:
+    tags: [Recipes]
+    operationId: createRecipeBranch
+    summary: Fork a recipe into a new branch off a specific version.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/recipe.yaml#/CreateBranchRequest' }
+    responses:
+      '201':
+        description: Branch created.
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeBranchDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Recipe not found or not owned by the caller.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Branch name already exists for this recipe.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: Invalid branch-point version, reserved branch name, or manual branch on SYSTEM recipe.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeBranch:
+  get:
+    tags: [Recipes]
+    operationId: getRecipeBranch
+    summary: Fetch a single branch of a recipe.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: branchId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The branch.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeBranchDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Branch not found or belongs to another recipe.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeVersionsRevert:
+  post:
+    tags: [Recipes]
+    operationId: revertRecipeToVersion
+    summary: Revert a branch to an earlier version by writing a new version whose body clones the target.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/recipe.yaml#/RevertToVersionRequest' }
+    responses:
+      '200':
+        description: New revert-version row created; returned with hydrated body.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeVersionDto' }
+      '400':
+        description: Validation error or no-op revert.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Recipe, branch, or version not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedRecipeOptimisticVersion.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: Revert on a SYSTEM-catalogue recipe.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

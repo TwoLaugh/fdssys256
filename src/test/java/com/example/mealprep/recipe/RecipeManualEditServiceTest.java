@@ -28,6 +28,8 @@ import com.example.mealprep.recipe.domain.repository.RecipeBranchRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeImportRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeVersionRepository;
+import com.example.mealprep.recipe.domain.service.internal.DivergenceScoreCalculator;
+import com.example.mealprep.recipe.domain.service.internal.FingerprintDeriver;
 import com.example.mealprep.recipe.domain.service.internal.HtmlImportParser;
 import com.example.mealprep.recipe.domain.service.internal.RecipeServiceImpl;
 import com.example.mealprep.recipe.domain.service.internal.VersionDiffer;
@@ -74,6 +76,8 @@ class RecipeManualEditServiceTest {
   private final ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper =
       new ParsedRecipeToCreateRequestMapper();
   private final VersionDiffer versionDiffer = new VersionDiffer(objectMapper);
+  private final DivergenceScoreCalculator divergenceCalculator = new DivergenceScoreCalculator();
+  private final FingerprintDeriver fingerprintDeriver = new FingerprintDeriver();
   private final Clock fixedClock =
       Clock.fixed(Instant.parse("2026-05-09T10:00:00Z"), ZoneOffset.UTC);
 
@@ -92,6 +96,9 @@ class RecipeManualEditServiceTest {
         htmlImportParser,
         parserToCreateRequestMapper,
         versionDiffer,
+        divergenceCalculator,
+        fingerprintDeriver,
+        objectMapper,
         eventPublisher,
         fixedClock);
   }

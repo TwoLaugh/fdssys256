@@ -459,3 +459,110 @@ UpdateRecipeManualEditRequest:
           items: { type: string, maxLength: 32 }
     changeReason: { type: string, minLength: 1, maxLength: 2000 }
     expectedOptimisticVersion: { type: integer, format: int64, minimum: 0 }
+CharacterFingerprintDto:
+  type: object
+  description: Per-version character fingerprint, refreshed only on branch creation.
+  required: [definingIngredients, definingTechniques, textureEssentials, flavourAnchors, complexityTier]
+  properties:
+    definingIngredients:
+      type: array
+      maxItems: 5
+      items: { type: string, maxLength: 160 }
+    definingTechniques:
+      type: array
+      maxItems: 5
+      items: { type: string, maxLength: 64 }
+    textureEssentials:
+      type: array
+      maxItems: 5
+      items: { type: string, maxLength: 64 }
+    flavourAnchors:
+      type: array
+      maxItems: 5
+      items: { type: string, maxLength: 64 }
+    complexityTier: { $ref: '#/Complexity' }
+    cuisineAnchor:
+      type: string
+      maxLength: 64
+      nullable: true
+CreateRecipeBodyRequest:
+  type: object
+  required: [ingredients, method, metadata]
+  properties:
+    ingredients:
+      type: array
+      minItems: 1
+      items: { $ref: '#/CreateIngredientRequest' }
+    method:
+      type: array
+      minItems: 1
+      items: { $ref: '#/CreateMethodStepRequest' }
+    metadata: { $ref: '#/CreateRecipeMetadataRequest' }
+    tags:
+      type: object
+      nullable: true
+      properties:
+        protein: { type: string, maxLength: 64, nullable: true }
+        cookingMethod: { type: string, maxLength: 64, nullable: true }
+        complexity:
+          type: string
+          enum: [MINIMAL, MODERATE, INVOLVED]
+          nullable: true
+        flavourProfile:
+          type: array
+          items: { type: string, maxLength: 32 }
+        dietaryFlags:
+          type: array
+          items: { type: string, maxLength: 32 }
+CreateBranchRequest:
+  type: object
+  required: [name, reason, branchPointVersionId, body]
+  properties:
+    name:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: '^[a-z0-9-]+$'
+    label:
+      type: string
+      maxLength: 120
+      nullable: true
+    reason: { type: string, minLength: 1, maxLength: 2000 }
+    branchPointVersionId: { type: string, format: uuid }
+    body: { $ref: '#/CreateRecipeBodyRequest' }
+    fingerprintOverride:
+      type: object
+      nullable: true
+      description: When supplied, the branch's v1 character_fingerprint is set verbatim. Otherwise derived from the body.
+      required: [definingIngredients, definingTechniques, textureEssentials, flavourAnchors, complexityTier]
+      properties:
+        definingIngredients:
+          type: array
+          maxItems: 5
+          items: { type: string, maxLength: 160 }
+        definingTechniques:
+          type: array
+          maxItems: 5
+          items: { type: string, maxLength: 64 }
+        textureEssentials:
+          type: array
+          maxItems: 5
+          items: { type: string, maxLength: 64 }
+        flavourAnchors:
+          type: array
+          maxItems: 5
+          items: { type: string, maxLength: 64 }
+        complexityTier:
+          type: string
+          enum: [MINIMAL, MODERATE, INVOLVED]
+        cuisineAnchor:
+          type: string
+          maxLength: 64
+          nullable: true
+RevertToVersionRequest:
+  type: object
+  required: [branchId, versionNumber, expectedRecipeOptimisticVersion]
+  properties:
+    branchId: { type: string, format: uuid }
+    versionNumber: { type: integer, minimum: 1 }
+    expectedRecipeOptimisticVersion: { type: integer, format: int64, minimum: 0 }

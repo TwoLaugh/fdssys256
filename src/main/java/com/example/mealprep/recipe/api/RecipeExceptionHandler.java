@@ -2,6 +2,10 @@ package com.example.mealprep.recipe.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
 import com.example.mealprep.recipe.exception.NoChangesException;
+import com.example.mealprep.recipe.exception.RecipeBranchNameConflictException;
+import com.example.mealprep.recipe.exception.RecipeBranchNameReservedException;
+import com.example.mealprep.recipe.exception.RecipeBranchNotFoundException;
+import com.example.mealprep.recipe.exception.RecipeBranchPointInvalidException;
 import com.example.mealprep.recipe.exception.RecipeCatalogueViolationException;
 import com.example.mealprep.recipe.exception.RecipeDiffCrossBranchException;
 import com.example.mealprep.recipe.exception.RecipeDiffNotComputedException;
@@ -144,6 +148,66 @@ public class RecipeExceptionHandler {
             ex.getMessage(),
             "recipe-diff-cross-branch",
             "Recipe diff cross branch",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeBranchNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeBranchNotFound(
+      RecipeBranchNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "recipe-branch-not-found",
+            "Recipe branch not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeBranchPointInvalidException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeBranchPointInvalid(
+      RecipeBranchPointInvalidException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "recipe-branch-point-invalid",
+            "Recipe branch-point version invalid",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeBranchNameConflictException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeBranchNameConflict(
+      RecipeBranchNameConflictException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "recipe-branch-name-conflict",
+            "Recipe branch name conflict",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeBranchNameReservedException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeBranchNameReserved(
+      RecipeBranchNameReservedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "recipe-branch-name-reserved",
+            "Recipe branch name reserved",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
