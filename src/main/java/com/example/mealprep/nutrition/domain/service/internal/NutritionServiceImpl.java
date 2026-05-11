@@ -1592,12 +1592,11 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
       throw new DuplicateHealthDirectiveException(row.getId(), row.getStatus());
     }
 
-    // Temporal-required-when-temporary check — surfaced as 400 by Spring's
-    // ResponseStatusExceptionResolver.
+    // Temporal-required-when-temporary check — IllegalArgumentException is mapped
+    // to 400 by GlobalExceptionHandler. Avoids importing Spring Web types into
+    // domain.service.internal (ArchUnit springWebStaysInApi rule).
     if (request.temporary() && request.autoExpiresAt() == null) {
-      throw new org.springframework.web.server.ResponseStatusException(
-          org.springframework.http.HttpStatus.BAD_REQUEST,
-          "autoExpiresAt is required when temporary=true");
+      throw new IllegalArgumentException("autoExpiresAt is required when temporary=true");
     }
 
     Instant now = Instant.now(clock);
