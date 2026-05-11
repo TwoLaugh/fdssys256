@@ -8,9 +8,10 @@ import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 
 /**
- * Recipe-module repository isolation. Other modules must not import {@code
- * recipe.domain.repository}. Cross-module callers go through {@code RecipeQueryService} / {@code
- * RecipeUpdateService}.
+ * Recipe-module repository + SPI isolation. Other modules must not import {@code
+ * recipe.domain.repository} or {@code recipe.spi}. Cross-module callers go through {@code
+ * RecipeQueryService} / {@code RecipeUpdateService}; the Adaptation Pipeline (separate module, not
+ * yet built) is the single intended external consumer of {@code RecipeWriteApi}.
  */
 @AnalyzeClasses(
     packages = "com.example.mealprep",
@@ -29,5 +30,24 @@ class RecipeBoundaryTest {
               "recipe repos are accessible only within the recipe module —"
                   + " cross-module callers go through RecipeQueryService /"
                   + " RecipeUpdateService.")
+          .allowEmptyShould(true);
+
+  /**
+   * Per LLD line 824 — the {@code RecipeWriteApi} SPI is internal to the recipe module + the
+   * Adaptation Pipeline module (not yet built). Today, with no pipeline module present, the rule is
+   * vacuously true; it stays in place to catch any accidental future import attempt.
+   */
+  @ArchTest
+  static final ArchRule recipeWriteApiNotImportedByOtherModules =
+      noClasses()
+          .that()
+          .resideOutsideOfPackages("com.example.mealprep.recipe..", "..test..")
+          .should()
+          .dependOnClassesThat()
+          .resideInAPackage("com.example.mealprep.recipe.spi..")
+          .as(
+              "the RecipeWriteApi SPI (and its commands) is consumed only by the recipe"
+                  + " module + (future) Adaptation Pipeline; other modules must go through"
+                  + " RecipeQueryService / RecipeUpdateService.")
           .allowEmptyShould(true);
 }

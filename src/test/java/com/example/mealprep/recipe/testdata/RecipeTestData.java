@@ -18,6 +18,10 @@ import com.example.mealprep.recipe.api.dto.SubstitutionItemRequest;
 import com.example.mealprep.recipe.api.dto.SubstitutionReason;
 import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
 import com.example.mealprep.recipe.domain.entity.Complexity;
+import com.example.mealprep.recipe.spi.SaveAdaptedBranchCommand;
+import com.example.mealprep.recipe.spi.SaveAdaptedSubstitutionCommand;
+import com.example.mealprep.recipe.spi.SaveAdaptedVersionCommand;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -221,5 +225,63 @@ public final class RecipeTestData {
   public static PromoteSubstitutionRequest promoteRequest(
       long expectedVersion, String changeReason) {
     return new PromoteSubstitutionRequest(expectedVersion, changeReason);
+  }
+
+  // ---------------- recipe-01f: RecipeWriteApi commands ----------------
+
+  /** Adaptation-pipeline new-version command targeting the supplied parent head. */
+  public static SaveAdaptedVersionCommand defaultSaveAdaptedVersionCommand(
+      UUID recipeId,
+      UUID branchId,
+      int expectedParentVersionNumber,
+      UUID expectedParentVersionId,
+      UUID adapterTraceId) {
+    return new SaveAdaptedVersionCommand(
+        recipeId,
+        branchId,
+        expectedParentVersionNumber,
+        expectedParentVersionId,
+        defaultIngredients(),
+        defaultMethod(),
+        defaultMetadata(),
+        defaultTags(),
+        defaultFingerprint(),
+        JsonNodeFactory.instance.objectNode(),
+        "Adapter swapped passata for fresh tomato puree.",
+        adapterTraceId);
+  }
+
+  /** Adaptation-pipeline new-branch command rooted at the supplied branch-point version. */
+  public static SaveAdaptedBranchCommand defaultSaveAdaptedBranchCommand(
+      UUID recipeId, UUID parentBranchId, UUID branchPointVersionId, UUID adapterTraceId) {
+    return new SaveAdaptedBranchCommand(
+        recipeId,
+        parentBranchId,
+        branchPointVersionId,
+        "adapter-low-sodium",
+        "Adapter low-sodium variant",
+        "Reduce sodium for dietary constraint.",
+        defaultIngredients(),
+        defaultMethod(),
+        defaultMetadata(),
+        defaultTags(),
+        defaultFingerprint(),
+        adapterTraceId);
+  }
+
+  /** Adaptation-pipeline new-substitution command on the supplied version. */
+  public static SaveAdaptedSubstitutionCommand defaultSaveAdaptedSubstitutionCommand(
+      UUID recipeId, UUID versionId, UUID adapterTraceId) {
+    return new SaveAdaptedSubstitutionCommand(
+        recipeId,
+        versionId,
+        new SubstitutionItemRequest("beef.mince", new BigDecimal("500.000"), "g"),
+        new SubstitutionItemRequest("soy.crumble", new BigDecimal("400.000"), "g"),
+        SubstitutionReason.DIETARY_TEMP,
+        null,
+        null,
+        null,
+        true,
+        adapterTraceId);
   }
 }
