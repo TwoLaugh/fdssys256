@@ -128,6 +128,11 @@ RecipeVersionDto:
         dietaryFlags:
           type: array
           items: { type: string }
+    appliedSubstitutionIds:
+      type: array
+      nullable: true
+      description: 'Populated only by GET /versions/{versionId}/with-substitutions; null on every other read.'
+      items: { type: string, format: uuid }
 RecipeDto:
   type: object
   required:
@@ -216,6 +221,11 @@ RecipeDto:
             dietaryFlags:
               type: array
               items: { type: string }
+        appliedSubstitutionIds:
+          type: array
+          nullable: true
+          description: 'Populated only by GET /versions/{versionId}/with-substitutions; null on every other read.'
+          items: { type: string, format: uuid }
     branches:
       type: array
       items: { $ref: '#/RecipeBranchDto' }
@@ -566,3 +576,117 @@ RevertToVersionRequest:
     branchId: { type: string, format: uuid }
     versionNumber: { type: integer, minimum: 1 }
     expectedRecipeOptimisticVersion: { type: integer, format: int64, minimum: 0 }
+SubstitutionReason:
+  type: string
+  enum: [BUDGET, AVAILABILITY, DIETARY_TEMP, EQUIPMENT]
+SubstitutionState:
+  type: string
+  enum: [PROPOSED, ACCEPTED, REJECTED, SUPERSEDED]
+SubstitutionItemRequest:
+  type: object
+  required: [ingredientMappingKey, quantity, unit]
+  properties:
+    ingredientMappingKey: { type: string, minLength: 1, maxLength: 160 }
+    quantity: { type: number, format: double, minimum: 0 }
+    unit: { type: string, minLength: 1, maxLength: 16 }
+MethodOverlayLineRequest:
+  type: object
+  required: [step, instruction]
+  properties:
+    step: { type: integer, minimum: 1 }
+    instruction: { type: string, minLength: 1, maxLength: 2000 }
+MethodOverlayLineDto:
+  type: object
+  required: [step, instruction]
+  properties:
+    step: { type: integer, minimum: 1 }
+    instruction: { type: string, maxLength: 2000 }
+SubstitutedItemDto:
+  type: object
+  required: [ingredientMappingKey, quantity, unit]
+  properties:
+    ingredientMappingKey: { type: string, maxLength: 160 }
+    quantity: { type: number, format: double, minimum: 0 }
+    unit: { type: string, maxLength: 16 }
+RecipeSubstitutionDto:
+  type: object
+  required: [id, recipeId, versionId, branchId, original, substitute, reason, state, applicationCount, temporary, createdAt, createdByActor, version]
+  properties:
+    id: { type: string, format: uuid }
+    recipeId: { type: string, format: uuid }
+    versionId: { type: string, format: uuid }
+    branchId: { type: string, format: uuid }
+    original: { $ref: '#/SubstitutedItemDto' }
+    substitute: { $ref: '#/SubstitutedItemDto' }
+    reason: { $ref: '#/SubstitutionReason' }
+    constraintRef:
+      type: string
+      maxLength: 160
+      nullable: true
+    methodOverlay:
+      type: array
+      nullable: true
+      items: { $ref: '#/MethodOverlayLineDto' }
+    notes:
+      type: string
+      maxLength: 2000
+      nullable: true
+    temporary: { type: boolean }
+    applicationCount: { type: integer, minimum: 0 }
+    lastAppliedAt:
+      type: string
+      format: date-time
+      nullable: true
+    state: { $ref: '#/SubstitutionState' }
+    promotedToVersionId:
+      type: string
+      format: uuid
+      nullable: true
+    createdAt: { type: string, format: date-time }
+    createdByActor: { type: string, maxLength: 64 }
+    adapterTraceId:
+      type: string
+      format: uuid
+      nullable: true
+    version: { type: integer, format: int64 }
+CreateSubstitutionRequest:
+  type: object
+  required: [versionId, original, substitute, reason]
+  properties:
+    versionId: { type: string, format: uuid }
+    original: { $ref: '#/SubstitutionItemRequest' }
+    substitute: { $ref: '#/SubstitutionItemRequest' }
+    reason: { $ref: '#/SubstitutionReason' }
+    constraintRef:
+      type: string
+      maxLength: 160
+      nullable: true
+    methodOverlay:
+      type: array
+      nullable: true
+      items: { $ref: '#/MethodOverlayLineRequest' }
+    notes:
+      type: string
+      maxLength: 1000
+      nullable: true
+    temporary: { type: boolean, default: true }
+AcceptSubstitutionRequest:
+  type: object
+  required: [expectedVersion]
+  properties:
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+RejectSubstitutionRequest:
+  type: object
+  required: [expectedVersion]
+  properties:
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+    reason:
+      type: string
+      maxLength: 255
+      nullable: true
+PromoteSubstitutionRequest:
+  type: object
+  required: [expectedVersion, changeReason]
+  properties:
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+    changeReason: { type: string, minLength: 1, maxLength: 2000 }

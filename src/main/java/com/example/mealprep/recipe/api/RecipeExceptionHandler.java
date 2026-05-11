@@ -12,7 +12,12 @@ import com.example.mealprep.recipe.exception.RecipeDiffNotComputedException;
 import com.example.mealprep.recipe.exception.RecipeImportFailureException;
 import com.example.mealprep.recipe.exception.RecipeImportNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
+import com.example.mealprep.recipe.exception.RecipeSubstitutionNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeVersionNotFoundException;
+import com.example.mealprep.recipe.exception.SubstitutionOriginalNotInVersionException;
+import com.example.mealprep.recipe.exception.SubstitutionPromotionPreconditionException;
+import com.example.mealprep.recipe.exception.SubstitutionRecordPreconditionException;
+import com.example.mealprep.recipe.exception.SubstitutionTerminalStateException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -208,6 +213,81 @@ public class RecipeExceptionHandler {
             ex.getMessage(),
             "recipe-branch-name-reserved",
             "Recipe branch name reserved",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeSubstitutionNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeSubstitutionNotFound(
+      RecipeSubstitutionNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "recipe-substitution-not-found",
+            "Recipe substitution not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(SubstitutionOriginalNotInVersionException.class)
+  public ResponseEntity<ProblemDetail> handleSubstitutionOriginalNotInVersion(
+      SubstitutionOriginalNotInVersionException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "substitution-original-not-in-version",
+            "Substitution original ingredient missing on version",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(SubstitutionTerminalStateException.class)
+  public ResponseEntity<ProblemDetail> handleSubstitutionTerminalState(
+      SubstitutionTerminalStateException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "substitution-terminal-state",
+            "Substitution is in a terminal state",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(SubstitutionPromotionPreconditionException.class)
+  public ResponseEntity<ProblemDetail> handleSubstitutionPromotionPrecondition(
+      SubstitutionPromotionPreconditionException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "substitution-promotion-precondition",
+            "Substitution must be ACCEPTED to promote",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(SubstitutionRecordPreconditionException.class)
+  public ResponseEntity<ProblemDetail> handleSubstitutionRecordPrecondition(
+      SubstitutionRecordPreconditionException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "substitution-record-precondition",
+            "Substitution must be ACCEPTED to record plan application",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)

@@ -7,23 +7,29 @@ import com.example.mealprep.recipe.api.dto.CreateMethodStepRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeMetadataRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeTagsRequest;
+import com.example.mealprep.recipe.api.dto.CreateSubstitutionRequest;
 import com.example.mealprep.recipe.api.dto.ImportRecipeFromUrlRequest;
+import com.example.mealprep.recipe.api.dto.MethodOverlayLineRequest;
 import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
 import com.example.mealprep.recipe.api.dto.RecipeDiffDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeImportDto;
+import com.example.mealprep.recipe.api.dto.RecipeSubstitutionDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
+import com.example.mealprep.recipe.api.dto.SubstitutionState;
 import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
 import com.example.mealprep.recipe.api.mapper.ParsedRecipeToCreateRequestMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeBranchMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeDiffMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeImportMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeMapper;
+import com.example.mealprep.recipe.api.mapper.RecipeSubstitutionMapper;
 import com.example.mealprep.recipe.api.mapper.RecipeVersionMapper;
 import com.example.mealprep.recipe.config.UrlFetcher;
 import com.example.mealprep.recipe.domain.entity.Catalogue;
 import com.example.mealprep.recipe.domain.entity.DataQuality;
 import com.example.mealprep.recipe.domain.entity.ImportSource;
+import com.example.mealprep.recipe.domain.entity.MethodOverlayLine;
 import com.example.mealprep.recipe.domain.entity.NutritionStatus;
 import com.example.mealprep.recipe.domain.entity.Recipe;
 import com.example.mealprep.recipe.domain.entity.RecipeBranch;
@@ -31,17 +37,22 @@ import com.example.mealprep.recipe.domain.entity.RecipeImport;
 import com.example.mealprep.recipe.domain.entity.RecipeIngredient;
 import com.example.mealprep.recipe.domain.entity.RecipeMetadata;
 import com.example.mealprep.recipe.domain.entity.RecipeMethodStep;
+import com.example.mealprep.recipe.domain.entity.RecipeSubstitution;
 import com.example.mealprep.recipe.domain.entity.RecipeTags;
 import com.example.mealprep.recipe.domain.entity.RecipeVersion;
 import com.example.mealprep.recipe.domain.entity.VersionTrigger;
 import com.example.mealprep.recipe.domain.repository.RecipeBranchRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeImportRepository;
+import com.example.mealprep.recipe.domain.repository.RecipeIngredientRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeRepository;
+import com.example.mealprep.recipe.domain.repository.RecipeSubstitutionRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeVersionRepository;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import com.example.mealprep.recipe.domain.service.RecipeUpdateService;
 import com.example.mealprep.recipe.event.RecipeBranchCreatedEvent;
 import com.example.mealprep.recipe.event.RecipeCreatedEvent;
+import com.example.mealprep.recipe.event.RecipeSubstitutionCreatedEvent;
+import com.example.mealprep.recipe.event.RecipeSubstitutionStateChangedEvent;
 import com.example.mealprep.recipe.event.RecipeUpdatedEvent;
 import com.example.mealprep.recipe.event.RecipeVersionCreatedEvent;
 import com.example.mealprep.recipe.exception.NoChangesException;
@@ -53,7 +64,13 @@ import com.example.mealprep.recipe.exception.RecipeCatalogueViolationException;
 import com.example.mealprep.recipe.exception.RecipeDiffCrossBranchException;
 import com.example.mealprep.recipe.exception.RecipeDiffNotComputedException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
+import com.example.mealprep.recipe.exception.RecipeSubstitutionNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeVersionNotFoundException;
+import com.example.mealprep.recipe.exception.SubstitutionOriginalNotInVersionException;
+import com.example.mealprep.recipe.exception.SubstitutionPromotionPreconditionException;
+import com.example.mealprep.recipe.exception.SubstitutionRecordPreconditionException;
+import com.example.mealprep.recipe.exception.SubstitutionTerminalStateException;
+import com.example.mealprep.recipe.spi.RecipeSubstitutionRecorder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -99,7 +116,8 @@ import org.springframework.transaction.annotation.Transactional;
  * Recipe.currentBranchId} on branch creation — checkout is a separate flow (recipe-01g).
  */
 @Service
-public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateService {
+public class RecipeServiceImpl
+    implements RecipeQueryService, RecipeUpdateService, RecipeSubstitutionRecorder {
 
   private static final Logger log = LoggerFactory.getLogger(RecipeServiceImpl.class);
 
@@ -111,17 +129,21 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
   private final RecipeBranchRepository branchRepository;
   private final RecipeVersionRepository versionRepository;
   private final RecipeImportRepository importRepository;
+  private final RecipeIngredientRepository ingredientRepository;
+  private final RecipeSubstitutionRepository substitutionRepository;
   private final RecipeMapper recipeMapper;
   private final RecipeVersionMapper versionMapper;
   private final RecipeBranchMapper branchMapper;
   private final RecipeImportMapper importMapper;
   private final RecipeDiffMapper diffMapper;
+  private final RecipeSubstitutionMapper substitutionMapper;
   private final UrlFetcher urlFetcher;
   private final HtmlImportParser htmlImportParser;
   private final ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper;
   private final VersionDiffer versionDiffer;
   private final DivergenceScoreCalculator divergenceCalculator;
   private final FingerprintDeriver fingerprintDeriver;
+  private final SubstitutionOverlayApplier overlayApplier;
   private final ObjectMapper objectMapper;
   private final ApplicationEventPublisher eventPublisher;
   private final Clock clock;
@@ -131,17 +153,21 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
       RecipeBranchRepository branchRepository,
       RecipeVersionRepository versionRepository,
       RecipeImportRepository importRepository,
+      RecipeIngredientRepository ingredientRepository,
+      RecipeSubstitutionRepository substitutionRepository,
       RecipeMapper recipeMapper,
       RecipeVersionMapper versionMapper,
       RecipeBranchMapper branchMapper,
       RecipeImportMapper importMapper,
       RecipeDiffMapper diffMapper,
+      RecipeSubstitutionMapper substitutionMapper,
       UrlFetcher urlFetcher,
       HtmlImportParser htmlImportParser,
       ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper,
       VersionDiffer versionDiffer,
       DivergenceScoreCalculator divergenceCalculator,
       FingerprintDeriver fingerprintDeriver,
+      SubstitutionOverlayApplier overlayApplier,
       ObjectMapper objectMapper,
       ApplicationEventPublisher eventPublisher,
       Clock clock) {
@@ -149,17 +175,21 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
     this.branchRepository = branchRepository;
     this.versionRepository = versionRepository;
     this.importRepository = importRepository;
+    this.ingredientRepository = ingredientRepository;
+    this.substitutionRepository = substitutionRepository;
     this.recipeMapper = recipeMapper;
     this.versionMapper = versionMapper;
     this.branchMapper = branchMapper;
     this.importMapper = importMapper;
     this.diffMapper = diffMapper;
+    this.substitutionMapper = substitutionMapper;
     this.urlFetcher = urlFetcher;
     this.htmlImportParser = htmlImportParser;
     this.parserToCreateRequestMapper = parserToCreateRequestMapper;
     this.versionDiffer = versionDiffer;
     this.divergenceCalculator = divergenceCalculator;
     this.fingerprintDeriver = fingerprintDeriver;
+    this.overlayApplier = overlayApplier;
     this.objectMapper = objectMapper;
     this.eventPublisher = eventPublisher;
     this.clock = clock;
@@ -974,6 +1004,378 @@ public class RecipeServiceImpl implements RecipeQueryService, RecipeUpdateServic
       log.warn("character_fingerprint JSON deserialization failed: {}", ex.getMessage());
       return Optional.empty();
     }
+  }
+
+  // ---------------- Substitution: Query ----------------
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<RecipeSubstitutionDto> getActiveSubstitutions(UUID recipeId) {
+    Recipe recipe =
+        recipeRepository
+            .findByIdAndDeletedAtIsNull(recipeId)
+            .orElseThrow(() -> new RecipeNotFoundException(recipeId));
+    return substitutionMapper.toDtoList(
+        substitutionRepository.findAllByRecipeIdAndStateOrderByLastAppliedAtDesc(
+            recipe.getId(), SubstitutionState.ACCEPTED));
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<RecipeSubstitutionDto> getSubstitutionsForVersion(UUID versionId) {
+    return substitutionMapper.toDtoList(
+        substitutionRepository.findAllByVersionIdAndStateOrderByLastAppliedAtDesc(
+            versionId, SubstitutionState.ACCEPTED));
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<RecipeSubstitutionDto> getSubstitution(UUID substitutionId) {
+    return substitutionRepository.findById(substitutionId).map(substitutionMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public RecipeVersionDto getVersionWithSubstitutions(UUID recipeId, UUID versionId) {
+    Recipe recipe =
+        recipeRepository
+            .findByIdAndDeletedAtIsNull(recipeId)
+            .orElseThrow(() -> new RecipeNotFoundException(recipeId));
+    RecipeVersion version =
+        versionRepository
+            .findById(versionId)
+            .filter(v -> v.getRecipe() != null && v.getRecipe().getId().equals(recipe.getId()))
+            .orElseThrow(() -> new RecipeVersionNotFoundException(versionId));
+    touchLazyChildren(version);
+    List<RecipeSubstitution> activeSubs =
+        substitutionRepository.findAllByVersionIdAndStateOrderByLastAppliedAtDesc(
+            version.getId(), SubstitutionState.ACCEPTED);
+    NewVersionInput baseBody = toNewVersionInput(version);
+    NewVersionInput overlaid = overlayApplier.apply(baseBody, activeSubs);
+    List<UUID> appliedIds = new ArrayList<>();
+    for (RecipeSubstitution s : activeSubs) {
+      appliedIds.add(s.getId());
+    }
+    return versionMapper.toOverlayDto(
+        version, overlaid.ingredients(), overlaid.method(), appliedIds);
+  }
+
+  // ---------------- Substitution: Update ----------------
+
+  @Override
+  @Transactional
+  public RecipeSubstitutionDto createSubstitution(
+      UUID recipeId, CreateSubstitutionRequest request, UUID actorUserId) {
+    Recipe recipe = loadOwnedUserCatalogueRecipe(recipeId, actorUserId, "Create substitution");
+    RecipeVersion version =
+        versionRepository
+            .findById(request.versionId())
+            .filter(v -> v.getRecipe() != null && v.getRecipe().getId().equals(recipe.getId()))
+            .orElseThrow(() -> new RecipeVersionNotFoundException(request.versionId()));
+
+    List<String> mappingKeys = ingredientRepository.findMappingKeysByVersionId(version.getId());
+    if (!mappingKeys.contains(request.original().ingredientMappingKey())) {
+      throw new SubstitutionOriginalNotInVersionException(
+          request.original().ingredientMappingKey());
+    }
+
+    UUID branchId = version.getBranch() != null ? version.getBranch().getId() : null;
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    UUID subId = UUID.randomUUID();
+    String createdByActor = "user:" + actorUserId;
+
+    List<MethodOverlayLine> overlay = null;
+    if (request.methodOverlay() != null && !request.methodOverlay().isEmpty()) {
+      overlay = new ArrayList<>(request.methodOverlay().size());
+      for (MethodOverlayLineRequest ml : request.methodOverlay()) {
+        overlay.add(new MethodOverlayLine(ml.step(), ml.instruction()));
+      }
+    }
+
+    RecipeSubstitution sub =
+        RecipeSubstitution.builder()
+            .id(subId)
+            .recipeId(recipe.getId())
+            .versionId(version.getId())
+            .branchId(branchId)
+            .originalMappingKey(request.original().ingredientMappingKey())
+            .originalQuantity(request.original().quantity())
+            .originalUnit(request.original().unit())
+            .substituteMappingKey(request.substitute().ingredientMappingKey())
+            .substituteQuantity(request.substitute().quantity())
+            .substituteUnit(request.substitute().unit())
+            .reason(request.reason())
+            .constraintRef(request.constraintRef())
+            .methodOverlay(overlay)
+            .notes(request.notes())
+            .temporary(request.temporary())
+            .appliedInPlanIds(new UUID[0])
+            .applicationCount(0)
+            .lastAppliedAt(null)
+            .state(SubstitutionState.PROPOSED)
+            .promotedToVersionId(null)
+            .createdByActor(createdByActor)
+            .adapterTraceId(null)
+            .build();
+
+    RecipeSubstitution saved = substitutionRepository.saveAndFlush(sub);
+
+    eventPublisher.publishEvent(
+        new RecipeSubstitutionCreatedEvent(
+            saved.getId(),
+            recipe.getId(),
+            version.getId(),
+            branchId,
+            saved.getReason(),
+            traceId,
+            now));
+
+    log.info(
+        "recipe createSubstitution recipeId={} versionId={} substitutionId={} userId={}",
+        recipe.getId(),
+        version.getId(),
+        saved.getId(),
+        actorUserId);
+
+    return substitutionMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public RecipeSubstitutionDto acceptSubstitution(
+      UUID substitutionId, UUID actorUserId, long expectedVersion) {
+    RecipeSubstitution sub = loadOwnedSubstitution(substitutionId, actorUserId);
+    if (sub.getVersion() != expectedVersion) {
+      throw new OptimisticLockingFailureException(
+          "Stale expectedVersion for substitution " + substitutionId);
+    }
+    SubstitutionState previous = sub.getState();
+    if (previous == SubstitutionState.SUPERSEDED) {
+      throw new SubstitutionTerminalStateException(previous);
+    }
+    if (previous == SubstitutionState.ACCEPTED) {
+      // no-op (no @Version bump, no event)
+      return substitutionMapper.toDto(sub);
+    }
+    sub.setState(SubstitutionState.ACCEPTED);
+    RecipeSubstitution saved = substitutionRepository.saveAndFlush(sub);
+    eventPublisher.publishEvent(
+        new RecipeSubstitutionStateChangedEvent(
+            saved.getId(),
+            saved.getRecipeId(),
+            saved.getVersionId(),
+            previous,
+            SubstitutionState.ACCEPTED,
+            currentTraceId(),
+            Instant.now(clock)));
+    log.info(
+        "recipe acceptSubstitution substitutionId={} previousState={} userId={}",
+        saved.getId(),
+        previous,
+        actorUserId);
+    return substitutionMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public RecipeSubstitutionDto rejectSubstitution(
+      UUID substitutionId, UUID actorUserId, long expectedVersion, String reason) {
+    RecipeSubstitution sub = loadOwnedSubstitution(substitutionId, actorUserId);
+    if (sub.getVersion() != expectedVersion) {
+      throw new OptimisticLockingFailureException(
+          "Stale expectedVersion for substitution " + substitutionId);
+    }
+    SubstitutionState previous = sub.getState();
+    if (previous == SubstitutionState.SUPERSEDED) {
+      throw new SubstitutionTerminalStateException(previous);
+    }
+    if (previous == SubstitutionState.REJECTED) {
+      return substitutionMapper.toDto(sub);
+    }
+    if (reason != null && !reason.isBlank()) {
+      log.info(
+          "recipe rejectSubstitution substitutionId={} reason='{}' userId={}",
+          sub.getId(),
+          reason,
+          actorUserId);
+    }
+    sub.setState(SubstitutionState.REJECTED);
+    RecipeSubstitution saved = substitutionRepository.saveAndFlush(sub);
+    eventPublisher.publishEvent(
+        new RecipeSubstitutionStateChangedEvent(
+            saved.getId(),
+            saved.getRecipeId(),
+            saved.getVersionId(),
+            previous,
+            SubstitutionState.REJECTED,
+            currentTraceId(),
+            Instant.now(clock)));
+    return substitutionMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public RecipeVersionDto promoteSubstitutionToVersion(
+      UUID substitutionId, UUID actorUserId, long expectedVersion, String changeReason) {
+    RecipeSubstitution sub = loadOwnedSubstitution(substitutionId, actorUserId);
+    if (sub.getVersion() != expectedVersion) {
+      throw new OptimisticLockingFailureException(
+          "Stale expectedVersion for substitution " + substitutionId);
+    }
+    if (sub.getState() == SubstitutionState.SUPERSEDED) {
+      throw new SubstitutionTerminalStateException(sub.getState());
+    }
+    if (sub.getState() != SubstitutionState.ACCEPTED) {
+      throw new SubstitutionPromotionPreconditionException(sub.getState());
+    }
+
+    Recipe recipe =
+        loadOwnedUserCatalogueRecipe(sub.getRecipeId(), actorUserId, "Promote substitution");
+
+    RecipeVersion baseVersion =
+        versionRepository
+            .findById(sub.getVersionId())
+            .orElseThrow(() -> new RecipeVersionNotFoundException(sub.getVersionId()));
+    touchLazyChildren(baseVersion);
+    RecipeBranch branch =
+        branchRepository
+            .findById(sub.getBranchId())
+            .orElseThrow(() -> new RecipeBranchNotFoundException(sub.getBranchId()));
+
+    NewVersionInput baseBody = toNewVersionInput(baseVersion);
+    NewVersionInput appliedBody = overlayApplier.apply(baseBody, List.of(sub));
+    ObjectNode changeDiff = versionDiffer.diff(baseVersion, appliedBody);
+
+    int newVersionNumber = branch.getCurrentVersion() + 1;
+    UUID newVersionId = UUID.randomUUID();
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    String createdByActor = "user:" + actorUserId;
+
+    RecipeVersion newVersion =
+        RecipeVersion.builder()
+            .id(newVersionId)
+            .recipe(recipe)
+            .branch(branch)
+            .versionNumber(newVersionNumber)
+            .parentVersionId(baseVersion.getId())
+            .changeDiff(changeDiff)
+            .changeReason(changeReason)
+            .trigger(VersionTrigger.SUBSTITUTION_PROMOTION)
+            .characterFingerprint(baseVersion.getCharacterFingerprint())
+            .nutritionPerServing(null)
+            .embeddingStatus(EMBEDDING_STATUS_PENDING)
+            .createdByActor(createdByActor)
+            .adapterTraceId(null)
+            .ingredients(new ArrayList<>())
+            .methodSteps(new ArrayList<>())
+            .build();
+
+    populateIngredientsFromRequests(newVersion, appliedBody.ingredients());
+    populateMethodStepsFromRequests(newVersion, appliedBody.method());
+    newVersion.setMetadata(buildMetadataFromRequest(newVersion, appliedBody.metadata()));
+    newVersion.setTags(buildTagsFromRequest(newVersion, appliedBody.tags()));
+
+    RecipeVersion savedNewVersion = versionRepository.saveAndFlush(newVersion);
+
+    branch.setCurrentVersion(newVersionNumber);
+    RecipeBranch savedBranch = branchRepository.saveAndFlush(branch);
+    if (sub.getBranchId().equals(recipe.getCurrentBranchId())) {
+      recipe.setCurrentVersion(newVersionNumber);
+      recipeRepository.saveAndFlush(recipe);
+    }
+
+    SubstitutionState previous = sub.getState();
+    sub.setState(SubstitutionState.SUPERSEDED);
+    sub.setPromotedToVersionId(savedNewVersion.getId());
+    substitutionRepository.saveAndFlush(sub);
+
+    eventPublisher.publishEvent(
+        new RecipeVersionCreatedEvent(
+            savedNewVersion.getId(),
+            recipe.getId(),
+            savedBranch.getId(),
+            savedNewVersion.getVersionNumber(),
+            traceId,
+            now));
+    eventPublisher.publishEvent(
+        new RecipeUpdatedEvent(
+            recipe.getId(),
+            savedBranch.getId(),
+            savedNewVersion.getId(),
+            savedNewVersion.getVersionNumber(),
+            VersionTrigger.SUBSTITUTION_PROMOTION,
+            traceId,
+            now));
+    eventPublisher.publishEvent(
+        new RecipeSubstitutionStateChangedEvent(
+            sub.getId(),
+            sub.getRecipeId(),
+            sub.getVersionId(),
+            previous,
+            SubstitutionState.SUPERSEDED,
+            traceId,
+            now));
+
+    log.info(
+        "recipe promoteSubstitution substitutionId={} newVersionId={} versionNumber={} userId={}",
+        sub.getId(),
+        savedNewVersion.getId(),
+        savedNewVersion.getVersionNumber(),
+        actorUserId);
+
+    return versionMapper.toDto(savedNewVersion);
+  }
+
+  // ---------------- RecipeSubstitutionRecorder SPI ----------------
+
+  @Override
+  @Transactional
+  public void recordSubstitution(UUID substitutionId, UUID planId) {
+    RecipeSubstitution sub =
+        substitutionRepository
+            .findById(substitutionId)
+            .orElseThrow(() -> new RecipeSubstitutionNotFoundException(substitutionId));
+    if (sub.getState() != SubstitutionState.ACCEPTED) {
+      throw new SubstitutionRecordPreconditionException(sub.getState());
+    }
+    UUID[] current = sub.getAppliedInPlanIds();
+    if (current == null) {
+      current = new UUID[0];
+    }
+    for (UUID existing : current) {
+      if (existing != null && existing.equals(planId)) {
+        // Idempotent: plan id already recorded.
+        return;
+      }
+    }
+    UUID[] next = new UUID[current.length + 1];
+    System.arraycopy(current, 0, next, 0, current.length);
+    next[current.length] = planId;
+    sub.setAppliedInPlanIds(next);
+    sub.setApplicationCount(sub.getApplicationCount() + 1);
+    sub.setLastAppliedAt(Instant.now(clock));
+    substitutionRepository.save(sub);
+  }
+
+  private RecipeSubstitution loadOwnedSubstitution(UUID substitutionId, UUID actorUserId) {
+    RecipeSubstitution sub =
+        substitutionRepository
+            .findById(substitutionId)
+            .orElseThrow(() -> new RecipeSubstitutionNotFoundException(substitutionId));
+    Recipe recipe =
+        recipeRepository
+            .findByIdAndDeletedAtIsNull(sub.getRecipeId())
+            .orElseThrow(() -> new RecipeSubstitutionNotFoundException(substitutionId));
+    if (recipe.getCatalogue() == Catalogue.SYSTEM) {
+      throw new RecipeCatalogueViolationException(
+          "Substitution actions are not allowed on SYSTEM-catalogue recipes; promote to USER first.");
+    }
+    if (!recipe.getUserId().equals(actorUserId)) {
+      throw new RecipeSubstitutionNotFoundException(substitutionId);
+    }
+    return sub;
   }
 
   private static UUID currentTraceId() {

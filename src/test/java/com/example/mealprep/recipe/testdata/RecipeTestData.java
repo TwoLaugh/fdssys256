@@ -1,5 +1,6 @@
 package com.example.mealprep.recipe.testdata;
 
+import com.example.mealprep.recipe.api.dto.AcceptSubstitutionRequest;
 import com.example.mealprep.recipe.api.dto.CharacterFingerprintDto;
 import com.example.mealprep.recipe.api.dto.CreateBranchRequest;
 import com.example.mealprep.recipe.api.dto.CreateIngredientRequest;
@@ -8,7 +9,13 @@ import com.example.mealprep.recipe.api.dto.CreateRecipeBodyRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeMetadataRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeTagsRequest;
+import com.example.mealprep.recipe.api.dto.CreateSubstitutionRequest;
+import com.example.mealprep.recipe.api.dto.MethodOverlayLineRequest;
+import com.example.mealprep.recipe.api.dto.PromoteSubstitutionRequest;
+import com.example.mealprep.recipe.api.dto.RejectSubstitutionRequest;
 import com.example.mealprep.recipe.api.dto.RevertToVersionRequest;
+import com.example.mealprep.recipe.api.dto.SubstitutionItemRequest;
+import com.example.mealprep.recipe.api.dto.SubstitutionReason;
 import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
 import com.example.mealprep.recipe.domain.entity.Complexity;
 import java.math.BigDecimal;
@@ -169,5 +176,50 @@ public final class RecipeTestData {
   public static RevertToVersionRequest revertRequest(
       UUID branchId, int versionNumber, long expectedRecipeOptimisticVersion) {
     return new RevertToVersionRequest(branchId, versionNumber, expectedRecipeOptimisticVersion);
+  }
+
+  /**
+   * Substitution proposal swapping {@code beef.mince} (from {@link #defaultIngredients()}) for
+   * {@code soy.crumble}, no method overlay, no notes, {@code temporary = true}.
+   */
+  public static CreateSubstitutionRequest defaultSubstitutionRequest(UUID versionId) {
+    return new CreateSubstitutionRequest(
+        versionId,
+        new SubstitutionItemRequest("beef.mince", new BigDecimal("500.000"), "g"),
+        new SubstitutionItemRequest("soy.crumble", new BigDecimal("400.000"), "g"),
+        SubstitutionReason.DIETARY_TEMP,
+        null,
+        null,
+        null,
+        true);
+  }
+
+  /** Substitution proposal with an explicit single method overlay line at step 2. */
+  public static CreateSubstitutionRequest substitutionRequestWithMethodOverlay(UUID versionId) {
+    return new CreateSubstitutionRequest(
+        versionId,
+        new SubstitutionItemRequest("beef.mince", new BigDecimal("500.000"), "g"),
+        new SubstitutionItemRequest("soy.crumble", new BigDecimal("400.000"), "g"),
+        SubstitutionReason.DIETARY_TEMP,
+        null,
+        List.of(new MethodOverlayLineRequest(2, "Add passata and simmer for 20 minutes.")),
+        null,
+        true);
+  }
+
+  /** Accept request carrying the supplied optimistic version. */
+  public static AcceptSubstitutionRequest acceptRequest(long expectedVersion) {
+    return new AcceptSubstitutionRequest(expectedVersion);
+  }
+
+  /** Reject request carrying the supplied optimistic version + optional reason. */
+  public static RejectSubstitutionRequest rejectRequest(long expectedVersion, String reason) {
+    return new RejectSubstitutionRequest(expectedVersion, reason);
+  }
+
+  /** Promote-to-version request. */
+  public static PromoteSubstitutionRequest promoteRequest(
+      long expectedVersion, String changeReason) {
+    return new PromoteSubstitutionRequest(expectedVersion, changeReason);
   }
 }

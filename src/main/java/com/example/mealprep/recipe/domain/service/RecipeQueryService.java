@@ -5,6 +5,8 @@ import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
 import com.example.mealprep.recipe.api.dto.RecipeDiffDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeImportDto;
+import com.example.mealprep.recipe.api.dto.RecipeSubstitutionDto;
+import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -15,6 +17,9 @@ import java.util.UUID;
  * <p>01a landed {@link #getById}; recipe-01b appended {@link #getBranches} (powers {@code GET
  * /api/v1/recipes/{recipeId}/branches} and the {@code branches[]} field on {@link RecipeDto}) and
  * {@link #getImportProvenance} (powers {@code GET /api/v1/recipes/{recipeId}/import-provenance}).
+ *
+ * <p>recipe-01e appends the substitution read paths: {@link #getActiveSubstitutions}, {@link
+ * #getSubstitutionsForVersion}, {@link #getSubstitution}, and {@link #getVersionWithSubstitutions}.
  */
 public interface RecipeQueryService {
 
@@ -61,4 +66,27 @@ public interface RecipeQueryService {
    * branch.
    */
   RecipeDiffDto diff(UUID recipeId, UUID fromVersionId, UUID toVersionId);
+
+  /**
+   * All {@code ACCEPTED} substitutions for a recipe, sorted {@code last_applied_at DESC NULLS
+   * LAST}. Verbatim from LLD line 531 ({@code getActiveSubstitutions}); the {@code state} predicate
+   * uses the renamed value {@code ACCEPTED} per ticket 01e.
+   */
+  List<RecipeSubstitutionDto> getActiveSubstitutions(UUID recipeId);
+
+  /**
+   * All {@code ACCEPTED} substitutions on a specific version, sorted {@code last_applied_at DESC
+   * NULLS LAST}. Verbatim from LLD line 532 ({@code getSubstitutionsForVersion}).
+   */
+  List<RecipeSubstitutionDto> getSubstitutionsForVersion(UUID versionId);
+
+  /** Single-fetch helper used by the controller's GET-by-id read path. */
+  Optional<RecipeSubstitutionDto> getSubstitution(UUID substitutionId);
+
+  /**
+   * Load a recipe version with its body and overlay the currently {@code ACCEPTED} substitutions
+   * onto the result. The returned DTO carries the base version's id; the body lists reflect the
+   * overlay; {@code appliedSubstitutionIds} lists the substitutions that contributed.
+   */
+  RecipeVersionDto getVersionWithSubstitutions(UUID recipeId, UUID versionId);
 }
