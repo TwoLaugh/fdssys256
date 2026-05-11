@@ -89,6 +89,10 @@ paths:
     $ref: 'paths/provisions.yaml#/provisionsSupplierProducts'
   /api/v1/provisions/supplier-products/{supplierProductId}/substitutions:
     $ref: 'paths/provisions.yaml#/provisionsSupplierProductSubstitution'
+  /api/v1/provisions/waste:
+    $ref: 'paths/provisions.yaml#/provisionsWaste'
+  /api/v1/provisions/waste/summary:
+    $ref: 'paths/provisions.yaml#/provisionsWasteSummary'
   # ===== nutrition =====
   /api/v1/nutrition/targets:
     $ref: 'paths/nutrition.yaml#/targets'
@@ -224,6 +228,12 @@ components:
     SupplierProductDto: { $ref: 'schemas/provisions.yaml#/SupplierProductDto' }
     SupplierProductDtoPage: { $ref: 'schemas/provisions.yaml#/SupplierProductDtoPage' }
     UpsertSupplierProductRequest: { $ref: 'schemas/provisions.yaml#/UpsertSupplierProductRequest' }
+    LogWasteRequest: { $ref: 'schemas/provisions.yaml#/LogWasteRequest' }
+    TopWastedItemDto: { $ref: 'schemas/provisions.yaml#/TopWastedItemDto' }
+    WasteEntryDto: { $ref: 'schemas/provisions.yaml#/WasteEntryDto' }
+    WasteEntryDtoPage: { $ref: 'schemas/provisions.yaml#/WasteEntryDtoPage' }
+    WasteReason: { $ref: 'schemas/provisions.yaml#/WasteReason' }
+    WasteSummaryDto: { $ref: 'schemas/provisions.yaml#/WasteSummaryDto' }
     # nutrition
     Goal: { $ref: 'schemas/nutrition.yaml#/Goal' }
     EnforcementDirection: { $ref: 'schemas/nutrition.yaml#/EnforcementDirection' }

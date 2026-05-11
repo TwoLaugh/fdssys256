@@ -7,6 +7,7 @@ import com.example.mealprep.provisions.exception.EquipmentNotFoundException;
 import com.example.mealprep.provisions.exception.InvalidInventoryQuantityException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
 import com.example.mealprep.provisions.exception.SupplierProductNotFoundException;
+import com.example.mealprep.provisions.exception.WasteExceedsInventoryException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -113,6 +114,24 @@ public class ProvisionsExceptionHandler {
             "Supplier product not found",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(WasteExceedsInventoryException.class)
+  public ResponseEntity<ProblemDetail> handleWasteExceedsInventory(
+      WasteExceedsInventoryException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "waste-exceeds-inventory",
+            "Waste quantity exceeds remaining inventory",
+            req.getRequestURI());
+    pd.setProperty("inventoryItemId", ex.getInventoryItemId());
+    pd.setProperty("requested", ex.getRequested());
+    pd.setProperty("remaining", ex.getRemaining());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

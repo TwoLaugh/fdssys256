@@ -69,6 +69,11 @@ class ProvisionServiceImplTest {
   @Mock private EquipmentRepository equipmentRepository;
   @Mock private BudgetRepository budgetRepository;
   @Mock private SupplierProductRepository supplierProductRepository;
+
+  @Mock
+  private com.example.mealprep.provisions.domain.repository.WasteEntryRepository
+      wasteEntryRepository;
+
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final InventoryItemMapper mapper =
@@ -79,6 +84,8 @@ class ProvisionServiceImplTest {
   private final InventoryAuditMapper inventoryAuditMapper =
       new com.example.mealprep.provisions.api.mapper.InventoryAuditMapperImpl();
   private final SupplierProductMapper supplierProductMapper = new SupplierProductMapper() {};
+  private final com.example.mealprep.provisions.api.mapper.WasteEntryMapper wasteEntryMapper =
+      new com.example.mealprep.provisions.api.mapper.WasteEntryMapper() {};
 
   // Use findAndRegisterModules() so JSR-310 (Instant, LocalDate) serializes correctly without
   // a hard import dependency on jackson-datatype-jsr310 from this test class.
@@ -94,11 +101,13 @@ class ProvisionServiceImplTest {
         equipmentRepository,
         budgetRepository,
         supplierProductRepository,
+        wasteEntryRepository,
         mapper,
         equipmentMapper,
         budgetMapper,
         inventoryAuditMapper,
         supplierProductMapper,
+        wasteEntryMapper,
         eventPublisher,
         objectMapper,
         fixedClock);

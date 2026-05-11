@@ -503,3 +503,113 @@ provisionsSupplierProductSubstitution:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+provisionsWaste:
+  post:
+    tags: [Provisions]
+    operationId: logWaste
+    summary: 'Log a wasted item; deducts from linked inventory when tracking-active.'
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/provisions.yaml#/LogWasteRequest' }
+    responses:
+      '201':
+        description: 'Waste entry persisted.'
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/WasteEntryDto' }
+      '400':
+        description: 'Validation error'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Linked inventory item not found or not owned'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Waste quantity exceeds remaining inventory (tracking active)'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  get:
+    tags: [Provisions]
+    operationId: listWasteEntries
+    summary: 'Paginated waste history; defaults to last 90 days.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: from
+        required: false
+        schema: { type: string, format: date }
+      - in: query
+        name: to
+        required: false
+        schema: { type: string, format: date }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of waste entries sorted occurred_on DESC.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/WasteEntryDtoPage' }
+      '400':
+        description: 'Invalid date range (from > to)'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+provisionsWasteSummary:
+  get:
+    tags: [Provisions]
+    operationId: getWasteSummary
+    summary: 'Aggregate waste over a window; total cost, total entries, counts by reason, top items.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: from
+        required: true
+        schema: { type: string, format: date }
+      - in: query
+        name: to
+        required: true
+        schema: { type: string, format: date }
+    responses:
+      '200':
+        description: 'Summary.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/WasteSummaryDto' }
+      '400':
+        description: 'Invalid date range'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

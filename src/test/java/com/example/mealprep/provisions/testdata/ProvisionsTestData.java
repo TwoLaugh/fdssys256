@@ -2,6 +2,7 @@ package com.example.mealprep.provisions.testdata;
 
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
+import com.example.mealprep.provisions.api.dto.LogWasteRequest;
 import com.example.mealprep.provisions.api.dto.PriceSensitivity;
 import com.example.mealprep.provisions.api.dto.RecordSubstitutionRequest;
 import com.example.mealprep.provisions.api.dto.SubstitutionRecordDto;
@@ -9,6 +10,7 @@ import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
 import com.example.mealprep.provisions.api.dto.UpsertSupplierProductRequest;
+import com.example.mealprep.provisions.api.dto.WasteReason;
 import com.example.mealprep.provisions.domain.entity.Budget;
 import com.example.mealprep.provisions.domain.entity.DefrostMethod;
 import com.example.mealprep.provisions.domain.entity.Equipment;
@@ -20,6 +22,7 @@ import com.example.mealprep.provisions.domain.entity.StorageLocation;
 import com.example.mealprep.provisions.domain.entity.SubstitutionRecord;
 import com.example.mealprep.provisions.domain.entity.SupplierProduct;
 import com.example.mealprep.provisions.domain.entity.TrackingMode;
+import com.example.mealprep.provisions.domain.entity.WasteEntry;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -267,5 +270,60 @@ public final class ProvisionsTestData {
       String substituteSku, long expectedVersion) {
     return new RecordSubstitutionRequest(
         substitutionRecordDto(substituteSku), true, expectedVersion);
+  }
+
+  // ---------------- Waste-log builders & request factories ----------------
+
+  public static WasteEntry.WasteEntryBuilder wasteEntry(UUID userId) {
+    return WasteEntry.builder()
+        .id(UUID.randomUUID())
+        .userId(userId)
+        .inventoryItemId(null)
+        .itemName("Cheddar")
+        .quantity(new BigDecimal("100.000"))
+        .unit("g")
+        .reason(WasteReason.EXPIRED)
+        .costEstimate(new BigDecimal("2.50"))
+        .occurredOn(LocalDate.parse("2026-05-08"))
+        .notes(null);
+  }
+
+  /** Free-form waste log (no linked inventory item; quantity may be null). */
+  public static LogWasteRequest logWasteRequestFreeForm() {
+    return new LogWasteRequest(
+        null,
+        "Bunch of celery",
+        null,
+        null,
+        WasteReason.EXPIRED,
+        new BigDecimal("1.20"),
+        LocalDate.parse("2026-05-08"),
+        null);
+  }
+
+  /** Linked waste log for a quantity-tracked inventory item. */
+  public static LogWasteRequest logWasteRequestLinkedQuantity(UUID inventoryItemId) {
+    return new LogWasteRequest(
+        inventoryItemId,
+        "Cheddar",
+        new BigDecimal("100.000"),
+        "g",
+        WasteReason.EXPIRED,
+        new BigDecimal("2.50"),
+        LocalDate.parse("2026-05-08"),
+        "moulded on the back shelf");
+  }
+
+  /** Linked waste log for a status-tracked inventory item (no quantity, no unit). */
+  public static LogWasteRequest logWasteRequestLinkedStatus(UUID inventoryItemId) {
+    return new LogWasteRequest(
+        inventoryItemId,
+        "Salt",
+        null,
+        null,
+        WasteReason.SPOILED_EARLY,
+        null,
+        LocalDate.parse("2026-05-08"),
+        null);
   }
 }

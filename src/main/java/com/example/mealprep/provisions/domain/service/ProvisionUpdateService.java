@@ -4,12 +4,14 @@ import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
+import com.example.mealprep.provisions.api.dto.LogWasteRequest;
 import com.example.mealprep.provisions.api.dto.SubstitutionRecordDto;
 import com.example.mealprep.provisions.api.dto.SupplierProductDto;
 import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
 import com.example.mealprep.provisions.api.dto.UpsertSupplierProductRequest;
+import com.example.mealprep.provisions.api.dto.WasteEntryDto;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
 import java.util.UUID;
 
@@ -129,4 +131,19 @@ public interface ProvisionUpdateService {
       boolean userAccepted,
       UUID actorUserId,
       long expectedVersion);
+
+  /**
+   * Append a waste-log row and, when the request carries an {@code inventoryItemId} the caller
+   * owns, deduct the wasted quantity from the linked inventory row (floor at zero), write an {@code
+   * InventoryAuditLog} entry, mark the inventory row {@code WASTED} when exhausted, and publish the
+   * appropriate {@code AFTER_COMMIT} event ({@code ItemQuantityAdjustedEvent} for QUANTITY-tracked
+   * items, {@code ItemSpoiledEvent} for STATUS-tracked items).
+   *
+   * <p>Free-form waste (request without {@code inventoryItemId}) persists only the waste row — no
+   * inventory mutation, no audit row, no inventory event. Throws {@code
+   * InventoryItemNotFoundException} (404) when the linked item is missing / not owned and {@code
+   * WasteExceedsInventoryException} (422) when quantity exceeds remaining stock on a
+   * QUANTITY-tracked item.
+   */
+  WasteEntryDto logWaste(UUID userId, LogWasteRequest request);
 }

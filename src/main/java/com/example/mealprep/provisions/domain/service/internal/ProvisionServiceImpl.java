@@ -7,17 +7,24 @@ import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
 import com.example.mealprep.provisions.api.dto.InventoryAuditEntryDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.InventorySearchCriteria;
+import com.example.mealprep.provisions.api.dto.LogWasteRequest;
+import com.example.mealprep.provisions.api.dto.ReasonAggregateRow;
 import com.example.mealprep.provisions.api.dto.SubstitutionRecordDto;
 import com.example.mealprep.provisions.api.dto.SupplierProductDto;
+import com.example.mealprep.provisions.api.dto.TopWastedItemDto;
 import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
 import com.example.mealprep.provisions.api.dto.UpsertSupplierProductRequest;
+import com.example.mealprep.provisions.api.dto.WasteEntryDto;
+import com.example.mealprep.provisions.api.dto.WasteReason;
+import com.example.mealprep.provisions.api.dto.WasteSummaryDto;
 import com.example.mealprep.provisions.api.mapper.BudgetMapper;
 import com.example.mealprep.provisions.api.mapper.EquipmentMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryAuditMapper;
 import com.example.mealprep.provisions.api.mapper.InventoryItemMapper;
 import com.example.mealprep.provisions.api.mapper.SupplierProductMapper;
+import com.example.mealprep.provisions.api.mapper.WasteEntryMapper;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
 import com.example.mealprep.provisions.domain.entity.Budget;
 import com.example.mealprep.provisions.domain.entity.DefrostMethod;
@@ -31,22 +38,27 @@ import com.example.mealprep.provisions.domain.entity.StorageLocation;
 import com.example.mealprep.provisions.domain.entity.SubstitutionRecord;
 import com.example.mealprep.provisions.domain.entity.SupplierProduct;
 import com.example.mealprep.provisions.domain.entity.TrackingMode;
+import com.example.mealprep.provisions.domain.entity.WasteEntry;
 import com.example.mealprep.provisions.domain.repository.BudgetRepository;
 import com.example.mealprep.provisions.domain.repository.EquipmentRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryAuditLogRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryItemRepository;
 import com.example.mealprep.provisions.domain.repository.SupplierProductRepository;
+import com.example.mealprep.provisions.domain.repository.WasteEntryRepository;
 import com.example.mealprep.provisions.domain.service.ProvisionQueryService;
 import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
 import com.example.mealprep.provisions.event.BudgetChangedEvent;
 import com.example.mealprep.provisions.event.EquipmentChangedEvent;
 import com.example.mealprep.provisions.event.InventoryItemUpsertedEvent;
+import com.example.mealprep.provisions.event.ItemAdjustmentSource;
+import com.example.mealprep.provisions.event.ItemQuantityAdjustedEvent;
 import com.example.mealprep.provisions.event.ItemRanOutEvent;
 import com.example.mealprep.provisions.event.ItemSpoiledEvent;
 import com.example.mealprep.provisions.event.SubstitutionAcceptedEvent;
 import com.example.mealprep.provisions.exception.BudgetCurrencyChangeException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
 import com.example.mealprep.provisions.exception.SupplierProductNotFoundException;
+import com.example.mealprep.provisions.exception.WasteExceedsInventoryException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -56,6 +68,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -113,16 +126,21 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
   static final String FIELD_ITEM_STATUS = "itemStatus";
   static final String FIELD_FREEZER_EXTENSION = "freezerExtension";
 
+  private static final int WASTE_WINDOW_CAP = 1000;
+  private static final int WASTE_SUMMARY_TOP_N = 10;
+
   private final InventoryItemRepository inventoryItemRepository;
   private final InventoryAuditLogRepository auditLogRepository;
   private final EquipmentRepository equipmentRepository;
   private final BudgetRepository budgetRepository;
   private final SupplierProductRepository supplierProductRepository;
+  private final WasteEntryRepository wasteEntryRepository;
   private final InventoryItemMapper mapper;
   private final EquipmentMapper equipmentMapper;
   private final BudgetMapper budgetMapper;
   private final InventoryAuditMapper inventoryAuditMapper;
   private final SupplierProductMapper supplierProductMapper;
+  private final WasteEntryMapper wasteEntryMapper;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -133,11 +151,13 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
       EquipmentRepository equipmentRepository,
       BudgetRepository budgetRepository,
       SupplierProductRepository supplierProductRepository,
+      WasteEntryRepository wasteEntryRepository,
       InventoryItemMapper mapper,
       EquipmentMapper equipmentMapper,
       BudgetMapper budgetMapper,
       InventoryAuditMapper inventoryAuditMapper,
       SupplierProductMapper supplierProductMapper,
+      WasteEntryMapper wasteEntryMapper,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
@@ -146,11 +166,13 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
     this.equipmentRepository = equipmentRepository;
     this.budgetRepository = budgetRepository;
     this.supplierProductRepository = supplierProductRepository;
+    this.wasteEntryRepository = wasteEntryRepository;
     this.mapper = mapper;
     this.equipmentMapper = equipmentMapper;
     this.budgetMapper = budgetMapper;
     this.inventoryAuditMapper = inventoryAuditMapper;
     this.supplierProductMapper = supplierProductMapper;
+    this.wasteEntryMapper = wasteEntryMapper;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -637,6 +659,57 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
         .map(supplierProductMapper::toDto);
   }
 
+  // ---------------- Waste log ----------------
+
+  @Override
+  @Transactional(readOnly = true)
+  public Page<WasteEntryDto> getWasteEntries(
+      UUID userId, LocalDate from, LocalDate to, Pageable p) {
+    return wasteEntryRepository
+        .findAllByUserIdAndOccurredOnBetweenOrderByOccurredOnDesc(userId, from, to, p)
+        .map(wasteEntryMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public WasteSummaryDto getWasteSummary(UUID userId, LocalDate from, LocalDate to) {
+    List<ReasonAggregateRow> reasonRows = wasteEntryRepository.aggregateByReason(userId, from, to);
+    List<TopWastedItemDto> topItems =
+        wasteEntryRepository.findTopWastedItems(
+            userId, from, to, PageRequest.of(0, WASTE_SUMMARY_TOP_N));
+
+    Map<WasteReason, Long> countByReason = new EnumMap<>(WasteReason.class);
+    long totalEntries = 0L;
+    BigDecimal totalCost = BigDecimal.ZERO;
+    for (ReasonAggregateRow row : reasonRows) {
+      countByReason.put(row.reason(), row.entryCount());
+      totalEntries += row.entryCount();
+      if (row.totalCost() != null) {
+        totalCost = totalCost.add(row.totalCost());
+      }
+    }
+    return new WasteSummaryDto(from, to, totalCost, totalEntries, countByReason, topItems);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<WasteEntryDto> getWasteForUserInWindow(UUID userId, LocalDate from, LocalDate to) {
+    // Capped at 1000 — caller is an analytics aggregator (currently deferred); paginate via the
+    // public getWasteEntries() path if more rows are needed.
+    Pageable cap = PageRequest.of(0, WASTE_WINDOW_CAP);
+    List<WasteEntry> rows =
+        wasteEntryRepository.findAllByUserIdAndOccurredOnBetween(userId, from, to, cap);
+    if (rows.size() >= WASTE_WINDOW_CAP) {
+      log.warn(
+          "waste-window-cap-exceeded user={} from={} to={} cap={}",
+          userId,
+          from,
+          to,
+          WASTE_WINDOW_CAP);
+    }
+    return rows.stream().map(wasteEntryMapper::toDto).toList();
+  }
+
   @Override
   @Transactional
   public ProvisionUpdateService.UpsertResult<SupplierProductDto> upsertSupplierProduct(
@@ -733,6 +806,141 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
         userAccepted,
         saved.getVersion());
     return supplierProductMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public WasteEntryDto logWaste(UUID userId, LogWasteRequest request) {
+    Instant now = Instant.now(clock);
+
+    InventoryItem inventory = null;
+    if (request.inventoryItemId() != null) {
+      inventory =
+          inventoryItemRepository
+              .findByIdAndUserId(request.inventoryItemId(), userId)
+              .orElseThrow(() -> new InventoryItemNotFoundException(request.inventoryItemId()));
+      if (inventory.getTrackingMode() == TrackingMode.QUANTITY
+          && request.quantity() != null
+          && inventory.getQuantity() != null
+          && request.quantity().compareTo(inventory.getQuantity()) > 0) {
+        throw new WasteExceedsInventoryException(
+            request.inventoryItemId(), request.quantity(), inventory.getQuantity());
+      }
+    }
+
+    WasteEntry entry =
+        WasteEntry.builder()
+            .id(UUID.randomUUID())
+            .userId(userId)
+            .inventoryItemId(request.inventoryItemId())
+            .itemName(request.itemName())
+            .quantity(request.quantity())
+            .unit(request.unit())
+            .reason(request.reason())
+            .costEstimate(request.costEstimate())
+            .occurredOn(request.occurredOn())
+            .notes(request.notes())
+            .build();
+    // saveAndFlush so {@code @CreationTimestamp createdAt} materialises before mapping to DTO —
+    // the OpenAPI schema requires the response's {@code createdAt} field.
+    WasteEntry saved = wasteEntryRepository.saveAndFlush(entry);
+
+    if (inventory != null) {
+      deductInventoryForWaste(inventory, request, userId, now);
+    }
+
+    log.info(
+        "waste entry logged id={} userId={} inventoryItemId={} reason={}",
+        saved.getId(),
+        userId,
+        request.inventoryItemId(),
+        request.reason());
+    return wasteEntryMapper.toDto(saved);
+  }
+
+  /**
+   * Apply the inventory-side effects of a waste log. Splits on {@code trackingMode}:
+   *
+   * <ul>
+   *   <li>{@code QUANTITY}: decrement {@code quantity} (floor at zero), write a {@code "quantity"}
+   *       audit row, mark {@code itemStatus = WASTED} when exhausted, publish {@code
+   *       ItemQuantityAdjustedEvent}.
+   *   <li>{@code STATUS}: skip the numeric deduction (status-tracked items have no quantity); set
+   *       {@code itemStatus = WASTED} for the lifecycle marker, write an {@code "itemStatus"} audit
+   *       row, publish {@code ItemSpoiledEvent} (re-uses the existing event variant).
+   * </ul>
+   */
+  private void deductInventoryForWaste(
+      InventoryItem inventory, LogWasteRequest request, UUID userId, Instant now) {
+    UUID itemId = inventory.getId();
+    if (inventory.getTrackingMode() == TrackingMode.QUANTITY) {
+      BigDecimal previous = inventory.getQuantity();
+      BigDecimal deducted = request.quantity() != null ? request.quantity() : BigDecimal.ZERO;
+      BigDecimal next = previous == null ? BigDecimal.ZERO : previous.subtract(deducted);
+      if (next.signum() < 0) {
+        next = BigDecimal.ZERO;
+      }
+      inventory.setQuantity(next);
+      ItemLifecycleStatus previousStatus = inventory.getItemStatus();
+      if (next.signum() == 0) {
+        inventory.setItemStatus(ItemLifecycleStatus.WASTED);
+      }
+      InventoryItem savedInventory = inventoryItemRepository.saveAndFlush(inventory);
+
+      auditLogRepository.save(
+          new InventoryAuditLog(
+              UUID.randomUUID(),
+              itemId,
+              userId,
+              AuditActor.USER,
+              userId,
+              FIELD_QUANTITY,
+              objectMapper.valueToTree(Map.of(FIELD_QUANTITY, previous)),
+              objectMapper.valueToTree(Map.of(FIELD_QUANTITY, next)),
+              now));
+      if (previousStatus != savedInventory.getItemStatus()) {
+        auditLogRepository.save(
+            new InventoryAuditLog(
+                UUID.randomUUID(),
+                itemId,
+                userId,
+                AuditActor.USER,
+                userId,
+                FIELD_ITEM_STATUS,
+                objectMapper.valueToTree(Map.of(FIELD_ITEM_STATUS, previousStatus.name())),
+                objectMapper.valueToTree(
+                    Map.of(FIELD_ITEM_STATUS, savedInventory.getItemStatus().name())),
+                now));
+      }
+      eventPublisher.publishEvent(
+          new ItemQuantityAdjustedEvent(
+              userId, List.of(itemId), ItemAdjustmentSource.WASTE, currentTraceId(), now));
+      return;
+    }
+
+    // STATUS-tracked: no quantity to deduct; mark WASTED for the lifecycle audit + ItemSpoiledEvent
+    // (the only existing "status-tracked transition" event in 01a — re-used per LLD line 565).
+    ItemLifecycleStatus previousStatus = inventory.getItemStatus();
+    if (previousStatus == ItemLifecycleStatus.WASTED) {
+      // Already wasted — idempotent no-op on the lifecycle side, but the waste row itself is
+      // still appended (analytics needs it). No audit row, no event.
+      return;
+    }
+    inventory.setItemStatus(ItemLifecycleStatus.WASTED);
+    inventoryItemRepository.saveAndFlush(inventory);
+    auditLogRepository.save(
+        new InventoryAuditLog(
+            UUID.randomUUID(),
+            itemId,
+            userId,
+            AuditActor.USER,
+            userId,
+            FIELD_ITEM_STATUS,
+            objectMapper.valueToTree(Map.of(FIELD_ITEM_STATUS, previousStatus.name())),
+            objectMapper.valueToTree(Map.of(FIELD_ITEM_STATUS, ItemLifecycleStatus.WASTED.name())),
+            now));
+    eventPublisher.publishEvent(
+        new ItemSpoiledEvent(userId, List.of(itemId), "wasted", currentTraceId(), now));
   }
 
   // ---------------- helpers ----------------
