@@ -501,3 +501,45 @@ WasteEntryDtoPage:
     last: { type: boolean }
     empty: { type: boolean }
     numberOfElements: { type: integer }
+ProvisionForPlannerBundleDto:
+  type: object
+  required: [userId, activeInventory, staplesAtLowOrOut, equipment, supplierPricesByMappingKey, staleness]
+  properties:
+    userId: { type: string, format: uuid }
+    activeInventory:
+      type: array
+      items: { $ref: '#/InventoryItemDto' }
+    staplesAtLowOrOut:
+      type: array
+      items: { $ref: '#/InventoryItemDto' }
+    equipment:
+      type: array
+      items: { $ref: '#/EquipmentDto' }
+    budget:
+      type: object
+      nullable: true
+      description: 'Null when the user has no budget row; the planner falls back to no-gate.'
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        weeklyTarget: { type: number, format: double, minimum: 0 }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        toleranceOver: { type: number, format: double, minimum: 0 }
+        priceSensitivity: { $ref: '#/PriceSensitivity' }
+        enabled: { type: boolean }
+        spendTracking: { $ref: '#/BudgetSpendTrackingDto', nullable: true }
+        version: { type: integer, format: int64 }
+    supplierPricesByMappingKey:
+      type: object
+      additionalProperties: { $ref: '#/SupplierProductDto' }
+    staleness:
+      type: object
+      required: [supplierCacheCoverageBps, inRampUpWindow, generatedAt]
+      properties:
+        supplierCacheCoverageBps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: 'Share of requested mapping keys with a fresh supplier-product entry (basis points).'
+        inRampUpWindow: { type: boolean }
+        generatedAt: { type: string, format: date-time }

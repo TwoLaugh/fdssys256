@@ -95,6 +95,8 @@ paths:
     $ref: 'paths/provisions.yaml#/provisionsWaste'
   /api/v1/provisions/waste/summary:
     $ref: 'paths/provisions.yaml#/provisionsWasteSummary'
+  /api/v1/provisions/planner-bundle:
+    $ref: 'paths/provisions.yaml#/provisionsPlannerBundle'
   # ===== nutrition =====
   /api/v1/nutrition/targets:
     $ref: 'paths/nutrition.yaml#/targets'
@@ -248,6 +250,7 @@ components:
     BudgetOrderRefDto: { $ref: 'schemas/provisions.yaml#/BudgetOrderRefDto' }
     BudgetSpendTrackingDto: { $ref: 'schemas/provisions.yaml#/BudgetSpendTrackingDto' }
     PriceSensitivity: { $ref: 'schemas/provisions.yaml#/PriceSensitivity' }
+    ProvisionForPlannerBundleDto: { $ref: 'schemas/provisions.yaml#/ProvisionForPlannerBundleDto' }
     UpdateBudgetRequest: { $ref: 'schemas/provisions.yaml#/UpdateBudgetRequest' }
     RecordSubstitutionRequest: { $ref: 'schemas/provisions.yaml#/RecordSubstitutionRequest' }
     SubstitutionRecordDto: { $ref: 'schemas/provisions.yaml#/SubstitutionRecordDto' }

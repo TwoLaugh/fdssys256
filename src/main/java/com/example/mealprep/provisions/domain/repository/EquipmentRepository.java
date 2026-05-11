@@ -20,5 +20,12 @@ public interface EquipmentRepository extends JpaRepository<Equipment, UUID> {
 
   List<Equipment> findAllByUserIdAndAvailableTrueOrderByNameAsc(UUID userId);
 
+  /**
+   * Unpaged list of available equipment for {@code userId}. Driven by 01f's planner-bundle
+   * aggregator — order is not relevant for the planner's consumption (it filters/sorts by its own
+   * scoring criteria).
+   */
+  List<Equipment> findAllByUserIdAndAvailableTrue(UUID userId);
+
   Optional<Equipment> findByUserIdAndName(UUID userId, String name);
 }

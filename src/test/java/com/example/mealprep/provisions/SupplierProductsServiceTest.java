@@ -100,7 +100,8 @@ class SupplierProductsServiceTest {
         wasteEntryMapper,
         eventPublisher,
         objectMapper,
-        fixedClock);
+        fixedClock,
+        null);
   }
 
   // ---------------- upsertSupplierProduct ----------------
