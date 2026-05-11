@@ -1,5 +1,6 @@
 package com.example.mealprep.household;
 
+import com.example.mealprep.household.domain.service.HouseholdMergeService;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.household.domain.service.HouseholdUpdateService;
 import org.springframework.stereotype.Component;
@@ -17,11 +18,15 @@ public class HouseholdModule {
 
   private final HouseholdQueryService householdQueryService;
   private final HouseholdUpdateService householdUpdateService;
+  private final HouseholdMergeService householdMergeService;
 
   public HouseholdModule(
-      HouseholdQueryService householdQueryService, HouseholdUpdateService householdUpdateService) {
+      HouseholdQueryService householdQueryService,
+      HouseholdUpdateService householdUpdateService,
+      HouseholdMergeService householdMergeService) {
     this.householdQueryService = householdQueryService;
     this.householdUpdateService = householdUpdateService;
+    this.householdMergeService = householdMergeService;
   }
 
   public HouseholdQueryService query() {
@@ -30,5 +35,9 @@ public class HouseholdModule {
 
   public HouseholdUpdateService update() {
     return householdUpdateService;
+  }
+
+  public HouseholdMergeService merge() {
+    return householdMergeService;
   }
 }

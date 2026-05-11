@@ -92,7 +92,10 @@ class HouseholdServiceImplTest {
         slotConfigurationResolver,
         inviteCodeGenerator,
         eventPublisher,
-        fixedClock);
+        fixedClock,
+        com.example.mealprep.household.testdata.SoftPreferencesReaderTestSupport.emptyProvider(),
+        new com.example.mealprep.household.domain.service.internal.SoftPreferenceMerger(
+            fixedClock));
   }
 
   // ---------------- getById ----------------

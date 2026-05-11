@@ -68,6 +68,8 @@ paths:
     $ref: 'paths/household.yaml#/householdMember'
   /api/v1/households/current/members/{memberId}/role:
     $ref: 'paths/household.yaml#/householdMemberRole'
+  /api/v1/households/current/merge:
+    $ref: 'paths/household.yaml#/householdMerge'
   # ===== provisions =====
   /api/v1/provisions/inventory:
     $ref: 'paths/provisions.yaml#/inventory'
@@ -210,6 +212,12 @@ components:
     AddMemberRequest: { $ref: 'schemas/household.yaml#/AddMemberRequest' }
     ChangeRoleRequest: { $ref: 'schemas/household.yaml#/ChangeRoleRequest' }
     UpdateMemberRequest: { $ref: 'schemas/household.yaml#/UpdateMemberRequest' }
+    LifestyleConfigDocument: { $ref: 'schemas/household.yaml#/LifestyleConfigDocument' }
+    MergeSoftPreferencesRequest: { $ref: 'schemas/household.yaml#/MergeSoftPreferencesRequest' }
+    MergeStrategy: { $ref: 'schemas/household.yaml#/MergeStrategy' }
+    MergedSoftPreferencesDto: { $ref: 'schemas/household.yaml#/MergedSoftPreferencesDto' }
+    SoftPreferenceBundleDto: { $ref: 'schemas/household.yaml#/SoftPreferenceBundleDto' }
+    TasteProfileDocument: { $ref: 'schemas/household.yaml#/TasteProfileDocument' }
     # provisions
     StorageLocation: { $ref: 'schemas/provisions.yaml#/StorageLocation' }
     TrackingMode: { $ref: 'schemas/provisions.yaml#/TrackingMode' }

@@ -308,3 +308,25 @@ householdMemberRole:
       '403': { description: Caller not primary, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
       '404': { description: Member not found / belongs to another household, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
       '409': { description: Stale expectedVersion / demoting the last primary, content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+householdMerge:
+  post:
+    tags: [Households]
+    operationId: mergeSoftPreferencesForCurrentHousehold
+    summary: 'Merge the soft-preferences of the calling user''s household members (or a subset). Read-only; not persisted.'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/household.yaml#/MergeSoftPreferencesRequest' }
+    responses:
+      '200':
+        description: Merged soft preferences for the requested eater set.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/household.yaml#/MergedSoftPreferencesDto' }
+      '400': { description: 'Validation error', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '401': { description: 'Unauthenticated', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '403': { description: 'eaterUserIds contains a user not in the caller''s household', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '404': { description: 'Caller not in any household', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '422': { description: 'Merge requested on an empty household (zero members)', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }

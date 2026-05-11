@@ -10,7 +10,9 @@ import com.example.mealprep.household.api.dto.HouseholdInviteDto;
 import com.example.mealprep.household.api.dto.HouseholdMemberDto;
 import com.example.mealprep.household.api.dto.HouseholdSettingsAuditEntryDto;
 import com.example.mealprep.household.api.dto.HouseholdSettingsDto;
+import com.example.mealprep.household.api.dto.MergedSoftPreferencesDto;
 import com.example.mealprep.household.api.dto.SlotConfigurationDto;
+import com.example.mealprep.household.api.dto.SoftPreferenceBundleDto;
 import com.example.mealprep.household.api.dto.UpdateHouseholdSettingsRequest;
 import com.example.mealprep.household.api.dto.UpdateMemberRequest;
 import com.example.mealprep.household.api.mapper.HouseholdInviteMapper;
@@ -33,6 +35,7 @@ import com.example.mealprep.household.domain.repository.HouseholdMemberRepositor
 import com.example.mealprep.household.domain.repository.HouseholdRepository;
 import com.example.mealprep.household.domain.repository.HouseholdSettingsAuditLogRepository;
 import com.example.mealprep.household.domain.repository.HouseholdSettingsRepository;
+import com.example.mealprep.household.domain.service.HouseholdMergeService;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.household.domain.service.HouseholdUpdateService;
 import com.example.mealprep.household.event.HouseholdCreatedEvent;
@@ -42,6 +45,7 @@ import com.example.mealprep.household.event.HouseholdMemberAddedEvent;
 import com.example.mealprep.household.event.HouseholdMemberRemovedEvent;
 import com.example.mealprep.household.event.HouseholdRoleChangedEvent;
 import com.example.mealprep.household.event.HouseholdSettingsChangedEvent;
+import com.example.mealprep.household.exception.EmptyHouseholdMergeException;
 import com.example.mealprep.household.exception.HouseholdInviteAlreadyAcceptedException;
 import com.example.mealprep.household.exception.HouseholdInviteExpiredException;
 import com.example.mealprep.household.exception.HouseholdInviteNotFoundException;
@@ -52,6 +56,7 @@ import com.example.mealprep.household.exception.HouseholdSettingsNotFoundExcepti
 import com.example.mealprep.household.exception.InsufficientHouseholdRoleException;
 import com.example.mealprep.household.exception.LastPrimaryRemovalException;
 import com.example.mealprep.household.exception.UserAlreadyInHouseholdException;
+import com.example.mealprep.household.spi.SoftPreferencesReader;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -64,9 +69,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -76,7 +83,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Single implementation of {@link HouseholdQueryService} and {@link HouseholdUpdateService}.
+ * Single implementation of {@link HouseholdQueryService}, {@link HouseholdUpdateService}, and
+ * {@link HouseholdMergeService}.
  *
  * <p>Reads run with {@code readOnly = true}; writes run REQUIRED (top-level transactions). The
  * create path enforces the v1 single-household-per-user invariant in two layers — a service-level
@@ -89,7 +97,8 @@ import org.springframework.transaction.annotation.Transactional;
  * itself in 01b.
  */
 @Service
-public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpdateService {
+public class HouseholdServiceImpl
+    implements HouseholdQueryService, HouseholdUpdateService, HouseholdMergeService {
 
   private static final Logger log = LoggerFactory.getLogger(HouseholdServiceImpl.class);
 
@@ -117,6 +126,15 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
   private final ApplicationEventPublisher eventPublisher;
   private final Clock clock;
 
+  /**
+   * Cross-module SPI looked up lazily — preference-01c will inject a real implementation; until
+   * then Spring binds {@code NoopSoftPreferencesReader}. {@link ObjectProvider} is preferred over
+   * field injection of {@code Optional<T>} per Spring 6 idiom for optional constructor deps.
+   */
+  private final ObjectProvider<SoftPreferencesReader> softPreferencesReaderProvider;
+
+  private final SoftPreferenceMerger softPreferenceMerger;
+
   public HouseholdServiceImpl(
       HouseholdRepository householdRepository,
       HouseholdMemberRepository householdMemberRepository,
@@ -132,7 +150,9 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
       SlotConfigurationResolver slotConfigurationResolver,
       InviteCodeGenerator inviteCodeGenerator,
       ApplicationEventPublisher eventPublisher,
-      Clock clock) {
+      Clock clock,
+      ObjectProvider<SoftPreferencesReader> softPreferencesReaderProvider,
+      SoftPreferenceMerger softPreferenceMerger) {
     this.householdRepository = householdRepository;
     this.householdMemberRepository = householdMemberRepository;
     this.householdSettingsRepository = householdSettingsRepository;
@@ -148,6 +168,8 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
     this.inviteCodeGenerator = inviteCodeGenerator;
     this.eventPublisher = eventPublisher;
     this.clock = clock;
+    this.softPreferencesReaderProvider = softPreferencesReaderProvider;
+    this.softPreferenceMerger = softPreferenceMerger;
   }
 
   // ---------------- Query ----------------
@@ -737,6 +759,76 @@ public class HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpd
         saved.getRole(),
         actorUserId);
     return memberMapper.toDto(saved);
+  }
+
+  // ---------------- Merge (01e) ----------------
+
+  @Override
+  @Transactional(readOnly = true)
+  public MergedSoftPreferencesDto mergeSoftPreferencesForSlot(
+      UUID householdId, List<UUID> eaterUserIds) {
+    Household household =
+        householdRepository
+            .findWithMembersById(householdId)
+            .orElseThrow(() -> new HouseholdNotFoundException(householdId));
+    List<HouseholdMember> members = household.getMembers();
+    if (members == null || members.isEmpty()) {
+      throw new EmptyHouseholdMergeException(householdId);
+    }
+    List<UUID> resolved =
+        (eaterUserIds == null || eaterUserIds.isEmpty())
+            ? members.stream().map(HouseholdMember::getUserId).toList()
+            : List.copyOf(eaterUserIds);
+
+    Map<UUID, Integer> priorityByUser =
+        members.stream()
+            .collect(
+                Collectors.toMap(
+                    HouseholdMember::getUserId, HouseholdMember::getPriority, (a, b) -> a));
+    List<Integer> priorities =
+        resolved.stream().map(u -> priorityByUser.getOrDefault(u, 100)).toList();
+
+    List<SoftPreferenceBundleDto> bundles =
+        resolveSoftPreferencesReader().getSoftPreferencesByUserIds(resolved);
+    return softPreferenceMerger.merge(bundles, priorities, householdId, resolved);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public MergedSoftPreferencesDto mergeSoftPreferencesForUsers(
+      List<UUID> userIds, List<Integer> priorities) {
+    if (userIds == null) {
+      throw new IllegalArgumentException("userIds must not be null");
+    }
+    if (priorities == null) {
+      throw new IllegalArgumentException("priorities must not be null");
+    }
+    if (userIds.size() != priorities.size()) {
+      throw new IllegalArgumentException(
+          "userIds.size() ("
+              + userIds.size()
+              + ") must equal priorities.size() ("
+              + priorities.size()
+              + ")");
+    }
+    List<UUID> resolved = List.copyOf(userIds);
+    List<Integer> resolvedPriorities = List.copyOf(priorities);
+    List<SoftPreferenceBundleDto> bundles =
+        resolveSoftPreferencesReader().getSoftPreferencesByUserIds(resolved);
+    return softPreferenceMerger.merge(bundles, resolvedPriorities, null, resolved);
+  }
+
+  /**
+   * Resolve the soft-preferences reader at call time. Returns the first available bean; if none is
+   * registered (defence-in-depth), returns an inline noop. Routine call path uses the configured
+   * Noop or preference-01c's real impl.
+   */
+  private SoftPreferencesReader resolveSoftPreferencesReader() {
+    SoftPreferencesReader reader = softPreferencesReaderProvider.getIfAvailable();
+    if (reader != null) {
+      return reader;
+    }
+    return userIds -> List.of();
   }
 
   // ---------------- helpers ----------------

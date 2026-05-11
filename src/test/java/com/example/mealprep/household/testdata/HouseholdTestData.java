@@ -3,6 +3,10 @@ package com.example.mealprep.household.testdata;
 import com.example.mealprep.household.api.dto.AddMemberRequest;
 import com.example.mealprep.household.api.dto.ChangeRoleRequest;
 import com.example.mealprep.household.api.dto.CreateHouseholdRequest;
+import com.example.mealprep.household.api.dto.LifestyleConfigDocument;
+import com.example.mealprep.household.api.dto.MergeSoftPreferencesRequest;
+import com.example.mealprep.household.api.dto.SoftPreferenceBundleDto;
+import com.example.mealprep.household.api.dto.TasteProfileDocument;
 import com.example.mealprep.household.api.dto.UpdateMemberRequest;
 import com.example.mealprep.household.domain.entity.Household;
 import com.example.mealprep.household.domain.entity.HouseholdInvite;
@@ -12,6 +16,7 @@ import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument;
 import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument.HouseholdSchedulingPreferences;
 import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument.SlotDefault;
 import com.example.mealprep.household.domain.entity.SlotKind;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -68,6 +73,19 @@ public final class HouseholdTestData {
 
   public static ChangeRoleRequest changeRoleRequest(HouseholdRole newRole, long expectedVersion) {
     return new ChangeRoleRequest(newRole, expectedVersion);
+  }
+
+  public static MergeSoftPreferencesRequest mergeRequest(List<UUID> eaterUserIds) {
+    return new MergeSoftPreferencesRequest(eaterUserIds);
+  }
+
+  /** Bundle with a single ingredientLike + empty everything else. */
+  public static SoftPreferenceBundleDto softPreferenceBundle(
+      UUID userId, String ingredient, BigDecimal likeScore) {
+    return new SoftPreferenceBundleDto(
+        userId,
+        new TasteProfileDocument(Map.of(ingredient, likeScore), Map.of(), List.of()),
+        new LifestyleConfigDocument(null, null, null, false));
   }
 
   /**
