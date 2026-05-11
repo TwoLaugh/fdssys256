@@ -613,3 +613,21 @@ provisionsWasteSummary:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+provisionsPlannerBundle:
+  get:
+    tags: [Provisions]
+    operationId: getProvisionsPlannerBundle
+    summary: 'Planner-friendly snapshot of the calling user''s inventory, equipment, budget, and supplier prices.'
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: 'Planner-bundle snapshot.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/ProvisionForPlannerBundleDto' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

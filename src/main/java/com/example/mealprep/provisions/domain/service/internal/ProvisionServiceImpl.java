@@ -1,6 +1,10 @@
 package com.example.mealprep.provisions.domain.service.internal;
 
+import com.example.mealprep.household.api.dto.HouseholdDto;
+import com.example.mealprep.household.api.dto.HouseholdMemberDto;
+import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.provisions.api.dto.BudgetDto;
+import com.example.mealprep.provisions.api.dto.BundleStaleness;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
@@ -8,6 +12,7 @@ import com.example.mealprep.provisions.api.dto.InventoryAuditEntryDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.InventorySearchCriteria;
 import com.example.mealprep.provisions.api.dto.LogWasteRequest;
+import com.example.mealprep.provisions.api.dto.ProvisionForPlannerBundleDto;
 import com.example.mealprep.provisions.api.dto.ReasonAggregateRow;
 import com.example.mealprep.provisions.api.dto.SubstitutionRecordDto;
 import com.example.mealprep.provisions.api.dto.SupplierProductDto;
@@ -45,6 +50,7 @@ import com.example.mealprep.provisions.domain.repository.InventoryAuditLogReposi
 import com.example.mealprep.provisions.domain.repository.InventoryItemRepository;
 import com.example.mealprep.provisions.domain.repository.SupplierProductRepository;
 import com.example.mealprep.provisions.domain.repository.WasteEntryRepository;
+import com.example.mealprep.provisions.domain.service.ProvisionForPlannerService;
 import com.example.mealprep.provisions.domain.service.ProvisionQueryService;
 import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
 import com.example.mealprep.provisions.event.BudgetChangedEvent;
@@ -63,6 +69,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -70,13 +77,16 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -102,7 +112,8 @@ import org.springframework.transaction.annotation.Transactional;
  * in 01a.
  */
 @Service
-public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpdateService {
+public class ProvisionServiceImpl
+    implements ProvisionQueryService, ProvisionUpdateService, ProvisionForPlannerService {
 
   private static final Logger log = LoggerFactory.getLogger(ProvisionServiceImpl.class);
 
@@ -128,6 +139,8 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
 
   private static final int WASTE_WINDOW_CAP = 1000;
   private static final int WASTE_SUMMARY_TOP_N = 10;
+  static final int PLANNER_BUNDLE_KEY_CAP = 50;
+  static final long PLANNER_BUNDLE_RAMP_UP_DAYS = 56L;
 
   private final InventoryItemRepository inventoryItemRepository;
   private final InventoryAuditLogRepository auditLogRepository;
@@ -144,6 +157,7 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
+  private final HouseholdQueryService householdQueryService;
 
   public ProvisionServiceImpl(
       InventoryItemRepository inventoryItemRepository,
@@ -160,7 +174,8 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
       WasteEntryMapper wasteEntryMapper,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
-      Clock clock) {
+      Clock clock,
+      HouseholdQueryService householdQueryService) {
     this.inventoryItemRepository = inventoryItemRepository;
     this.auditLogRepository = auditLogRepository;
     this.equipmentRepository = equipmentRepository;
@@ -176,6 +191,7 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
+    this.householdQueryService = householdQueryService;
   }
 
   // ---------------- Query ----------------
@@ -244,6 +260,125 @@ public class ProvisionServiceImpl implements ProvisionQueryService, ProvisionUpd
       return List.of();
     }
     return budgetMapper.toDtos(budgetRepository.findAllByUserIdIn(userIds));
+  }
+
+  // ---------------- Planner bundle ----------------
+
+  /**
+   * Aggregate read for the planner module's provisions-utilisation sub-score. Combines active
+   * inventory, staples needing replenishment, available equipment, the budget (nullable), the
+   * cheapest supplier-product per ingredient-mapping-key (capped at {@value
+   * #PLANNER_BUNDLE_KEY_CAP} keys for v1), and staleness metadata into a single read.
+   *
+   * <p>Six queries per call (1 inventory + 1 staples + 1 equipment + 1 budget + 1 supplier-products
+   * + 1 household). Empty user state returns an empty-but-valid bundle. Never throws.
+   */
+  @Override
+  @Transactional(readOnly = true)
+  public ProvisionForPlannerBundleDto getBundle(UUID userId) {
+    List<InventoryItem> activeRows =
+        inventoryItemRepository.findAllByUserIdAndItemStatus(userId, ItemLifecycleStatus.ACTIVE);
+    List<InventoryItem> staples =
+        inventoryItemRepository.findAllByUserIdAndIsStapleTrueAndStatusIn(
+            userId, Set.of(StapleStatus.LOW, StapleStatus.OUT));
+    List<Equipment> equipment = equipmentRepository.findAllByUserIdAndAvailableTrue(userId);
+    BudgetDto budget = budgetRepository.findByUserId(userId).map(budgetMapper::toDto).orElse(null);
+
+    // Union of ingredient mapping keys from active inventory + staples. Sorted (alphabetical) for
+    // deterministic top-N cap; LinkedHashSet preserves insertion order for downstream consumers.
+    TreeSet<String> allKeys = new TreeSet<>();
+    Stream.concat(activeRows.stream(), staples.stream())
+        .map(InventoryItem::getIngredientMappingKey)
+        .filter(Objects::nonNull)
+        .forEach(allKeys::add);
+    LinkedHashSet<String> keys = new LinkedHashSet<>();
+    for (String k : allKeys) {
+      if (keys.size() >= PLANNER_BUNDLE_KEY_CAP) {
+        break;
+      }
+      keys.add(k);
+    }
+
+    Map<String, SupplierProductDto> prices;
+    int coverageBps;
+    if (keys.isEmpty()) {
+      prices = Map.of();
+      coverageBps = 0;
+    } else {
+      List<SupplierProduct> rows = supplierProductRepository.findAllByIngredientMappingKeyIn(keys);
+      // Group by ingredient mapping key; pick the row with the most recent lastChecked. Nulls in
+      // lastChecked sink to oldest (any non-null row wins over a null-dated one).
+      Map<String, SupplierProduct> winners = new LinkedHashMap<>();
+      for (SupplierProduct sp : rows) {
+        String mappingKey = sp.getIngredientMappingKey();
+        if (mappingKey == null || !keys.contains(mappingKey)) {
+          continue;
+        }
+        SupplierProduct incumbent = winners.get(mappingKey);
+        if (incumbent == null || isMoreRecent(sp, incumbent)) {
+          winners.put(mappingKey, sp);
+        }
+      }
+      Map<String, SupplierProductDto> mapped = new LinkedHashMap<>(winners.size());
+      winners.forEach((k, v) -> mapped.put(k, supplierProductMapper.toDto(v)));
+      prices = Map.copyOf(mapped);
+      coverageBps = (int) ((long) mapped.size() * 10000L / (long) keys.size());
+    }
+
+    boolean inRampUp = resolveInRampUpWindow(userId);
+
+    List<InventoryItemDto> activeDtos = activeRows.stream().map(mapper::toDto).toList();
+    List<InventoryItemDto> stapleDtos = staples.stream().map(mapper::toDto).toList();
+    List<EquipmentDto> equipmentDtos = equipment.stream().map(equipmentMapper::toDto).toList();
+
+    return new ProvisionForPlannerBundleDto(
+        userId,
+        activeDtos,
+        stapleDtos,
+        equipmentDtos,
+        budget,
+        prices,
+        new BundleStaleness(coverageBps, inRampUp, Instant.now(clock)));
+  }
+
+  private static boolean isMoreRecent(SupplierProduct candidate, SupplierProduct incumbent) {
+    LocalDate cand = candidate.getLastChecked();
+    LocalDate inc = incumbent.getLastChecked();
+    if (cand == null) {
+      return false;
+    }
+    if (inc == null) {
+      return true;
+    }
+    return cand.isAfter(inc);
+  }
+
+  /**
+   * Best-effort ramp-up resolver. Anchors on the caller's household membership {@code joinedAt}
+   * (which carries the membership's {@code @CreationTimestamp} from household-01a) — the closest
+   * proxy for "user account creation" available without auth-01a exposing {@code User.createdAt}.
+   *
+   * <p>TODO(provisions-followup): switch to {@code UserQueryService.getUserById(userId).createdAt}
+   * once auth-01a exposes it; the household-membership anchor under-approximates for users who
+   * created their household after sign-up.
+   */
+  private boolean resolveInRampUpWindow(UUID userId) {
+    Optional<HouseholdDto> household = householdQueryService.getByUserId(userId);
+    if (household.isEmpty()) {
+      return false;
+    }
+    Instant membershipCreatedAt =
+        household.get().members().stream()
+            .filter(m -> userId.equals(m.userId()))
+            .map(HouseholdMemberDto::joinedAt)
+            .filter(Objects::nonNull)
+            .findFirst()
+            .orElse(null);
+    if (membershipCreatedAt == null) {
+      return false;
+    }
+    return Duration.between(membershipCreatedAt, Instant.now(clock)).toDays()
+        < PLANNER_BUNDLE_RAMP_UP_DAYS;
   }
 
   // ---------------- Update ----------------

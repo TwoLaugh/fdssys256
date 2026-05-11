@@ -76,6 +76,9 @@ class ProvisionServiceImplTest {
 
   @Mock private ApplicationEventPublisher eventPublisher;
 
+  @Mock
+  private com.example.mealprep.household.domain.service.HouseholdQueryService householdQueryService;
+
   private final InventoryItemMapper mapper =
       new com.example.mealprep.provisions.api.mapper.InventoryItemMapperImpl();
   private final EquipmentMapper equipmentMapper =
@@ -110,7 +113,8 @@ class ProvisionServiceImplTest {
         wasteEntryMapper,
         eventPublisher,
         objectMapper,
-        fixedClock);
+        fixedClock,
+        householdQueryService);
   }
 
   // ---------------- getInventoryItem ----------------

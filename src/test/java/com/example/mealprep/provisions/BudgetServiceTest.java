@@ -94,7 +94,8 @@ class BudgetServiceTest {
         wasteEntryMapper,
         eventPublisher,
         objectMapper,
-        fixedClock);
+        fixedClock,
+        null);
   }
 
   // ---------------- getBudget ----------------

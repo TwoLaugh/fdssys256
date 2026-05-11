@@ -1,11 +1,17 @@
 package com.example.mealprep.provisions.testdata;
 
+import com.example.mealprep.provisions.api.dto.BudgetDto;
+import com.example.mealprep.provisions.api.dto.BundleStaleness;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
+import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
+import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.LogWasteRequest;
 import com.example.mealprep.provisions.api.dto.PriceSensitivity;
+import com.example.mealprep.provisions.api.dto.ProvisionForPlannerBundleDto;
 import com.example.mealprep.provisions.api.dto.RecordSubstitutionRequest;
 import com.example.mealprep.provisions.api.dto.SubstitutionRecordDto;
+import com.example.mealprep.provisions.api.dto.SupplierProductDto;
 import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
@@ -24,8 +30,10 @@ import com.example.mealprep.provisions.domain.entity.SupplierProduct;
 import com.example.mealprep.provisions.domain.entity.TrackingMode;
 import com.example.mealprep.provisions.domain.entity.WasteEntry;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -325,5 +333,44 @@ public final class ProvisionsTestData {
         null,
         LocalDate.parse("2026-05-08"),
         null);
+  }
+
+  // ---------------- Planner-bundle builders ----------------
+
+  /**
+   * Default {@link BundleStaleness} stub — non-zero coverage, in-ramp-up false, deterministic time.
+   */
+  public static BundleStaleness bundleStaleness() {
+    return new BundleStaleness(10000, false, Instant.parse("2026-05-09T10:00:00Z"));
+  }
+
+  /** Empty-state planner-bundle stub — all collections empty, null budget, zero coverage. */
+  public static ProvisionForPlannerBundleDto emptyPlannerBundle(UUID userId) {
+    return new ProvisionForPlannerBundleDto(
+        userId,
+        List.of(),
+        List.of(),
+        List.of(),
+        null,
+        Map.of(),
+        new BundleStaleness(0, false, Instant.parse("2026-05-09T10:00:00Z")));
+  }
+
+  /** Populated planner-bundle stub — caller supplies the inner sections. */
+  public static ProvisionForPlannerBundleDto plannerBundle(
+      UUID userId,
+      List<InventoryItemDto> activeInventory,
+      List<InventoryItemDto> staplesAtLowOrOut,
+      List<EquipmentDto> equipment,
+      BudgetDto budget,
+      Map<String, SupplierProductDto> supplierPrices) {
+    return new ProvisionForPlannerBundleDto(
+        userId,
+        activeInventory,
+        staplesAtLowOrOut,
+        equipment,
+        budget,
+        supplierPrices,
+        bundleStaleness());
   }
 }
