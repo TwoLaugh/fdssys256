@@ -146,6 +146,8 @@ paths:
     $ref: 'paths/nutrition.yaml#/nutritionHealthDirectiveAccept'
   /api/v1/nutrition/health-directives/{directiveId}/reject:
     $ref: 'paths/nutrition.yaml#/nutritionHealthDirectiveReject'
+  /api/v1/nutrition/recipes/{recipeId}/versions/{versionId}/recalculate:
+    $ref: 'paths/nutrition.yaml#/nutritionRecipeRecalc'
   # ===== recipe =====
   /api/v1/recipes:
     $ref: 'paths/recipe.yaml#/recipes'
@@ -316,6 +318,8 @@ components:
     RejectDirectiveRequest: { $ref: 'schemas/nutrition.yaml#/RejectDirectiveRequest' }
     SafetyFindingDto: { $ref: 'schemas/nutrition.yaml#/SafetyFindingDto' }
     SafetyGateVerdict: { $ref: 'schemas/nutrition.yaml#/SafetyGateVerdict' }
+    RecalculateRecipeNutritionRequest: { $ref: 'schemas/nutrition.yaml#/RecalculateRecipeNutritionRequest' }
+    RecipeNutritionResultDto: { $ref: 'schemas/nutrition.yaml#/RecipeNutritionResultDto' }
     # recipe
     Catalogue: { $ref: 'schemas/recipe.yaml#/Catalogue' }
     DataQuality: { $ref: 'schemas/recipe.yaml#/DataQuality' }

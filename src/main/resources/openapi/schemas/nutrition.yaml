@@ -673,3 +673,37 @@ HealthDirectiveDtoPage:
     last: { type: boolean }
     empty: { type: boolean }
     numberOfElements: { type: integer }
+RecalculateRecipeNutritionRequest:
+  type: object
+  required: [branchId, versionNumber]
+  properties:
+    branchId: { type: string, format: uuid }
+    versionNumber: { type: integer, minimum: 1 }
+RecipeNutritionResultDto:
+  type: object
+  required:
+    - recipeId
+    - caloriesPerServing
+    - proteinPerServingG
+    - carbsPerServingG
+    - fatPerServingG
+    - fibrePerServingG
+    - microsPerServing
+    - nutritionStatus
+    - unmapped
+  properties:
+    recipeId: { type: string, format: uuid }
+    caloriesPerServing: { type: integer, minimum: 0 }
+    proteinPerServingG: { type: number, format: double, minimum: 0 }
+    carbsPerServingG: { type: number, format: double, minimum: 0 }
+    fatPerServingG: { type: number, format: double, minimum: 0 }
+    fibrePerServingG: { type: number, format: double, minimum: 0 }
+    microsPerServing:
+      type: object
+      additionalProperties: { type: number, format: double, minimum: 0 }
+    nutritionStatus:
+      type: string
+      enum: [calculated, partial, pending]
+    unmapped:
+      type: array
+      items: { $ref: '#/UnmappedIngredientDto' }

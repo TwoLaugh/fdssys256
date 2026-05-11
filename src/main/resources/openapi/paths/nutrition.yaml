@@ -865,3 +865,49 @@ nutritionHealthDirectiveReject:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionRecipeRecalc:
+  post:
+    tags: [Nutrition]
+    operationId: recalculateRecipeNutrition
+    summary: 'Manually recalculate per-serving nutrition for a recipe version; result written back via the recipe-side SPI.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: versionId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/RecalculateRecipeNutritionRequest' }
+    responses:
+      '200':
+        description: 'Computed per-serving nutrition. May include a Warning header if the recipe-side SPI is not yet wired.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/RecipeNutritionResultDto' }
+      '400':
+        description: 'Validation error'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Recipe version not found'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Recipe-side write failed (e.g. version immutable)'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

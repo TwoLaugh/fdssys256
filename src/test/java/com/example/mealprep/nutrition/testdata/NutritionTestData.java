@@ -14,7 +14,10 @@ import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
 import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
 import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
 import com.example.mealprep.nutrition.api.dto.PlannedSlotInputDto;
+import com.example.mealprep.nutrition.api.dto.RecipeIngredientLineDto;
+import com.example.mealprep.nutrition.api.dto.RecipeNutritionResultDto;
 import com.example.mealprep.nutrition.api.dto.RejectDirectiveRequest;
+import com.example.mealprep.nutrition.api.dto.UnmappedIngredientDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.api.dto.UpsertFoodMoodEntryRequest;
 import com.example.mealprep.nutrition.domain.entity.ActivityAdjustment;
@@ -281,6 +284,29 @@ public final class NutritionTestData {
 
   public static RejectDirectiveRequest rejectRequest(String reason, long expectedVersion) {
     return new RejectDirectiveRequest(reason, expectedVersion);
+  }
+
+  // ---------------- 01f: recipe-version calculation fixtures ----------------
+
+  public static RecipeIngredientLineDto ingredientLine(String name, String key, BigDecimal grams) {
+    return new RecipeIngredientLineDto(name, key, BigDecimal.ONE, "g", grams, false);
+  }
+
+  public static UnmappedIngredientDto unmapped(String name) {
+    return new UnmappedIngredientDto(name, "not-in-cache", BigDecimal.ZERO);
+  }
+
+  public static RecipeNutritionResultDto pendingResult(UUID recipeId) {
+    return new RecipeNutritionResultDto(
+        recipeId,
+        0,
+        new BigDecimal("0.00"),
+        new BigDecimal("0.00"),
+        new BigDecimal("0.00"),
+        new BigDecimal("0.00"),
+        new LinkedHashMap<>(),
+        "pending",
+        List.of());
   }
 
   // ---------------- Entity builders (for unit tests) ----------------
