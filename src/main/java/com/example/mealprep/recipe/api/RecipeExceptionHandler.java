@@ -13,6 +13,7 @@ import com.example.mealprep.recipe.exception.RecipeImportFailureException;
 import com.example.mealprep.recipe.exception.RecipeImportNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeSubstitutionNotFoundException;
+import com.example.mealprep.recipe.exception.RecipeVersionConflictException;
 import com.example.mealprep.recipe.exception.RecipeVersionNotFoundException;
 import com.example.mealprep.recipe.exception.SubstitutionOriginalNotInVersionException;
 import com.example.mealprep.recipe.exception.SubstitutionPromotionPreconditionException;
@@ -215,6 +216,21 @@ public class RecipeExceptionHandler {
             "Recipe branch name reserved",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeVersionConflictException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeVersionConflict(
+      RecipeVersionConflictException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "recipe-version-conflict",
+            "Recipe version conflict",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

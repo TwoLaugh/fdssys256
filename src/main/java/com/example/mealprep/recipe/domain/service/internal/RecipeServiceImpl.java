@@ -49,8 +49,12 @@ import com.example.mealprep.recipe.domain.repository.RecipeSubstitutionRepositor
 import com.example.mealprep.recipe.domain.repository.RecipeVersionRepository;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import com.example.mealprep.recipe.domain.service.RecipeUpdateService;
+import com.example.mealprep.recipe.event.AdaptationOutcomeType;
+import com.example.mealprep.recipe.event.RecipeAdaptedEvent;
 import com.example.mealprep.recipe.event.RecipeBranchCreatedEvent;
 import com.example.mealprep.recipe.event.RecipeCreatedEvent;
+import com.example.mealprep.recipe.event.RecipeEvolvedEvent;
+import com.example.mealprep.recipe.event.RecipeEvolvedEvent.EvolvedReason;
 import com.example.mealprep.recipe.event.RecipeSubstitutionCreatedEvent;
 import com.example.mealprep.recipe.event.RecipeSubstitutionStateChangedEvent;
 import com.example.mealprep.recipe.event.RecipeUpdatedEvent;
@@ -65,12 +69,17 @@ import com.example.mealprep.recipe.exception.RecipeDiffCrossBranchException;
 import com.example.mealprep.recipe.exception.RecipeDiffNotComputedException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeSubstitutionNotFoundException;
+import com.example.mealprep.recipe.exception.RecipeVersionConflictException;
 import com.example.mealprep.recipe.exception.RecipeVersionNotFoundException;
 import com.example.mealprep.recipe.exception.SubstitutionOriginalNotInVersionException;
 import com.example.mealprep.recipe.exception.SubstitutionPromotionPreconditionException;
 import com.example.mealprep.recipe.exception.SubstitutionRecordPreconditionException;
 import com.example.mealprep.recipe.exception.SubstitutionTerminalStateException;
 import com.example.mealprep.recipe.spi.RecipeSubstitutionRecorder;
+import com.example.mealprep.recipe.spi.RecipeWriteApi;
+import com.example.mealprep.recipe.spi.SaveAdaptedBranchCommand;
+import com.example.mealprep.recipe.spi.SaveAdaptedSubstitutionCommand;
+import com.example.mealprep.recipe.spi.SaveAdaptedVersionCommand;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -117,7 +126,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class RecipeServiceImpl
-    implements RecipeQueryService, RecipeUpdateService, RecipeSubstitutionRecorder {
+    implements RecipeQueryService, RecipeUpdateService, RecipeSubstitutionRecorder, RecipeWriteApi {
 
   private static final Logger log = LoggerFactory.getLogger(RecipeServiceImpl.class);
 
@@ -1326,6 +1335,423 @@ public class RecipeServiceImpl
         actorUserId);
 
     return versionMapper.toDto(savedNewVersion);
+  }
+
+  // ---------------- RecipeWriteApi SPI ----------------
+
+  @Override
+  @Transactional
+  public RecipeVersionDto saveAdaptedVersion(SaveAdaptedVersionCommand cmd) {
+    Recipe recipe =
+        recipeRepository
+            .findByIdForUpdate(cmd.recipeId())
+            .orElseThrow(() -> new RecipeNotFoundException(cmd.recipeId()));
+    RecipeBranch branch =
+        branchRepository
+            .findById(cmd.branchId())
+            .filter(b -> b.getRecipe() != null && b.getRecipe().getId().equals(recipe.getId()))
+            .orElseThrow(() -> new RecipeBranchNotFoundException(cmd.branchId()));
+
+    if (recipe.getCurrentVersion() != cmd.expectedParentVersionNumber()) {
+      throw new RecipeVersionConflictException(
+          "Recipe "
+              + recipe.getId()
+              + " expected parent version "
+              + cmd.expectedParentVersionNumber()
+              + " but head is at "
+              + recipe.getCurrentVersion());
+    }
+    UUID actualHeadVersionId =
+        versionRepository
+            .findCurrentVersionId(recipe.getId(), branch.getId(), branch.getCurrentVersion())
+            .orElseThrow(
+                () ->
+                    new IllegalStateException(
+                        "Recipe inconsistent: no current version row for branch "
+                            + branch.getId()));
+    if (!actualHeadVersionId.equals(cmd.expectedParentVersionId())) {
+      throw new RecipeVersionConflictException(
+          "Recipe "
+              + recipe.getId()
+              + " expected parent version id "
+              + cmd.expectedParentVersionId()
+              + " but head version id is "
+              + actualHeadVersionId);
+    }
+
+    int newVersionNumber = recipe.getCurrentVersion() + 1;
+    UUID newVersionId = UUID.randomUUID();
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    String createdByActor =
+        cmd.adapterTraceId() != null ? "pipeline:" + cmd.adapterTraceId() : "pipeline:unknown";
+
+    RecipeVersion newVersion =
+        RecipeVersion.builder()
+            .id(newVersionId)
+            .recipe(recipe)
+            .branch(branch)
+            .versionNumber(newVersionNumber)
+            .parentVersionId(cmd.expectedParentVersionId())
+            .changeDiff(
+                cmd.changeDiff() != null ? cmd.changeDiff() : JsonNodeFactory.instance.objectNode())
+            .changeReason(cmd.changeReason())
+            .trigger(VersionTrigger.ADAPTATION_PIPELINE)
+            .characterFingerprint(fingerprintToJson(cmd.characterFingerprint()))
+            .nutritionPerServing(null)
+            .embeddingStatus(EMBEDDING_STATUS_PENDING)
+            .createdByActor(createdByActor)
+            .adapterTraceId(cmd.adapterTraceId())
+            .ingredients(new ArrayList<>())
+            .methodSteps(new ArrayList<>())
+            .build();
+
+    populateIngredientsFromRequests(newVersion, cmd.ingredients());
+    populateMethodStepsFromRequests(newVersion, cmd.method());
+    newVersion.setMetadata(buildMetadataFromRequest(newVersion, cmd.metadata()));
+    newVersion.setTags(buildTagsFromRequest(newVersion, cmd.tags()));
+
+    RecipeVersion savedNewVersion = versionRepository.saveAndFlush(newVersion);
+
+    recipe.setCurrentVersion(newVersionNumber);
+    // Nutrition status resets to PENDING — the nutrition listener will back-fill via
+    // updateNutritionStatus.
+    recipe.setNutritionStatus(NutritionStatus.PENDING);
+    Recipe savedRecipe = recipeRepository.saveAndFlush(recipe);
+
+    branch.setCurrentVersion(newVersionNumber);
+    RecipeBranch savedBranch = branchRepository.saveAndFlush(branch);
+
+    eventPublisher.publishEvent(
+        new RecipeVersionCreatedEvent(
+            savedNewVersion.getId(),
+            savedRecipe.getId(),
+            savedBranch.getId(),
+            savedNewVersion.getVersionNumber(),
+            traceId,
+            now));
+    eventPublisher.publishEvent(
+        new RecipeUpdatedEvent(
+            savedRecipe.getId(),
+            savedBranch.getId(),
+            savedNewVersion.getId(),
+            savedNewVersion.getVersionNumber(),
+            VersionTrigger.ADAPTATION_PIPELINE,
+            traceId,
+            now));
+    eventPublisher.publishEvent(
+        new RecipeAdaptedEvent(
+            savedRecipe.getId(),
+            savedBranch.getId(),
+            savedNewVersion.getId(),
+            AdaptationOutcomeType.NEW_VERSION,
+            cmd.adapterTraceId(),
+            traceId,
+            now));
+
+    log.info(
+        "recipe saveAdaptedVersion recipeId={} branchId={} newVersionId={} versionNumber={} adapterTraceId={}",
+        savedRecipe.getId(),
+        savedBranch.getId(),
+        savedNewVersion.getId(),
+        savedNewVersion.getVersionNumber(),
+        cmd.adapterTraceId());
+
+    return versionMapper.toDto(savedNewVersion);
+  }
+
+  @Override
+  @Transactional
+  public RecipeBranchDto saveAdaptedBranch(SaveAdaptedBranchCommand cmd) {
+    Recipe recipe =
+        recipeRepository
+            .findByIdAndDeletedAtIsNull(cmd.recipeId())
+            .orElseThrow(() -> new RecipeNotFoundException(cmd.recipeId()));
+
+    if (branchRepository.findByRecipeIdAndName(recipe.getId(), cmd.name()).isPresent()) {
+      throw new RecipeBranchNameConflictException(cmd.name());
+    }
+
+    RecipeVersion branchPoint =
+        versionRepository
+            .findById(cmd.branchPointVersionId())
+            .filter(v -> v.getRecipe() != null && v.getRecipe().getId().equals(recipe.getId()))
+            .orElseThrow(() -> new RecipeBranchPointInvalidException(cmd.branchPointVersionId()));
+
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    String createdByActor =
+        cmd.adapterTraceId() != null ? "pipeline:" + cmd.adapterTraceId() : "pipeline:unknown";
+    UUID branchId = UUID.randomUUID();
+
+    RecipeBranch newBranch =
+        RecipeBranch.builder()
+            .id(branchId)
+            .recipe(recipe)
+            .parentBranchId(cmd.parentBranchId())
+            .branchPointVersionId(branchPoint.getId())
+            .name(cmd.name())
+            .label(cmd.label())
+            .reason(cmd.reason())
+            .currentVersion(1)
+            .divergenceScore(new BigDecimal("0.000"))
+            .createdByActor(createdByActor)
+            .adapterTraceId(cmd.adapterTraceId())
+            .build();
+    RecipeBranch savedBranch = branchRepository.saveAndFlush(newBranch);
+
+    UUID newVersionId = UUID.randomUUID();
+    RecipeVersion v1 =
+        RecipeVersion.builder()
+            .id(newVersionId)
+            .recipe(recipe)
+            .branch(savedBranch)
+            .versionNumber(1)
+            .parentVersionId(branchPoint.getId())
+            .changeDiff(JsonNodeFactory.instance.objectNode())
+            .changeReason(cmd.reason())
+            .trigger(VersionTrigger.ADAPTATION_PIPELINE)
+            .characterFingerprint(fingerprintToJson(cmd.characterFingerprint()))
+            .nutritionPerServing(null)
+            .embeddingStatus(EMBEDDING_STATUS_PENDING)
+            .createdByActor(createdByActor)
+            .adapterTraceId(cmd.adapterTraceId())
+            .ingredients(new ArrayList<>())
+            .methodSteps(new ArrayList<>())
+            .build();
+
+    populateIngredientsFromRequests(v1, cmd.ingredients());
+    populateMethodStepsFromRequests(v1, cmd.method());
+    v1.setMetadata(buildMetadataFromRequest(v1, cmd.metadata()));
+    v1.setTags(buildTagsFromRequest(v1, cmd.tags()));
+
+    RecipeVersion savedV1 = versionRepository.saveAndFlush(v1);
+
+    // Per LLD: branch creation does NOT bump recipe.currentVersion / currentBranchId.
+
+    eventPublisher.publishEvent(
+        new RecipeVersionCreatedEvent(
+            savedV1.getId(),
+            recipe.getId(),
+            savedBranch.getId(),
+            savedV1.getVersionNumber(),
+            traceId,
+            now));
+    eventPublisher.publishEvent(
+        new RecipeBranchCreatedEvent(
+            recipe.getId(),
+            savedBranch.getId(),
+            savedBranch.getParentBranchId(),
+            savedBranch.getBranchPointVersionId(),
+            savedBranch.getDivergenceScore(),
+            traceId,
+            now));
+    eventPublisher.publishEvent(
+        new RecipeAdaptedEvent(
+            recipe.getId(),
+            savedBranch.getId(),
+            savedV1.getId(),
+            AdaptationOutcomeType.BRANCH,
+            cmd.adapterTraceId(),
+            traceId,
+            now));
+
+    log.info(
+        "recipe saveAdaptedBranch recipeId={} branchId={} name={} adapterTraceId={}",
+        recipe.getId(),
+        savedBranch.getId(),
+        savedBranch.getName(),
+        cmd.adapterTraceId());
+
+    return branchMapper.toDto(savedBranch);
+  }
+
+  @Override
+  @Transactional
+  public RecipeSubstitutionDto saveAdaptedSubstitution(SaveAdaptedSubstitutionCommand cmd) {
+    Recipe recipe =
+        recipeRepository
+            .findByIdAndDeletedAtIsNull(cmd.recipeId())
+            .orElseThrow(() -> new RecipeNotFoundException(cmd.recipeId()));
+    RecipeVersion version =
+        versionRepository
+            .findById(cmd.versionId())
+            .filter(v -> v.getRecipe() != null && v.getRecipe().getId().equals(recipe.getId()))
+            .orElseThrow(() -> new RecipeVersionNotFoundException(cmd.versionId()));
+
+    List<String> mappingKeys = ingredientRepository.findMappingKeysByVersionId(version.getId());
+    if (!mappingKeys.contains(cmd.original().ingredientMappingKey())) {
+      throw new SubstitutionOriginalNotInVersionException(cmd.original().ingredientMappingKey());
+    }
+
+    UUID branchId = version.getBranch() != null ? version.getBranch().getId() : null;
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    UUID subId = UUID.randomUUID();
+    String createdByActor =
+        cmd.adapterTraceId() != null ? "pipeline:" + cmd.adapterTraceId() : "pipeline:unknown";
+
+    List<MethodOverlayLine> overlay = null;
+    if (cmd.methodOverlay() != null && !cmd.methodOverlay().isEmpty()) {
+      overlay = new ArrayList<>(cmd.methodOverlay().size());
+      for (MethodOverlayLineRequest ml : cmd.methodOverlay()) {
+        overlay.add(new MethodOverlayLine(ml.step(), ml.instruction()));
+      }
+    }
+
+    RecipeSubstitution sub =
+        RecipeSubstitution.builder()
+            .id(subId)
+            .recipeId(recipe.getId())
+            .versionId(version.getId())
+            .branchId(branchId)
+            .originalMappingKey(cmd.original().ingredientMappingKey())
+            .originalQuantity(cmd.original().quantity())
+            .originalUnit(cmd.original().unit())
+            .substituteMappingKey(cmd.substitute().ingredientMappingKey())
+            .substituteQuantity(cmd.substitute().quantity())
+            .substituteUnit(cmd.substitute().unit())
+            .reason(cmd.reason())
+            .constraintRef(cmd.constraintRef())
+            .methodOverlay(overlay)
+            .notes(cmd.notes())
+            .temporary(cmd.temporary())
+            .appliedInPlanIds(new UUID[0])
+            .applicationCount(0)
+            .lastAppliedAt(null)
+            .state(SubstitutionState.ACCEPTED)
+            .promotedToVersionId(null)
+            .createdByActor(createdByActor)
+            .adapterTraceId(cmd.adapterTraceId())
+            .build();
+
+    RecipeSubstitution saved = substitutionRepository.saveAndFlush(sub);
+
+    eventPublisher.publishEvent(
+        new RecipeSubstitutionCreatedEvent(
+            saved.getId(),
+            recipe.getId(),
+            version.getId(),
+            branchId,
+            saved.getReason(),
+            traceId,
+            now));
+    eventPublisher.publishEvent(
+        new RecipeAdaptedEvent(
+            recipe.getId(),
+            branchId,
+            version.getId(),
+            AdaptationOutcomeType.SUBSTITUTION,
+            cmd.adapterTraceId(),
+            traceId,
+            now));
+
+    log.info(
+        "recipe saveAdaptedSubstitution recipeId={} versionId={} substitutionId={} adapterTraceId={}",
+        recipe.getId(),
+        version.getId(),
+        saved.getId(),
+        cmd.adapterTraceId());
+
+    return substitutionMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public void updateNutritionStatus(
+      UUID versionId, NutritionStatus status, JsonNode nutritionPerServing) {
+    RecipeVersion version =
+        versionRepository
+            .findById(versionId)
+            .orElseThrow(() -> new RecipeVersionNotFoundException(versionId));
+    // Append-only exception per LLD line 130: nutrition recalculation is one of three permitted
+    // mutations on a persisted version row.
+    version.setNutritionPerServing(nutritionPerServing);
+    versionRepository.saveAndFlush(version);
+
+    // Aggregate-level status lives on Recipe per the recipe_recipes schema; the version's
+    // nutrition_status column ships in a later schema rev. Update the recipe-level status now so
+    // the read DTO reflects the recalculation outcome.
+    Recipe recipe = version.getRecipe();
+    if (recipe != null) {
+      recipe.setNutritionStatus(status);
+      recipeRepository.saveAndFlush(recipe);
+    }
+
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    eventPublisher.publishEvent(
+        new RecipeEvolvedEvent(
+            recipe != null ? recipe.getId() : null,
+            versionId,
+            EvolvedReason.NUTRITION_RECALCULATED,
+            traceId,
+            now));
+
+    log.info(
+        "recipe updateNutritionStatus versionId={} status={} hasJson={}",
+        versionId,
+        status,
+        nutritionPerServing != null && !nutritionPerServing.isNull());
+  }
+
+  @Override
+  @Transactional
+  public void updateCharacterFingerprint(UUID versionId, CharacterFingerprintDto fingerprint) {
+    RecipeVersion version =
+        versionRepository
+            .findById(versionId)
+            .orElseThrow(() -> new RecipeVersionNotFoundException(versionId));
+    version.setCharacterFingerprint(fingerprintToJson(fingerprint));
+    versionRepository.saveAndFlush(version);
+
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    UUID recipeId = version.getRecipe() != null ? version.getRecipe().getId() : null;
+    eventPublisher.publishEvent(
+        new RecipeEvolvedEvent(
+            recipeId, versionId, EvolvedReason.FINGERPRINT_REFRESHED, traceId, now));
+
+    log.info("recipe updateCharacterFingerprint versionId={}", versionId);
+  }
+
+  @Override
+  @Transactional
+  public void updateBranchDivergence(UUID branchId, BigDecimal divergenceScore) {
+    RecipeBranch branch =
+        branchRepository
+            .findById(branchId)
+            .orElseThrow(() -> new RecipeBranchNotFoundException(branchId));
+    branch.setDivergenceScore(divergenceScore);
+    branchRepository.saveAndFlush(branch);
+    log.info("recipe updateBranchDivergence branchId={} score={}", branchId, divergenceScore);
+  }
+
+  @Override
+  @Transactional
+  public void storeEmbedding(UUID versionId, float[] embedding, String modelId) {
+    RecipeVersion version =
+        versionRepository
+            .findById(versionId)
+            .orElseThrow(() -> new RecipeVersionNotFoundException(versionId));
+    // Flip the embedding_status from 'pending' to 'embedded'. The vector(1536) column +
+    // embedding_model_id column land in recipe-01h alongside CREATE EXTENSION vector — 01f records
+    // the model id on the log line and updates the status so downstream readers can fan out, but
+    // the vector + model id column writes are a no-op until 01h's migration.
+    version.setEmbeddingStatus("embedded");
+    versionRepository.saveAndFlush(version);
+
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    UUID recipeId = version.getRecipe() != null ? version.getRecipe().getId() : null;
+    eventPublisher.publishEvent(
+        new RecipeEvolvedEvent(recipeId, versionId, EvolvedReason.EMBEDDING_STORED, traceId, now));
+
+    log.info(
+        "recipe storeEmbedding versionId={} modelId={} vectorDim={}",
+        versionId,
+        modelId,
+        embedding != null ? embedding.length : 0);
   }
 
   // ---------------- RecipeSubstitutionRecorder SPI ----------------
