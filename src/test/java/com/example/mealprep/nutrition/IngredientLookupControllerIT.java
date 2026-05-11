@@ -206,15 +206,19 @@ class IngredientLookupControllerIT {
   @Test
   void correction_happyPath_bumpsVersion_setsManual() throws Exception {
     AuthedUser user = registerUser();
+    // Use a no-space search term: Spring's StrictHttpFirewall blocks URL-encoded
+    // path segments (%20 decodes fine, but the request-URI containing %25 from
+    // MockMvc's auto-encoding gets rejected). The normaliser logic is exercised
+    // by JournalServiceTest separately; here we just need a routable path.
     IngredientMapping row =
-        NutritionTestData.ingredientMapping("chicken breast", IngredientMappingSource.USDA, 0.6);
+        NutritionTestData.ingredientMapping("chicken-breast", IngredientMappingSource.USDA, 0.6);
     insertIngredient(row);
 
     CorrectIngredientMappingRequest body =
         new CorrectIngredientMappingRequest(NutritionTestData.defaultNutritionDocument(), 0L);
 
     mvc.perform(
-            put("/api/v1/nutrition/ingredients/chicken%20breast/correction")
+            put("/api/v1/nutrition/ingredients/chicken-breast/correction")
                 .cookie(user.cookie())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(body)))
@@ -243,14 +247,14 @@ class IngredientLookupControllerIT {
   void correction_returns409_forStaleVersion() throws Exception {
     AuthedUser user = registerUser();
     IngredientMapping row =
-        NutritionTestData.ingredientMapping("chicken breast", IngredientMappingSource.USDA, 0.85);
+        NutritionTestData.ingredientMapping("chicken-breast", IngredientMappingSource.USDA, 0.85);
     insertIngredient(row);
 
     CorrectIngredientMappingRequest body =
         new CorrectIngredientMappingRequest(NutritionTestData.defaultNutritionDocument(), 999L);
 
     mvc.perform(
-            put("/api/v1/nutrition/ingredients/chicken%20breast/correction")
+            put("/api/v1/nutrition/ingredients/chicken-breast/correction")
                 .cookie(user.cookie())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(body)))
