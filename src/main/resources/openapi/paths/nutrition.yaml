@@ -561,3 +561,128 @@ nutritionJournalRecent:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionIngredientLookup:
+  get:
+    tags: [Nutrition]
+    operationId: lookupIngredient
+    summary: Look up an ingredient by free-text term; cache-checks then falls through USDA / OFF.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: term
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 255 }
+    responses:
+      '200':
+        description: Ingredient nutrition resolved.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IngredientNutritionDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: No cache hit and no USDA / OFF match.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionIngredientSearch:
+  post:
+    tags: [Nutrition]
+    operationId: searchIngredients
+    summary: Search the cache (LIKE) for ingredient candidates; v1 is cache-only.
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/IngredientLookupRequest' }
+    responses:
+      '200':
+        description: Cache search results.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IngredientLookupResultDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionIngredientCorrection:
+  put:
+    tags: [Nutrition]
+    operationId: correctIngredientMapping
+    summary: Correct an existing ingredient mapping; bumps source = MANUAL, confidence = 1.0.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: searchTerm
+        required: true
+        schema: { type: string, maxLength: 255 }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/CorrectIngredientMappingRequest' }
+    responses:
+      '200':
+        description: Mapping corrected.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IngredientNutritionDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Search term not in cache.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedVersion.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionIngredientNeedsReview:
+  get:
+    tags: [Nutrition]
+    operationId: getIngredientsNeedingReview
+    summary: Paginated mappings with needs_review = true, sorted updatedAt DESC.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of needs-review mappings.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IngredientNutritionDtoPage' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

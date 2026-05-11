@@ -1,6 +1,8 @@
 package com.example.mealprep.nutrition.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.nutrition.exception.IngredientMappingNotFoundException;
+import com.example.mealprep.nutrition.exception.IngredientMappingPipelineException;
 import com.example.mealprep.nutrition.exception.IntakeDayNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
@@ -135,6 +137,36 @@ public class NutritionExceptionHandler {
             "Conflict",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.CONFLICT)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(IngredientMappingNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleIngredientMappingNotFound(
+      IngredientMappingNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "ingredient-mapping-not-found",
+            "Ingredient mapping not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(IngredientMappingPipelineException.class)
+  public ResponseEntity<ProblemDetail> handleIngredientMappingPipeline(
+      IngredientMappingPipelineException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "ingredient-mapping-pipeline",
+            "Ingredient mapping pipeline failure",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.api.mapper.DailyActivityMapper;
+import com.example.mealprep.nutrition.api.mapper.IngredientMappingMapper;
 import com.example.mealprep.nutrition.api.mapper.IntakeMapper;
 import com.example.mealprep.nutrition.api.mapper.JournalMapper;
 import com.example.mealprep.nutrition.api.mapper.TargetsMapper;
@@ -19,10 +20,12 @@ import com.example.mealprep.nutrition.domain.entity.NutritionTargets;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargetsAuditLog;
 import com.example.mealprep.nutrition.domain.repository.DailyActivityLogRepository;
 import com.example.mealprep.nutrition.domain.repository.FoodMoodJournalRepository;
+import com.example.mealprep.nutrition.domain.repository.IngredientMappingRepository;
 import com.example.mealprep.nutrition.domain.repository.IntakeAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.IntakeDayRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsRepository;
+import com.example.mealprep.nutrition.domain.service.internal.IntakeKeyNormaliser;
 import com.example.mealprep.nutrition.domain.service.internal.NutritionServiceImpl;
 import com.example.mealprep.nutrition.event.NutritionTargetsChangedEvent;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
@@ -55,6 +58,7 @@ class NutritionServiceImplTest {
   @Mock private IntakeAuditRepository intakeAuditRepository;
   @Mock private DailyActivityLogRepository dailyActivityLogRepository;
   @Mock private FoodMoodJournalRepository journalRepository;
+  @Mock private IngredientMappingRepository ingredientMappingRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final TargetsMapper mapper =
@@ -64,6 +68,8 @@ class NutritionServiceImplTest {
   private final DailyActivityMapper dailyActivityMapper =
       new com.example.mealprep.nutrition.api.mapper.DailyActivityMapperImpl();
   private final JournalMapper journalMapper = new JournalMapper() {};
+  private final IngredientMappingMapper ingredientMappingMapper = new IngredientMappingMapper() {};
+  private final IntakeKeyNormaliser intakeKeyNormaliser = new IntakeKeyNormaliser();
   private final ObjectMapper objectMapper = new ObjectMapper();
   private final Clock fixedClock =
       Clock.fixed(Instant.parse("2026-05-09T10:00:00Z"), ZoneOffset.UTC);
@@ -76,10 +82,13 @@ class NutritionServiceImplTest {
         intakeAuditRepository,
         dailyActivityLogRepository,
         journalRepository,
+        ingredientMappingRepository,
         mapper,
         intakeMapper,
         dailyActivityMapper,
         journalMapper,
+        ingredientMappingMapper,
+        intakeKeyNormaliser,
         eventPublisher,
         objectMapper,
         fixedClock);

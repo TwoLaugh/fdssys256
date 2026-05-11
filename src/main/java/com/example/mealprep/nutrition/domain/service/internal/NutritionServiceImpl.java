@@ -5,6 +5,11 @@ import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
 import com.example.mealprep.nutrition.api.dto.EatingWindowDto;
 import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
+import com.example.mealprep.nutrition.api.dto.IngredientLookupRequest;
+import com.example.mealprep.nutrition.api.dto.IngredientLookupResultDto;
+import com.example.mealprep.nutrition.api.dto.IngredientMappingSource;
+import com.example.mealprep.nutrition.api.dto.IngredientNutritionDocument;
+import com.example.mealprep.nutrition.api.dto.IngredientNutritionDto;
 import com.example.mealprep.nutrition.api.dto.IntakeAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.IntakeEntryDto;
@@ -19,6 +24,7 @@ import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.api.dto.UpsertFoodMoodEntryRequest;
 import com.example.mealprep.nutrition.api.mapper.DailyActivityMapper;
+import com.example.mealprep.nutrition.api.mapper.IngredientMappingMapper;
 import com.example.mealprep.nutrition.api.mapper.IntakeMapper;
 import com.example.mealprep.nutrition.api.mapper.JournalMapper;
 import com.example.mealprep.nutrition.api.mapper.TargetsMapper;
@@ -29,6 +35,7 @@ import com.example.mealprep.nutrition.domain.entity.DailyActivityLog;
 import com.example.mealprep.nutrition.domain.entity.EatingWindow;
 import com.example.mealprep.nutrition.domain.entity.FoodMoodJournalEntry;
 import com.example.mealprep.nutrition.domain.entity.Goal;
+import com.example.mealprep.nutrition.domain.entity.IngredientMapping;
 import com.example.mealprep.nutrition.domain.entity.IntakeAuditAction;
 import com.example.mealprep.nutrition.domain.entity.IntakeAuditLog;
 import com.example.mealprep.nutrition.domain.entity.IntakeDay;
@@ -42,6 +49,7 @@ import com.example.mealprep.nutrition.domain.entity.NutritionTargetsAuditLog;
 import com.example.mealprep.nutrition.domain.entity.PerMealDistributionEntry;
 import com.example.mealprep.nutrition.domain.repository.DailyActivityLogRepository;
 import com.example.mealprep.nutrition.domain.repository.FoodMoodJournalRepository;
+import com.example.mealprep.nutrition.domain.repository.IngredientMappingRepository;
 import com.example.mealprep.nutrition.domain.repository.IntakeAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.IntakeDayRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsAuditRepository;
@@ -49,8 +57,10 @@ import com.example.mealprep.nutrition.domain.repository.NutritionTargetsReposito
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.nutrition.domain.service.NutritionUpdateService;
 import com.example.mealprep.nutrition.event.FoodMoodEntryWrittenEvent;
+import com.example.mealprep.nutrition.event.IngredientMappingCorrectedEvent;
 import com.example.mealprep.nutrition.event.IntakeLoggedEvent;
 import com.example.mealprep.nutrition.event.NutritionTargetsChangedEvent;
+import com.example.mealprep.nutrition.exception.IngredientMappingNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeDayNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
@@ -64,6 +74,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -138,10 +149,13 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
   private final IntakeAuditRepository intakeAuditRepository;
   private final DailyActivityLogRepository dailyActivityLogRepository;
   private final FoodMoodJournalRepository journalRepository;
+  private final IngredientMappingRepository ingredientMappingRepository;
   private final TargetsMapper mapper;
   private final IntakeMapper intakeMapper;
   private final DailyActivityMapper dailyActivityMapper;
   private final JournalMapper journalMapper;
+  private final IngredientMappingMapper ingredientMappingMapper;
+  private final IntakeKeyNormaliser intakeKeyNormaliser;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -153,10 +167,13 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
       IntakeAuditRepository intakeAuditRepository,
       DailyActivityLogRepository dailyActivityLogRepository,
       FoodMoodJournalRepository journalRepository,
+      IngredientMappingRepository ingredientMappingRepository,
       TargetsMapper mapper,
       IntakeMapper intakeMapper,
       DailyActivityMapper dailyActivityMapper,
       JournalMapper journalMapper,
+      IngredientMappingMapper ingredientMappingMapper,
+      IntakeKeyNormaliser intakeKeyNormaliser,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
@@ -166,10 +183,13 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
     this.intakeAuditRepository = intakeAuditRepository;
     this.dailyActivityLogRepository = dailyActivityLogRepository;
     this.journalRepository = journalRepository;
+    this.ingredientMappingRepository = ingredientMappingRepository;
     this.mapper = mapper;
     this.intakeMapper = intakeMapper;
     this.dailyActivityMapper = dailyActivityMapper;
     this.journalMapper = journalMapper;
+    this.ingredientMappingMapper = ingredientMappingMapper;
+    this.intakeKeyNormaliser = intakeKeyNormaliser;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -1406,5 +1426,105 @@ public class NutritionServiceImpl implements NutritionQueryService, NutritionUpd
       throw new InvalidIntakeRangeException(
           "range must be at most " + RANGE_MAX_DAYS + " days (got " + days + ")");
     }
+  }
+
+  // =================================================================================
+  // Ingredient mapping (01d)
+  // =================================================================================
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<IngredientNutritionDto> lookupIngredient(String searchTerm) {
+    String normalised = intakeKeyNormaliser.normalise(searchTerm);
+    if (normalised == null || normalised.isEmpty()) {
+      return Optional.empty();
+    }
+    return ingredientMappingRepository
+        .findBySearchTerm(normalised)
+        .map(ingredientMappingMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<IngredientNutritionDto> lookupIngredients(Collection<String> searchTerms) {
+    if (searchTerms == null || searchTerms.isEmpty()) {
+      return List.of();
+    }
+    List<String> normalised = new ArrayList<>(searchTerms.size());
+    for (String t : searchTerms) {
+      String n = intakeKeyNormaliser.normalise(t);
+      if (n != null && !n.isEmpty()) {
+        normalised.add(n);
+      }
+    }
+    if (normalised.isEmpty()) {
+      return List.of();
+    }
+    List<IngredientMapping> rows = ingredientMappingRepository.findBySearchTermIn(normalised);
+    List<IngredientNutritionDto> out = new ArrayList<>(rows.size());
+    for (IngredientMapping r : rows) {
+      out.add(ingredientMappingMapper.toDto(r));
+    }
+    return out;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public IngredientLookupResultDto searchIngredientsForUi(IngredientLookupRequest request) {
+    int max = request.maxResults() == null ? 10 : Math.min(Math.max(request.maxResults(), 1), 20);
+    org.springframework.data.domain.Pageable pageable =
+        org.springframework.data.domain.PageRequest.of(0, max);
+    org.springframework.data.domain.Page<IngredientMapping> rows =
+        ingredientMappingRepository.searchByTerm(request.query(), pageable);
+    List<IngredientNutritionDto> hits = new ArrayList<>(rows.getNumberOfElements());
+    for (IngredientMapping r : rows.getContent()) {
+      hits.add(ingredientMappingMapper.toDto(r));
+    }
+    return new IngredientLookupResultDto(hits, true);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public org.springframework.data.domain.Page<IngredientNutritionDto> getMappingsNeedingReview(
+      org.springframework.data.domain.Pageable pageable) {
+    return ingredientMappingRepository
+        .findByNeedsReviewTrueOrderByUpdatedAtDesc(pageable)
+        .map(ingredientMappingMapper::toDto);
+  }
+
+  @Override
+  @Transactional
+  public IngredientNutritionDto correctIngredientMapping(
+      String searchTerm,
+      IngredientNutritionDocument override,
+      long expectedVersion,
+      UUID actorUserId) {
+    String normalised = intakeKeyNormaliser.normalise(searchTerm);
+    IngredientMapping row =
+        ingredientMappingRepository
+            .findBySearchTerm(normalised)
+            .orElseThrow(() -> new IngredientMappingNotFoundException(normalised));
+    if (row.getVersion() != expectedVersion) {
+      throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
+          IngredientMapping.class, row.getId());
+    }
+    row.setNutritionPer100g(override);
+    row.setSource(IngredientMappingSource.MANUAL);
+    row.setConfidence(BigDecimal.valueOf(1.0));
+    row.setNeedsReview(false);
+    Instant now = Instant.now(clock);
+    row.setLastVerifiedAt(now);
+
+    // saveAndFlush so the @Version bump materialises before mapping to DTO.
+    IngredientMapping saved = ingredientMappingRepository.saveAndFlush(row);
+    eventPublisher.publishEvent(
+        new IngredientMappingCorrectedEvent(
+            saved.getId(), saved.getSearchTerm(), actorUserId, UUID.randomUUID(), now));
+    log.info(
+        "ingredient mapping corrected searchTerm={} actorUserId={} newVersion={}",
+        saved.getSearchTerm(),
+        actorUserId,
+        saved.getVersion());
+    return ingredientMappingMapper.toDto(saved);
   }
 }

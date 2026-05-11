@@ -2,6 +2,8 @@ package com.example.mealprep.nutrition.domain.service;
 
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
 import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
+import com.example.mealprep.nutrition.api.dto.IngredientNutritionDocument;
+import com.example.mealprep.nutrition.api.dto.IngredientNutritionDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.IntakeEntryDto;
 import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
@@ -103,4 +105,23 @@ public interface NutritionUpdateService {
    * event carries {@code action = DELETED}.
    */
   void deleteJournalEntry(UUID userId, UUID entryId);
+
+  /**
+   * Upgrade an ingredient mapping with a user-confirmed override. Bumps {@code source = MANUAL},
+   * {@code confidence = 1.0}, {@code needsReview = false}, sets {@code lastVerifiedAt}, and bumps
+   * the {@code @Version}.
+   *
+   * <p>LLD line 729 names the verb; 01d widens the signature to take {@code expectedVersion} too
+   * (the controller carries it from the wire DTO; mismatch surfaces as 409 via {@code
+   * OptimisticLockingFailureException}). Publishes {@code IngredientMappingCorrectedEvent}
+   * AFTER_COMMIT.
+   *
+   * @throws com.example.mealprep.nutrition.exception.IngredientMappingNotFoundException if no row
+   *     matches the (normalised) search term
+   */
+  IngredientNutritionDto correctIngredientMapping(
+      String searchTerm,
+      IngredientNutritionDocument override,
+      long expectedVersion,
+      UUID actorUserId);
 }
