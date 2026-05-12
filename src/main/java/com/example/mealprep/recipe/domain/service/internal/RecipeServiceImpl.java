@@ -1737,15 +1737,16 @@ public class RecipeServiceImpl
         versionRepository
             .findById(versionId)
             .orElseThrow(() -> new RecipeVersionNotFoundException(versionId));
-    // Flip the embedding_status from 'pending' to 'embedded'. The vector(1536) column +
-    // embedding_model_id column land in recipe-01h alongside CREATE EXTENSION vector — 01f records
-    // the model id on the log line and updates the status so downstream readers can fan out, but
-    // the vector + model id column writes are a no-op until 01h's migration.
+    // recipe-01h: vector(1536) column + embedding_model_id + embedded_at now exist; persist them
+    // alongside the embedding_status flip from 'pending' to 'embedded'.
+    Instant now = Instant.now(clock);
+    version.setEmbedding(embedding);
+    version.setEmbeddingModelId(modelId);
+    version.setEmbeddedAt(now);
     version.setEmbeddingStatus("embedded");
     versionRepository.saveAndFlush(version);
 
     UUID traceId = currentTraceId();
-    Instant now = Instant.now(clock);
     UUID recipeId = version.getRecipe() != null ? version.getRecipe().getId() : null;
     eventPublisher.publishEvent(
         new RecipeEvolvedEvent(recipeId, versionId, EvolvedReason.EMBEDDING_STORED, traceId, now));
@@ -1755,6 +1756,34 @@ public class RecipeServiceImpl
         versionId,
         modelId,
         embedding != null ? embedding.length : 0);
+  }
+
+  @Override
+  @Transactional
+  public void markEmbeddingFailed(UUID versionId) {
+    RecipeVersion version =
+        versionRepository
+            .findById(versionId)
+            .orElseThrow(() -> new RecipeVersionNotFoundException(versionId));
+    version.setEmbeddingStatus("failed");
+    versionRepository.saveAndFlush(version);
+
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    UUID recipeId = version.getRecipe() != null ? version.getRecipe().getId() : null;
+    eventPublisher.publishEvent(
+        new RecipeEvolvedEvent(recipeId, versionId, EvolvedReason.EMBEDDING_FAILED, traceId, now));
+
+    log.info("recipe markEmbeddingFailed versionId={}", versionId);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<float[]> getEmbedding(UUID versionId) {
+    return versionRepository
+        .findById(versionId)
+        .map(RecipeVersion::getEmbedding)
+        .filter(arr -> arr != null && arr.length > 0);
   }
 
   // ---------------- RecipeSubstitutionRecorder SPI ----------------

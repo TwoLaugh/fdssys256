@@ -400,9 +400,13 @@ class RecipeWriteApiTest {
     when(versionRepository.saveAndFlush(any(RecipeVersion.class)))
         .thenAnswer(inv -> inv.getArgument(0));
 
-    service().storeEmbedding(versionId, new float[] {0.1f, 0.2f}, "openai:text-embedding-3-small");
+    float[] vector = {0.1f, 0.2f};
+    service().storeEmbedding(versionId, vector, "openai:text-embedding-3-small");
 
     assertThat(version.getEmbeddingStatus()).isEqualTo("embedded");
+    assertThat(version.getEmbedding()).isSameAs(vector);
+    assertThat(version.getEmbeddingModelId()).isEqualTo("openai:text-embedding-3-small");
+    assertThat(version.getEmbeddedAt()).isNotNull();
 
     ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
     verify(eventPublisher).publishEvent(eventCaptor.capture());
@@ -412,6 +416,70 @@ class RecipeWriteApiTest {
             ev ->
                 assertThat(ev.reason())
                     .isEqualTo(RecipeEvolvedEvent.EvolvedReason.EMBEDDING_STORED));
+  }
+
+  @Test
+  void markEmbeddingFailed_flipsStatus_doesNotClearEmbedding_andPublishesEvent() {
+    UUID recipeId = UUID.randomUUID();
+    UUID versionId = UUID.randomUUID();
+    Recipe recipe = recipeAtVersion(recipeId, UUID.randomUUID(), 1);
+    RecipeVersion version = versionRow(versionId, recipe, 1);
+    when(versionRepository.findById(versionId)).thenReturn(Optional.of(version));
+    when(versionRepository.saveAndFlush(any(RecipeVersion.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    service().markEmbeddingFailed(versionId);
+
+    assertThat(version.getEmbeddingStatus()).isEqualTo("failed");
+    assertThat(version.getEmbedding()).isNull();
+
+    ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+    verify(eventPublisher).publishEvent(eventCaptor.capture());
+    assertThat(eventCaptor.getValue())
+        .isInstanceOfSatisfying(
+            RecipeEvolvedEvent.class,
+            ev ->
+                assertThat(ev.reason())
+                    .isEqualTo(RecipeEvolvedEvent.EvolvedReason.EMBEDDING_FAILED));
+  }
+
+  @Test
+  void markEmbeddingFailed_throws404OnMissingVersion() {
+    UUID versionId = UUID.randomUUID();
+    when(versionRepository.findById(versionId)).thenReturn(Optional.empty());
+    assertThatThrownBy(() -> service().markEmbeddingFailed(versionId))
+        .isInstanceOf(RecipeVersionNotFoundException.class);
+  }
+
+  @Test
+  void getEmbedding_returnsVectorWhenPopulated() {
+    UUID versionId = UUID.randomUUID();
+    Recipe recipe = recipeAtVersion(UUID.randomUUID(), UUID.randomUUID(), 1);
+    RecipeVersion version = versionRow(versionId, recipe, 1);
+    version.setEmbedding(new float[] {0.1f, 0.2f, 0.3f});
+    when(versionRepository.findById(versionId)).thenReturn(Optional.of(version));
+
+    Optional<float[]> result = service().getEmbedding(versionId);
+
+    assertThat(result).isPresent();
+    assertThat(result.get()).containsExactly(0.1f, 0.2f, 0.3f);
+  }
+
+  @Test
+  void getEmbedding_emptyWhenVectorNull() {
+    UUID versionId = UUID.randomUUID();
+    Recipe recipe = recipeAtVersion(UUID.randomUUID(), UUID.randomUUID(), 1);
+    RecipeVersion version = versionRow(versionId, recipe, 1);
+    when(versionRepository.findById(versionId)).thenReturn(Optional.of(version));
+
+    assertThat(service().getEmbedding(versionId)).isEmpty();
+  }
+
+  @Test
+  void getEmbedding_emptyWhenVersionMissing() {
+    UUID versionId = UUID.randomUUID();
+    when(versionRepository.findById(versionId)).thenReturn(Optional.empty());
+    assertThat(service().getEmbedding(versionId)).isEmpty();
   }
 
   // ---------------- helpers ----------------

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -88,6 +89,22 @@ public class RecipeVersion {
 
   @Column(name = "embedding_status", nullable = false, length = 16)
   private String embeddingStatus;
+
+  /**
+   * Embedding vector (pgvector {@code vector(1536)}). NULL until the async listener succeeds.
+   * Persisted via {@link RecipeEmbeddingConverter} which renders the {@code float[]} as the
+   * pgvector text literal {@code '[v1,...,v1536]'} that pgvector implicitly casts to {@code
+   * vector}.
+   */
+  @Convert(converter = RecipeEmbeddingConverter.class)
+  @Column(name = "embedding", columnDefinition = "vector(1536)")
+  private float[] embedding;
+
+  @Column(name = "embedding_model_id", length = 96)
+  private String embeddingModelId;
+
+  @Column(name = "embedded_at")
+  private Instant embeddedAt;
 
   @CreationTimestamp
   @Column(name = "created_at", updatable = false, nullable = false)
