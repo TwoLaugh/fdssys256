@@ -911,3 +911,31 @@ nutritionRecipeRecalc:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionFloorGateEvaluate:
+  post:
+    tags: [Nutrition]
+    operationId: evaluateNutritionFloorGate
+    summary: 'Evaluate the hard-floor gate for the calling user against a candidate plan rollup.'
+    description: 'Returns passed=true with empty violations when no targets are configured or every hard floor is met across every day.'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/CandidatePlanRollupDto' }
+    responses:
+      '200':
+        description: 'Gate verdict. HTTP 200 even when passed=false; passed is the actionable signal.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/FloorGateResultDto' }
+      '400':
+        description: 'Validation error (e.g. perDay dates outside [startDate, endDate])'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

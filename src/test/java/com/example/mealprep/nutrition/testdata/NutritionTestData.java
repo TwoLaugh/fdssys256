@@ -319,6 +319,30 @@ public final class NutritionTestData {
     private final List<MicroTarget> micros = new ArrayList<>();
     private final List<ActivityAdjustment> activities = new ArrayList<>();
     private EatingWindow eatingWindow;
+    private BigDecimal proteinFloorG;
+    private BigDecimal carbsFloorG;
+    private BigDecimal fatFloorG;
+    private BigDecimal fibreFloorG;
+
+    public NutritionTargetsBuilder withProteinFloor(BigDecimal floor) {
+      this.proteinFloorG = floor;
+      return this;
+    }
+
+    public NutritionTargetsBuilder withCarbsFloor(BigDecimal floor) {
+      this.carbsFloorG = floor;
+      return this;
+    }
+
+    public NutritionTargetsBuilder withFatFloor(BigDecimal floor) {
+      this.fatFloorG = floor;
+      return this;
+    }
+
+    public NutritionTargetsBuilder withFibreFloor(BigDecimal floor) {
+      this.fibreFloorG = floor;
+      return this;
+    }
 
     public NutritionTargetsBuilder withId(UUID id) {
       this.id = id;
@@ -380,19 +404,19 @@ public final class NutritionTestData {
               .calorieEnforcement("weekly_average")
               .calorieDirection(EnforcementDirection.BOTH_BOUNDED)
               .proteinTargetG(BigDecimal.valueOf(120.0))
-              .proteinFloorG(null)
+              .proteinFloorG(proteinFloorG)
               .proteinEnforcement("daily_floor")
               .proteinDirection(EnforcementDirection.LOWER_FLOOR)
               .carbsTargetG(BigDecimal.valueOf(250.0))
-              .carbsFloorG(null)
+              .carbsFloorG(carbsFloorG)
               .carbsEnforcement("weekly_average")
               .carbsDirection(EnforcementDirection.BOTH_BOUNDED)
               .fatTargetG(BigDecimal.valueOf(70.0))
-              .fatFloorG(null)
+              .fatFloorG(fatFloorG)
               .fatEnforcement("weekly_average")
               .fatDirection(EnforcementDirection.BOTH_BOUNDED)
               .fibreTargetG(BigDecimal.valueOf(30.0))
-              .fibreFloorG(null)
+              .fibreFloorG(fibreFloorG)
               .fibreEnforcement("daily_floor")
               .fibreDirection(EnforcementDirection.LOWER_FLOOR)
               .satFatTargetG(BigDecimal.valueOf(20.0))
@@ -423,5 +447,48 @@ public final class NutritionTestData {
       }
       return t;
     }
+  }
+
+  // ---------------- 01g: floor-gate fixtures ----------------
+
+  /**
+   * A single-day rollup that meets the {@link #defaultUpdateRequest} macro targets — useful as a
+   * "passes" baseline for floor-gate tests.
+   */
+  public static com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto dailyRollup(
+      LocalDate date) {
+    Map<String, BigDecimal> micros = new LinkedHashMap<>();
+    micros.put("iron_mg", BigDecimal.valueOf(20.0));
+    return new com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto(
+        date,
+        ActivityLevel.LIGHT_ACTIVITY,
+        2000,
+        BigDecimal.valueOf(150.0),
+        BigDecimal.valueOf(260.0),
+        BigDecimal.valueOf(80.0),
+        BigDecimal.valueOf(35.0),
+        micros);
+  }
+
+  /** A single-day rollup overriding the macro grams — handy for "macro X below floor" tests. */
+  public static com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto dailyRollup(
+      LocalDate date, BigDecimal proteinG, BigDecimal carbsG, BigDecimal fatG, BigDecimal fibreG) {
+    return new com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto(
+        date,
+        ActivityLevel.LIGHT_ACTIVITY,
+        2000,
+        proteinG,
+        carbsG,
+        fatG,
+        fibreG,
+        new LinkedHashMap<>());
+  }
+
+  /** Wraps {@code days} into a {@code CandidatePlanRollupDto} spanning their min..max dates. */
+  public static com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto planRollup(
+      List<com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto> days) {
+    LocalDate start = days.get(0).date();
+    LocalDate end = days.get(days.size() - 1).date();
+    return new com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto(start, end, days);
   }
 }

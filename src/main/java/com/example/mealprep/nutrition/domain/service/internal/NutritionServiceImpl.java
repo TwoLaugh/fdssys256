@@ -4,10 +4,14 @@ import com.example.mealprep.nutrition.api.dto.AcceptDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.ActivityAdjustmentDto;
 import com.example.mealprep.nutrition.api.dto.CalculateRecipeNutritionRequest;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
+import com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto;
+import com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto;
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
 import com.example.mealprep.nutrition.api.dto.DirectiveInstructionDocument;
 import com.example.mealprep.nutrition.api.dto.DirectiveStatus;
 import com.example.mealprep.nutrition.api.dto.EatingWindowDto;
+import com.example.mealprep.nutrition.api.dto.FloorGateResultDto;
+import com.example.mealprep.nutrition.api.dto.FloorViolationDto;
 import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
 import com.example.mealprep.nutrition.api.dto.HealthDirectiveDto;
 import com.example.mealprep.nutrition.api.dto.InboundHealthDirectiveRequest;
@@ -69,6 +73,7 @@ import com.example.mealprep.nutrition.domain.repository.IntakeDayRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsAuditRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsRepository;
 import com.example.mealprep.nutrition.domain.service.NutritionCalculationService;
+import com.example.mealprep.nutrition.domain.service.NutritionFloorGateService;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.nutrition.domain.service.NutritionUpdateService;
 import com.example.mealprep.nutrition.event.FoodMoodEntryWrittenEvent;
@@ -86,6 +91,7 @@ import com.example.mealprep.nutrition.exception.IntakeDayNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
 import com.example.mealprep.nutrition.exception.InvalidIntakeRangeException;
+import com.example.mealprep.nutrition.exception.InvalidPlanRollupException;
 import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -130,7 +136,10 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class NutritionServiceImpl
-    implements NutritionQueryService, NutritionUpdateService, NutritionCalculationService {
+    implements NutritionQueryService,
+        NutritionUpdateService,
+        NutritionCalculationService,
+        NutritionFloorGateService {
 
   private static final Logger log = LoggerFactory.getLogger(NutritionServiceImpl.class);
 
@@ -1911,4 +1920,151 @@ public class NutritionServiceImpl
 
     return result;
   }
+
+  // ---------------- 01g: Floor-gate evaluation ----------------
+
+  @Override
+  @Transactional(readOnly = true)
+  public FloorGateResultDto evaluate(UUID userId, CandidatePlanRollupDto rollup) {
+    validateRollupShape(rollup);
+
+    Optional<NutritionTargets> targetsOpt = targetsRepository.findByUserId(userId);
+    if (targetsOpt.isEmpty()) {
+      return new FloorGateResultDto(
+          true, List.of(), "No targets configured — gate passes by default");
+    }
+    NutritionTargets targets = targetsOpt.get();
+    // Force lazy-load of the micros child list inside the read-only tx (per 01a's convention; the
+    // aggregate has three list children so no multi-attribute @EntityGraph is possible).
+    targets.getMicroTargets().size();
+
+    List<MacroFloor> macroFloors = collectMacroFloors(targets);
+    List<MicroFloor> microFloors = collectMicroFloors(targets);
+
+    List<FloorViolationDto> violations = new ArrayList<>();
+    for (CandidateDailyRollupDto day : rollup.perDay()) {
+      for (MacroFloor mf : macroFloors) {
+        BigDecimal actual = mf.extract(day);
+        if (actual == null) {
+          actual = BigDecimal.ZERO;
+        }
+        if (actual.compareTo(mf.floor()) < 0) {
+          violations.add(new FloorViolationDto(day.date(), mf.key(), mf.floor(), actual));
+        }
+      }
+      for (MicroFloor mfi : microFloors) {
+        BigDecimal actual =
+            day.micros() == null
+                ? BigDecimal.ZERO
+                : day.micros().getOrDefault(mfi.key(), BigDecimal.ZERO);
+        if (actual.compareTo(mfi.floor()) < 0) {
+          violations.add(new FloorViolationDto(day.date(), mfi.key(), mfi.floor(), actual));
+        }
+      }
+    }
+
+    boolean passed = violations.isEmpty();
+    String summary;
+    if (passed) {
+      summary = "Plan passes all hard floors across " + rollup.perDay().size() + " day(s)";
+    } else {
+      long distinctDates = violations.stream().map(FloorViolationDto::date).distinct().count();
+      summary =
+          "Plan fails " + violations.size() + " hard floor(s) across " + distinctDates + " day(s)";
+    }
+    return new FloorGateResultDto(passed, List.copyOf(violations), summary);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Map<UUID, FloorGateResultDto> evaluateForHousehold(
+      List<UUID> userIds, CandidatePlanRollupDto rollup) {
+    LinkedHashMap<UUID, FloorGateResultDto> out = new LinkedHashMap<>();
+    if (userIds == null || userIds.isEmpty()) {
+      return out;
+    }
+    for (UUID userId : userIds) {
+      out.put(userId, evaluate(userId, rollup));
+    }
+    return out;
+  }
+
+  /**
+   * Service-layer rollup shape validation. The controller catches and bubbles {@link
+   * InvalidPlanRollupException} as 400; calling {@code evaluate} directly (in-process) also
+   * triggers the same check so the planner cannot pass a malformed envelope.
+   */
+  private static void validateRollupShape(CandidatePlanRollupDto rollup) {
+    if (rollup.endDate().isBefore(rollup.startDate())) {
+      throw new InvalidPlanRollupException(
+          "endDate ("
+              + rollup.endDate()
+              + ") must not precede startDate ("
+              + rollup.startDate()
+              + ")");
+    }
+    for (CandidateDailyRollupDto day : rollup.perDay()) {
+      LocalDate d = day.date();
+      if (d.isBefore(rollup.startDate()) || d.isAfter(rollup.endDate())) {
+        throw new InvalidPlanRollupException(
+            "perDay date "
+                + d
+                + " is outside ["
+                + rollup.startDate()
+                + ", "
+                + rollup.endDate()
+                + "]");
+      }
+    }
+  }
+
+  /**
+   * Collect the macro hard-floors. LLD says macros default to {@code isHardFloor=true}; the
+   * persisted schema does not carry an {@code is_hard_floor} column on the macro fields, so 01g
+   * treats any macro whose {@code <macro>FloorG} column is non-null as a hard floor (the column is
+   * the only way the floor is expressed at all). A {@code null} floor implies "no floor configured"
+   * regardless of the LLD default — there is nothing to compare against.
+   */
+  private static List<MacroFloor> collectMacroFloors(NutritionTargets t) {
+    List<MacroFloor> out = new ArrayList<>(4);
+    if (t.getProteinFloorG() != null) {
+      out.add(new MacroFloor("protein", t.getProteinFloorG(), CandidateDailyRollupDto::proteinG));
+    }
+    if (t.getCarbsFloorG() != null) {
+      out.add(new MacroFloor("carbs", t.getCarbsFloorG(), CandidateDailyRollupDto::carbsG));
+    }
+    if (t.getFatFloorG() != null) {
+      out.add(new MacroFloor("fat", t.getFatFloorG(), CandidateDailyRollupDto::fatG));
+    }
+    if (t.getFibreFloorG() != null) {
+      out.add(new MacroFloor("fibre", t.getFibreFloorG(), CandidateDailyRollupDto::fibreG));
+    }
+    return out;
+  }
+
+  /**
+   * Collect the micro hard-floors. LLD says micros default to {@code isHardFloor=false}; the
+   * persisted schema does not carry an {@code is_hard_floor} column on {@code MicroTarget} either.
+   * To honour the LLD default verbatim, 01g treats no micro as hard-floored at this revision (the
+   * gate never raises a micro violation). When 01h adds the column, this method becomes the only
+   * place to update.
+   */
+  private static List<MicroFloor> collectMicroFloors(NutritionTargets t) {
+    // No is_hard_floor column on MicroTarget yet — default isHardFloor=false per LLD line 774, so
+    // no micro contributes to the hard-floor list. List<MicroFloor> stays empty by design.
+    return List.of();
+  }
+
+  /** Internal record carrying a macro key + its floor + the rollup field extractor. */
+  private record MacroFloor(
+      String key,
+      BigDecimal floor,
+      java.util.function.Function<CandidateDailyRollupDto, BigDecimal> extract) {
+    BigDecimal extract(CandidateDailyRollupDto day) {
+      return extract.apply(day);
+    }
+  }
+
+  /** Internal record carrying a micro key + its floor. */
+  private record MicroFloor(String key, BigDecimal floor) {}
 }

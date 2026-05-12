@@ -707,3 +707,46 @@ RecipeNutritionResultDto:
     unmapped:
       type: array
       items: { $ref: '#/UnmappedIngredientDto' }
+CandidatePlanRollupDto:
+  type: object
+  required: [startDate, endDate, perDay]
+  properties:
+    startDate: { type: string, format: date }
+    endDate:   { type: string, format: date }
+    perDay:
+      type: array
+      minItems: 1
+      items: { $ref: '#/CandidateDailyRollupDto' }
+CandidateDailyRollupDto:
+  type: object
+  required: [date, activityLevel, calories, proteinG, carbsG, fatG, fibreG, micros]
+  properties:
+    date: { type: string, format: date }
+    activityLevel:
+      type: string
+      enum: [REST_DAY, LIGHT_ACTIVITY, TRAINING_DAY, HEAVY_TRAINING]
+    calories: { type: integer, minimum: 0 }
+    proteinG: { type: number, format: double, minimum: 0 }
+    carbsG:   { type: number, format: double, minimum: 0 }
+    fatG:     { type: number, format: double, minimum: 0 }
+    fibreG:   { type: number, format: double, minimum: 0 }
+    micros:
+      type: object
+      additionalProperties: { type: number, format: double, minimum: 0 }
+FloorGateResultDto:
+  type: object
+  required: [passed, violations, summary]
+  properties:
+    passed: { type: boolean }
+    violations:
+      type: array
+      items: { $ref: '#/FloorViolationDto' }
+    summary: { type: string, maxLength: 255 }
+FloorViolationDto:
+  type: object
+  required: [date, macroOrMicro, floor, actual]
+  properties:
+    date: { type: string, format: date }
+    macroOrMicro: { type: string, maxLength: 64 }
+    floor:  { type: number, format: double, minimum: 0 }
+    actual: { type: number, format: double, minimum: 0 }
