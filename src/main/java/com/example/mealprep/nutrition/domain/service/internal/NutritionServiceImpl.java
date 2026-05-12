@@ -38,6 +38,7 @@ import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.UnmappedIngredientDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.api.dto.UpsertFoodMoodEntryRequest;
+import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
 import com.example.mealprep.nutrition.api.mapper.DailyActivityMapper;
 import com.example.mealprep.nutrition.api.mapper.HealthDirectiveMapper;
 import com.example.mealprep.nutrition.api.mapper.IngredientMappingMapper;
@@ -92,6 +93,7 @@ import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
 import com.example.mealprep.nutrition.exception.InvalidIntakeRangeException;
 import com.example.mealprep.nutrition.exception.InvalidPlanRollupException;
+import com.example.mealprep.nutrition.exception.InvalidWeekStartException;
 import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -99,6 +101,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
+import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -193,6 +196,8 @@ public class NutritionServiceImpl
   private final IntakeKeyNormaliser intakeKeyNormaliser;
   private final DirectiveSafetyGate directiveSafetyGate;
   private final DirectiveApplier directiveApplier;
+  private final IntakeAggregator intakeAggregator;
+  private final DivergenceDetector divergenceDetector;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -215,6 +220,8 @@ public class NutritionServiceImpl
       IntakeKeyNormaliser intakeKeyNormaliser,
       DirectiveSafetyGate directiveSafetyGate,
       DirectiveApplier directiveApplier,
+      IntakeAggregator intakeAggregator,
+      DivergenceDetector divergenceDetector,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
@@ -235,6 +242,8 @@ public class NutritionServiceImpl
     this.intakeKeyNormaliser = intakeKeyNormaliser;
     this.directiveSafetyGate = directiveSafetyGate;
     this.directiveApplier = directiveApplier;
+    this.intakeAggregator = intakeAggregator;
+    this.divergenceDetector = divergenceDetector;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -904,6 +913,15 @@ public class NutritionServiceImpl
 
   @Override
   @Transactional(readOnly = true)
+  public WeeklyAggregateDto getWeeklyAggregate(UUID userId, LocalDate weekStart) {
+    if (weekStart == null || weekStart.getDayOfWeek() != DayOfWeek.MONDAY) {
+      throw new InvalidWeekStartException(weekStart == null ? null : weekStart.getDayOfWeek());
+    }
+    return intakeAggregator.aggregateWeek(userId, weekStart);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
   public Page<IntakeAuditEntryDto> getIntakeAuditLog(
       UUID userId, LocalDate onDate, Pageable pageable) {
     Optional<IntakeDay> day = intakeDayRepository.findByUserIdAndOnDate(userId, onDate);
@@ -1005,6 +1023,7 @@ public class NutritionServiceImpl
         objectMapper.valueToTree(Map.of("status", prev.name())),
         objectMapper.valueToTree(Map.of("status", IntakeSlotStatus.CONFIRMED.name())),
         now);
+    divergenceDetector.detectAndPublish(userId, onDate, UUID.randomUUID());
     publishIntakeEvent(userId, day, IntakeAuditAction.CONFIRM, mealSlot, null, now);
     return intakeMapper.toDto(day);
   }
@@ -1041,6 +1060,7 @@ public class NutritionServiceImpl
         objectMapper.valueToTree(
             Map.of("status", IntakeSlotStatus.OVERRIDDEN.name(), "freeText", freeText)),
         now);
+    divergenceDetector.detectAndPublish(userId, onDate, UUID.randomUUID());
     publishIntakeEvent(userId, day, IntakeAuditAction.OVERRIDE, mealSlot, null, now);
     return intakeMapper.toDto(day);
   }
@@ -1076,6 +1096,7 @@ public class NutritionServiceImpl
         objectMapper.valueToTree(
             Map.of("status", IntakeSlotStatus.EDITED.name(), "calories", entry.calories())),
         now);
+    divergenceDetector.detectAndPublish(userId, onDate, UUID.randomUUID());
     publishIntakeEvent(userId, day, IntakeAuditAction.EDIT, mealSlot, null, now);
     return intakeMapper.toDto(day);
   }
@@ -1107,6 +1128,7 @@ public class NutritionServiceImpl
         objectMapper.valueToTree(Map.of("status", prev.name())),
         objectMapper.valueToTree(Map.of("status", IntakeSlotStatus.SKIPPED.name())),
         now);
+    divergenceDetector.detectAndPublish(userId, onDate, UUID.randomUUID());
     publishIntakeEvent(userId, day, IntakeAuditAction.SKIP, mealSlot, null, now);
     return intakeMapper.toDto(day);
   }

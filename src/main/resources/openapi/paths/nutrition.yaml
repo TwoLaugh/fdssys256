@@ -939,3 +939,32 @@ nutritionFloorGateEvaluate:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionIntakeWeekAggregate:
+  get:
+    tags: [Nutrition]
+    operationId: getWeeklyIntakeAggregate
+    summary: 'Weekly intake rollup (Monday-anchored) for the calling user.'
+    description: 'Returns per-day breakdown plus a weekly total. Floor violations list keys whose weekly total fell below 7-day floor.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: weekStart
+        required: true
+        description: 'ISO-8601 date; must be a Monday. Non-Monday inputs yield 400 invalid-week-start.'
+        schema: { type: string, format: date }
+    responses:
+      '200':
+        description: 'Weekly aggregate; empty intake days contribute zero-valued DailyAggregateDto entries.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/WeeklyAggregateDto' }
+      '400':
+        description: 'weekStart is not a Monday'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

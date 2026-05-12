@@ -97,6 +97,20 @@ class NutritionServiceImplTest {
             eventPublisher,
             objectMapper,
             fixedClock);
+    com.example.mealprep.nutrition.domain.service.internal.IntakeAggregator intakeAggregator =
+        new com.example.mealprep.nutrition.domain.service.internal.IntakeAggregator(
+            intakeDayRepository, targetsRepository);
+    com.example.mealprep.nutrition.domain.service.internal.DivergenceDetector divergenceDetector =
+        new com.example.mealprep.nutrition.domain.service.internal.DivergenceDetector(
+            intakeDayRepository,
+            targetsRepository,
+            org.mockito.Mockito.mock(
+                com.example.mealprep.nutrition.domain.repository.NutritionDivergenceStateRepository
+                    .class),
+            eventPublisher,
+            fixedClock,
+            new java.math.BigDecimal("0.15"),
+            200);
     return new NutritionServiceImpl(
         targetsRepository,
         auditRepository,
@@ -115,6 +129,8 @@ class NutritionServiceImplTest {
         intakeKeyNormaliser,
         new com.example.mealprep.nutrition.domain.service.internal.DirectiveSafetyGate(),
         directiveApplier,
+        intakeAggregator,
+        divergenceDetector,
         eventPublisher,
         objectMapper,
         fixedClock);
