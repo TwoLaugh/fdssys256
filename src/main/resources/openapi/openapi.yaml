@@ -99,6 +99,12 @@ paths:
     $ref: 'paths/provisions.yaml#/provisionsWasteSummary'
   /api/v1/provisions/planner-bundle:
     $ref: 'paths/provisions.yaml#/provisionsPlannerBundle'
+  /api/v1/provisions/cook-event:
+    $ref: 'paths/provisions.yaml#/provisionsCookEvent'
+  /api/v1/provisions/meal-consumption:
+    $ref: 'paths/provisions.yaml#/provisionsMealConsumption'
+  /api/v1/provisions/standalone-consumption:
+    $ref: 'paths/provisions.yaml#/provisionsStandaloneConsumption'
   # ===== nutrition =====
   /api/v1/nutrition/targets:
     $ref: 'paths/nutrition.yaml#/targets'
@@ -271,6 +277,12 @@ components:
     WasteEntryDtoPage: { $ref: 'schemas/provisions.yaml#/WasteEntryDtoPage' }
     WasteReason: { $ref: 'schemas/provisions.yaml#/WasteReason' }
     WasteSummaryDto: { $ref: 'schemas/provisions.yaml#/WasteSummaryDto' }
+    CookEventCommand:              { $ref: 'schemas/provisions.yaml#/CookEventCommand' }
+    InventoryDeductionResultDto:   { $ref: 'schemas/provisions.yaml#/InventoryDeductionResultDto' }
+    MealConsumptionCommand:        { $ref: 'schemas/provisions.yaml#/MealConsumptionCommand' }
+    RecipeIngredientUsage:         { $ref: 'schemas/provisions.yaml#/RecipeIngredientUsage' }
+    StandaloneConsumptionCommand:  { $ref: 'schemas/provisions.yaml#/StandaloneConsumptionCommand' }
+    UnderflowFlagDto:              { $ref: 'schemas/provisions.yaml#/UnderflowFlagDto' }
     # nutrition
     Goal: { $ref: 'schemas/nutrition.yaml#/Goal' }
     EnforcementDirection: { $ref: 'schemas/nutrition.yaml#/EnforcementDirection' }

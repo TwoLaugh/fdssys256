@@ -5,18 +5,24 @@ import com.example.mealprep.household.api.dto.HouseholdMemberDto;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.BundleStaleness;
+import com.example.mealprep.provisions.api.dto.CookEventCommand;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
 import com.example.mealprep.provisions.api.dto.InventoryAuditEntryDto;
+import com.example.mealprep.provisions.api.dto.InventoryDeductionResultDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.InventorySearchCriteria;
 import com.example.mealprep.provisions.api.dto.LogWasteRequest;
+import com.example.mealprep.provisions.api.dto.MealConsumptionCommand;
 import com.example.mealprep.provisions.api.dto.ProvisionForPlannerBundleDto;
 import com.example.mealprep.provisions.api.dto.ReasonAggregateRow;
+import com.example.mealprep.provisions.api.dto.RecipeIngredientUsage;
+import com.example.mealprep.provisions.api.dto.StandaloneConsumptionCommand;
 import com.example.mealprep.provisions.api.dto.SubstitutionRecordDto;
 import com.example.mealprep.provisions.api.dto.SupplierProductDto;
 import com.example.mealprep.provisions.api.dto.TopWastedItemDto;
+import com.example.mealprep.provisions.api.dto.UnderflowFlagDto;
 import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
@@ -38,6 +44,7 @@ import com.example.mealprep.provisions.domain.entity.InventoryAuditLog;
 import com.example.mealprep.provisions.domain.entity.InventoryItem;
 import com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus;
 import com.example.mealprep.provisions.domain.entity.ItemSource;
+import com.example.mealprep.provisions.domain.entity.ProvisionCookEventDedupe;
 import com.example.mealprep.provisions.domain.entity.StapleStatus;
 import com.example.mealprep.provisions.domain.entity.StorageLocation;
 import com.example.mealprep.provisions.domain.entity.SubstitutionRecord;
@@ -45,6 +52,7 @@ import com.example.mealprep.provisions.domain.entity.SupplierProduct;
 import com.example.mealprep.provisions.domain.entity.TrackingMode;
 import com.example.mealprep.provisions.domain.entity.WasteEntry;
 import com.example.mealprep.provisions.domain.repository.BudgetRepository;
+import com.example.mealprep.provisions.domain.repository.CookEventDedupeRepository;
 import com.example.mealprep.provisions.domain.repository.EquipmentRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryAuditLogRepository;
 import com.example.mealprep.provisions.domain.repository.InventoryItemRepository;
@@ -61,18 +69,24 @@ import com.example.mealprep.provisions.event.ItemQuantityAdjustedEvent;
 import com.example.mealprep.provisions.event.ItemRanOutEvent;
 import com.example.mealprep.provisions.event.ItemSpoiledEvent;
 import com.example.mealprep.provisions.event.SubstitutionAcceptedEvent;
+import com.example.mealprep.provisions.exception.BatchCookNotSupportedException;
 import com.example.mealprep.provisions.exception.BudgetCurrencyChangeException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
+import com.example.mealprep.provisions.exception.InventoryUnderflowException;
 import com.example.mealprep.provisions.exception.SupplierProductNotFoundException;
 import com.example.mealprep.provisions.exception.WasteExceedsInventoryException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumMap;
@@ -148,6 +162,7 @@ public class ProvisionServiceImpl
   private final BudgetRepository budgetRepository;
   private final SupplierProductRepository supplierProductRepository;
   private final WasteEntryRepository wasteEntryRepository;
+  private final CookEventDedupeRepository cookEventDedupeRepository;
   private final InventoryItemMapper mapper;
   private final EquipmentMapper equipmentMapper;
   private final BudgetMapper budgetMapper;
@@ -158,6 +173,8 @@ public class ProvisionServiceImpl
   private final ObjectMapper objectMapper;
   private final Clock clock;
   private final HouseholdQueryService householdQueryService;
+  private final InventoryDeductionEngine deductionEngine;
+  private final ProvisionEventBatcher eventBatcher;
 
   public ProvisionServiceImpl(
       InventoryItemRepository inventoryItemRepository,
@@ -166,6 +183,7 @@ public class ProvisionServiceImpl
       BudgetRepository budgetRepository,
       SupplierProductRepository supplierProductRepository,
       WasteEntryRepository wasteEntryRepository,
+      CookEventDedupeRepository cookEventDedupeRepository,
       InventoryItemMapper mapper,
       EquipmentMapper equipmentMapper,
       BudgetMapper budgetMapper,
@@ -175,13 +193,16 @@ public class ProvisionServiceImpl
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock,
-      HouseholdQueryService householdQueryService) {
+      HouseholdQueryService householdQueryService,
+      InventoryDeductionEngine deductionEngine,
+      ProvisionEventBatcher eventBatcher) {
     this.inventoryItemRepository = inventoryItemRepository;
     this.auditLogRepository = auditLogRepository;
     this.equipmentRepository = equipmentRepository;
     this.budgetRepository = budgetRepository;
     this.supplierProductRepository = supplierProductRepository;
     this.wasteEntryRepository = wasteEntryRepository;
+    this.cookEventDedupeRepository = cookEventDedupeRepository;
     this.mapper = mapper;
     this.equipmentMapper = equipmentMapper;
     this.budgetMapper = budgetMapper;
@@ -192,6 +213,8 @@ public class ProvisionServiceImpl
     this.objectMapper = objectMapper;
     this.clock = clock;
     this.householdQueryService = householdQueryService;
+    this.deductionEngine = deductionEngine;
+    this.eventBatcher = eventBatcher;
   }
 
   // ---------------- Query ----------------
@@ -927,6 +950,7 @@ public class ProvisionServiceImpl
     eventPublisher.publishEvent(
         new SubstitutionAcceptedEvent(
             actorUserId,
+            List.of(),
             supplierProductId,
             saved.getProductId(),
             record.substitutedWithProductId(),
@@ -1076,6 +1100,161 @@ public class ProvisionServiceImpl
             now));
     eventPublisher.publishEvent(
         new ItemSpoiledEvent(userId, List.of(itemId), "wasted", currentTraceId(), now));
+  }
+
+  // ---------------- Cook event + consumption flows (01g) ----------------
+
+  @Override
+  @Transactional(noRollbackFor = InventoryUnderflowException.class)
+  public InventoryDeductionResultDto applyCookEvent(UUID userId, CookEventCommand command) {
+    String dedupeKey =
+        command.dedupeKey() != null ? command.dedupeKey() : computeDedupeKey(command);
+    if (cookEventDedupeRepository.existsByIdMealSlotIdAndIdDedupeKey(
+        command.mealSlotId(), dedupeKey)) {
+      log.info(
+          "duplicate cook event mealSlot={} dedupeKey={}; no-op", command.mealSlotId(), dedupeKey);
+      return new InventoryDeductionResultDto(List.of(), List.of(), List.of());
+    }
+    cookEventDedupeRepository.save(
+        new ProvisionCookEventDedupe(command.mealSlotId(), dedupeKey, Instant.now(clock)));
+
+    if (Boolean.TRUE.equals(command.isBatchCook())) {
+      throw new BatchCookNotSupportedException();
+    }
+
+    BigDecimal proportion =
+        command.proportionOfRecipe() != null ? command.proportionOfRecipe() : BigDecimal.ONE;
+    boolean strict = Boolean.TRUE.equals(command.strict());
+    UUID traceId = command.traceId() != null ? command.traceId() : currentTraceId();
+
+    Set<UUID> deductedIds = new LinkedHashSet<>();
+    Set<UUID> exhaustedIds = new LinkedHashSet<>();
+    List<UnderflowFlagDto> underflows = new ArrayList<>();
+    for (RecipeIngredientUsage usage : command.ingredientsUsed()) {
+      BigDecimal scaled = usage.quantity().multiply(proportion);
+      InventoryDeductionEngine.DeductionOutcome o =
+          deductionEngine.deduct(
+              userId, usage.ingredientMappingKey(), scaled, usage.unit(), traceId);
+      deductedIds.addAll(o.deductedItemIds());
+      exhaustedIds.addAll(o.exhaustedItemIds());
+      underflows.addAll(o.underflows());
+    }
+
+    if (strict && !underflows.isEmpty()) {
+      throw new InventoryUnderflowException(underflows);
+    }
+
+    List<InventoryItemDto> updatedItems =
+        inventoryItemRepository.findAllById(deductedIds).stream().map(mapper::toDto).toList();
+    return new InventoryDeductionResultDto(
+        updatedItems, List.copyOf(exhaustedIds), List.copyOf(underflows));
+  }
+
+  @Override
+  @Transactional
+  public InventoryDeductionResultDto applyMealConsumption(
+      UUID userId, MealConsumptionCommand command) {
+    InventoryItem item =
+        inventoryItemRepository
+            .findByIdAndUserId(command.inventoryItemId(), userId)
+            .orElseThrow(() -> new InventoryItemNotFoundException(command.inventoryItemId()));
+
+    BigDecimal previous = item.getQuantity() == null ? BigDecimal.ZERO : item.getQuantity();
+    BigDecimal portions = command.portions() == null ? BigDecimal.ZERO : command.portions();
+    BigDecimal next = previous.subtract(portions);
+    if (next.signum() < 0) {
+      next = BigDecimal.ZERO;
+    }
+    item.setQuantity(next);
+    boolean exhausted = next.signum() == 0;
+    if (exhausted) {
+      item.setItemStatus(ItemLifecycleStatus.EXHAUSTED);
+    }
+    InventoryItem saved = inventoryItemRepository.saveAndFlush(item);
+
+    Instant now = Instant.now(clock);
+    auditLogRepository.save(
+        new InventoryAuditLog(
+            UUID.randomUUID(),
+            saved.getId(),
+            userId,
+            AuditActor.COOK_EVENT,
+            null,
+            FIELD_QUANTITY,
+            objectMapper.valueToTree(Map.of(FIELD_QUANTITY, previous)),
+            objectMapper.valueToTree(Map.of(FIELD_QUANTITY, next)),
+            now));
+
+    UUID traceId = command.traceId() != null ? command.traceId() : currentTraceId();
+    eventBatcher.recordAdjustment(
+        userId, saved.getId(), ItemAdjustmentSource.MEAL_CONSUMPTION, traceId);
+
+    List<UUID> exhaustedIds = exhausted ? List.of(saved.getId()) : List.of();
+    return new InventoryDeductionResultDto(List.of(mapper.toDto(saved)), exhaustedIds, List.of());
+  }
+
+  @Override
+  @Transactional
+  public Optional<InventoryItemDto> applyStandaloneConsumption(
+      UUID userId, StandaloneConsumptionCommand command) {
+    List<InventoryItem> rows =
+        inventoryItemRepository.findActiveByMappingKeyOrderByExpiryAsc(
+            userId, command.ingredientMappingKey());
+    if (rows.isEmpty()) {
+      return Optional.empty();
+    }
+    InventoryItem oldest = rows.get(0);
+    if (!Boolean.TRUE.equals(command.userConfirmedDeduction())) {
+      // Preview only — no mutation, no audit, no event.
+      return Optional.of(mapper.toDto(oldest));
+    }
+    BigDecimal previous = oldest.getQuantity() == null ? BigDecimal.ZERO : oldest.getQuantity();
+    BigDecimal qty = command.quantity() == null ? BigDecimal.ZERO : command.quantity();
+    BigDecimal next = previous.subtract(qty);
+    if (next.signum() < 0) {
+      next = BigDecimal.ZERO;
+    }
+    oldest.setQuantity(next);
+    if (next.signum() == 0) {
+      oldest.setItemStatus(ItemLifecycleStatus.EXHAUSTED);
+    }
+    InventoryItem saved = inventoryItemRepository.saveAndFlush(oldest);
+
+    Instant now = Instant.now(clock);
+    auditLogRepository.save(
+        new InventoryAuditLog(
+            UUID.randomUUID(),
+            saved.getId(),
+            userId,
+            AuditActor.NUTRITION_LOGGER,
+            null,
+            FIELD_QUANTITY,
+            objectMapper.valueToTree(Map.of(FIELD_QUANTITY, previous)),
+            objectMapper.valueToTree(Map.of(FIELD_QUANTITY, next)),
+            now));
+    UUID traceId = command.traceId() != null ? command.traceId() : currentTraceId();
+    eventBatcher.recordAdjustment(
+        userId, saved.getId(), ItemAdjustmentSource.STANDALONE_LOG, traceId);
+    return Optional.of(mapper.toDto(saved));
+  }
+
+  private String computeDedupeKey(CookEventCommand command) {
+    String material =
+        command.mealSlotId()
+            + "|"
+            + command.recipeId()
+            + "|"
+            + command.servingsCooked()
+            + "|"
+            + Boolean.TRUE.equals(command.isBatchCook());
+    try {
+      MessageDigest md = MessageDigest.getInstance("SHA-256");
+      byte[] hash = md.digest(material.getBytes(StandardCharsets.UTF_8));
+      String b64 = Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
+      return b64.length() > 32 ? b64.substring(0, 32) : b64;
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 unavailable", e);
+    }
   }
 
   // ---------------- helpers ----------------

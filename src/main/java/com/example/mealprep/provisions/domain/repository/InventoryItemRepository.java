@@ -58,4 +58,19 @@ public interface InventoryItemRepository extends JpaRepository<InventoryItem, UU
    */
   List<InventoryItem> findAllByUserIdAndIsStapleTrueAndStatusIn(
       UUID userId, Collection<StapleStatus> statuses);
+
+  /**
+   * FIFO-by-expiry inventory rows for a user + mapping key, restricted to {@code ACTIVE}. Ordered
+   * by {@code expiry_date ASC NULLS LAST} so oldest-expiring items are deducted first; rows with no
+   * expiry date sink to the bottom. Driven by 01g's {@code InventoryDeductionEngine} (cook-event +
+   * standalone-consumption flows).
+   */
+  @Query(
+      "SELECT i FROM InventoryItem i"
+          + " WHERE i.userId = :userId"
+          + " AND i.ingredientMappingKey = :ingredientMappingKey"
+          + " AND i.itemStatus = com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus.ACTIVE"
+          + " ORDER BY CASE WHEN i.expiryDate IS NULL THEN 1 ELSE 0 END, i.expiryDate ASC")
+  List<InventoryItem> findActiveByMappingKeyOrderByExpiryAsc(
+      UUID userId, String ingredientMappingKey);
 }

@@ -91,6 +91,7 @@ class ProvisionForPlannerServiceTest {
         budgetRepository,
         supplierProductRepository,
         wasteEntryRepository,
+        null,
         mapper,
         equipmentMapper,
         budgetMapper,
@@ -100,7 +101,9 @@ class ProvisionForPlannerServiceTest {
         eventPublisher,
         objectMapper,
         fixedClock,
-        householdQueryService);
+        householdQueryService,
+        null,
+        null);
   }
 
   // ---------------- empty user ----------------

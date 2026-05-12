@@ -86,6 +86,7 @@ class BudgetServiceTest {
         budgetRepository,
         supplierProductRepository,
         wasteEntryRepository,
+        null,
         mapper,
         equipmentMapper,
         budgetMapper,
@@ -95,6 +96,8 @@ class BudgetServiceTest {
         eventPublisher,
         objectMapper,
         fixedClock,
+        null,
+        null,
         null);
   }
 

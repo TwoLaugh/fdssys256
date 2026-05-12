@@ -631,3 +631,74 @@ provisionsPlannerBundle:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+provisionsCookEvent:
+  post:
+    tags: [Provisions]
+    operationId: applyCookEvent
+    summary: 'Apply a cook event for the calling user; deducts ingredients FIFO-by-expiry from the pantry.'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/provisions.yaml#/CookEventCommand' }
+    responses:
+      '200':
+        description: 'Deduction outcome including any underflow flags.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/InventoryDeductionResultDto' }
+      '400': { description: 'Validation error', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '401': { description: 'Unauthenticated', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '422': { description: 'Strict-mode underflow or batch cook (not supported in v1)', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+provisionsMealConsumption:
+  post:
+    tags: [Provisions]
+    operationId: applyMealConsumption
+    summary: 'Decrement a specific inventory item by a number of portions.'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/provisions.yaml#/MealConsumptionCommand' }
+    responses:
+      '200':
+        description: 'Deduction outcome.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/InventoryDeductionResultDto' }
+      '400': { description: 'Validation error', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '401': { description: 'Unauthenticated', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '404': { description: 'Inventory item not found or not owned by caller', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+provisionsStandaloneConsumption:
+  post:
+    tags: [Provisions]
+    operationId: applyStandaloneConsumption
+    summary: 'Standalone food log — finds an active inventory row matching ingredientMappingKey and optionally decrements.'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/provisions.yaml#/StandaloneConsumptionCommand' }
+    responses:
+      '200':
+        description: 'The matched inventory item (nullable; null when no matching active row exists).'
+        content:
+          application/json:
+            schema:
+              type: object
+              nullable: true
+              description: 'InventoryItemDto inlined to honor the round-1/4/6 nullable+$ref sticky-trap avoidance — do NOT use $ref with nullable here.'
+              properties:
+                id: { type: string, format: uuid }
+                userId: { type: string, format: uuid }
+                name: { type: string, maxLength: 128 }
+                quantity: { type: number, format: double, nullable: true }
+                unit: { type: string, maxLength: 16, nullable: true }
+                ingredientMappingKey: { type: string, maxLength: 128, nullable: true }
+                itemStatus: { type: string, enum: [ACTIVE, EXHAUSTED, SPOILED, WASTED] }
+                version: { type: integer, format: int64 }
+      '400': { description: 'Validation error', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '401': { description: 'Unauthenticated', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }

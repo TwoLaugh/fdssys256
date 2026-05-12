@@ -1,6 +1,5 @@
 package com.example.mealprep.provisions.event;
 
-import com.example.mealprep.core.events.ScopeChangedEvent;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -9,11 +8,7 @@ import java.util.UUID;
  * Published {@code AFTER_COMMIT} when an inventory item is marked exhausted (manually by the user,
  * or by the cook-event deduction engine in 01g).
  *
- * <p>LLD divergence note: LLD §Events declares both {@code ItemSpoiledEvent} and {@code
- * ItemRanOutEvent} as variants of a sealed {@code ProvisionChangedEvent} interface. 01a deferred
- * the sealed base to 01g (cook-event flow, when the hierarchy carries more than one variant). 01b
- * therefore declares this event as a plain record (not a sealed-interface variant); 01g will
- * refactor it to extend the sealed base.
+ * <p>01g refactored this record to implement the sealed {@link ProvisionChangedEvent} base.
  *
  * <p>{@code wasStaple} mirrors the row's {@code isStaple} flag at the time of the transition — the
  * 01i staple-replenishment-list endpoint listens on this event to drive shopping-list updates.
@@ -28,7 +23,7 @@ public record ItemRanOutEvent(
     boolean wasStaple,
     UUID traceId,
     Instant occurredAt)
-    implements ScopeChangedEvent {
+    implements ProvisionChangedEvent {
 
   @Override
   public String scopeKind() {

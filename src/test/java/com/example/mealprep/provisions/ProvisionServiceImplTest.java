@@ -105,6 +105,7 @@ class ProvisionServiceImplTest {
         budgetRepository,
         supplierProductRepository,
         wasteEntryRepository,
+        null,
         mapper,
         equipmentMapper,
         budgetMapper,
@@ -114,7 +115,9 @@ class ProvisionServiceImplTest {
         eventPublisher,
         objectMapper,
         fixedClock,
-        householdQueryService);
+        householdQueryService,
+        null,
+        null);
   }
 
   // ---------------- getInventoryItem ----------------

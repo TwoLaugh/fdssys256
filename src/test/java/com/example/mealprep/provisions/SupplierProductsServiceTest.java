@@ -92,6 +92,7 @@ class SupplierProductsServiceTest {
         budgetRepository,
         supplierProductRepository,
         wasteEntryRepository,
+        null,
         mapper,
         equipmentMapper,
         budgetMapper,
@@ -101,6 +102,8 @@ class SupplierProductsServiceTest {
         eventPublisher,
         objectMapper,
         fixedClock,
+        null,
+        null,
         null);
   }
 

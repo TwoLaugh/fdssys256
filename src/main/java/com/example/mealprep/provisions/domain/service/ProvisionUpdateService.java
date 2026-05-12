@@ -1,10 +1,14 @@
 package com.example.mealprep.provisions.domain.service;
 
 import com.example.mealprep.provisions.api.dto.BudgetDto;
+import com.example.mealprep.provisions.api.dto.CookEventCommand;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
+import com.example.mealprep.provisions.api.dto.InventoryDeductionResultDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.LogWasteRequest;
+import com.example.mealprep.provisions.api.dto.MealConsumptionCommand;
+import com.example.mealprep.provisions.api.dto.StandaloneConsumptionCommand;
 import com.example.mealprep.provisions.api.dto.SubstitutionRecordDto;
 import com.example.mealprep.provisions.api.dto.SupplierProductDto;
 import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
@@ -13,6 +17,7 @@ import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
 import com.example.mealprep.provisions.api.dto.UpsertSupplierProductRequest;
 import com.example.mealprep.provisions.api.dto.WasteEntryDto;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -146,4 +151,35 @@ public interface ProvisionUpdateService {
    * QUANTITY-tracked item.
    */
   WasteEntryDto logWaste(UUID userId, LogWasteRequest request);
+
+  /**
+   * Apply a cook event for {@code userId} per LLD §Flow 1. Walks {@code command.ingredientsUsed},
+   * deducts from active inventory FIFO-by-expiry, writes audit rows, coalesces a single {@code
+   * ItemQuantityAdjustedEvent(source=COOK_EVENT)} at AFTER_COMMIT, and returns the deduction
+   * outcome (updated items + exhausted IDs + underflows). Idempotent by {@code (mealSlotId,
+   * dedupeKey)}: a duplicate replay returns an empty result and writes nothing.
+   *
+   * <p>Throws {@code InventoryUnderflowException} (422) when {@code command.strict == true} and the
+   * pantry can't cover. Throws {@code BatchCookNotSupportedException} (422) when {@code
+   * command.isBatchCook == true} (v1 stop-gap; full split lands in 01j).
+   */
+  InventoryDeductionResultDto applyCookEvent(UUID userId, CookEventCommand command);
+
+  /**
+   * Decrement a specific inventory row by {@code command.portions} per LLD §Flow 2 line 424. Floor
+   * at zero. Throws 404 when the item is missing or not owned by {@code userId}. Publishes {@code
+   * ItemQuantityAdjustedEvent(source=MEAL_CONSUMPTION)} at AFTER_COMMIT.
+   */
+  InventoryDeductionResultDto applyMealConsumption(UUID userId, MealConsumptionCommand command);
+
+  /**
+   * Nutrition Logger path per LLD §Flow 3 line 425. Finds active rows for {@code (userId,
+   * ingredientMappingKey)}; returns {@code Optional.empty()} when none match (per LLD line 646 —
+   * "unrelated logged item, no error"). When {@code userConfirmedDeduction == true}, decrements the
+   * oldest-expiry row by {@code command.quantity}; otherwise returns the matched row unchanged.
+   * Publishes {@code ItemQuantityAdjustedEvent(source=STANDALONE_LOG)} at AFTER_COMMIT on the
+   * mutation path.
+   */
+  Optional<InventoryItemDto> applyStandaloneConsumption(
+      UUID userId, StandaloneConsumptionCommand command);
 }

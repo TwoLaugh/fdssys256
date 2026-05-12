@@ -2,14 +2,18 @@ package com.example.mealprep.provisions.testdata;
 
 import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.BundleStaleness;
+import com.example.mealprep.provisions.api.dto.CookEventCommand;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.LogWasteRequest;
+import com.example.mealprep.provisions.api.dto.MealConsumptionCommand;
 import com.example.mealprep.provisions.api.dto.PriceSensitivity;
 import com.example.mealprep.provisions.api.dto.ProvisionForPlannerBundleDto;
+import com.example.mealprep.provisions.api.dto.RecipeIngredientUsage;
 import com.example.mealprep.provisions.api.dto.RecordSubstitutionRequest;
+import com.example.mealprep.provisions.api.dto.StandaloneConsumptionCommand;
 import com.example.mealprep.provisions.api.dto.SubstitutionRecordDto;
 import com.example.mealprep.provisions.api.dto.SupplierProductDto;
 import com.example.mealprep.provisions.api.dto.UpdateBudgetRequest;
@@ -354,6 +358,38 @@ public final class ProvisionsTestData {
         null,
         Map.of(),
         new BundleStaleness(0, false, Instant.parse("2026-05-09T10:00:00Z")));
+  }
+
+  // ---------------- Cook-event / consumption builders (01g) ----------------
+
+  /**
+   * Cook-event command with one ingredient line. Defaults: {@code servingsCooked=1, isBatchCook=
+   * false, proportionOfRecipe=1.0, strict=false, dedupeKey=null}.
+   */
+  public static CookEventCommand cookEventCommand(
+      UUID recipeId, UUID mealSlotId, String ingredientKey, BigDecimal quantity, String unit) {
+    return new CookEventCommand(
+        recipeId,
+        null,
+        mealSlotId,
+        1,
+        false,
+        null,
+        false,
+        null,
+        List.of(new RecipeIngredientUsage(ingredientKey, quantity, unit)),
+        null);
+  }
+
+  /** Meal-consumption command for a specific item. */
+  public static MealConsumptionCommand mealConsumptionCommand(UUID itemId, BigDecimal portions) {
+    return new MealConsumptionCommand(itemId, portions, null);
+  }
+
+  /** Standalone-consumption command — preview mode by default. */
+  public static StandaloneConsumptionCommand standaloneConsumptionCommand(
+      String key, BigDecimal quantity, String unit, boolean confirmed) {
+    return new StandaloneConsumptionCommand(key, quantity, unit, confirmed, null);
   }
 
   /** Populated planner-bundle stub — caller supplies the inner sections. */
