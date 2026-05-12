@@ -9,6 +9,7 @@ import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeSubstitutionDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -132,4 +133,45 @@ public interface RecipeUpdateService {
    */
   RecipeVersionDto promoteSubstitutionToVersion(
       UUID substitutionId, UUID actorUserId, long expectedVersion, String changeReason);
+
+  /**
+   * Promote a SYSTEM-catalogue recipe into the calling user's USER catalogue (flip-in-place).
+   * Plan-references / version IDs are preserved. Publishes {@code RecipePromotedEvent} {@code
+   * AFTER_COMMIT}. Throws {@link com.example.mealprep.recipe.exception.RecipeNotFoundException}
+   * (404) when missing, {@link
+   * com.example.mealprep.recipe.exception.RecipeCatalogueViolationException} (422) when the recipe
+   * is already USER, deleted, or archived. Per LLD line 563 / recipe-01g.
+   */
+  RecipeDto promoteToUserCatalogue(UUID systemRecipeId, UUID userId);
+
+  /**
+   * Demote a USER-catalogue recipe owned by the caller back to SYSTEM (flip-in-place); retains
+   * {@code userId} for provenance. Publishes {@code RecipeArchivedEvent(cause=USER_DEMOTION)}
+   * {@code AFTER_COMMIT}. Throws {@code RecipeNotFoundException} (404) when missing or not owned
+   * (don't leak existence); {@code RecipeCatalogueViolationException} (422) when already SYSTEM.
+   * Per LLD line 564 / recipe-01g.
+   */
+  void demoteToSystemCatalogue(UUID userRecipeId, UUID actorUserId);
+
+  /**
+   * Soft-archive a recipe — sets {@code archived_at = now()}. Idempotent (already archived → no
+   * event). USER recipes: caller must own; SYSTEM recipes: any authenticated caller (v1 admin
+   * policy). Already-deleted recipes → 422. Publishes {@code
+   * RecipeArchivedEvent(cause=MANUAL_ADMIN)} {@code AFTER_COMMIT} on actual transition. Per LLD
+   * line 565 / recipe-01g.
+   */
+  void archive(UUID recipeId, UUID actorUserId);
+
+  /**
+   * Clear {@code archived_at}. Idempotent (already unarchived → no-op). Same authorisation rules as
+   * {@link #archive}. No event is published per LLD §Events. Per LLD line 566 / recipe-01g.
+   */
+  void unarchive(UUID recipeId, UUID actorUserId);
+
+  /**
+   * Bulk-update {@code last_used_in_plan_at = now()} for the supplied recipe IDs. Empty list →
+   * no-op. Unknown IDs tolerated. No event published. Consumed by the cook listener
+   * (provisions-01g) and the future planner. Per LLD line 577 / recipe-01g.
+   */
+  void markUsedInPlan(List<UUID> recipeIds);
 }

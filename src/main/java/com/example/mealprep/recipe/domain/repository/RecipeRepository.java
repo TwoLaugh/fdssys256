@@ -2,10 +2,15 @@ package com.example.mealprep.recipe.domain.repository;
 
 import com.example.mealprep.recipe.domain.entity.Recipe;
 import jakarta.persistence.LockModeType;
+import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -27,4 +32,42 @@ public interface RecipeRepository extends JpaRepository<Recipe, UUID> {
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select r from Recipe r where r.id = :id and r.deletedAt is null")
   Optional<Recipe> findByIdForUpdate(@Param("id") UUID id);
+
+  /**
+   * Recipe-01g {@code ArchiveEligibilityScanner} eligibility query. Returns SYSTEM-catalogue,
+   * un-archived, un-deleted recipe IDs whose {@code last_used_in_plan_at} is null or older than the
+   * supplied cutoff. Ordered oldest-first so the longest-untouched rows get archived first; bounded
+   * by the {@link Pageable} (the scanner passes {@code PageRequest.of(0, 1000)}). Per LLD lines
+   * 466-471.
+   */
+  @Query(
+      """
+      select r.id from Recipe r
+      where r.catalogue = com.example.mealprep.recipe.domain.entity.Catalogue.SYSTEM
+        and r.archivedAt is null
+        and r.deletedAt is null
+        and (r.lastUsedInPlanAt is null or r.lastUsedInPlanAt < :cutoff)
+      order by r.lastUsedInPlanAt asc nulls first
+      """)
+  List<UUID> findArchiveEligibleSystemRecipes(@Param("cutoff") Instant cutoff, Pageable page);
+
+  /**
+   * Bulk-archive helper used by {@code ArchiveEligibilityScanner}. Sets {@code archived_at} only on
+   * rows that are not already archived (belt-and-braces race guard). Bypasses the {@code @Version}
+   * check intentionally — SYSTEM-catalogue rows have no concurrent user writes. Returns the count
+   * of rows updated.
+   */
+  @Modifying
+  @Query("update Recipe r set r.archivedAt = :now" + " where r.id in :ids and r.archivedAt is null")
+  int markArchived(@Param("ids") Collection<UUID> ids, @Param("now") Instant now);
+
+  /**
+   * Bulk-update {@code last_used_in_plan_at = :now} for the supplied IDs. Recipe-01g exposes this
+   * via {@link
+   * com.example.mealprep.recipe.domain.service.RecipeUpdateService#markUsedInPlan(java.util.List)}
+   * for the cook listener + future planner. Returns the count of rows updated.
+   */
+  @Modifying
+  @Query("update Recipe r set r.lastUsedInPlanAt = :now where r.id in :ids")
+  int touchLastUsedInPlan(@Param("ids") Collection<UUID> ids, @Param("now") Instant now);
 }

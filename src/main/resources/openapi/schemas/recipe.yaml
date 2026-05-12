@@ -690,3 +690,11 @@ PromoteSubstitutionRequest:
   properties:
     expectedVersion: { type: integer, format: int64, minimum: 0 }
     changeReason: { type: string, minLength: 1, maxLength: 2000 }
+RunArchiveScanResultDto:
+  type: object
+  required: [flaggedCount]
+  properties:
+    flaggedCount:
+      type: integer
+      minimum: 0
+      description: 'Count of system-catalogue rows newly transitioned to archived_at != null this run.'

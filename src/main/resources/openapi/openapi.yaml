@@ -185,6 +185,16 @@ paths:
     $ref: 'paths/recipe.yaml#/recipeSubstitutionLifecycle'
   /api/v1/recipes/{recipeId}/versions/{versionId}/with-substitutions:
     $ref: 'paths/recipe.yaml#/recipeVersionWithSubstitutions'
+  /api/v1/recipes/{recipeId}/promote:
+    $ref: 'paths/recipe.yaml#/recipePromote'
+  /api/v1/recipes/{recipeId}/demote:
+    $ref: 'paths/recipe.yaml#/recipeDemote'
+  /api/v1/recipes/{recipeId}/archive:
+    $ref: 'paths/recipe.yaml#/recipeArchive'
+  /api/v1/recipes/{recipeId}/unarchive:
+    $ref: 'paths/recipe.yaml#/recipeUnarchive'
+  /api/v1/recipes/admin/run-archive-scan:
+    $ref: 'paths/recipe.yaml#/recipeAdminRunArchiveScan'
 components:
   securitySchemes:
     cookieAuth:
@@ -383,6 +393,7 @@ components:
     MethodOverlayLineDto: { $ref: 'schemas/recipe.yaml#/MethodOverlayLineDto' }
     MethodOverlayLineRequest: { $ref: 'schemas/recipe.yaml#/MethodOverlayLineRequest' }
     PromoteSubstitutionRequest: { $ref: 'schemas/recipe.yaml#/PromoteSubstitutionRequest' }
+    RunArchiveScanResultDto: { $ref: 'schemas/recipe.yaml#/RunArchiveScanResultDto' }
     RecipeSubstitutionDto: { $ref: 'schemas/recipe.yaml#/RecipeSubstitutionDto' }
     RejectSubstitutionRequest: { $ref: 'schemas/recipe.yaml#/RejectSubstitutionRequest' }
     SubstitutedItemDto: { $ref: 'schemas/recipe.yaml#/SubstitutedItemDto' }
