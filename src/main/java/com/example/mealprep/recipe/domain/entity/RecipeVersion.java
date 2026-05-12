@@ -26,10 +26,9 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.ColumnTransformer;
 import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Type;
-import org.hibernate.type.SqlTypes;
 
 /**
  * Append-only version row for a recipe. Owns the version body — ingredients + method steps +
@@ -99,14 +98,17 @@ public class RecipeVersion {
    * vector}.
    */
   // The AttributeConverter outputs the pgvector text format "[v1,v2,...]" as a String.
-  // @JdbcTypeCode(SqlTypes.OTHER) tells Hibernate to bind via setObject(idx, str, Types.OTHER) —
-  // the Postgres JDBC driver then sends an "unknown"-typed parameter that pgvector implicitly
-  // casts to the column's vector(1536) type. Without this override Hibernate binds as varchar
-  // and Postgres refuses (`column "embedding" is of type vector but expression is of type
-  // character varying`, SQLState 42804).
+  // @ColumnTransformer(write = "?::vector") wraps the bound parameter in an explicit Postgres
+  // CAST so the varchar→vector conversion happens server-side. Required because:
+  //   - Plain bind (no override) → setString → SQLState 42804 "expression is of type character
+  //     varying" (pgvector won't implicit-cast varchar→vector).
+  //   - @JdbcTypeCode(SqlTypes.OTHER) → Hibernate routes a String as bytea → 42804 "expression is
+  //     of type bytea".
+  //   - @ColumnTransformer keeps the standard varchar bind + adds the cast at SQL layer; the
+  //     pgvector parser handles "[v1,v2,...]" text natively when cast.
   @Convert(converter = RecipeEmbeddingConverter.class)
-  @JdbcTypeCode(SqlTypes.OTHER)
   @Column(name = "embedding", columnDefinition = "vector(1536)")
+  @ColumnTransformer(write = "?::vector")
   private float[] embedding;
 
   @Column(name = "embedding_model_id", length = 96)
