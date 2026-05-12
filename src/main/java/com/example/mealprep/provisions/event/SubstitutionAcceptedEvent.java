@@ -1,7 +1,7 @@
 package com.example.mealprep.provisions.event;
 
-import com.example.mealprep.core.events.ScopeChangedEvent;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -12,22 +12,23 @@ import java.util.UUID;
  * <p>{@code userId} carries the {@code actorUserId} (who recorded the decision), not an owner of
  * the row — supplier products are global reference data with no per-user ownership.
  *
- * <p>LLD divergence note: LLD §Events declares this as a sealed-variant of {@code
- * ProvisionChangedEvent}. 01a deferred the sealed base (no hierarchy exists yet); 01d follows the
- * same pattern as {@code ItemRanOutEvent}/{@code ItemSpoiledEvent}/{@code BudgetChangedEvent} and
- * declares this as a plain record implementing {@link ScopeChangedEvent}. The sealed base will be
- * introduced in 01g and this event refactored to extend it.
+ * <p>01g refactored this record to implement the sealed {@link ProvisionChangedEvent} base. The
+ * shape gained {@code affectedItemIds} (typically empty for substitution events — supplier-product
+ * decisions don't directly mutate inventory rows; 01h grocery-import will populate the list when an
+ * accepted substitution implicitly adds a different inventory row). {@code supplierProductId} is
+ * retained alongside as the routing key for substitution-history listeners.
  *
  * <p>{@code scopeKind = "supplier-product"}, {@code scopeId = supplierProductId}.
  */
 public record SubstitutionAcceptedEvent(
     UUID userId,
+    List<UUID> affectedItemIds,
     UUID supplierProductId,
     String orderedProductId,
     String substitutedProductId,
     UUID traceId,
     Instant occurredAt)
-    implements ScopeChangedEvent {
+    implements ProvisionChangedEvent {
 
   @Override
   public String scopeKind() {

@@ -554,3 +554,77 @@ ProvisionForPlannerBundleDto:
           description: 'Share of requested mapping keys with a fresh supplier-product entry (basis points).'
         inRampUpWindow: { type: boolean }
         generatedAt: { type: string, format: date-time }
+CookEventCommand:
+  type: object
+  required: [recipeId, mealSlotId, servingsCooked, ingredientsUsed]
+  properties:
+    recipeId: { type: string, format: uuid }
+    planId: { type: string, format: uuid, nullable: true }
+    mealSlotId: { type: string, format: uuid }
+    servingsCooked: { type: integer, minimum: 1 }
+    isBatchCook: { type: boolean, nullable: true, default: false }
+    proportionOfRecipe:
+      type: number
+      format: double
+      minimum: 0
+      maximum: 1
+      nullable: true
+      default: 1.0
+    strict:
+      type: boolean
+      nullable: true
+      default: false
+      description: 'When true, an underflow throws 422 InventoryUnderflowException; when false (default) underflows are floored at zero and surfaced in result.underflows.'
+    dedupeKey:
+      type: string
+      maxLength: 64
+      nullable: true
+      description: 'Idempotency token; server defaults to SHA-256 over (mealSlotId, recipeId, servingsCooked, isBatchCook) when null.'
+    ingredientsUsed:
+      type: array
+      minItems: 1
+      items: { $ref: '#/RecipeIngredientUsage' }
+    traceId: { type: string, format: uuid, nullable: true }
+RecipeIngredientUsage:
+  type: object
+  required: [ingredientMappingKey, quantity, unit]
+  properties:
+    ingredientMappingKey: { type: string, maxLength: 128 }
+    quantity: { type: number, format: double, minimum: 0 }
+    unit: { type: string, maxLength: 16 }
+MealConsumptionCommand:
+  type: object
+  required: [inventoryItemId, portions]
+  properties:
+    inventoryItemId: { type: string, format: uuid }
+    portions: { type: number, format: double, minimum: 0 }
+    traceId: { type: string, format: uuid, nullable: true }
+StandaloneConsumptionCommand:
+  type: object
+  required: [ingredientMappingKey, quantity, unit, userConfirmedDeduction]
+  properties:
+    ingredientMappingKey: { type: string, maxLength: 128 }
+    quantity: { type: number, format: double, minimum: 0 }
+    unit: { type: string, maxLength: 16 }
+    userConfirmedDeduction: { type: boolean }
+    traceId: { type: string, format: uuid, nullable: true }
+InventoryDeductionResultDto:
+  type: object
+  required: [updatedItems, exhaustedItems, underflows]
+  properties:
+    updatedItems:
+      type: array
+      items: { $ref: '#/InventoryItemDto' }
+    exhaustedItems:
+      type: array
+      items: { type: string, format: uuid }
+    underflows:
+      type: array
+      items: { $ref: '#/UnderflowFlagDto' }
+UnderflowFlagDto:
+  type: object
+  required: [ingredientMappingKey, requested, available]
+  properties:
+    ingredientMappingKey: { type: string, maxLength: 128 }
+    requested: { type: number, format: double, minimum: 0 }
+    available: { type: number, format: double, minimum: 0 }

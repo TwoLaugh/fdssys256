@@ -1,11 +1,13 @@
 package com.example.mealprep.provisions.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.provisions.exception.BatchCookNotSupportedException;
 import com.example.mealprep.provisions.exception.BudgetCurrencyChangeException;
 import com.example.mealprep.provisions.exception.BudgetNotFoundException;
 import com.example.mealprep.provisions.exception.EquipmentNotFoundException;
 import com.example.mealprep.provisions.exception.InvalidInventoryQuantityException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
+import com.example.mealprep.provisions.exception.InventoryUnderflowException;
 import com.example.mealprep.provisions.exception.SupplierProductNotFoundException;
 import com.example.mealprep.provisions.exception.WasteExceedsInventoryException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -131,6 +133,37 @@ public class ProvisionsExceptionHandler {
     pd.setProperty("inventoryItemId", ex.getInventoryItemId());
     pd.setProperty("requested", ex.getRequested());
     pd.setProperty("remaining", ex.getRemaining());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(InventoryUnderflowException.class)
+  public ResponseEntity<ProblemDetail> handleInventoryUnderflow(
+      InventoryUnderflowException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "inventory-underflow",
+            "Insufficient inventory for cook event",
+            req.getRequestURI());
+    pd.setProperty("underflows", ex.getUnderflows());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(BatchCookNotSupportedException.class)
+  public ResponseEntity<ProblemDetail> handleBatchCookNotSupported(
+      BatchCookNotSupportedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "batch-cook-not-supported",
+            "Batch cook is not supported in v1",
+            req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);

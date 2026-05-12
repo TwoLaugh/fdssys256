@@ -5,19 +5,17 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Published {@code AFTER_COMMIT} when an inventory item's quantity is decremented (or otherwise
- * adjusted) via one of the user-driven flows. The {@code source} disambiguates which flow drove the
- * change ({@code COOK_EVENT}, {@code MEAL_CONSUMPTION}, {@code STANDALONE_LOG}, {@code MANUAL},
- * {@code WASTE}).
- *
- * <p>01g refactored this record to implement the sealed {@link ProvisionChangedEvent} base.
+ * Published {@code AFTER_COMMIT} when a grocery-import flow adds inventory rows on the user's
+ * behalf. Shipped in 01g for sealed-hierarchy completeness; the publishing flow lands with {@code
+ * GroceryImportProcessor} in 01h.
  *
  * <p>{@code scopeKind = "inventory-item"}, {@code scopeId = affectedItemIds.get(0)}.
  */
-public record ItemQuantityAdjustedEvent(
+public record ItemAddedFromGroceryEvent(
     UUID userId,
     List<UUID> affectedItemIds,
-    ItemAdjustmentSource source,
+    String supplier,
+    String orderRef,
     UUID traceId,
     Instant occurredAt)
     implements ProvisionChangedEvent {
