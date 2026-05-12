@@ -15,6 +15,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
@@ -56,6 +57,8 @@ public class RecipeEventListener {
   }
 
   @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  @Transactional // AFTER_COMMIT runs outside the publisher's tx; open a new one so JPA reads + the
+  // SPI write back via RecipeNutritionWriter both have an active tx.
   public void onRecipeUpdated(RecipeUpdatedEvent event) {
     log.debug(
         "RecipeEventListener.onRecipeUpdated recipeId={} versionId={} branchId={} versionNumber={}",
