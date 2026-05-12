@@ -14,6 +14,7 @@ import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
 import com.example.mealprep.nutrition.exception.InvalidDirectiveRoutingException;
 import com.example.mealprep.nutrition.exception.InvalidIntakeRangeException;
 import com.example.mealprep.nutrition.exception.InvalidPlanRollupException;
+import com.example.mealprep.nutrition.exception.InvalidWeekStartException;
 import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
 import com.example.mealprep.nutrition.exception.RecipeNutritionWriteFailedException;
@@ -322,6 +323,23 @@ public class NutritionExceptionHandler {
             ex.getMessage(),
             "invalid-plan-rollup",
             "Invalid plan rollup",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  // ---------------- 01h: weekly-aggregate + divergence exceptions ----------------
+
+  @ExceptionHandler(InvalidWeekStartException.class)
+  public ResponseEntity<ProblemDetail> handleInvalidWeekStart(
+      InvalidWeekStartException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.BAD_REQUEST,
+            ex.getMessage(),
+            "invalid-week-start",
+            "Invalid week start",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)

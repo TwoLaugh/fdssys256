@@ -11,6 +11,7 @@ import com.example.mealprep.nutrition.api.dto.IntakeAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.NutritionTargetsAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
+import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
 import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
@@ -48,6 +49,13 @@ public interface NutritionQueryService {
    * invalid.
    */
   List<IntakeDayDto> getIntakeRange(UUID userId, LocalDate from, LocalDate to);
+
+  /**
+   * Weekly intake aggregate for the user (Monday-anchored). {@code weekStart} must be a Monday
+   * (ISO-8601 day-of-week 1); non-Monday inputs throw {@code InvalidWeekStartException}. Missing
+   * days contribute zero-valued daily entries; the per-day list is always exactly 7 entries.
+   */
+  WeeklyAggregateDto getWeeklyAggregate(UUID userId, LocalDate weekStart);
 
   /**
    * Paginated audit log for an intake day, newest-first. Returns an empty page if the day row does

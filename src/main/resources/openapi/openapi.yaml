@@ -160,6 +160,8 @@ paths:
     $ref: 'paths/nutrition.yaml#/nutritionRecipeRecalc'
   /api/v1/nutrition/floor-gate/evaluate:
     $ref: 'paths/nutrition.yaml#/nutritionFloorGateEvaluate'
+  /api/v1/nutrition/intake/week/{weekStart}/aggregate:
+    $ref: 'paths/nutrition.yaml#/nutritionIntakeWeekAggregate'
   # ===== recipe =====
   /api/v1/recipes:
     $ref: 'paths/recipe.yaml#/recipes'
@@ -355,6 +357,10 @@ components:
     CandidateDailyRollupDto:  { $ref: 'schemas/nutrition.yaml#/CandidateDailyRollupDto' }
     FloorGateResultDto:       { $ref: 'schemas/nutrition.yaml#/FloorGateResultDto' }
     FloorViolationDto:        { $ref: 'schemas/nutrition.yaml#/FloorViolationDto' }
+    DailyAggregateDto:        { $ref: 'schemas/nutrition.yaml#/DailyAggregateDto' }
+    DivergenceSummaryDto:     { $ref: 'schemas/nutrition.yaml#/DivergenceSummaryDto' }
+    MacroAggregateDto:        { $ref: 'schemas/nutrition.yaml#/MacroAggregateDto' }
+    WeeklyAggregateDto:       { $ref: 'schemas/nutrition.yaml#/WeeklyAggregateDto' }
     # recipe
     Catalogue: { $ref: 'schemas/recipe.yaml#/Catalogue' }
     DataQuality: { $ref: 'schemas/recipe.yaml#/DataQuality' }

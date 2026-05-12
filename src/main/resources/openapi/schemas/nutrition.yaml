@@ -750,3 +750,53 @@ FloorViolationDto:
     macroOrMicro: { type: string, maxLength: 64 }
     floor:  { type: number, format: double, minimum: 0 }
     actual: { type: number, format: double, minimum: 0 }
+WeeklyAggregateDto:
+  type: object
+  required: [weekStart, weekEnd, perDay, weeklyTotal, floorViolations]
+  properties:
+    weekStart: { type: string, format: date }
+    weekEnd:   { type: string, format: date }
+    perDay:
+      type: array
+      minItems: 7
+      maxItems: 7
+      items: { $ref: '#/DailyAggregateDto' }
+    weeklyTotal: { $ref: '#/DailyAggregateDto' }
+    floorViolations:
+      type: array
+      description: 'List of macro/micro keys whose weekly total fell below 7-day-summed floor.'
+      items: { type: string, maxLength: 64 }
+DailyAggregateDto:
+  type: object
+  required: [caloriesPlanned, caloriesActualSoFar, caloriesRemaining, protein, carbs, fat, fibre, microsActualSoFar]
+  properties:
+    caloriesPlanned:     { type: integer, minimum: 0 }
+    caloriesActualSoFar: { type: integer, minimum: 0 }
+    caloriesRemaining:   { type: integer }
+    protein: { $ref: '#/MacroAggregateDto' }
+    carbs:   { $ref: '#/MacroAggregateDto' }
+    fat:     { $ref: '#/MacroAggregateDto' }
+    fibre:   { $ref: '#/MacroAggregateDto' }
+    microsActualSoFar:
+      type: object
+      additionalProperties: { type: number, format: double, minimum: 0 }
+MacroAggregateDto:
+  type: object
+  required: [plannedG, actualSoFarG, remainingG]
+  properties:
+    plannedG:     { type: number, format: double, minimum: 0 }
+    actualSoFarG: { type: number, format: double, minimum: 0 }
+    remainingG:   { type: number, format: double }
+DivergenceSummaryDto:
+  type: object
+  required: [plannedSoFar, actualSoFar, percentVariance]
+  properties:
+    plannedSoFar:
+      type: object
+      additionalProperties: { type: number, format: double, minimum: 0 }
+    actualSoFar:
+      type: object
+      additionalProperties: { type: number, format: double, minimum: 0 }
+    percentVariance:
+      type: object
+      additionalProperties: { type: number, format: double }

@@ -6,6 +6,7 @@ import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.IntakeEntryDto;
 import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
 import com.example.mealprep.nutrition.api.dto.OverrideIntakeRequest;
+import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
 import com.example.mealprep.nutrition.domain.entity.MealSlot;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.nutrition.domain.service.NutritionUpdateService;
@@ -147,6 +148,14 @@ public class IntakeController {
       @PathVariable UUID snackId) {
     UUID userId = requireCurrentUserId();
     updateService.removeSnack(userId, date, snackId);
+  }
+
+  @GetMapping(path = "/week/{weekStart}/aggregate", produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(summary = "Weekly intake rollup (Monday-anchored) for the calling user.")
+  public WeeklyAggregateDto getWeeklyAggregate(
+      @PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate weekStart) {
+    UUID userId = requireCurrentUserId();
+    return queryService.getWeeklyAggregate(userId, weekStart);
   }
 
   @GetMapping(path = "/{date}/audit-log", produces = MediaType.APPLICATION_JSON_VALUE)
