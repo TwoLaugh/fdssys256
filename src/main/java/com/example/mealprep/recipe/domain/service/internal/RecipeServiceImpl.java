@@ -50,11 +50,14 @@ import com.example.mealprep.recipe.domain.repository.RecipeVersionRepository;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import com.example.mealprep.recipe.domain.service.RecipeUpdateService;
 import com.example.mealprep.recipe.event.AdaptationOutcomeType;
+import com.example.mealprep.recipe.event.ArchiveCause;
 import com.example.mealprep.recipe.event.RecipeAdaptedEvent;
+import com.example.mealprep.recipe.event.RecipeArchivedEvent;
 import com.example.mealprep.recipe.event.RecipeBranchCreatedEvent;
 import com.example.mealprep.recipe.event.RecipeCreatedEvent;
 import com.example.mealprep.recipe.event.RecipeEvolvedEvent;
 import com.example.mealprep.recipe.event.RecipeEvolvedEvent.EvolvedReason;
+import com.example.mealprep.recipe.event.RecipePromotedEvent;
 import com.example.mealprep.recipe.event.RecipeSubstitutionCreatedEvent;
 import com.example.mealprep.recipe.event.RecipeSubstitutionStateChangedEvent;
 import com.example.mealprep.recipe.event.RecipeUpdatedEvent;
@@ -1814,5 +1817,160 @@ public class RecipeServiceImpl
       }
     }
     return UUID.randomUUID();
+  }
+
+  // ---------------- recipe-01g: Promote / Demote / Archive / Unarchive / markUsedInPlan
+  // ----------------
+
+  @Override
+  @Transactional
+  public RecipeDto promoteToUserCatalogue(UUID systemRecipeId, UUID userId) {
+    Recipe recipe =
+        recipeRepository
+            .findById(systemRecipeId)
+            .orElseThrow(() -> new RecipeNotFoundException(systemRecipeId));
+    if (recipe.getCatalogue() != Catalogue.SYSTEM) {
+      throw new RecipeCatalogueViolationException("recipe is already in user catalogue");
+    }
+    if (recipe.getDeletedAt() != null) {
+      throw new RecipeCatalogueViolationException("recipe is deleted");
+    }
+    if (recipe.getArchivedAt() != null) {
+      throw new RecipeCatalogueViolationException("recipe is archived; unarchive before promoting");
+    }
+
+    recipe.setCatalogue(Catalogue.USER);
+    recipe.setUserId(userId);
+    Recipe saved = recipeRepository.saveAndFlush(recipe);
+
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    eventPublisher.publishEvent(
+        new RecipePromotedEvent(
+            saved.getId(), userId, Catalogue.SYSTEM, Catalogue.USER, traceId, now));
+
+    log.info(
+        "recipe promoteToUserCatalogue recipeId={} userId={} traceId={}",
+        saved.getId(),
+        userId,
+        traceId);
+
+    List<RecipeBranchDto> branches =
+        branchMapper.toDtoList(branchRepository.findAllByRecipeId(saved.getId()));
+    RecipeVersionDto versionDto = null;
+    if (saved.getCurrentBranchId() != null) {
+      Optional<RecipeVersion> versionOpt =
+          versionRepository.findFirstByRecipeIdAndBranchIdAndVersionNumber(
+              saved.getId(), saved.getCurrentBranchId(), saved.getCurrentVersion());
+      if (versionOpt.isPresent()) {
+        RecipeVersion version = versionOpt.get();
+        touchLazyChildren(version);
+        versionDto = versionMapper.toDto(version);
+      }
+    }
+    return recipeMapper.toDto(saved, versionDto, branches);
+  }
+
+  @Override
+  @Transactional
+  public void demoteToSystemCatalogue(UUID userRecipeId, UUID actorUserId) {
+    Recipe recipe =
+        recipeRepository
+            .findById(userRecipeId)
+            .orElseThrow(() -> new RecipeNotFoundException(userRecipeId));
+    // Ownership / existence: don't leak existence for someone else's recipe.
+    if (recipe.getUserId() == null || !recipe.getUserId().equals(actorUserId)) {
+      throw new RecipeNotFoundException(userRecipeId);
+    }
+    if (recipe.getCatalogue() != Catalogue.USER) {
+      throw new RecipeCatalogueViolationException("recipe is already in system catalogue");
+    }
+
+    recipe.setCatalogue(Catalogue.SYSTEM);
+    // userId is RETAINED for provenance per LLD line 764.
+    recipeRepository.saveAndFlush(recipe);
+
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    eventPublisher.publishEvent(
+        new RecipeArchivedEvent(recipe.getId(), ArchiveCause.USER_DEMOTION, traceId, now));
+
+    log.info(
+        "recipe demoteToSystemCatalogue recipeId={} actorUserId={} traceId={}",
+        recipe.getId(),
+        actorUserId,
+        traceId);
+  }
+
+  @Override
+  @Transactional
+  public void archive(UUID recipeId, UUID actorUserId) {
+    Recipe recipe =
+        recipeRepository
+            .findById(recipeId)
+            .orElseThrow(() -> new RecipeNotFoundException(recipeId));
+    authoriseArchiveOp(recipe, actorUserId);
+    if (recipe.getDeletedAt() != null) {
+      throw new RecipeCatalogueViolationException("recipe is already deleted");
+    }
+    if (recipe.getArchivedAt() != null) {
+      // Idempotent no-op — no new event.
+      return;
+    }
+    recipe.setArchivedAt(Instant.now(clock));
+    recipeRepository.saveAndFlush(recipe);
+
+    UUID traceId = currentTraceId();
+    Instant now = Instant.now(clock);
+    eventPublisher.publishEvent(
+        new RecipeArchivedEvent(recipe.getId(), ArchiveCause.MANUAL_ADMIN, traceId, now));
+
+    log.info(
+        "recipe archive recipeId={} actorUserId={} traceId={}",
+        recipe.getId(),
+        actorUserId,
+        traceId);
+  }
+
+  @Override
+  @Transactional
+  public void unarchive(UUID recipeId, UUID actorUserId) {
+    Recipe recipe =
+        recipeRepository
+            .findById(recipeId)
+            .orElseThrow(() -> new RecipeNotFoundException(recipeId));
+    authoriseArchiveOp(recipe, actorUserId);
+    if (recipe.getArchivedAt() == null) {
+      // Idempotent no-op — no event (LLD has no RecipeUnarchivedEvent).
+      return;
+    }
+    recipe.setArchivedAt(null);
+    recipeRepository.saveAndFlush(recipe);
+
+    log.info("recipe unarchive recipeId={} actorUserId={}", recipe.getId(), actorUserId);
+  }
+
+  @Override
+  @Transactional
+  public void markUsedInPlan(List<UUID> recipeIds) {
+    if (recipeIds == null || recipeIds.isEmpty()) {
+      return;
+    }
+    int updated = recipeRepository.touchLastUsedInPlan(recipeIds, Instant.now(clock));
+    log.info("recipe markUsedInPlan size={} updated={}", recipeIds.size(), updated);
+  }
+
+  /**
+   * Authorisation gate for {@code archive} / {@code unarchive}: USER recipes require ownership;
+   * SYSTEM recipes are open to any authenticated caller per recipe-01g §Archive (manual) (v1
+   * admin-open policy; locks down when role enum gains {@code ADMIN}).
+   */
+  private void authoriseArchiveOp(Recipe recipe, UUID actorUserId) {
+    if (recipe.getCatalogue() == Catalogue.USER) {
+      if (recipe.getUserId() == null || !recipe.getUserId().equals(actorUserId)) {
+        throw new RecipeNotFoundException(recipe.getId());
+      }
+    }
+    // SYSTEM: open to any authenticated caller — see ticket §Archive (manual) line 92.
   }
 }

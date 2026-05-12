@@ -573,3 +573,134 @@ recipeVersionWithSubstitutions:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipePromote:
+  post:
+    tags: [Recipes]
+    operationId: promoteRecipeToUserCatalogue
+    summary: 'Promote a SYSTEM-catalogue recipe to the calling user''s USER catalogue (flip-in-place).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Recipe is now in the user catalogue.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Recipe not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Recipe is already USER catalogue, deleted, or archived.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeDemote:
+  post:
+    tags: [Recipes]
+    operationId: demoteRecipeToSystemCatalogue
+    summary: 'Demote a USER-catalogue recipe owned by the caller to SYSTEM catalogue (flip-in-place, retains userId for provenance).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '204':
+        description: 'Recipe demoted; no body.'
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Recipe not found or not owned by the caller.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Recipe is already SYSTEM catalogue.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeArchive:
+  post:
+    tags: [Recipes]
+    operationId: archiveRecipe
+    summary: 'Soft-archive the recipe (sets archived_at); idempotent.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '204':
+        description: 'Recipe archived (or already was; idempotent).'
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Recipe not found or not owned by the caller.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Recipe is already deleted.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeUnarchive:
+  post:
+    tags: [Recipes]
+    operationId: unarchiveRecipe
+    summary: 'Unarchive the recipe (clears archived_at); idempotent.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '204':
+        description: 'Recipe unarchived (or was not archived; idempotent).'
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Recipe not found or not owned by the caller.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeAdminRunArchiveScan:
+  post:
+    tags: [Recipes]
+    operationId: runArchiveScan
+    summary: 'Manual trigger for the daily archive-eligibility scan; returns the count of newly-archived rows.'
+    security: [{ cookieAuth: [] }]
+    responses:
+      '200':
+        description: 'Scan completed; flaggedCount is the number of rows newly archived this run.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RunArchiveScanResultDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

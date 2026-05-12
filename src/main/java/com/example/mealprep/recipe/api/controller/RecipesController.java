@@ -100,6 +100,41 @@ public class RecipesController {
         .orElseThrow(() -> new RecipeImportNotFoundException(recipeId));
   }
 
+  @PostMapping(path = "/{recipeId}/promote", produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary = "Promote a SYSTEM-catalogue recipe to the caller's USER catalogue (flip-in-place).")
+  public RecipeDto promote(@PathVariable UUID recipeId) {
+    UUID userId = requireCurrentUserId();
+    return updateService.promoteToUserCatalogue(recipeId, userId);
+  }
+
+  @PostMapping(path = "/{recipeId}/demote")
+  @Operation(
+      summary =
+          "Demote a USER-catalogue recipe owned by the caller to SYSTEM (flip-in-place; retains"
+              + " userId for provenance).")
+  public ResponseEntity<Void> demote(@PathVariable UUID recipeId) {
+    UUID userId = requireCurrentUserId();
+    updateService.demoteToSystemCatalogue(recipeId, userId);
+    return ResponseEntity.noContent().build();
+  }
+
+  @PostMapping(path = "/{recipeId}/archive")
+  @Operation(summary = "Soft-archive the recipe (sets archived_at); idempotent.")
+  public ResponseEntity<Void> archive(@PathVariable UUID recipeId) {
+    UUID userId = requireCurrentUserId();
+    updateService.archive(recipeId, userId);
+    return ResponseEntity.noContent().build();
+  }
+
+  @PostMapping(path = "/{recipeId}/unarchive")
+  @Operation(summary = "Unarchive the recipe (clears archived_at); idempotent.")
+  public ResponseEntity<Void> unarchive(@PathVariable UUID recipeId) {
+    UUID userId = requireCurrentUserId();
+    updateService.unarchive(recipeId, userId);
+    return ResponseEntity.noContent().build();
+  }
+
   private UUID requireCurrentUserId() {
     return currentUserResolver
         .currentUserId()

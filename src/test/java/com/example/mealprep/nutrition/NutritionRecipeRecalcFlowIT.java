@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -67,15 +66,18 @@ class NutritionRecipeRecalcFlowIT {
 
   @MockBean private RecipeQueryService recipeQueryService;
 
-  // RecipeServiceImpl implements all three of: RecipeQueryService, RecipeUpdateService,
-  // RecipeSubstitutionRecorder. @MockBean on RecipeQueryService alone removes the real
-  // RecipeServiceImpl bean, leaving Spring unable to wire RecipeUpdateService into
-  // RecipeModule. Mock the other two interfaces too so Spring has stubs for everything.
+  // RecipeServiceImpl implements four interfaces: RecipeQueryService, RecipeUpdateService,
+  // RecipeSubstitutionRecorder, RecipeWriteApi. @MockBean on RecipeQueryService alone removes the
+  // real RecipeServiceImpl bean, leaving Spring unable to wire the other three. Mock all four so
+  // the recipe-01g RecipeNutritionWriterImpl bridge (which depends on RecipeWriteApi) still
+  // satisfies its constructor.
   @MockBean
   private com.example.mealprep.recipe.domain.service.RecipeUpdateService recipeUpdateService;
 
   @MockBean
   private com.example.mealprep.recipe.spi.RecipeSubstitutionRecorder recipeSubstitutionRecorder;
+
+  @MockBean private com.example.mealprep.recipe.spi.RecipeWriteApi recipeWriteApi;
 
   @AfterEach
   void cleanup() {
@@ -195,7 +197,11 @@ class NutritionRecipeRecalcFlowIT {
   }
 
   @Test
-  void recalc_returns200_withWarningHeader_whenNoopWriterWired() throws Exception {
+  void recalc_returns200_withoutWarningHeader_whenBridgeWriterWired() throws Exception {
+    // Recipe-01g landed RecipeNutritionWriterImpl (the SPI bridge), displacing the Noop. The
+    // recalc should still succeed and the controller MUST NOT emit the Warning header (the bridge
+    // is wired). The real bridge would delegate to RecipeWriteApi.updateNutritionStatus; here the
+    // @MockBean recipeWriteApi swallows the call.
     AuthedUser user = registerUser();
     UUID recipeId = UUID.randomUUID();
     UUID versionId = UUID.randomUUID();
@@ -219,12 +225,12 @@ class NutritionRecipeRecalcFlowIT {
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(body)))
             .andExpect(status().isOk())
-            .andExpect(header().exists("Warning"))
             .andExpect(jsonPath("$.nutritionStatus").exists())
             .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
 
+    // Bridge writer is wired (not the Noop) → no Warning header.
     String warning = result.getResponse().getHeader("Warning");
-    assertThat(warning).contains("recipe-01f impl not yet wired");
+    assertThat(warning).isNull();
   }
 }

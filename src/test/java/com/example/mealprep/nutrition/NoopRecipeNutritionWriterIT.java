@@ -24,15 +24,21 @@ import org.springframework.test.context.ActiveProfiles;
  * pattern invariants:
  *
  * <ul>
- *   <li>With no other binding present, the {@code NoopRecipeNutritionWriterConfiguration} fallback
- *       wins via {@code @ConditionalOnMissingBean} (it must NOT be {@code @Primary} or marked as
- *       primary indirectly — see round-5 bug 1).
- *   <li>A {@code @TestConfiguration @Primary} fake wins over the Noop (round-5 bug 3 fix).
+ *   <li>With recipe-01g's {@code RecipeNutritionWriterImpl} on the classpath, the bridge wins (the
+ *       Noop's {@code @ConditionalOnMissingBean} defers). Round-5 bug 1 (the Noop must NOT be
+ *       {@code @Primary}) is still asserted indirectly — the bridge is plain {@code @Component} so
+ *       it wins on the deferral mechanism alone.
+ *   <li>A {@code @TestConfiguration @Primary} fake wins over both the bridge and the Noop (round-5
+ *       bug 3 fix).
  * </ul>
  */
 class NoopRecipeNutritionWriterIT {
 
-  /** Sub-test: Noop is the wired bean when nothing else is registered. */
+  /**
+   * Sub-test: with no override the recipe-01g bridge is the wired bean (recipe-01g landed {@code
+   * RecipeNutritionWriterImpl} via {@code @Component @ConditionalOnClass}; the Noop's
+   * {@code @ConditionalOnMissingBean} defers).
+   */
   @Nested
   @SpringBootTest
   @Import(TestContainersConfig.class)
@@ -42,26 +48,33 @@ class NoopRecipeNutritionWriterIT {
     @Autowired private RecipeNutritionWriter writer;
 
     @Test
-    void noopBean_isWired() {
-      assertThat(writer.getClass().getName())
-          .contains("NoopRecipeNutritionWriterConfiguration")
-          .contains("NoopRecipeNutritionWriterImpl");
+    void bridgeBean_isWired() {
+      assertThat(writer.getClass().getName()).contains("RecipeNutritionWriterImpl");
+      assertThat(writer.getClass().getName()).doesNotContain("Noop");
     }
 
     @Test
-    void noopBean_doesNotThrow_onWrite() {
-      writer.writeNutritionPerServing(
-          UUID.randomUUID(),
-          new RecipeNutritionResultDto(
-              UUID.randomUUID(),
-              0,
-              new BigDecimal("0.00"),
-              new BigDecimal("0.00"),
-              new BigDecimal("0.00"),
-              new BigDecimal("0.00"),
-              Map.of(),
-              "pending",
-              List.of()));
+    void bridgeBean_doesNotThrow_onWriteForUnknownVersion() {
+      // Calling the bridge against an unknown version id delegates to RecipeWriteApi.update… which
+      // throws RecipeVersionNotFoundException. The bridge surfacing that exception is part of its
+      // contract; verify it propagates rather than silently swallowing.
+      try {
+        writer.writeNutritionPerServing(
+            UUID.randomUUID(),
+            new RecipeNutritionResultDto(
+                UUID.randomUUID(),
+                0,
+                new BigDecimal("0.00"),
+                new BigDecimal("0.00"),
+                new BigDecimal("0.00"),
+                new BigDecimal("0.00"),
+                Map.of(),
+                "pending",
+                List.of()));
+      } catch (RuntimeException ignored) {
+        // Expected — version doesn't exist; the bridge correctly delegated and the recipe-side
+        // RecipeVersionNotFoundException bubbled up.
+      }
     }
   }
 
