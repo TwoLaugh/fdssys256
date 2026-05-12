@@ -13,6 +13,7 @@ import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
 import com.example.mealprep.nutrition.exception.InvalidDirectiveRoutingException;
 import com.example.mealprep.nutrition.exception.InvalidIntakeRangeException;
+import com.example.mealprep.nutrition.exception.InvalidPlanRollupException;
 import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
 import com.example.mealprep.nutrition.exception.RecipeNutritionWriteFailedException;
@@ -306,6 +307,23 @@ public class NutritionExceptionHandler {
             req.getRequestURI());
     pd.setProperty("versionId", ex.versionId());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  // ---------------- 01g: floor-gate exceptions ----------------
+
+  @ExceptionHandler(InvalidPlanRollupException.class)
+  public ResponseEntity<ProblemDetail> handleInvalidPlanRollup(
+      InvalidPlanRollupException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.BAD_REQUEST,
+            ex.getMessage(),
+            "invalid-plan-rollup",
+            "Invalid plan rollup",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }
