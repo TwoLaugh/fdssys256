@@ -1733,21 +1733,24 @@ public class RecipeServiceImpl
   @Override
   @Transactional
   public void storeEmbedding(UUID versionId, float[] embedding, String modelId) {
-    RecipeVersion version =
-        versionRepository
-            .findById(versionId)
-            .orElseThrow(() -> new RecipeVersionNotFoundException(versionId));
-    // recipe-01h: vector(1536) column + embedding_model_id + embedded_at now exist; persist them
-    // alongside the embedding_status flip from 'pending' to 'embedded'.
+    // recipe-01h: native UPDATE bypasses Hibernate's full-entity dirty-check. The async listener
+    // fires AFTER_COMMIT but the create flow's persistence context may still observe the row;
+    // saveAndFlush of a re-loaded RecipeVersion (with cascaded child collections) triggered
+    // StaleObjectStateException. The native UPDATE only touches the embedding columns and casts
+    // the pgvector text literal at the SQL layer (see RecipeVersionRepository.updateEmbedding).
     Instant now = Instant.now(clock);
-    version.setEmbedding(embedding);
-    version.setEmbeddingModelId(modelId);
-    version.setEmbeddedAt(now);
-    version.setEmbeddingStatus("embedded");
-    versionRepository.saveAndFlush(version);
+    String pgVectorText = formatPgVector(embedding);
+    int rows = versionRepository.updateEmbedding(versionId, pgVectorText, modelId, now);
+    if (rows == 0) {
+      throw new RecipeVersionNotFoundException(versionId);
+    }
 
     UUID traceId = currentTraceId();
-    UUID recipeId = version.getRecipe() != null ? version.getRecipe().getId() : null;
+    UUID recipeId =
+        versionRepository
+            .findById(versionId)
+            .map(v -> v.getRecipe() != null ? v.getRecipe().getId() : null)
+            .orElse(null);
     eventPublisher.publishEvent(
         new RecipeEvolvedEvent(recipeId, versionId, EvolvedReason.EMBEDDING_STORED, traceId, now));
 
@@ -1761,20 +1764,44 @@ public class RecipeServiceImpl
   @Override
   @Transactional
   public void markEmbeddingFailed(UUID versionId) {
-    RecipeVersion version =
-        versionRepository
-            .findById(versionId)
-            .orElseThrow(() -> new RecipeVersionNotFoundException(versionId));
-    version.setEmbeddingStatus("failed");
-    versionRepository.saveAndFlush(version);
+    // Native UPDATE for the same reason as storeEmbedding — only flip embedding_status.
+    int rows = versionRepository.markEmbeddingFailed(versionId);
+    if (rows == 0) {
+      throw new RecipeVersionNotFoundException(versionId);
+    }
 
     UUID traceId = currentTraceId();
     Instant now = Instant.now(clock);
-    UUID recipeId = version.getRecipe() != null ? version.getRecipe().getId() : null;
+    UUID recipeId =
+        versionRepository
+            .findById(versionId)
+            .map(v -> v.getRecipe() != null ? v.getRecipe().getId() : null)
+            .orElse(null);
     eventPublisher.publishEvent(
         new RecipeEvolvedEvent(recipeId, versionId, EvolvedReason.EMBEDDING_FAILED, traceId, now));
 
     log.info("recipe markEmbeddingFailed versionId={}", versionId);
+  }
+
+  /**
+   * Render a {@code float[]} as the pgvector text literal {@code '[v1,v2,...,vN]'}. Mirrors {@link
+   * com.example.mealprep.recipe.domain.entity.RecipeEmbeddingConverter} — kept here because the
+   * native UPDATE bypasses the JPA AttributeConverter pipeline.
+   */
+  private static String formatPgVector(float[] v) {
+    if (v == null) {
+      return null;
+    }
+    StringBuilder sb = new StringBuilder(v.length * 8 + 2);
+    sb.append('[');
+    for (int i = 0; i < v.length; i++) {
+      if (i > 0) {
+        sb.append(',');
+      }
+      sb.append(Float.toString(v[i]));
+    }
+    sb.append(']');
+    return sb.toString();
   }
 
   @Override
