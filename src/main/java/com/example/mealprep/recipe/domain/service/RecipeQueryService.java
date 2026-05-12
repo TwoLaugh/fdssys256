@@ -89,4 +89,15 @@ public interface RecipeQueryService {
    * overlay; {@code appliedSubstitutionIds} lists the substitutions that contributed.
    */
   RecipeVersionDto getVersionWithSubstitutions(UUID recipeId, UUID versionId);
+
+  /**
+   * Cross-module accessor for the version's semantic embedding vector. Empty when the version is
+   * missing, when the embedding column is still NULL (status {@code pending} or {@code failed}), or
+   * when the embedding has zero dimensions. Future similarity-search consumers (recipe-01i +
+   * planner) call through {@link com.example.mealprep.recipe.RecipeModule}. Per LLD line 541.
+   *
+   * <p>This is an in-process query helper, not a REST endpoint; missing versions return empty
+   * rather than throwing {@code RecipeVersionNotFoundException}.
+   */
+  Optional<float[]> getEmbedding(UUID versionId);
 }

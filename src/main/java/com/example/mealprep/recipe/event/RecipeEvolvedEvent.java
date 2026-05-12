@@ -31,6 +31,7 @@ public record RecipeEvolvedEvent(
   public enum EvolvedReason {
     NUTRITION_RECALCULATED,
     FINGERPRINT_REFRESHED,
-    EMBEDDING_STORED
+    EMBEDDING_STORED,
+    EMBEDDING_FAILED
   }
 }

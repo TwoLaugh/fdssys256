@@ -75,4 +75,19 @@ public interface RecipeWriteApi {
    * 01h's migration.
    */
   void storeEmbedding(UUID versionId, float[] embedding, String modelId);
+
+  /**
+   * Mark the version's embedding as terminally failed. Sets {@code embedding_status = 'failed'},
+   * leaves the {@code embedding} column NULL (it was never set), and publishes {@code
+   * RecipeEvolvedEvent(EMBEDDING_FAILED)} {@code AFTER_COMMIT}. Called by {@code
+   * RecipeEmbeddingListener} when {@code AiService.embed} terminally fails (e.g. {@code
+   * AiUnavailableException} after retries are exhausted).
+   *
+   * <p>LLD divergence: the LLD-line-599 surface only declared a happy-path {@code storeEmbedding};
+   * recipe-01h adds this explicit failure-flip rather than overloading {@code storeEmbedding} with
+   * a status param — explicit-method-per-state is clearer at call sites.
+   *
+   * @throws com.example.mealprep.recipe.exception.RecipeVersionNotFoundException missing version
+   */
+  void markEmbeddingFailed(UUID versionId);
 }

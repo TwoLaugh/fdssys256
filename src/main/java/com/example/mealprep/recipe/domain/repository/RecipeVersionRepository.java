@@ -1,9 +1,11 @@
 package com.example.mealprep.recipe.domain.repository;
 
 import com.example.mealprep.recipe.domain.entity.RecipeVersion;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -36,4 +38,30 @@ public interface RecipeVersionRepository extends JpaRepository<RecipeVersion, UU
       @Param("recipeId") UUID recipeId,
       @Param("branchId") UUID branchId,
       @Param("currentVersion") int currentVersion);
+
+  /**
+   * Direct UPDATE for the embedding columns — bypasses Hibernate's full-entity save (which collides
+   * with the entity's child collections + dirty-checking when the row is being touched by the
+   * create flow's persistence context). Native SQL casts the bound varchar parameter to pgvector.
+   * The async listener calls this exclusively.
+   */
+  @Modifying
+  @Query(
+      value =
+          "UPDATE recipe_versions SET embedding = CAST(:embedding AS vector),"
+              + " embedding_model_id = :modelId, embedded_at = :embeddedAt,"
+              + " embedding_status = 'embedded' WHERE id = :id",
+      nativeQuery = true)
+  int updateEmbedding(
+      @Param("id") UUID id,
+      @Param("embedding") String embedding,
+      @Param("modelId") String modelId,
+      @Param("embeddedAt") Instant embeddedAt);
+
+  /** Flip embedding_status to 'failed' without touching the rest of the row. */
+  @Modifying
+  @Query(
+      value = "UPDATE recipe_versions SET embedding_status = 'failed' WHERE id = :id",
+      nativeQuery = true)
+  int markEmbeddingFailed(@Param("id") UUID id);
 }

@@ -396,22 +396,94 @@ class RecipeWriteApiTest {
     UUID versionId = UUID.randomUUID();
     Recipe recipe = recipeAtVersion(recipeId, UUID.randomUUID(), 1);
     RecipeVersion version = versionRow(versionId, recipe, 1);
+    // New impl: native UPDATE via versionRepository.updateEmbedding(...) returns affected row
+    // count; non-zero means the row was found. The findById is now only used to fetch the
+    // recipeId for the published event (the row itself is mutated server-side by the UPDATE).
+    when(versionRepository.updateEmbedding(
+            org.mockito.ArgumentMatchers.eq(versionId),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.eq("openai:text-embedding-3-small"),
+            org.mockito.ArgumentMatchers.any(Instant.class)))
+        .thenReturn(1);
     when(versionRepository.findById(versionId)).thenReturn(Optional.of(version));
-    when(versionRepository.saveAndFlush(any(RecipeVersion.class)))
-        .thenAnswer(inv -> inv.getArgument(0));
 
-    service().storeEmbedding(versionId, new float[] {0.1f, 0.2f}, "openai:text-embedding-3-small");
-
-    assertThat(version.getEmbeddingStatus()).isEqualTo("embedded");
+    float[] vector = {0.1f, 0.2f};
+    service().storeEmbedding(versionId, vector, "openai:text-embedding-3-small");
 
     ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
     verify(eventPublisher).publishEvent(eventCaptor.capture());
     assertThat(eventCaptor.getValue())
         .isInstanceOfSatisfying(
             RecipeEvolvedEvent.class,
-            ev ->
-                assertThat(ev.reason())
-                    .isEqualTo(RecipeEvolvedEvent.EvolvedReason.EMBEDDING_STORED));
+            ev -> {
+              assertThat(ev.reason()).isEqualTo(RecipeEvolvedEvent.EvolvedReason.EMBEDDING_STORED);
+              assertThat(ev.recipeId()).isEqualTo(recipeId);
+              assertThat(ev.versionId()).isEqualTo(versionId);
+            });
+  }
+
+  @Test
+  void markEmbeddingFailed_flipsStatus_doesNotClearEmbedding_andPublishesEvent() {
+    UUID recipeId = UUID.randomUUID();
+    UUID versionId = UUID.randomUUID();
+    Recipe recipe = recipeAtVersion(recipeId, UUID.randomUUID(), 1);
+    RecipeVersion version = versionRow(versionId, recipe, 1);
+    when(versionRepository.markEmbeddingFailed(versionId)).thenReturn(1);
+    when(versionRepository.findById(versionId)).thenReturn(Optional.of(version));
+
+    service().markEmbeddingFailed(versionId);
+
+    // Native UPDATE only touches embedding_status — it does NOT clear the embedding vector
+    // (see SQL in RecipeVersionRepository#markEmbeddingFailed).
+    ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+    verify(eventPublisher).publishEvent(eventCaptor.capture());
+    assertThat(eventCaptor.getValue())
+        .isInstanceOfSatisfying(
+            RecipeEvolvedEvent.class,
+            ev -> {
+              assertThat(ev.reason()).isEqualTo(RecipeEvolvedEvent.EvolvedReason.EMBEDDING_FAILED);
+              assertThat(ev.recipeId()).isEqualTo(recipeId);
+            });
+  }
+
+  @Test
+  void markEmbeddingFailed_throws404OnMissingVersion() {
+    UUID versionId = UUID.randomUUID();
+    // Native UPDATE returns 0 affected rows when the version does not exist.
+    when(versionRepository.markEmbeddingFailed(versionId)).thenReturn(0);
+    assertThatThrownBy(() -> service().markEmbeddingFailed(versionId))
+        .isInstanceOf(RecipeVersionNotFoundException.class);
+  }
+
+  @Test
+  void getEmbedding_returnsVectorWhenPopulated() {
+    UUID versionId = UUID.randomUUID();
+    Recipe recipe = recipeAtVersion(UUID.randomUUID(), UUID.randomUUID(), 1);
+    RecipeVersion version = versionRow(versionId, recipe, 1);
+    version.setEmbedding(new float[] {0.1f, 0.2f, 0.3f});
+    when(versionRepository.findById(versionId)).thenReturn(Optional.of(version));
+
+    Optional<float[]> result = service().getEmbedding(versionId);
+
+    assertThat(result).isPresent();
+    assertThat(result.get()).containsExactly(0.1f, 0.2f, 0.3f);
+  }
+
+  @Test
+  void getEmbedding_emptyWhenVectorNull() {
+    UUID versionId = UUID.randomUUID();
+    Recipe recipe = recipeAtVersion(UUID.randomUUID(), UUID.randomUUID(), 1);
+    RecipeVersion version = versionRow(versionId, recipe, 1);
+    when(versionRepository.findById(versionId)).thenReturn(Optional.of(version));
+
+    assertThat(service().getEmbedding(versionId)).isEmpty();
+  }
+
+  @Test
+  void getEmbedding_emptyWhenVersionMissing() {
+    UUID versionId = UUID.randomUUID();
+    when(versionRepository.findById(versionId)).thenReturn(Optional.empty());
+    assertThat(service().getEmbedding(versionId)).isEmpty();
   }
 
   // ---------------- helpers ----------------
