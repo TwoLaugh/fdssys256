@@ -27,7 +27,9 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Type;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Append-only version row for a recipe. Owns the version body — ingredients + method steps +
@@ -96,7 +98,14 @@ public class RecipeVersion {
    * pgvector text literal {@code '[v1,...,v1536]'} that pgvector implicitly casts to {@code
    * vector}.
    */
+  // The AttributeConverter outputs the pgvector text format "[v1,v2,...]" as a String.
+  // @JdbcTypeCode(SqlTypes.OTHER) tells Hibernate to bind via setObject(idx, str, Types.OTHER) —
+  // the Postgres JDBC driver then sends an "unknown"-typed parameter that pgvector implicitly
+  // casts to the column's vector(1536) type. Without this override Hibernate binds as varchar
+  // and Postgres refuses (`column "embedding" is of type vector but expression is of type
+  // character varying`, SQLState 42804).
   @Convert(converter = RecipeEmbeddingConverter.class)
+  @JdbcTypeCode(SqlTypes.OTHER)
   @Column(name = "embedding", columnDefinition = "vector(1536)")
   private float[] embedding;
 
