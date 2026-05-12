@@ -104,6 +104,7 @@ class SupplierProductsServiceTest {
         fixedClock,
         null,
         null,
+        null,
         null);
   }
 

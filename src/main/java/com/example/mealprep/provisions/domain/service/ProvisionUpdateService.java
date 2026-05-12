@@ -4,6 +4,8 @@ import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.CookEventCommand;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
+import com.example.mealprep.provisions.api.dto.GroceryImportResultDto;
+import com.example.mealprep.provisions.api.dto.GroceryOrderImportCommand;
 import com.example.mealprep.provisions.api.dto.InventoryDeductionResultDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.LogWasteRequest;
@@ -182,4 +184,19 @@ public interface ProvisionUpdateService {
    */
   Optional<InventoryItemDto> applyStandaloneConsumption(
       UUID userId, StandaloneConsumptionCommand command);
+
+  /**
+   * Apply a grocery-order import for {@code userId} per LLD §Flow 2. Idempotent on {@code (userId,
+   * supplier, orderRef)} via the {@code provision_grocery_import_log} table; a duplicate replay
+   * throws {@code DuplicateGroceryImportException} (409). Per-line: upserts the supplier-product
+   * cache, infers storage location + expiry, then either merges into an existing inventory row
+   * (same {@code userId + ingredientMappingKey + storageLocation + expiryDate}) or creates a new
+   * one. Substitutions append to the matching supplier product's {@code substitutionHistory} JSONB.
+   * Audit rows are written with {@code actor = GROCERY_IMPORT}; a single coalesced {@code
+   * ItemAddedFromGroceryEvent} per import is published at {@code AFTER_COMMIT}.
+   *
+   * <p>The whole import is atomic — any per-line failure rolls the transaction back (LLD line 640
+   * "partial failure"; the grocery module is responsible for "of 5 ordered, 3 arrived").
+   */
+  GroceryImportResultDto applyGroceryOrder(UUID userId, GroceryOrderImportCommand command);
 }

@@ -4,6 +4,7 @@ import com.example.mealprep.config.ProblemDetailSupport;
 import com.example.mealprep.provisions.exception.BatchCookNotSupportedException;
 import com.example.mealprep.provisions.exception.BudgetCurrencyChangeException;
 import com.example.mealprep.provisions.exception.BudgetNotFoundException;
+import com.example.mealprep.provisions.exception.DuplicateGroceryImportException;
 import com.example.mealprep.provisions.exception.EquipmentNotFoundException;
 import com.example.mealprep.provisions.exception.InvalidInventoryQuantityException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
@@ -165,6 +166,24 @@ public class ProvisionsExceptionHandler {
             "Batch cook is not supported in v1",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(DuplicateGroceryImportException.class)
+  public ResponseEntity<ProblemDetail> handleDuplicateGroceryImport(
+      DuplicateGroceryImportException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "duplicate-grocery-import",
+            "Duplicate grocery import",
+            req.getRequestURI());
+    pd.setProperty("userId", ex.getUserId());
+    pd.setProperty("source", ex.getSource());
+    pd.setProperty("sourceRef", ex.getSourceRef());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

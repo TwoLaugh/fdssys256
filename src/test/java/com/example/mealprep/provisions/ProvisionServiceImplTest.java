@@ -117,6 +117,7 @@ class ProvisionServiceImplTest {
         fixedClock,
         householdQueryService,
         null,
+        null,
         null);
   }
 

@@ -73,4 +73,41 @@ public interface InventoryItemRepository extends JpaRepository<InventoryItem, UU
           + " ORDER BY CASE WHEN i.expiryDate IS NULL THEN 1 ELSE 0 END, i.expiryDate ASC")
   List<InventoryItem> findActiveByMappingKeyOrderByExpiryAsc(
       UUID userId, String ingredientMappingKey);
+
+  /**
+   * Single {@code ACTIVE} row matching {@code (userId, ingredientMappingKey, storageLocation,
+   * expiryDate)} — the expiry-aware merge predicate from LLD line 635-638 (grocery import).
+   * Asymmetric null handling: when {@code expiryDate} is null, only rows with null expiry match;
+   * when it's non-null, only rows with equal expiry match. Returns the first such row (the merge
+   * predicate is unique-by-construction once the per-line iteration completes; multiple matches
+   * would only arise mid-iteration if a prior import-time merge created a sibling, which the
+   * single-line iteration already handled).
+   */
+  @Query(
+      "SELECT i FROM InventoryItem i"
+          + " WHERE i.userId = :userId"
+          + " AND i.ingredientMappingKey = :ingredientMappingKey"
+          + " AND i.storageLocation = :storageLocation"
+          + " AND ((:expiryDate IS NULL AND i.expiryDate IS NULL)"
+          + "      OR (:expiryDate IS NOT NULL AND i.expiryDate = :expiryDate))"
+          + " AND i.itemStatus = com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus.ACTIVE")
+  List<InventoryItem> findActiveForExpiryMerge(
+      UUID userId,
+      String ingredientMappingKey,
+      StorageLocation storageLocation,
+      java.time.LocalDate expiryDate);
+
+  /**
+   * Convenience wrapper around {@link #findActiveForExpiryMerge}; returns the first match (or
+   * empty). 01h's import processor consumes this on the expiry-aware merge path.
+   */
+  default Optional<InventoryItem> findOneActiveByUserIdAndMappingKeyAndStorageLocationAndExpiryDate(
+      UUID userId,
+      String ingredientMappingKey,
+      StorageLocation storageLocation,
+      java.time.LocalDate expiryDate) {
+    List<InventoryItem> matches =
+        findActiveForExpiryMerge(userId, ingredientMappingKey, storageLocation, expiryDate);
+    return matches.isEmpty() ? Optional.empty() : Optional.of(matches.get(0));
+  }
 }

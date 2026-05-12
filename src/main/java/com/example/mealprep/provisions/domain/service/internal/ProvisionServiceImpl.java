@@ -9,6 +9,8 @@ import com.example.mealprep.provisions.api.dto.CookEventCommand;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
+import com.example.mealprep.provisions.api.dto.GroceryImportResultDto;
+import com.example.mealprep.provisions.api.dto.GroceryOrderImportCommand;
 import com.example.mealprep.provisions.api.dto.InventoryAuditEntryDto;
 import com.example.mealprep.provisions.api.dto.InventoryDeductionResultDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
@@ -175,6 +177,7 @@ public class ProvisionServiceImpl
   private final HouseholdQueryService householdQueryService;
   private final InventoryDeductionEngine deductionEngine;
   private final ProvisionEventBatcher eventBatcher;
+  private final GroceryImportProcessor groceryImportProcessor;
 
   public ProvisionServiceImpl(
       InventoryItemRepository inventoryItemRepository,
@@ -195,7 +198,8 @@ public class ProvisionServiceImpl
       Clock clock,
       HouseholdQueryService householdQueryService,
       InventoryDeductionEngine deductionEngine,
-      ProvisionEventBatcher eventBatcher) {
+      ProvisionEventBatcher eventBatcher,
+      GroceryImportProcessor groceryImportProcessor) {
     this.inventoryItemRepository = inventoryItemRepository;
     this.auditLogRepository = auditLogRepository;
     this.equipmentRepository = equipmentRepository;
@@ -215,6 +219,7 @@ public class ProvisionServiceImpl
     this.householdQueryService = householdQueryService;
     this.deductionEngine = deductionEngine;
     this.eventBatcher = eventBatcher;
+    this.groceryImportProcessor = groceryImportProcessor;
   }
 
   // ---------------- Query ----------------
@@ -1236,6 +1241,14 @@ public class ProvisionServiceImpl
     eventBatcher.recordAdjustment(
         userId, saved.getId(), ItemAdjustmentSource.STANDALONE_LOG, traceId);
     return Optional.of(mapper.toDto(saved));
+  }
+
+  // ---------------- Grocery-import flow (01h) ----------------
+
+  @Override
+  @Transactional
+  public GroceryImportResultDto applyGroceryOrder(UUID userId, GroceryOrderImportCommand command) {
+    return groceryImportProcessor.process(userId, command, AuditActor.GROCERY_IMPORT);
   }
 
   private String computeDedupeKey(CookEventCommand command) {

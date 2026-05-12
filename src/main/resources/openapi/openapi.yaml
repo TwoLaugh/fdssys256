@@ -105,6 +105,8 @@ paths:
     $ref: 'paths/provisions.yaml#/provisionsMealConsumption'
   /api/v1/provisions/standalone-consumption:
     $ref: 'paths/provisions.yaml#/provisionsStandaloneConsumption'
+  /api/v1/provisions/grocery-import:
+    $ref: 'paths/provisions.yaml#/provisionsGroceryImport'
   # ===== nutrition =====
   /api/v1/nutrition/targets:
     $ref: 'paths/nutrition.yaml#/targets'
@@ -293,6 +295,10 @@ components:
     RecipeIngredientUsage:         { $ref: 'schemas/provisions.yaml#/RecipeIngredientUsage' }
     StandaloneConsumptionCommand:  { $ref: 'schemas/provisions.yaml#/StandaloneConsumptionCommand' }
     UnderflowFlagDto:              { $ref: 'schemas/provisions.yaml#/UnderflowFlagDto' }
+    GroceryImportResultDto:        { $ref: 'schemas/provisions.yaml#/GroceryImportResultDto' }
+    GroceryOrderImportCommand:     { $ref: 'schemas/provisions.yaml#/GroceryOrderImportCommand' }
+    GroceryOrderLine:              { $ref: 'schemas/provisions.yaml#/GroceryOrderLine' }
+    GroceryOrderSubstitution:      { $ref: 'schemas/provisions.yaml#/GroceryOrderSubstitution' }
     # nutrition
     Goal: { $ref: 'schemas/nutrition.yaml#/Goal' }
     EnforcementDirection: { $ref: 'schemas/nutrition.yaml#/EnforcementDirection' }
