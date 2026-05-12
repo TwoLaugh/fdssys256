@@ -628,3 +628,73 @@ UnderflowFlagDto:
     ingredientMappingKey: { type: string, maxLength: 128 }
     requested: { type: number, format: double, minimum: 0 }
     available: { type: number, format: double, minimum: 0 }
+GroceryOrderImportCommand:
+  type: object
+  required: [supplier, orderRef, deliveredOn, lines]
+  properties:
+    supplier:    { type: string, maxLength: 32 }
+    orderRef:    { type: string, maxLength: 128 }
+    deliveredOn: { type: string, format: date }
+    lines:
+      type: array
+      minItems: 1
+      items: { $ref: '#/GroceryOrderLine' }
+    substitutions:
+      type: array
+      nullable: true
+      items: { $ref: '#/GroceryOrderSubstitution' }
+    traceId:
+      type: string
+      format: uuid
+      nullable: true
+GroceryOrderLine:
+  type: object
+  required: [productId, name, quantity, unit]
+  properties:
+    productId:            { type: string, maxLength: 128 }
+    name:                 { type: string, maxLength: 255 }
+    ingredientMappingKey:
+      type: string
+      maxLength: 128
+      nullable: true
+    quantity:             { type: number, format: double, minimum: 0 }
+    unit:                 { type: string, maxLength: 16 }
+    pricePaid:
+      type: number
+      format: double
+      minimum: 0
+      nullable: true
+    category:
+      type: string
+      maxLength: 64
+      nullable: true
+    packSizeG:
+      type: integer
+      minimum: 1
+      nullable: true
+GroceryOrderSubstitution:
+  type: object
+  required: [orderedProductId, substitutedProductId]
+  properties:
+    orderedProductId:     { type: string, maxLength: 128 }
+    substitutedProductId: { type: string, maxLength: 128 }
+    reason:
+      type: string
+      maxLength: 255
+      nullable: true
+GroceryImportResultDto:
+  type: object
+  required: [addedItems, mergedItems, updatedSupplierProducts, warnings]
+  properties:
+    addedItems:
+      type: array
+      items: { $ref: '#/InventoryItemDto' }
+    mergedItems:
+      type: array
+      items: { $ref: '#/InventoryItemDto' }
+    updatedSupplierProducts:
+      type: array
+      items: { $ref: '#/SupplierProductDto' }
+    warnings:
+      type: array
+      items: { type: string, maxLength: 255 }

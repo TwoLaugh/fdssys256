@@ -1,5 +1,6 @@
 package com.example.mealprep.provisions.domain.service.internal;
 
+import com.example.mealprep.provisions.event.ItemAddedFromGroceryEvent;
 import com.example.mealprep.provisions.event.ItemAdjustmentSource;
 import com.example.mealprep.provisions.event.ItemQuantityAdjustedEvent;
 import com.example.mealprep.provisions.event.ItemRanOutEvent;
@@ -55,6 +56,29 @@ class ProvisionEventBatcher {
   }
 
   /**
+   * Record one added-from-grocery item id for {@code (userId, supplier, orderRef)}. Items are
+   * de-duplicated within a tx; a duplicate {@code itemId} for the same key is a no-op. Trace id is
+   * taken from the first call for a given key. Implements the single-event-per-operation contract
+   * (LLD line 572) for {@link ItemAddedFromGroceryEvent} — one import touching 15 items emits
+   * exactly one event carrying all 15 ids.
+   */
+  void recordItemAddedFromGrocery(
+      UUID userId, UUID itemId, String supplier, String orderRef, UUID traceId) {
+    State s = state();
+    AddedFromGroceryKey key = new AddedFromGroceryKey(userId, supplier, orderRef);
+    AddedFromGroceryValue v =
+        s.addedFromGrocery.computeIfAbsent(
+            key,
+            k ->
+                new AddedFromGroceryValue(
+                    new LinkedHashMap<>(), traceId == null ? UUID.randomUUID() : traceId));
+    v.itemIds.putIfAbsent(itemId, Boolean.TRUE);
+    if (s.directPublish) {
+      flushDirect(s);
+    }
+  }
+
+  /**
    * Record one ran-out item id for {@code (userId, ingredientMappingKey)}. {@code wasStaple}
    * mirrors the row's staple flag at the time of the transition.
    */
@@ -96,6 +120,7 @@ class ProvisionEventBatcher {
     flushAfterCommit(s);
     s.adjust.clear();
     s.ranOut.clear();
+    s.addedFromGrocery.clear();
   }
 
   private void flushAfterCommit(State s) {
@@ -115,6 +140,16 @@ class ProvisionEventBatcher {
                     v.wasStaple,
                     v.traceId,
                     now)));
+    s.addedFromGrocery.forEach(
+        (k, v) ->
+            publisher.publishEvent(
+                new ItemAddedFromGroceryEvent(
+                    k.userId,
+                    List.copyOf(v.itemIds.keySet()),
+                    k.supplier,
+                    k.orderRef,
+                    v.traceId,
+                    now)));
   }
 
   /**
@@ -123,6 +158,7 @@ class ProvisionEventBatcher {
   private static final class State {
     final Map<AdjustKey, AdjustValue> adjust = new LinkedHashMap<>();
     final Map<RanOutKey, RanOutValue> ranOut = new LinkedHashMap<>();
+    final Map<AddedFromGroceryKey, AddedFromGroceryValue> addedFromGrocery = new LinkedHashMap<>();
     boolean directPublish;
   }
 
@@ -161,6 +197,32 @@ class ProvisionEventBatcher {
     RanOutValue(Map<UUID, Boolean> itemIds, boolean wasStaple, UUID traceId) {
       this.itemIds = itemIds;
       this.wasStaple = wasStaple;
+      this.traceId = traceId;
+    }
+  }
+
+  private record AddedFromGroceryKey(UUID userId, String supplier, String orderRef) {
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) return true;
+      if (!(o instanceof AddedFromGroceryKey that)) return false;
+      return Objects.equals(userId, that.userId)
+          && Objects.equals(supplier, that.supplier)
+          && Objects.equals(orderRef, that.orderRef);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(userId, supplier, orderRef);
+    }
+  }
+
+  private static final class AddedFromGroceryValue {
+    final Map<UUID, Boolean> itemIds;
+    final UUID traceId;
+
+    AddedFromGroceryValue(Map<UUID, Boolean> itemIds, UUID traceId) {
+      this.itemIds = itemIds;
       this.traceId = traceId;
     }
   }

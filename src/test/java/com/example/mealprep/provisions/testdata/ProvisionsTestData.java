@@ -6,6 +6,9 @@ import com.example.mealprep.provisions.api.dto.CookEventCommand;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
+import com.example.mealprep.provisions.api.dto.GroceryOrderImportCommand;
+import com.example.mealprep.provisions.api.dto.GroceryOrderLine;
+import com.example.mealprep.provisions.api.dto.GroceryOrderSubstitution;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.LogWasteRequest;
 import com.example.mealprep.provisions.api.dto.MealConsumptionCommand;
@@ -27,6 +30,7 @@ import com.example.mealprep.provisions.domain.entity.Equipment;
 import com.example.mealprep.provisions.domain.entity.InventoryItem;
 import com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus;
 import com.example.mealprep.provisions.domain.entity.ItemSource;
+import com.example.mealprep.provisions.domain.entity.ProvisionGroceryImportLog;
 import com.example.mealprep.provisions.domain.entity.StapleStatus;
 import com.example.mealprep.provisions.domain.entity.StorageLocation;
 import com.example.mealprep.provisions.domain.entity.SubstitutionRecord;
@@ -36,6 +40,7 @@ import com.example.mealprep.provisions.domain.entity.WasteEntry;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -390,6 +395,71 @@ public final class ProvisionsTestData {
   public static StandaloneConsumptionCommand standaloneConsumptionCommand(
       String key, BigDecimal quantity, String unit, boolean confirmed) {
     return new StandaloneConsumptionCommand(key, quantity, unit, confirmed, null);
+  }
+
+  // ---------------- Grocery-import builders (01h) ----------------
+
+  /**
+   * Grocery-order import command for {@code supplier="tesco"} with one quantity-tracked line and no
+   * substitutions. The lines list is mutable so tests can extend it; {@code traceId} is null.
+   */
+  public static GroceryOrderImportCommand groceryOrderImportCommand(
+      String supplier, String orderRef) {
+    return new GroceryOrderImportCommand(
+        supplier,
+        orderRef,
+        LocalDate.parse("2026-05-10"),
+        new ArrayList<>(List.of(groceryOrderLine())),
+        null,
+        null);
+  }
+
+  /** Grocery-order import command with a caller-supplied list of lines. */
+  public static GroceryOrderImportCommand groceryOrderImportCommand(
+      String supplier, String orderRef, List<GroceryOrderLine> lines) {
+    return new GroceryOrderImportCommand(
+        supplier, orderRef, LocalDate.parse("2026-05-10"), new ArrayList<>(lines), null, null);
+  }
+
+  /** Default line — Cheddar, 250 g, mapping key "cheese:cheddar", category "dairy". */
+  public static GroceryOrderLine groceryOrderLine() {
+    return new GroceryOrderLine(
+        "tesco:cheddar-250g",
+        "Cheddar 250g",
+        "cheese:cheddar",
+        new BigDecimal("250.000"),
+        "g",
+        new BigDecimal("3.49"),
+        "dairy",
+        250);
+  }
+
+  /** Build a line with a specific mapping key + category + quantity. */
+  public static GroceryOrderLine groceryOrderLine(
+      String productId, String mappingKey, String category, BigDecimal quantity) {
+    return new GroceryOrderLine(
+        productId,
+        productId + "-name",
+        mappingKey,
+        quantity,
+        "g",
+        new BigDecimal("1.00"),
+        category,
+        100);
+  }
+
+  public static GroceryOrderSubstitution groceryOrderSubstitution(
+      String ordered, String substituted, String reason) {
+    return new GroceryOrderSubstitution(ordered, substituted, reason);
+  }
+
+  public static ProvisionGroceryImportLog groceryImportLog(UUID userId, String orderRef) {
+    return new ProvisionGroceryImportLog(
+        userId,
+        ItemSource.TESCO_ORDER,
+        orderRef,
+        UUID.randomUUID(),
+        Instant.parse("2026-05-10T10:00:00Z"));
   }
 
   /** Populated planner-bundle stub — caller supplies the inner sections. */

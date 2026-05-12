@@ -702,3 +702,31 @@ provisionsStandaloneConsumption:
                 version: { type: integer, format: int64 }
       '400': { description: 'Validation error', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
       '401': { description: 'Unauthenticated', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+
+provisionsGroceryImport:
+  post:
+    tags: [Provisions]
+    operationId: applyGroceryOrder
+    summary: 'Apply a grocery-order import; upserts supplier products and creates/merges inventory rows by expiry.'
+    description: 'Idempotent on (userId, source, orderRef); re-submission yields 409 duplicate-grocery-import.'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/provisions.yaml#/GroceryOrderImportCommand' }
+    responses:
+      '200':
+        description: 'Import result; addedItems, mergedItems, updatedSupplierProducts, and advisory warnings.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/GroceryImportResultDto' }
+      '400':
+        description: 'Validation error'
+        content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } }
+      '401':
+        description: 'Unauthenticated'
+        content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } }
+      '409':
+        description: 'Duplicate grocery import; the same (source, orderRef) was already applied for this user.'
+        content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } }
