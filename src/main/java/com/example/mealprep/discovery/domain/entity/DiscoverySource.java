@@ -26,10 +26,10 @@ import org.hibernate.annotations.UpdateTimestamp;
 /**
  * Aggregate root for a discovery source. Mutable on the bookkeeping fields the runner updates
  * ({@code enabled} via admin, {@code failureStreak} / {@code lastFailureAt} / {@code lastSuccessAt}
- * / {@code lastUsedAt} via the runner, {@code qualityScore} via the rolling-stats job). The
- * runner reads enabled sources once per job — toggles take effect on the next job. {@code
- * crawlConfig} is an opaque {@code JsonNode} (sitemap URL / RSS URL / search engine id), read whole
- * by the source impl.
+ * / {@code lastUsedAt} via the runner, {@code qualityScore} via the rolling-stats job). The runner
+ * reads enabled sources once per job — toggles take effect on the next job. {@code crawlConfig} is
+ * an opaque {@code JsonNode} (sitemap URL / RSS URL / search engine id), read whole by the source
+ * impl.
  */
 @Entity
 @Table(

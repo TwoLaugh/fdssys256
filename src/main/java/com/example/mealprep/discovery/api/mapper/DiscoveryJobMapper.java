@@ -66,9 +66,9 @@ public class DiscoveryJobMapper {
   }
 
   /**
-   * Convert the persisted opaque {@link JsonNode} into a typed {@link DiscoveryConstraints}. Returns
-   * {@code null} for a null node so the field surfaces as {@code null} on the wire when the column
-   * (theoretically) is absent — 01b's service code always writes it, so this is defensive.
+   * Convert the persisted opaque {@link JsonNode} into a typed {@link DiscoveryConstraints}.
+   * Returns {@code null} for a null node so the field surfaces as {@code null} on the wire when the
+   * column (theoretically) is absent — 01b's service code always writes it, so this is defensive.
    */
   private DiscoveryConstraints toConstraints(JsonNode node) {
     if (node == null || node.isNull() || node.isMissingNode()) {

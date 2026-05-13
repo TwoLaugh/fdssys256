@@ -26,8 +26,8 @@ import org.hibernate.annotations.UpdateTimestamp;
 /**
  * Aggregate root for an async discovery job. State machine {@code QUEUED → RUNNING → SUCCEEDED |
  * FAILED | PARTIAL}. {@code constraintsJson} carries the frozen-at-enqueue {@code
- * DiscoveryConstraints} as opaque {@link JsonNode}; the service layer reads/writes the typed
- * record via Jackson.
+ * DiscoveryConstraints} as opaque {@link JsonNode}; the service layer reads/writes the typed record
+ * via Jackson.
  *
  * <p>{@code sourcesRequested}, {@code sourcesSucceeded}, {@code sourcesFailed}: spec calls for
  * {@code text[]}; per ticket invariant 9 the repo has hit repeated Hibernate text[] flakiness on

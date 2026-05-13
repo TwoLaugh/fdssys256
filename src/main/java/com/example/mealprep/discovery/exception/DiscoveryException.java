@@ -7,9 +7,9 @@ package com.example.mealprep.discovery.exception;
  * the (deferred-to-01b) {@code DiscoveryExceptionHandler} can map either the specific subtype or
  * the root if a future subtype lands without an explicit handler.
  *
- * <p>Mirrors the recipe module's {@code RecipeException}: the project-wide {@code MealPrepException}
- * root hasn't been introduced yet, so we extend {@link RuntimeException} directly per the same
- * convention.
+ * <p>Mirrors the recipe module's {@code RecipeException}: the project-wide {@code
+ * MealPrepException} root hasn't been introduced yet, so we extend {@link RuntimeException}
+ * directly per the same convention.
  */
 public class DiscoveryException extends RuntimeException {
 

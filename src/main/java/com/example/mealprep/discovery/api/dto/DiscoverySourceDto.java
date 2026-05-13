@@ -6,8 +6,8 @@ import java.util.UUID;
 
 /**
  * Cross-module read shape for {@code DiscoverySource}. Mirrors LLD lines 206-213; only operational
- * fields needed by admin / debug callers are exposed (no {@code crawlConfig} JSONB, no
- * {@code qualityScore} until v2).
+ * fields needed by admin / debug callers are exposed (no {@code crawlConfig} JSONB, no {@code
+ * qualityScore} until v2).
  */
 public record DiscoverySourceDto(
     UUID id,

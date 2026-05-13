@@ -12,8 +12,8 @@ import org.junit.jupiter.api.Test;
  * Round-trip discipline for the {@link DiscoveryConstraints} JSONB document per style-guide §JSONB
  * §Required discipline. Serialise → JsonNode → record; assert field-for-field equality so a silent
  * field drift in the record (a rename, a removed field, a missing {@code @JsonProperty}) breaks
- * here at unit-test time rather than at runtime when 01b's service tries to materialise a
- * persisted job.
+ * here at unit-test time rather than at runtime when 01b's service tries to materialise a persisted
+ * job.
  */
 class DiscoveryConstraintsRoundTripTest {
 
@@ -45,7 +45,8 @@ class DiscoveryConstraintsRoundTripTest {
   @Test
   void roundTrip_constraintsWithNullableFieldsAbsent_preservesNulls() throws Exception {
     DiscoveryConstraints original =
-        new DiscoveryConstraints(1, List.of(), List.of(), null, List.of(), List.of(), List.of(), null);
+        new DiscoveryConstraints(
+            1, List.of(), List.of(), null, List.of(), List.of(), List.of(), null);
 
     JsonNode tree = objectMapper.valueToTree(original);
     DiscoveryConstraints roundTripped = objectMapper.treeToValue(tree, DiscoveryConstraints.class);
@@ -58,7 +59,8 @@ class DiscoveryConstraintsRoundTripTest {
   @Test
   void roundTrip_serialisedStringContainsSchemaVersion() throws Exception {
     DiscoveryConstraints original =
-        new DiscoveryConstraints(1, List.of(), List.of(), null, List.of(), List.of(), List.of(), null);
+        new DiscoveryConstraints(
+            1, List.of(), List.of(), null, List.of(), List.of(), List.of(), null);
     String json = objectMapper.writeValueAsString(original);
     assertThat(json).contains("\"schemaVersion\":1");
   }

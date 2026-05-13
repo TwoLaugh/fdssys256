@@ -8,8 +8,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 /**
  * Async config skeleton for the discovery runner. Ships the {@code discoveryRunnerExecutor} bean
- * stub in 01a so 01d's {@code @Async("discoveryRunnerExecutor")} on {@code
- * DiscoveryJobRunner.run} resolves from day one.
+ * stub in 01a so 01d's {@code @Async("discoveryRunnerExecutor")} on {@code DiscoveryJobRunner.run}
+ * resolves from day one.
  *
  * <p>Pool sizing per LLD line 566: I/O-bound work, small parallelism. {@code CallerRunsPolicy}
  * provides the simplest backpressure when the queue is full — the publisher thread executes the

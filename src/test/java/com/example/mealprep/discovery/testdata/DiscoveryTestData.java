@@ -41,7 +41,8 @@ public final class DiscoveryTestData {
         .requestsPerDay(500)
         .respectRobotsTxt(true)
         .userAgent("MealPrepAI/1.0 (+https://example.test)")
-        .crawlConfig(OBJECT_MAPPER.createObjectNode().put("sitemap_url", "https://example.test/sitemap.xml"))
+        .crawlConfig(
+            OBJECT_MAPPER.createObjectNode().put("sitemap_url", "https://example.test/sitemap.xml"))
         .failureStreak(0)
         .qualityScore(new BigDecimal("0.750"))
         .build();

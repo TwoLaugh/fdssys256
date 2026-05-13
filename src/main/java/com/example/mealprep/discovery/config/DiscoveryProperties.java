@@ -11,8 +11,8 @@ import org.springframework.validation.annotation.Validated;
  *
  * <p>{@link #heartbeatTimeout} — orphan sweep cutoff in 01d ({@code RUNNING} jobs older than this
  * are finalised as {@code FAILED}). {@link #duplicateLookbackDays} — fingerprint-dedup lookback in
- * 01d. {@link #syncTimeout} — {@code runJobSync} hard cap in 01f. {@link #robotsCacheTtl} — per-host
- * robots.txt cache TTL in 01c.
+ * 01d. {@link #syncTimeout} — {@code runJobSync} hard cap in 01f. {@link #robotsCacheTtl} —
+ * per-host robots.txt cache TTL in 01c.
  *
  * <p>Spring Boot 3.x supports record-shaped {@code @ConfigurationProperties}; defaults assigned in
  * the canonical constructor below to keep the bean usable when no overrides are configured.

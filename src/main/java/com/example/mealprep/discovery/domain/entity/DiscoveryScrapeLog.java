@@ -16,9 +16,9 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /**
- * Append-only audit row for a single fetch attempt against a candidate URL. NO {@code @Version}
- * and NO {@code @UpdateTimestamp} (LLD line 195) — rows are written once at the time of the fetch
- * and never mutated.
+ * Append-only audit row for a single fetch attempt against a candidate URL. NO {@code @Version} and
+ * NO {@code @UpdateTimestamp} (LLD line 195) — rows are written once at the time of the fetch and
+ * never mutated.
  *
  * <p>{@code recipeId} is a SOFT foreign key (no {@code @ManyToOne} / {@code REFERENCES} clause to
  * {@code recipe_recipes}) per LLD line 181 — discovery must not pull the recipe module's tables
