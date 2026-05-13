@@ -1,0 +1,28 @@
+planById:
+  get:
+    tags: [Plans]
+    operationId: getPlan
+    summary: 'Fetch a plan by id; returns the full hydrated aggregate (days + slots + scheduled recipes).'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: planId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Plan with all child collections populated.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Plan not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

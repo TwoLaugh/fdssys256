@@ -1,0 +1,247 @@
+PlanStatus:
+  type: string
+  enum: [DRAFT, GENERATED, ACTIVE, SUPERSEDED, COMPLETED, REJECTED, ABANDONED]
+TriggerKind:
+  type: string
+  enum: [USER_INITIATED, SCHEDULED_WEEKLY, MID_WEEK_REOPT]
+PlannerSlotKind:
+  type: string
+  enum: [BREAKFAST, LUNCH, DINNER, SNACK, CUSTOM]
+SlotState:
+  type: string
+  enum: [PLANNED, COOKING, COOKED, EATEN, SKIPPED]
+PinnedReason:
+  type: string
+  enum: [EATEN, COOKED, COOKING, SKIPPED, USER_PINNED]
+AugmentationSource:
+  type: string
+  enum: [LLM, USER]
+ReoptTriggerKind:
+  type: string
+  enum: [PROVISIONS, NUTRITION, PREFERENCE, HOUSEHOLD_SETTINGS, USER]
+ReoptStatus:
+  type: string
+  enum: [PENDING, ACCEPTED, DISMISSED, EXPIRED]
+
+DailyRollupDocument:
+  type: object
+  required: [date, kcal, proteinG, fatG, carbsG, fibreG, costGbp, totalTimeMin, violations]
+  properties:
+    date: { type: string, format: date }
+    kcal: { type: integer }
+    proteinG: { type: number }
+    fatG: { type: number }
+    carbsG: { type: number }
+    fibreG: { type: number }
+    costGbp: { type: number }
+    totalTimeMin: { type: integer }
+    violations:
+      type: array
+      items: { type: string }
+
+WeeklyRollupDocument:
+  type: object
+  required:
+    - kcalTotal
+    - proteinAvgG
+    - fatAvgG
+    - carbsAvgG
+    - costEstimateGbp
+    - costConfidence
+    - staleIngredientCount
+    - varietyIndex
+    - batchCookSessions
+    - constraintViolations
+  properties:
+    kcalTotal: { type: integer }
+    proteinAvgG: { type: number }
+    fatAvgG: { type: number }
+    carbsAvgG: { type: number }
+    costEstimateGbp: { type: number }
+    costConfidence: { type: number }
+    staleIngredientCount: { type: integer }
+    varietyIndex: { type: number }
+    batchCookSessions: { type: integer }
+    constraintViolations:
+      type: array
+      items: { type: string }
+
+RollupSummaryDocument:
+  type: object
+  required: [daily, weekly]
+  properties:
+    daily:
+      type: array
+      items: { $ref: '#/DailyRollupDocument' }
+    weekly: { $ref: '#/WeeklyRollupDocument' }
+
+ScoreBreakdownDocument:
+  type: object
+  required:
+    - preference
+    - nutrition
+    - cost
+    - variety
+    - time
+    - batch
+    - provisions
+    - composite
+    - nutritionFloorGatePassed
+    - varietyGatePassed
+    - weightSchemeVersion
+  properties:
+    preference: { type: number }
+    nutrition: { type: number }
+    cost: { type: number }
+    variety: { type: number }
+    time: { type: number }
+    batch: { type: number }
+    provisions: { type: number }
+    composite: { type: number }
+    nutritionFloorGatePassed: { type: boolean }
+    varietyGatePassed: { type: boolean }
+    weightSchemeVersion: { type: string }
+
+ScheduledRecipeDto:
+  type: object
+  required: [id, recipeId, recipeVersionId, recipeBranchId, servings, phase2Addition]
+  properties:
+    id: { type: string, format: uuid }
+    recipeId: { type: string, format: uuid }
+    recipeVersionId: { type: string, format: uuid }
+    recipeBranchId: { type: string, format: uuid }
+    servings: { type: integer }
+    batchCookSessionId: { type: string, format: uuid, nullable: true }
+    augmentationNotes: { type: string, maxLength: 512, nullable: true }
+    augmentationSource:
+      type: string
+      enum: [LLM, USER]
+      nullable: true
+    phase2Addition: { type: boolean }
+
+MealSlotDto:
+  type: object
+  required: [id, slotIndex, kind, label, timeBudgetMin, shared, eaters, state]
+  properties:
+    id: { type: string, format: uuid }
+    slotIndex: { type: integer }
+    kind: { $ref: '#/PlannerSlotKind' }
+    label: { type: string, maxLength: 64 }
+    timeBudgetMin: { type: integer }
+    shared: { type: boolean }
+    eaters:
+      type: array
+      items: { type: string, format: uuid }
+    state: { $ref: '#/SlotState' }
+    pinnedReason:
+      type: string
+      enum: [EATEN, COOKED, COOKING, SKIPPED, USER_PINNED]
+      nullable: true
+    scheduledRecipe:
+      # Inlined nullable object — $ref + nullable: true is silently ignored by OpenAPI 3.0
+      # (gotchas #3). The same shape is published as a named ScheduledRecipeDto for reuse
+      # in future write endpoints; here we inline.
+      type: object
+      nullable: true
+      required: [id, recipeId, recipeVersionId, recipeBranchId, servings, phase2Addition]
+      properties:
+        id: { type: string, format: uuid }
+        recipeId: { type: string, format: uuid }
+        recipeVersionId: { type: string, format: uuid }
+        recipeBranchId: { type: string, format: uuid }
+        servings: { type: integer }
+        batchCookSessionId: { type: string, format: uuid, nullable: true }
+        augmentationNotes: { type: string, maxLength: 512, nullable: true }
+        augmentationSource:
+          type: string
+          enum: [LLM, USER]
+          nullable: true
+        phase2Addition: { type: boolean }
+
+DayDto:
+  type: object
+  required: [id, date, slots]
+  properties:
+    id: { type: string, format: uuid }
+    date: { type: string, format: date }
+    notes: { type: string, maxLength: 255, nullable: true }
+    slots:
+      type: array
+      items: { $ref: '#/MealSlotDto' }
+
+PlanDto:
+  type: object
+  required:
+    - id
+    - householdId
+    - weekStartDate
+    - generation
+    - status
+    - triggerKind
+    - qualityWarning
+    - coldStart
+    - aiAugmented
+    - traceId
+    - decisionId
+    - scoreBreakdown
+    - rollupSummary
+    - days
+    - version
+    - createdAt
+    - updatedAt
+  properties:
+    id: { type: string, format: uuid }
+    householdId: { type: string, format: uuid }
+    weekStartDate: { type: string, format: date }
+    generation: { type: integer }
+    replacesPlanId: { type: string, format: uuid, nullable: true }
+    status: { $ref: '#/PlanStatus' }
+    triggerKind: { $ref: '#/TriggerKind' }
+    triggerEventId: { type: string, format: uuid, nullable: true }
+    qualityWarning: { type: boolean }
+    coldStart: { type: boolean }
+    aiAugmented: { type: boolean }
+    traceId: { type: string, format: uuid }
+    decisionId: { type: string, format: uuid }
+    acceptedAt: { type: string, format: date-time, nullable: true }
+    completedAt: { type: string, format: date-time, nullable: true }
+    rejectedAt: { type: string, format: date-time, nullable: true }
+    rejectedReason: { type: string, maxLength: 255, nullable: true }
+    abandonedAt: { type: string, format: date-time, nullable: true }
+    abandonedReason: { type: string, maxLength: 255, nullable: true }
+    scoreBreakdown: { $ref: '#/ScoreBreakdownDocument' }
+    rollupSummary: { $ref: '#/RollupSummaryDocument' }
+    days:
+      type: array
+      items: { $ref: '#/DayDto' }
+    version: { type: integer, format: int64 }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+ReoptSuggestionDto:
+  type: object
+  required:
+    - id
+    - householdId
+    - weekStartDate
+    - planId
+    - triggerKind
+    - affectedSlotIds
+    - summary
+    - status
+    - createdAt
+  properties:
+    id: { type: string, format: uuid }
+    householdId: { type: string, format: uuid }
+    weekStartDate: { type: string, format: date }
+    planId: { type: string, format: uuid }
+    triggerKind: { $ref: '#/ReoptTriggerKind' }
+    triggerEventId: { type: string, format: uuid, nullable: true }
+    affectedSlotIds:
+      type: array
+      items: { type: string, format: uuid }
+    summary: { type: string, maxLength: 255 }
+    status: { $ref: '#/ReoptStatus' }
+    expiresAt: { type: string, format: date-time, nullable: true }
+    createdAt: { type: string, format: date-time }
+    resolvedAt: { type: string, format: date-time, nullable: true }
