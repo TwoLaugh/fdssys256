@@ -2,6 +2,7 @@ package com.example.mealprep.discovery.api.dto;
 
 import com.example.mealprep.discovery.domain.entity.DiscoveryJobTrigger;
 import com.example.mealprep.discovery.validation.ValidDiscoveryConstraints;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.annotation.Nullable;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
@@ -32,6 +33,7 @@ public record StartDiscoveryJobRequest(
    * Cross-record invariant: a per-source budget exceeding the total job quota is nonsensical.
    * Returns {@code true} when the rule passes (Jakarta semantics).
    */
+  @JsonIgnore
   @AssertTrue(message = "maxRecipesPerSource must be less than or equal to requestedCount")
   public boolean isMaxRecipesPerSourceWithinTotal() {
     if (constraints == null || constraints.maxRecipesPerSource() == null) {
