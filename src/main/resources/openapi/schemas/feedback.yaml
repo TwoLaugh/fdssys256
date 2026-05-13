@@ -1,0 +1,125 @@
+Screen:
+  type: string
+  enum: [RECIPE_DETAIL, PLAN_MEAL_DETAIL, PLAN_VIEW, GROCERY, NUTRITION_DASHBOARD, SETTINGS, GENERAL]
+SubmissionStatus:
+  type: string
+  enum: [RECEIVED, CLASSIFYING, CLASSIFIED, CLARIFICATION_PENDING, ROUTED, PARTIALLY_FAILED, FAILED, CORRECTED]
+Destination:
+  type: string
+  enum: [RECIPE, PREFERENCE, NUTRITION, PROVISIONS]
+RoutingDecision:
+  type: string
+  enum: [AUTO_ROUTED, ROUTED_WITH_FLAG, CLARIFICATION_QUEUED]
+RoutingStatus:
+  type: string
+  enum: [PENDING, APPLIED, FAILED, CORRECTED_AWAY, REPLAYED, AWAITING_USER_APPROVAL]
+RoutingFailureKind:
+  type: string
+  enum: [TRANSIENT, DESTINATION_VALIDATION, DESTINATION_BUSINESS, AI_UNAVAILABLE, UNKNOWN]
+UiContextDto:
+  type: object
+  required: [screen]
+  properties:
+    screen: { $ref: '#/Screen' }
+    recipeId:
+      type: string
+      format: uuid
+      nullable: true
+    recipeVersion:
+      type: integer
+      nullable: true
+    mealSlotId:
+      type: string
+      format: uuid
+      nullable: true
+    planId:
+      type: string
+      format: uuid
+      nullable: true
+    referenceDate:
+      type: string
+      format: date
+      nullable: true
+RoutingDecisionDto:
+  type: object
+  required: [id, destination, confidence, decision, status, extractedFeedback]
+  properties:
+    id: { type: string, format: uuid }
+    destination: { $ref: '#/Destination' }
+    confidence: { type: number, format: float, minimum: 0, maximum: 1 }
+    decision: { $ref: '#/RoutingDecision' }
+    status: { $ref: '#/RoutingStatus' }
+    extractedFeedback: { type: string }
+    actionTaken:
+      type: string
+      maxLength: 512
+      nullable: true
+    destinationResult:
+      type: object
+      nullable: true
+      additionalProperties: true
+      description: 'Destination-typed result shell; shape depends on destination.'
+    failureMessage:
+      type: string
+      maxLength: 512
+      nullable: true
+FeedbackEntryDto:
+  type: object
+  required: [id, userId, text, context, submissionStatus, classificationAttempts, traceId, routes, createdAt, updatedAt]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    text: { type: string }
+    context: { $ref: '#/UiContextDto' }
+    submissionStatus: { $ref: '#/SubmissionStatus' }
+    classificationAttempts: { type: integer }
+    lastClassifiedAt:
+      type: string
+      format: date-time
+      nullable: true
+    traceId: { type: string, format: uuid }
+    routes:
+      type: array
+      items: { $ref: '#/RoutingDecisionDto' }
+    pendingClarificationQueryId:
+      type: string
+      format: uuid
+      nullable: true
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+SubmitFeedbackRequest:
+  type: object
+  required: [text, context]
+  properties:
+    text: { type: string, minLength: 1, maxLength: 4000 }
+    context: { $ref: '#/UiContextDto' }
+SubmitFeedbackResponse:
+  type: object
+  required: [feedbackId, traceId, submissionStatus, routes]
+  properties:
+    feedbackId: { type: string, format: uuid }
+    traceId: { type: string, format: uuid }
+    submissionStatus: { $ref: '#/SubmissionStatus' }
+    routes:
+      type: array
+      items: { $ref: '#/RoutingDecisionDto' }
+    pendingClarificationQueryId:
+      type: string
+      format: uuid
+      nullable: true
+FeedbackEntryDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/FeedbackEntryDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }

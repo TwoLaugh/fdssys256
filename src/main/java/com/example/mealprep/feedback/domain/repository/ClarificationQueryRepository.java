@@ -14,7 +14,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
  * Spring Data repository for {@link ClarificationQuery}. Package-private; cross-module callers go
  * through {@code FeedbackQueryService} / {@code FeedbackUpdateService}.
  */
-interface ClarificationQueryRepository extends JpaRepository<ClarificationQuery, UUID> {
+public interface ClarificationQueryRepository extends JpaRepository<ClarificationQuery, UUID> {
 
   Optional<ClarificationQuery> findByIdAndFeedbackEntryUserId(UUID id, UUID userId);
 
@@ -24,4 +24,12 @@ interface ClarificationQueryRepository extends JpaRepository<ClarificationQuery,
   /** Daily expiry sweep — feedback-01e. */
   List<ClarificationQuery> findByStatusAndExpiresAtBefore(
       ClarificationStatus status, Instant before);
+
+  /**
+   * Used by {@code FeedbackServiceImpl.getById} to populate {@code
+   * FeedbackEntryDto.pendingClarificationQueryId}. By convention there is at most one {@code
+   * PENDING} clarification per entry — see feedback-01e for the partial-unique-index follow-up.
+   */
+  Optional<ClarificationQuery> findFirstByFeedbackEntryIdAndStatus(
+      UUID feedbackEntryId, ClarificationStatus status);
 }

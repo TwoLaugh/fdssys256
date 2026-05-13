@@ -202,6 +202,11 @@ paths:
   # ===== planner =====
   /api/v1/plans/{planId}:
     $ref: 'paths/planner.yaml#/planById'
+  # ===== feedback =====
+  /api/v1/feedback:
+    $ref: 'paths/feedback.yaml#/feedback'
+  /api/v1/feedback/{feedbackId}:
+    $ref: 'paths/feedback.yaml#/feedbackById'
 components:
   securitySchemes:
     cookieAuth:
@@ -433,6 +438,19 @@ components:
     DayDto: { $ref: 'schemas/planner.yaml#/DayDto' }
     PlanDto: { $ref: 'schemas/planner.yaml#/PlanDto' }
     ReoptSuggestionDto: { $ref: 'schemas/planner.yaml#/ReoptSuggestionDto' }
+    # feedback
+    Destination: { $ref: 'schemas/feedback.yaml#/Destination' }
+    FeedbackEntryDto: { $ref: 'schemas/feedback.yaml#/FeedbackEntryDto' }
+    FeedbackEntryDtoPage: { $ref: 'schemas/feedback.yaml#/FeedbackEntryDtoPage' }
+    RoutingDecision: { $ref: 'schemas/feedback.yaml#/RoutingDecision' }
+    RoutingDecisionDto: { $ref: 'schemas/feedback.yaml#/RoutingDecisionDto' }
+    RoutingFailureKind: { $ref: 'schemas/feedback.yaml#/RoutingFailureKind' }
+    RoutingStatus: { $ref: 'schemas/feedback.yaml#/RoutingStatus' }
+    Screen: { $ref: 'schemas/feedback.yaml#/Screen' }
+    SubmissionStatus: { $ref: 'schemas/feedback.yaml#/SubmissionStatus' }
+    SubmitFeedbackRequest: { $ref: 'schemas/feedback.yaml#/SubmitFeedbackRequest' }
+    SubmitFeedbackResponse: { $ref: 'schemas/feedback.yaml#/SubmitFeedbackResponse' }
+    UiContextDto: { $ref: 'schemas/feedback.yaml#/UiContextDto' }
     # ai
     TaskType: { $ref: 'schemas/ai.yaml#/TaskType' }
     ModelTier: { $ref: 'schemas/ai.yaml#/ModelTier' }

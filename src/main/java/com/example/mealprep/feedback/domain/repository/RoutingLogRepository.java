@@ -18,7 +18,7 @@ import org.springframework.data.repository.query.Param;
  * fix is switching to {@code select new com.example.mealprep.feedback.domain.repository.…(…)}
  * constructor projection (per ticket 01a §22).
  */
-interface RoutingLogRepository extends JpaRepository<RoutingLogEntry, UUID> {
+public interface RoutingLogRepository extends JpaRepository<RoutingLogEntry, UUID> {
 
   List<RoutingLogEntry> findByFeedbackEntryIdOrderByRoutedAtAsc(UUID entryId);
 
