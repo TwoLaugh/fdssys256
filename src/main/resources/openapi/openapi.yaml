@@ -199,6 +199,9 @@ paths:
     $ref: 'paths/recipe.yaml#/recipeUnarchive'
   /api/v1/recipes/admin/run-archive-scan:
     $ref: 'paths/recipe.yaml#/recipeAdminRunArchiveScan'
+  # ===== planner =====
+  /api/v1/plans/{planId}:
+    $ref: 'paths/planner.yaml#/planById'
 components:
   securitySchemes:
     cookieAuth:
@@ -412,6 +415,24 @@ components:
     SubstitutionItemRequest: { $ref: 'schemas/recipe.yaml#/SubstitutionItemRequest' }
     SubstitutionReason: { $ref: 'schemas/recipe.yaml#/SubstitutionReason' }
     SubstitutionState: { $ref: 'schemas/recipe.yaml#/SubstitutionState' }
+    # planner
+    PlanStatus: { $ref: 'schemas/planner.yaml#/PlanStatus' }
+    TriggerKind: { $ref: 'schemas/planner.yaml#/TriggerKind' }
+    PlannerSlotKind: { $ref: 'schemas/planner.yaml#/PlannerSlotKind' }
+    SlotState: { $ref: 'schemas/planner.yaml#/SlotState' }
+    PinnedReason: { $ref: 'schemas/planner.yaml#/PinnedReason' }
+    AugmentationSource: { $ref: 'schemas/planner.yaml#/AugmentationSource' }
+    ReoptTriggerKind: { $ref: 'schemas/planner.yaml#/ReoptTriggerKind' }
+    ReoptStatus: { $ref: 'schemas/planner.yaml#/ReoptStatus' }
+    DailyRollupDocument: { $ref: 'schemas/planner.yaml#/DailyRollupDocument' }
+    WeeklyRollupDocument: { $ref: 'schemas/planner.yaml#/WeeklyRollupDocument' }
+    RollupSummaryDocument: { $ref: 'schemas/planner.yaml#/RollupSummaryDocument' }
+    ScoreBreakdownDocument: { $ref: 'schemas/planner.yaml#/ScoreBreakdownDocument' }
+    ScheduledRecipeDto: { $ref: 'schemas/planner.yaml#/ScheduledRecipeDto' }
+    MealSlotDto: { $ref: 'schemas/planner.yaml#/MealSlotDto' }
+    DayDto: { $ref: 'schemas/planner.yaml#/DayDto' }
+    PlanDto: { $ref: 'schemas/planner.yaml#/PlanDto' }
+    ReoptSuggestionDto: { $ref: 'schemas/planner.yaml#/ReoptSuggestionDto' }
     # ai
     TaskType: { $ref: 'schemas/ai.yaml#/TaskType' }
     ModelTier: { $ref: 'schemas/ai.yaml#/ModelTier' }
