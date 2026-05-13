@@ -8,10 +8,11 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 /**
- * Spring Data repository for {@link AdaptationTrace}. Package-private per LLD line 414. Verbatim
- * from {@code lld/adaptation-pipeline.md} lines 447-452.
+ * Spring Data repository for {@link AdaptationTrace}. {@code public} so the in-module {@code
+ * domain.service} package can inject it; cross-module isolation comes from the (01f-shipping)
+ * {@code ModuleBoundaryArchTest}. Verbatim from {@code lld/adaptation-pipeline.md} lines 447-452.
  */
-interface AdaptationTraceRepository extends JpaRepository<AdaptationTrace, UUID> {
+public interface AdaptationTraceRepository extends JpaRepository<AdaptationTrace, UUID> {
 
   Optional<AdaptationTrace> findByJobId(UUID jobId);
 

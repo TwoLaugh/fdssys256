@@ -10,10 +10,11 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 /**
- * Spring Data repository for {@link PlannerHintRecord}. Package-private per LLD line 414. Verbatim
- * from {@code lld/adaptation-pipeline.md} lines 460-468.
+ * Spring Data repository for {@link PlannerHintRecord}. {@code public} so the in-module {@code
+ * domain.service} package can inject it; cross-module isolation comes from the (01f-shipping)
+ * {@code ModuleBoundaryArchTest}. Verbatim from {@code lld/adaptation-pipeline.md} lines 460-468.
  */
-interface PlannerHintRecordRepository extends JpaRepository<PlannerHintRecord, UUID> {
+public interface PlannerHintRecordRepository extends JpaRepository<PlannerHintRecord, UUID> {
 
   @Query("select h from PlannerHintRecord h where h.versionId = :vid and h.invalidatedAt is null")
   List<PlannerHintRecord> findActiveForVersion(@Param("vid") UUID versionId);
