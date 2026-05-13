@@ -17,7 +17,7 @@ import org.springframework.data.repository.query.Param;
  * through {@code DiscoveryQueryService} / {@code DiscoveryService}. The {@code
  * DiscoveryBoundaryTest} (ArchUnit) backstops the visibility rule.
  */
-interface DiscoveryJobRepository extends JpaRepository<DiscoveryJob, UUID> {
+public interface DiscoveryJobRepository extends JpaRepository<DiscoveryJob, UUID> {
 
   Optional<DiscoveryJob> findByIdAndUserId(UUID id, UUID userId);
 

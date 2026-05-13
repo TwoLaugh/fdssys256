@@ -207,6 +207,25 @@ paths:
     $ref: 'paths/feedback.yaml#/feedback'
   /api/v1/feedback/{feedbackId}:
     $ref: 'paths/feedback.yaml#/feedbackById'
+  # ===== discovery =====
+  /api/v1/discovery/jobs:
+    $ref: 'paths/discovery.yaml#/discoveryJobs'
+  /api/v1/discovery/jobs/{jobId}:
+    $ref: 'paths/discovery.yaml#/discoveryJobById'
+  /api/v1/discovery/jobs/{jobId}/cancel:
+    $ref: 'paths/discovery.yaml#/discoveryJobCancel'
+  /api/v1/discovery/jobs/{jobId}/scrape-log:
+    $ref: 'paths/discovery.yaml#/discoveryJobScrapeLog'
+  /api/v1/discovery/sources:
+    $ref: 'paths/discovery.yaml#/discoverySources'
+  /api/v1/discovery/sources/{sourceKey}:
+    $ref: 'paths/discovery.yaml#/discoverySourceById'
+  /api/v1/discovery/admin/sources/{sourceKey}/enable:
+    $ref: 'paths/discovery.yaml#/discoveryAdminSourceEnable'
+  /api/v1/discovery/admin/sources/{sourceKey}/disable:
+    $ref: 'paths/discovery.yaml#/discoveryAdminSourceDisable'
+  /api/v1/discovery/admin/run-orphan-sweep:
+    $ref: 'paths/discovery.yaml#/discoveryAdminOrphanSweep'
 components:
   securitySchemes:
     cookieAuth:
@@ -458,6 +477,22 @@ components:
     PromptTemplateDto: { $ref: 'schemas/ai.yaml#/PromptTemplateDto' }
     CostSummaryUserEntry: { $ref: 'schemas/ai.yaml#/CostSummaryUserEntry' }
     CostSummaryDto: { $ref: 'schemas/ai.yaml#/CostSummaryDto' }
+    # discovery
+    DiscoveryConstraints: { $ref: 'schemas/discovery.yaml#/DiscoveryConstraints' }
+    DiscoveryJobDto: { $ref: 'schemas/discovery.yaml#/DiscoveryJobDto' }
+    DiscoveryJobDtoPage: { $ref: 'schemas/discovery.yaml#/DiscoveryJobDtoPage' }
+    DiscoveryJobStatus: { $ref: 'schemas/discovery.yaml#/DiscoveryJobStatus' }
+    DiscoveryJobTrigger: { $ref: 'schemas/discovery.yaml#/DiscoveryJobTrigger' }
+    DiscoveryScrapeLogEntryDto: { $ref: 'schemas/discovery.yaml#/DiscoveryScrapeLogEntryDto' }
+    DiscoveryScrapeLogEntryDtoPage: { $ref: 'schemas/discovery.yaml#/DiscoveryScrapeLogEntryDtoPage' }
+    DiscoverySourceDto: { $ref: 'schemas/discovery.yaml#/DiscoverySourceDto' }
+    DiscoverySourceKind: { $ref: 'schemas/discovery.yaml#/DiscoverySourceKind' }
+    DiscoverySourceType: { $ref: 'schemas/discovery.yaml#/DiscoverySourceType' }
+    OrphanSweepResultDto: { $ref: 'schemas/discovery.yaml#/OrphanSweepResultDto' }
+    RobotsTxtOutcome: { $ref: 'schemas/discovery.yaml#/RobotsTxtOutcome' }
+    ScrapeOutcome: { $ref: 'schemas/discovery.yaml#/ScrapeOutcome' }
+    ScrapeSkipReason: { $ref: 'schemas/discovery.yaml#/ScrapeSkipReason' }
+    StartDiscoveryJobRequest: { $ref: 'schemas/discovery.yaml#/StartDiscoveryJobRequest' }
     # common (cross-module)
     ProblemDetail: { $ref: 'schemas/common.yaml#/ProblemDetail' }
   responses:

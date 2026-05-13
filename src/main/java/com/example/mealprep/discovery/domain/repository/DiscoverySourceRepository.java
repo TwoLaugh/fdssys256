@@ -11,7 +11,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
  * Spring Data repository for {@link DiscoverySource}. Package-private — cross-module callers go
  * through {@code DiscoveryQueryService}.
  */
-interface DiscoverySourceRepository extends JpaRepository<DiscoverySource, UUID> {
+public interface DiscoverySourceRepository extends JpaRepository<DiscoverySource, UUID> {
 
   Optional<DiscoverySource> findBySourceKey(String sourceKey);
 

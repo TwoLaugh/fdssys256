@@ -11,7 +11,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
  * Spring Data repository for {@link DiscoveryScrapeLog}. Package-private — cross-module callers go
  * through {@code DiscoveryQueryService}.
  */
-interface DiscoveryScrapeLogRepository extends JpaRepository<DiscoveryScrapeLog, UUID> {
+public interface DiscoveryScrapeLogRepository extends JpaRepository<DiscoveryScrapeLog, UUID> {
 
   Page<DiscoveryScrapeLog> findByJobIdOrderByOccurredAt(UUID jobId, Pageable pageable);
 
