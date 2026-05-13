@@ -49,6 +49,9 @@ public final class DiscoveryTestData {
   }
 
   public static DiscoveryConstraints sampleConstraints() {
+    // maxRecipesPerSource (last arg) must be <= requestedCount in StartDiscoveryJobRequest;
+    // tests typically pass requestedCount=5 so cap this at 3 to satisfy the @AssertTrue
+    // cross-field check.
     return new DiscoveryConstraints(
         1,
         List.of("East Asian"),
@@ -57,7 +60,7 @@ public final class DiscoveryTestData {
         List.of("peanuts"),
         List.of("vegetarian"),
         List.of("lighter dishes"),
-        20);
+        3);
   }
 
   public static DiscoveryJob sampleJob(UUID userId) {

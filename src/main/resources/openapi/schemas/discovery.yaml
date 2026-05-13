@@ -1,0 +1,227 @@
+DiscoveryJobStatus:
+  type: string
+  enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, PARTIAL]
+DiscoveryJobTrigger:
+  type: string
+  enum: [COLD_START, USER_INITIATED, SCHEDULED]
+DiscoverySourceKind:
+  type: string
+  enum: [SITEMAP, RSS_FEED, CATEGORY_INDEX, SEARCH_API]
+DiscoverySourceType:
+  type: string
+  enum: [CURATED, SEARCH]
+ScrapeOutcome:
+  type: string
+  enum:
+    - SUCCESS
+    - SKIPPED
+    - RATE_LIMITED
+    - ROBOTS_DISALLOWED
+    - HTTP_ERROR
+    - EXTRACTION_FAILED
+    - DUPLICATE
+    - HARD_CONSTRAINT_VIOLATION
+RobotsTxtOutcome:
+  type: string
+  enum: [ALLOWED, DISALLOWED, UNAVAILABLE, SKIPPED]
+ScrapeSkipReason:
+  type: string
+  enum:
+    - DUPLICATE
+    - HARD_CONSTRAINT
+    - LOW_CONFIDENCE
+    - RATE_LIMITED
+    - ROBOTS_DISALLOWED
+    - JOB_QUOTA_REACHED
+    - AI_FILTER_REJECTED
+
+DiscoveryConstraints:
+  type: object
+  required: [schemaVersion]
+  properties:
+    schemaVersion: { type: integer, minimum: 1 }
+    requiredCuisines:
+      type: array
+      items: { type: string, minLength: 1 }
+      nullable: true
+    requiredMealTypes:
+      type: array
+      items: { type: string, minLength: 1 }
+      nullable: true
+    maxTotalTimeMins: { type: integer, minimum: 0, nullable: true }
+    mustExcludeIngredientMappingKeys:
+      type: array
+      items: { type: string, minLength: 1 }
+      nullable: true
+    dietaryFlags:
+      type: array
+      items: { type: string, minLength: 1 }
+      nullable: true
+    preferenceHints:
+      type: array
+      items: { type: string, minLength: 1 }
+      nullable: true
+    maxRecipesPerSource: { type: integer, minimum: 1, nullable: true }
+
+StartDiscoveryJobRequest:
+  type: object
+  required: [trigger, requestedCount, constraints]
+  properties:
+    trigger: { $ref: '#/DiscoveryJobTrigger' }
+    requestedCount: { type: integer, minimum: 1, maximum: 50 }
+    constraints: { $ref: '#/DiscoveryConstraints' }
+    sourceKeys:
+      type: array
+      items: { type: string, minLength: 1, maxLength: 64 }
+      nullable: true
+    traceId: { type: string, format: uuid, nullable: true }
+
+DiscoverySourceDto:
+  type: object
+  required:
+    - id
+    - sourceKey
+    - displayName
+    - kind
+    - baseUrl
+    - enabled
+    - requestsPerMinute
+    - requestsPerDay
+    - respectRobotsTxt
+    - userAgent
+    - failureStreak
+    - optimisticVersion
+  properties:
+    id: { type: string, format: uuid }
+    sourceKey: { type: string, maxLength: 64 }
+    displayName: { type: string, maxLength: 120 }
+    kind: { $ref: '#/DiscoverySourceKind' }
+    baseUrl: { type: string, maxLength: 255 }
+    enabled: { type: boolean }
+    requestsPerMinute: { type: integer, minimum: 0 }
+    requestsPerDay: { type: integer, minimum: 0 }
+    respectRobotsTxt: { type: boolean }
+    userAgent: { type: string, maxLength: 160 }
+    failureStreak: { type: integer, minimum: 0 }
+    lastFailureAt: { type: string, format: date-time, nullable: true }
+    lastSuccessAt: { type: string, format: date-time, nullable: true }
+    notes: { type: string, nullable: true }
+    optimisticVersion: { type: integer, format: int64 }
+
+DiscoveryJobDto:
+  type: object
+  required:
+    - id
+    - userId
+    - trigger
+    - requestedCount
+    - constraints
+    - sourcesRequested
+    - status
+    - queuedAt
+    - candidatesSeen
+    - candidatesAfterFilter
+    - recipesIngested
+    - recipesSkippedDuplicate
+    - sourcesSucceeded
+    - sourcesFailed
+    - traceId
+    - optimisticVersion
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    trigger: { $ref: '#/DiscoveryJobTrigger' }
+    requestedCount: { type: integer, minimum: 1 }
+    constraints: { $ref: '#/DiscoveryConstraints' }
+    sourcesRequested:
+      type: array
+      items: { type: string }
+    status: { $ref: '#/DiscoveryJobStatus' }
+    queuedAt: { type: string, format: date-time }
+    startedAt: { type: string, format: date-time, nullable: true }
+    completedAt: { type: string, format: date-time, nullable: true }
+    candidatesSeen: { type: integer, minimum: 0 }
+    candidatesAfterFilter: { type: integer, minimum: 0 }
+    recipesIngested: { type: integer, minimum: 0 }
+    recipesSkippedDuplicate: { type: integer, minimum: 0 }
+    sourcesSucceeded:
+      type: array
+      items: { type: string }
+    sourcesFailed:
+      type: array
+      items: { type: string }
+    errorSummary: { type: string, nullable: true }
+    traceId: { type: string, format: uuid }
+    optimisticVersion: { type: integer, format: int64 }
+
+DiscoveryScrapeLogEntryDto:
+  type: object
+  required: [id, jobId, sourceKey, candidateUrl, status, robotsTxtOutcome, occurredAt]
+  properties:
+    id: { type: string, format: uuid }
+    jobId: { type: string, format: uuid }
+    sourceKey: { type: string, maxLength: 64 }
+    candidateUrl: { type: string, maxLength: 2048 }
+    canonicalUrl: { type: string, maxLength: 2048, nullable: true }
+    status: { $ref: '#/ScrapeOutcome' }
+    httpStatusCode: { type: integer, nullable: true }
+    robotsTxtOutcome: { $ref: '#/RobotsTxtOutcome' }
+    latencyMs: { type: integer, minimum: 0, nullable: true }
+    contentFingerprint: { type: string, maxLength: 64, nullable: true }
+    extractionMethod: { type: string, maxLength: 32, nullable: true }
+    extractionConfidence: { type: number, minimum: 0, maximum: 1, nullable: true }
+    recipeId: { type: string, format: uuid, nullable: true }
+    skipReason:
+      type: string
+      enum:
+        - DUPLICATE
+        - HARD_CONSTRAINT
+        - LOW_CONFIDENCE
+        - RATE_LIMITED
+        - ROBOTS_DISALLOWED
+        - JOB_QUOTA_REACHED
+        - AI_FILTER_REJECTED
+      nullable: true
+    errorClass: { type: string, maxLength: 64, nullable: true }
+    errorMessage: { type: string, nullable: true }
+    occurredAt: { type: string, format: date-time }
+
+OrphanSweepResultDto:
+  type: object
+  required: [resumedCount]
+  properties:
+    resumedCount: { type: integer, minimum: 0 }
+
+DiscoveryJobDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/DiscoveryJobDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+
+DiscoveryScrapeLogEntryDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/DiscoveryScrapeLogEntryDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }

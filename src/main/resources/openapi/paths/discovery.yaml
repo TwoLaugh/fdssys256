@@ -1,0 +1,275 @@
+discoveryJobs:
+  post:
+    tags: [Discovery]
+    operationId: startDiscoveryJob
+    summary: 'Enqueue a discovery job; returns the queued DTO. The async runner picks it up via DiscoveryJobStartedEvent.'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/discovery.yaml#/StartDiscoveryJobRequest' }
+    responses:
+      '202':
+        description: 'Job queued.'
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/discovery.yaml#/DiscoveryJobDto' }
+      '400':
+        description: 'Validation error.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'No enabled source matched or unknown source keys.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  get:
+    tags: [Discovery]
+    operationId: listDiscoveryJobs
+    summary: 'Paginated discovery-job history for the current user, queued-at descending.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of jobs.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/discovery.yaml#/DiscoveryJobDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+discoveryJobById:
+  get:
+    tags: [Discovery]
+    operationId: getDiscoveryJob
+    summary: 'Fetch a discovery job by id.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: jobId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Job DTO.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/discovery.yaml#/DiscoveryJobDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+discoveryJobCancel:
+  post:
+    tags: [Discovery]
+    operationId: cancelDiscoveryJob
+    summary: 'Cancel a queued discovery job. Idempotent for terminal states (returns 422).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: jobId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Cancelled job DTO (status flipped to FAILED).'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/discovery.yaml#/DiscoveryJobDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Already terminal or in-flight (01b limitation).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+discoveryJobScrapeLog:
+  get:
+    tags: [Discovery]
+    operationId: getDiscoveryJobScrapeLog
+    summary: 'Page of scrape-log rows for the given job. 404 if job not found.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: jobId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of scrape rows.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/discovery.yaml#/DiscoveryScrapeLogEntryDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Job not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+discoverySources:
+  get:
+    tags: [Discovery]
+    operationId: listDiscoverySources
+    summary: 'List all discovery sources.'
+    security: [{ cookieAuth: [] }]
+    responses:
+      '200':
+        description: 'All sources.'
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/discovery.yaml#/DiscoverySourceDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+discoverySourceById:
+  get:
+    tags: [Discovery]
+    operationId: getDiscoverySource
+    summary: 'Fetch a discovery source by its stable key.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: sourceKey
+        required: true
+        schema: { type: string, maxLength: 64 }
+    responses:
+      '200':
+        description: 'Source DTO.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/discovery.yaml#/DiscoverySourceDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+discoveryAdminSourceEnable:
+  post:
+    tags: [Discovery]
+    operationId: enableDiscoverySource
+    summary: 'Admin: enable a discovery source (idempotent).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: sourceKey
+        required: true
+        schema: { type: string, maxLength: 64 }
+    responses:
+      '200':
+        description: 'Source enabled.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/discovery.yaml#/DiscoverySourceDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Source not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+discoveryAdminSourceDisable:
+  post:
+    tags: [Discovery]
+    operationId: disableDiscoverySource
+    summary: 'Admin: disable a discovery source (idempotent). Does NOT set userDisabled.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: sourceKey
+        required: true
+        schema: { type: string, maxLength: 64 }
+    responses:
+      '200':
+        description: 'Source disabled.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/discovery.yaml#/DiscoverySourceDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Source not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+discoveryAdminOrphanSweep:
+  post:
+    tags: [Discovery]
+    operationId: runDiscoveryOrphanSweep
+    summary: 'Resume orphan RUNNING jobs (heartbeat-stale). Returns count resumed. 01b placeholder returns 0.'
+    security: [{ cookieAuth: [] }]
+    responses:
+      '200':
+        description: 'Sweep complete.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/discovery.yaml#/OrphanSweepResultDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
