@@ -82,15 +82,17 @@ class AdaptationPendingChangeIndexIT {
     // Flip the existing PENDING to SUPERSEDED first; the FK on superseded_by is satisfied later
     // when the new row inserts and we update the pointer. Mirrors LLD §V20260615120100: the partial
     // unique index allows the new PENDING only once the old one has left PENDING status.
+    // Re-bind `first` to the returned managed entity so @Version increments don't go stale on the
+    // second update (round-8 retro: StaleObjectStateException when reusing the pre-save reference).
     first.setStatus(PendingChangeStatus.SUPERSEDED);
-    pendingChangeRepository.saveAndFlush(first);
+    first = pendingChangeRepository.saveAndFlush(first);
 
     PendingChange second =
         pendingChangeRepository.saveAndFlush(
             newPending(recipeId, ChangeDimension.SALT_LEVEL, PendingChangeStatus.PENDING, job2));
 
     first.setSupersededBy(second.getId());
-    pendingChangeRepository.saveAndFlush(first);
+    first = pendingChangeRepository.saveAndFlush(first);
 
     assertThat(second.getStatus()).isEqualTo(PendingChangeStatus.PENDING);
     assertThat(pendingChangeRepository.findAll()).hasSize(2);
