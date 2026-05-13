@@ -1,0 +1,12 @@
+-- Adaptation pipeline — 01a repeatable stub.
+-- See lld/adaptation-pipeline.md §Repeatable migrations (lines 244-245) and the 01a
+-- ticket §Migration timestamps and ordering ("R__adaptation_seed_change_dimensions.sql").
+--
+-- ChangeDimension is enum-backed in 01a (com.example.mealprep.adaptation.domain.enums.ChangeDimension);
+-- there is no lookup table. This file ships as a content-free stub so the filename is reserved for
+-- the v1.x change-dimension seed work, should that lookup table ever land (e.g. for FE-side dropdowns
+-- or admin tooling). Unseeded values surface a WARN and fall back to GENERAL per LLD line 245.
+--
+-- Flyway accepts an empty-but-present repeatable file; the SELECT below is a deterministic no-op
+-- that produces no rows or side effects.
+SELECT 1 WHERE FALSE;

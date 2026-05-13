@@ -1,0 +1,49 @@
+package com.example.mealprep.adaptation.domain.repository;
+
+import com.example.mealprep.adaptation.domain.entity.AdaptationJob;
+import com.example.mealprep.adaptation.domain.enums.JobStatus;
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+/**
+ * Spring Data repository for {@link AdaptationJob}. Package-private per LLD line 414 — cross-module
+ * access goes through the (01b-shipping) service interfaces. Verbatim from {@code
+ * lld/adaptation-pipeline.md} lines 417-430.
+ */
+interface AdaptationJobRepository extends JpaRepository<AdaptationJob, UUID> {
+
+  Optional<AdaptationJob> findByIdAndStatusIn(UUID id, Collection<JobStatus> statuses);
+
+  /**
+   * Worker scan in source-priority order: SYNC first, then ASYNC, then BATCH, breaking ties by
+   * {@code enqueuedAt} ascending.
+   */
+  @Query(
+      """
+      select j from AdaptationJob j where j.status = com.example.mealprep.adaptation.domain.enums.JobStatus.PENDING
+       order by case j.priority
+                  when com.example.mealprep.adaptation.domain.enums.JobPriority.SYNC then 0
+                  when com.example.mealprep.adaptation.domain.enums.JobPriority.ASYNC then 1
+                  else 2
+                end, j.enqueuedAt""")
+  List<AdaptationJob> findNextPendingJobs(Pageable pageable);
+
+  Page<AdaptationJob> findByRecipeIdOrderByEnqueuedAtDesc(UUID recipeId, Pageable p);
+
+  Page<AdaptationJob> findByUserIdAndStatusOrderByEnqueuedAtDesc(
+      UUID userId, JobStatus s, Pageable p);
+
+  @Query(
+      """
+      select j from AdaptationJob j where j.recipeId = :rid
+       and j.status in (com.example.mealprep.adaptation.domain.enums.JobStatus.PENDING,
+                        com.example.mealprep.adaptation.domain.enums.JobStatus.RUNNING)""")
+  List<AdaptationJob> findActiveByRecipeId(@Param("rid") UUID recipeId);
+}
