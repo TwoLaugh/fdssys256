@@ -21,7 +21,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
  * confirmation view. The page-list query does <i>not</i> eager-load the log; the timeline view
  * renders a pill summary only.
  */
-interface FeedbackEntryRepository extends JpaRepository<FeedbackEntry, UUID> {
+public interface FeedbackEntryRepository extends JpaRepository<FeedbackEntry, UUID> {
 
   @EntityGraph(attributePaths = {"routingLog"})
   Optional<FeedbackEntry> findWithRoutingByIdAndUserId(UUID id, UUID userId);

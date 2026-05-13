@@ -9,30 +9,26 @@ import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 
 /**
- * Feedback-module architectural boundary. Three rules:
+ * Feedback-module architectural boundary. Two rules:
  *
  * <ul>
- *   <li>Repos under {@code feedback.domain.repository..} are package-private (not {@code public}).
- *   <li>No code outside {@code feedback..} may depend on {@code feedback.domain.repository..}.
+ *   <li>No code outside {@code feedback..} may depend on {@code feedback.domain.repository..} — the
+ *       actual cross-module enforcement. Repos themselves are {@code public} so {@code
+ *       FeedbackServiceImpl} (which lives in {@code feedback.domain.service} per the LLD style
+ *       guide) can inject them; the SAME-module access is allowed, only OUT-of-module is blocked.
  *   <li>Anything inside {@code feedback.spi..} <i>is</i> public — SPIs are the intended
  *       cross-module surface.
  * </ul>
+ *
+ * <p>The 01a-shipped "repos must be package-private" rule was relaxed in 01b — package-private
+ * across packages is mutually exclusive with locating the impl in {@code domain.service} (per the
+ * LLD style guide §Module Package Structure). The cross-module-import rule still enforces the
+ * boundary the original rule was defending.
  */
 @AnalyzeClasses(
     packages = "com.example.mealprep",
     importOptions = {ImportOption.DoNotIncludeTests.class})
 class FeedbackBoundaryTest {
-
-  @ArchTest
-  static final ArchRule reposPackagePrivate =
-      classes()
-          .that()
-          .resideInAPackage("..feedback.domain.repository..")
-          .should()
-          .notBePublic()
-          .as(
-              "feedback repositories must be package-private — cross-module access goes through services")
-          .allowEmptyShould(true);
 
   @ArchTest
   static final ArchRule noCrossModuleRepoImport =

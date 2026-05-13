@@ -1,0 +1,84 @@
+feedback:
+  post:
+    tags: [Feedback]
+    operationId: submitFeedback
+    summary: 'Submit a free-text feedback entry. Classification + routing run asynchronously after commit.'
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/feedback.yaml#/SubmitFeedbackRequest' }
+    responses:
+      '202':
+        description: 'Feedback received; classification + routing pending.'
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/feedback.yaml#/SubmitFeedbackResponse' }
+      '400':
+        description: 'Validation error.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  get:
+    tags: [Feedback]
+    operationId: listFeedback
+    summary: 'Paginated list of the caller''s feedback entries, newest-first.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of feedback entries.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/feedback.yaml#/FeedbackEntryDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+feedbackById:
+  get:
+    tags: [Feedback]
+    operationId: getFeedback
+    summary: 'Fetch a single feedback entry with its routing log.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: feedbackId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Feedback entry.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/feedback.yaml#/FeedbackEntryDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Not found, or belongs to another user.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

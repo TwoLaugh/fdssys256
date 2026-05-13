@@ -1,6 +1,8 @@
 package com.example.mealprep.feedback.testdata;
 
 import com.example.mealprep.feedback.api.dto.Screen;
+import com.example.mealprep.feedback.api.dto.SubmitFeedbackRequest;
+import com.example.mealprep.feedback.api.dto.UiContextDto;
 import com.example.mealprep.feedback.domain.document.UiContextDocument;
 import com.example.mealprep.feedback.domain.entity.ClarificationQuery;
 import com.example.mealprep.feedback.domain.entity.ClarificationStatus;
@@ -104,6 +106,22 @@ public final class FeedbackTestData {
         .status(ClarificationStatus.PENDING)
         .expiresAt(Instant.now().plus(7, ChronoUnit.DAYS).truncatedTo(ChronoUnit.MILLIS))
         .build();
+  }
+
+  public static UiContextDto uiContextDto(UUID recipeId) {
+    return new UiContextDto(Screen.RECIPE_DETAIL, recipeId, 1, null, null, null);
+  }
+
+  public static UiContextDto uiContextDtoGeneral() {
+    return new UiContextDto(Screen.GENERAL, null, null, null, null, null);
+  }
+
+  public static SubmitFeedbackRequest submitFeedbackRequest(String text) {
+    return new SubmitFeedbackRequest(text, uiContextDto(UUID.randomUUID()));
+  }
+
+  public static SubmitFeedbackRequest submitFeedbackRequest(String text, UiContextDto context) {
+    return new SubmitFeedbackRequest(text, context);
   }
 
   public static MisclassificationCorrection misclassificationCorrection(

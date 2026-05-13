@@ -22,4 +22,26 @@ public record FeedbackEntryDto(
     List<RoutingDecisionDto> routes,
     UUID pendingClarificationQueryId,
     Instant createdAt,
-    Instant updatedAt) {}
+    Instant updatedAt) {
+
+  /**
+   * Returns a copy with {@code pendingClarificationQueryId} replaced. Used by {@code
+   * FeedbackServiceImpl.getById} to enrich the DTO after the mapper has produced it — the mapper
+   * cannot do the clarification-repo lookup itself.
+   */
+  public FeedbackEntryDto withPendingClarificationQueryId(UUID pendingId) {
+    return new FeedbackEntryDto(
+        this.id,
+        this.userId,
+        this.text,
+        this.context,
+        this.submissionStatus,
+        this.classificationAttempts,
+        this.lastClassifiedAt,
+        this.traceId,
+        this.routes,
+        pendingId,
+        this.createdAt,
+        this.updatedAt);
+  }
+}
