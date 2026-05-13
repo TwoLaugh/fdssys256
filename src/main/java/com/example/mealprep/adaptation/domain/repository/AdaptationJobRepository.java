@@ -13,11 +13,12 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 /**
- * Spring Data repository for {@link AdaptationJob}. Package-private per LLD line 414 — cross-module
- * access goes through the (01b-shipping) service interfaces. Verbatim from {@code
- * lld/adaptation-pipeline.md} lines 417-430.
+ * Spring Data repository for {@link AdaptationJob}. {@code public} so the in-module {@code
+ * domain.service} package can inject it (mirrors the pattern used by {@code RecipeRepository} /
+ * {@code InventoryItemRepository}); cross-module isolation comes from the (01f-shipping) {@code
+ * ModuleBoundaryArchTest}. Verbatim from {@code lld/adaptation-pipeline.md} lines 417-430.
  */
-interface AdaptationJobRepository extends JpaRepository<AdaptationJob, UUID> {
+public interface AdaptationJobRepository extends JpaRepository<AdaptationJob, UUID> {
 
   Optional<AdaptationJob> findByIdAndStatusIn(UUID id, Collection<JobStatus> statuses);
 

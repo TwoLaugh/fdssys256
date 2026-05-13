@@ -15,10 +15,11 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 /**
- * Spring Data repository for {@link PendingChange}. Package-private per LLD line 414. Verbatim from
- * {@code lld/adaptation-pipeline.md} lines 432-445.
+ * Spring Data repository for {@link PendingChange}. {@code public} so the in-module {@code
+ * domain.service} package can inject it; cross-module isolation comes from the (01f-shipping)
+ * {@code ModuleBoundaryArchTest}. Verbatim from {@code lld/adaptation-pipeline.md} lines 432-445.
  */
-interface PendingChangeRepository extends JpaRepository<PendingChange, UUID> {
+public interface PendingChangeRepository extends JpaRepository<PendingChange, UUID> {
 
   Optional<PendingChange> findByRecipeIdAndChangeDimensionAndStatus(
       UUID rid, ChangeDimension d, PendingChangeStatus s);
