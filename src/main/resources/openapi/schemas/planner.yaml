@@ -245,3 +245,37 @@ ReoptSuggestionDto:
     expiresAt: { type: string, format: date-time, nullable: true }
     createdAt: { type: string, format: date-time }
     resolvedAt: { type: string, format: date-time, nullable: true }
+
+PlanDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/PlanDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+
+ReoptSuggestionDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/ReoptSuggestionDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }

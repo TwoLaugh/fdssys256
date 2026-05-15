@@ -15,6 +15,16 @@ public class PlanNotFoundException extends PlannerException {
     this.planId = planId;
   }
 
+  /**
+   * 01c overload — the active/history/range endpoints have no plan-id to throw with; the message
+   * already carries the (household, week) context. The {@link #planId()} accessor returns {@code
+   * null} in that branch.
+   */
+  public PlanNotFoundException(String message) {
+    super(message);
+    this.planId = null;
+  }
+
   public UUID planId() {
     return planId;
   }

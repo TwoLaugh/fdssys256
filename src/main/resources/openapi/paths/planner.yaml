@@ -26,3 +26,143 @@ planById:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+plansActive:
+  get:
+    tags: [Plans]
+    operationId: getActivePlan
+    summary: 'Fetch the currently ACTIVE plan for a household and week.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: householdId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: weekStartDate
+        required: true
+        schema: { type: string, format: date }
+    responses:
+      '200':
+        description: 'Active plan.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No active plan for this household and week.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+plansHistory:
+  get:
+    tags: [Plans]
+    operationId: getPlanHistory
+    summary: 'Fetch all plan generations for a (household, weekStartDate); latest generation first; capped at 100.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: householdId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: weekStartDate
+        required: true
+        schema: { type: string, format: date }
+    responses:
+      '200':
+        description: 'Plan history list (may be empty); latest generation first; capped at 100.'
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/planner.yaml#/PlanDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+plansRange:
+  get:
+    tags: [Plans]
+    operationId: getPlansBetween
+    summary: 'Paginated list of plans for a household over a date range; sorted by weekStartDate DESC, generation DESC.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: householdId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: from
+        required: true
+        schema: { type: string, format: date }
+      - in: query
+        name: to
+        required: true
+        schema: { type: string, format: date }
+      - in: query
+        name: page
+        required: false
+        schema: { type: integer, default: 0, minimum: 0 }
+      - in: query
+        name: size
+        required: false
+        schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+    responses:
+      '200':
+        description: 'Page of plans.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanDtoPage' }
+      '400':
+        description: 'Validation error (e.g. from > to).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+plansSuggestions:
+  get:
+    tags: [Plans]
+    operationId: getPendingSuggestions
+    summary: 'List PENDING re-opt suggestions for a household, sorted by createdAt DESC.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: householdId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: page
+        required: false
+        schema: { type: integer, default: 0, minimum: 0 }
+      - in: query
+        name: size
+        required: false
+        schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+    responses:
+      '200':
+        description: 'Page of PENDING suggestions.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/ReoptSuggestionDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
