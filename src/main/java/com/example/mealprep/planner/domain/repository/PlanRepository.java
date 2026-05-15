@@ -1,6 +1,7 @@
 package com.example.mealprep.planner.domain.repository;
 
 import com.example.mealprep.planner.domain.entity.Plan;
+import com.example.mealprep.planner.domain.entity.PlanStatus;
 import java.time.LocalDate;
 import java.util.Optional;
 import java.util.UUID;
@@ -26,4 +27,12 @@ public interface PlanRepository extends JpaRepository<Plan, UUID> {
   Optional<Plan> findFirstByHouseholdIdAndWeekStartDate(UUID householdId, LocalDate weekStartDate);
 
   int countByHouseholdIdAndWeekStartDate(UUID householdId, LocalDate weekStartDate);
+
+  /**
+   * Used by {@code PlanGenerationCounter.currentActivePlanIdFor} to find the {@code ACTIVE} plan
+   * for a scope so the generation flow can populate {@code Plan.replacesPlanId} (Flow 4 / Flow 6).
+   * Backed by {@code idx_planner_plans_household_week_status} from 01a.
+   */
+  Optional<Plan> findFirstByHouseholdIdAndWeekStartDateAndStatus(
+      UUID householdId, LocalDate weekStartDate, PlanStatus status);
 }

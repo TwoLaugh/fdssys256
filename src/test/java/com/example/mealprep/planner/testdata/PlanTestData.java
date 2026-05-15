@@ -126,4 +126,41 @@ public final class PlanTestData {
     }
     return plan;
   }
+
+  /**
+   * Minimal {@link Plan} in {@code GENERATED} state for the given {@code (household, week,
+   * generation)} tuple. No days/slots — used by {@link
+   * com.example.mealprep.planner.PlanGenerationCounterIT} and other 01b+ tests that don't care
+   * about the child graph.
+   */
+  public static Plan testGeneratedPlan(UUID householdId, LocalDate weekStartDate, int generation) {
+    return basePlanBuilder(householdId, weekStartDate, generation, PlanStatus.GENERATED).build();
+  }
+
+  /**
+   * Minimal {@link Plan} in {@code ACTIVE} state. No days/slots — used by the counter IT to verify
+   * {@code currentActivePlanIdFor} returns the right id.
+   */
+  public static Plan testActivePlan(UUID householdId, LocalDate weekStartDate, int generation) {
+    return basePlanBuilder(householdId, weekStartDate, generation, PlanStatus.ACTIVE).build();
+  }
+
+  private static Plan.PlanBuilder basePlanBuilder(
+      UUID householdId, LocalDate weekStartDate, int generation, PlanStatus status) {
+    return Plan.builder()
+        .id(UUID.randomUUID())
+        .householdId(householdId)
+        .weekStartDate(weekStartDate)
+        .generation(generation)
+        .status(status)
+        .triggerKind(TriggerKind.USER_INITIATED)
+        .qualityWarning(false)
+        .coldStart(false)
+        .aiAugmented(false)
+        .traceId(UUID.randomUUID())
+        .decisionId(UUID.randomUUID())
+        .scoreBreakdown(zeroScoreBreakdown())
+        .rollupSummary(emptyRollup())
+        .days(new ArrayList<>());
+  }
 }

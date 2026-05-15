@@ -1,9 +1,13 @@
 package com.example.mealprep.planner.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.planner.exception.ConcurrentGenerationInProgressException;
+import com.example.mealprep.planner.exception.InvalidPlanStateTransitionException;
+import com.example.mealprep.planner.exception.InvalidSlotStateTransitionException;
 import com.example.mealprep.planner.exception.MealSlotNotFoundException;
 import com.example.mealprep.planner.exception.PlanNotFoundException;
 import com.example.mealprep.planner.exception.ReoptSuggestionNotFoundException;
+import com.example.mealprep.planner.exception.RevertTargetNotInHistoryException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -65,6 +69,66 @@ public class PlannerExceptionHandler {
             "Re-opt suggestion not found",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(InvalidPlanStateTransitionException.class)
+  public ResponseEntity<ProblemDetail> handleInvalidPlanStateTransition(
+      InvalidPlanStateTransitionException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "invalid-plan-state-transition",
+            "Invalid plan state transition",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(InvalidSlotStateTransitionException.class)
+  public ResponseEntity<ProblemDetail> handleInvalidSlotStateTransition(
+      InvalidSlotStateTransitionException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "invalid-slot-state-transition",
+            "Invalid slot state transition",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(ConcurrentGenerationInProgressException.class)
+  public ResponseEntity<ProblemDetail> handleConcurrentGeneration(
+      ConcurrentGenerationInProgressException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "concurrent-generation",
+            "Concurrent plan generation in progress",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RevertTargetNotInHistoryException.class)
+  public ResponseEntity<ProblemDetail> handleRevertTargetNotInHistory(
+      RevertTargetNotInHistoryException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "revert-target-invalid",
+            "Revert target is not in caller's history",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }
