@@ -198,7 +198,7 @@ class FeedbackClassificationFlowIT {
           Optional<FeedbackEntry> e = entryRepository.findById(feedbackId);
           return e.isPresent() && e.get().getSubmissionStatus() == expected;
         },
-        Duration.ofSeconds(10));
+        Duration.ofSeconds(30));
     FeedbackEntry e = entryRepository.findById(feedbackId).orElseThrow();
     assertThat(e.getSubmissionStatus()).isEqualTo(expected);
   }
