@@ -352,14 +352,17 @@ class DiscoveryJobsControllerIT {
   }
 
   @Test
-  void cancel_runningJob_returns422_in01b() throws Exception {
+  void cancel_runningJob_returns200_setsCancellationFlag() throws Exception {
+    // 01d: cancel of a RUNNING job sets the in-memory flag and returns the current DTO (still
+    // RUNNING). The runner sees the flag at its next iteration and finalises FAILED.
     AuthedUser user = registerUser();
     seedSource("src_a", true);
     UUID jobId = seedAndPostJob(user);
     jdbcTemplate.update("UPDATE discovery_jobs SET status = 'RUNNING' WHERE id = ?", jobId);
 
     mvc.perform(post("/api/v1/discovery/jobs/" + jobId + "/cancel").cookie(user.cookie()))
-        .andExpect(status().isUnprocessableEntity());
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("RUNNING"));
   }
 
   // ---------------- helpers ----------------

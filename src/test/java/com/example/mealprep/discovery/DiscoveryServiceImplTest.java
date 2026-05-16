@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import com.example.mealprep.discovery.api.dto.DiscoveryJobDto;
 import com.example.mealprep.discovery.api.dto.DiscoverySourceDto;
+import com.example.mealprep.discovery.api.dto.OrphanSweepResultDto;
 import com.example.mealprep.discovery.api.dto.StartDiscoveryJobRequest;
 import com.example.mealprep.discovery.api.mapper.DiscoveryJobMapper;
 import com.example.mealprep.discovery.api.mapper.DiscoveryScrapeLogMapper;
@@ -22,6 +23,7 @@ import com.example.mealprep.discovery.domain.entity.DiscoverySourceKind;
 import com.example.mealprep.discovery.domain.repository.DiscoveryJobRepository;
 import com.example.mealprep.discovery.domain.repository.DiscoveryScrapeLogRepository;
 import com.example.mealprep.discovery.domain.repository.DiscoverySourceRepository;
+import com.example.mealprep.discovery.domain.service.internal.DiscoveryJobRunner;
 import com.example.mealprep.discovery.domain.service.internal.DiscoveryServiceImpl;
 import com.example.mealprep.discovery.event.DiscoveryJobStartedEvent;
 import com.example.mealprep.discovery.exception.DiscoveryConstraintInvalidException;
@@ -56,6 +58,7 @@ class DiscoveryServiceImplTest {
   @Mock private DiscoverySourceMapper sourceMapper;
   @Mock private DiscoveryScrapeLogMapper scrapeLogMapper;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private DiscoveryJobRunner runner;
 
   private DiscoveryServiceImpl service;
 
@@ -70,7 +73,8 @@ class DiscoveryServiceImplTest {
             sourceMapper,
             scrapeLogMapper,
             eventPublisher,
-            new ObjectMapper());
+            new ObjectMapper(),
+            runner);
   }
 
   // ---------- startJob ----------
@@ -177,6 +181,7 @@ class DiscoveryServiceImplTest {
     assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.FAILED);
     assertThat(job.getErrorSummary()).isEqualTo("cancelled by user");
     assertThat(job.getCompletedAt()).isNotNull();
+    verify(runner).requestCancellation(jobId);
   }
 
   @Test
@@ -201,16 +206,20 @@ class DiscoveryServiceImplTest {
   }
 
   @Test
-  void cancelJob_runningState_throws422_in01b() {
+  void cancelJob_runningState_setsCancellationFlag_doesNotMutateRow() {
     UUID userId = UUID.randomUUID();
     UUID jobId = UUID.randomUUID();
     DiscoveryJob job = DiscoveryTestData.sampleJob(userId);
     job.setId(jobId);
     job.setStatus(DiscoveryJobStatus.RUNNING);
     when(jobRepository.findByIdAndUserId(jobId, userId)).thenReturn(Optional.of(job));
-    assertThatThrownBy(() -> service.cancelJob(userId, jobId))
-        .isInstanceOf(DiscoveryJobAlreadyTerminalException.class)
-        .hasMessageContaining("queued-only");
+
+    service.cancelJob(userId, jobId);
+
+    verify(runner).requestCancellation(jobId);
+    // 01d: the row stays RUNNING; the runner transitions it on next iteration.
+    assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.RUNNING);
+    verify(jobRepository, never()).saveAndFlush(any(DiscoveryJob.class));
   }
 
   // ---------- enable/disable ----------
@@ -257,8 +266,10 @@ class DiscoveryServiceImplTest {
   // ---------- runOrphanSweep ----------
 
   @Test
-  void runOrphanSweep_returnsZeroInPlaceholder() {
-    assertThat(service.runOrphanSweep().resumedCount()).isZero();
+  void runOrphanSweep_delegatesToRunner() {
+    when(runner.sweepOrphansNow()).thenReturn(new OrphanSweepResultDto(3));
+    assertThat(service.runOrphanSweep().resumedCount()).isEqualTo(3);
+    verify(runner).sweepOrphansNow();
   }
 
   // ---------- helpers ----------

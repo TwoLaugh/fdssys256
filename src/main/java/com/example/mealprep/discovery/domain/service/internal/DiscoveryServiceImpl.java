@@ -76,6 +76,7 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
   private final DiscoveryScrapeLogMapper scrapeLogMapper;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
+  private final DiscoveryJobRunner runner;
 
   public DiscoveryServiceImpl(
       DiscoveryJobRepository jobRepository,
@@ -85,7 +86,8 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
       DiscoverySourceMapper sourceMapper,
       DiscoveryScrapeLogMapper scrapeLogMapper,
       ApplicationEventPublisher eventPublisher,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      DiscoveryJobRunner runner) {
     this.jobRepository = jobRepository;
     this.sourceRepository = sourceRepository;
     this.scrapeLogRepository = scrapeLogRepository;
@@ -94,6 +96,7 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
     this.scrapeLogMapper = scrapeLogMapper;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
+    this.runner = runner;
   }
 
   // ===== DiscoveryService — update path =====
@@ -165,9 +168,16 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
       throw new DiscoveryJobAlreadyTerminalException(jobId, job.getStatus());
     }
     if (job.getStatus() == DiscoveryJobStatus.RUNNING) {
-      // 01b limitation: in-memory cancellation flag for RUNNING jobs ships with 01d.
-      throw new DiscoveryJobAlreadyTerminalException(jobId, job.getStatus());
+      // 01d: set the in-memory cancellation flag; the runner sees it on its next per-candidate
+      // iteration and finalises early. The endpoint returns 200 with status=RUNNING; the caller
+      // polls. Per ticket invariants 32-35.
+      runner.requestCancellation(jobId);
+      return;
     }
+    // QUEUED branch: flip atomically and also set the cancellation flag for safety (no-op since
+    // the runner hasn't started yet — the map will be cleared by the runner's finally block if
+    // the listener somehow picks the job up between our save and the cancel signal).
+    runner.requestCancellation(jobId);
     job.setStatus(DiscoveryJobStatus.FAILED);
     job.setCompletedAt(Instant.now());
     job.setErrorSummary("cancelled by user");
@@ -203,9 +213,7 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
 
   @Override
   public OrphanSweepResultDto runOrphanSweep() {
-    log.warn(
-        "runOrphanSweep called on 01b placeholder — real implementation lands with discovery-01d");
-    return new OrphanSweepResultDto(0);
+    return runner.sweepOrphansNow();
   }
 
   // ===== DiscoveryQueryService — read path =====
