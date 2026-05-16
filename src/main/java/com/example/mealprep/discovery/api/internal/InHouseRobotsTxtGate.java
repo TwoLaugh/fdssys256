@@ -14,7 +14,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
@@ -30,13 +29,17 @@ import org.springframework.web.client.RestClientException;
  * dependency (which would be a separate {@code chore:} ticket per the playbook). Covers {@code
  * User-agent} + {@code Disallow} with prefix match. {@code Allow:} precedence and wildcard paths
  * are NOT supported — if production traffic surfaces those, a future {@code chore:} ticket can swap
- * to crawler-commons via {@link ConditionalOnMissingBean}.
+ * to crawler-commons.
  *
  * <p>Per-host cache keyed by hostname with {@link DiscoveryProperties#robotsCacheTtl} TTL.
  * Thundering-herd on miss is acceptable (per-host cost is one extra HTTP GET).
+ *
+ * <p>Plain {@code @Component} (no {@code @ConditionalOnMissingBean}) because round-5 retro: the
+ * conditional fires during component-scan before any other {@code RobotsTxtGate} provider can
+ * register, so the impl never gates on. If a future ticket needs an override, switch to a
+ * {@code @Configuration + @Bean @ConditionalOnMissingBean} factory pattern.
  */
 @Component
-@ConditionalOnMissingBean(RobotsTxtGate.class)
 public class InHouseRobotsTxtGate implements RobotsTxtGate {
 
   private static final Logger log = LoggerFactory.getLogger(InHouseRobotsTxtGate.class);
