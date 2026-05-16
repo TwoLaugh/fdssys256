@@ -51,6 +51,7 @@ public class InHouseRobotsTxtGate implements RobotsTxtGate {
   private final String uriTemplate;
   private final Map<String, CachedRobotsTxt> cache = new ConcurrentHashMap<>();
 
+  @org.springframework.beans.factory.annotation.Autowired
   public InHouseRobotsTxtGate(
       RestClient robotsRestClient, DiscoveryProperties properties, Clock clock) {
     this(robotsRestClient, properties, clock, DEFAULT_URI_TEMPLATE);
