@@ -200,6 +200,14 @@ paths:
   /api/v1/recipes/admin/run-archive-scan:
     $ref: 'paths/recipe.yaml#/recipeAdminRunArchiveScan'
   # ===== planner =====
+  /api/v1/plans:
+    $ref: 'paths/planner.yaml#/plansRange'
+  /api/v1/plans/active:
+    $ref: 'paths/planner.yaml#/plansActive'
+  /api/v1/plans/history:
+    $ref: 'paths/planner.yaml#/plansHistory'
+  /api/v1/plans/suggestions:
+    $ref: 'paths/planner.yaml#/plansSuggestions'
   /api/v1/plans/{planId}:
     $ref: 'paths/planner.yaml#/planById'
   # ===== feedback =====
@@ -456,7 +464,9 @@ components:
     MealSlotDto: { $ref: 'schemas/planner.yaml#/MealSlotDto' }
     DayDto: { $ref: 'schemas/planner.yaml#/DayDto' }
     PlanDto: { $ref: 'schemas/planner.yaml#/PlanDto' }
+    PlanDtoPage: { $ref: 'schemas/planner.yaml#/PlanDtoPage' }
     ReoptSuggestionDto: { $ref: 'schemas/planner.yaml#/ReoptSuggestionDto' }
+    ReoptSuggestionDtoPage: { $ref: 'schemas/planner.yaml#/ReoptSuggestionDtoPage' }
     # feedback
     Destination: { $ref: 'schemas/feedback.yaml#/Destination' }
     FeedbackEntryDto: { $ref: 'schemas/feedback.yaml#/FeedbackEntryDto' }

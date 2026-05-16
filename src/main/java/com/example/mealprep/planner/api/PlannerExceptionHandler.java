@@ -15,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -129,6 +130,27 @@ public class PlannerExceptionHandler {
             "Revert target is not in caller's history",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  /**
+   * Spring throws this when a required {@code @RequestParam} is missing. Without an explicit
+   * handler it falls through to {@code GlobalExceptionHandler}'s catch-all (500). 01c's read
+   * endpoints (e.g., {@code GET /api/v1/plans/active}) take required query params; this maps the
+   * missing-param case to the standard 400.
+   */
+  @ExceptionHandler(MissingServletRequestParameterException.class)
+  public ResponseEntity<ProblemDetail> handleMissingParam(
+      MissingServletRequestParameterException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.BAD_REQUEST,
+            ex.getMessage(),
+            "missing-query-parameter",
+            "Missing required query parameter",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

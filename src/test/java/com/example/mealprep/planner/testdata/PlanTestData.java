@@ -67,13 +67,27 @@ public final class PlanTestData {
    */
   public static Plan newPlanGraph(LocalDate weekStartDate, int numDays, int slotsPerDay) {
     UUID householdId = UUID.randomUUID();
+    return newPlanGraph(householdId, weekStartDate, 1, PlanStatus.GENERATED, numDays, slotsPerDay);
+  }
+
+  /**
+   * Variant that lets the caller pin household, generation, and status — used by 01c read tests to
+   * build multi-generation history fixtures and ACTIVE/SUPERSEDED state mixes.
+   */
+  public static Plan newPlanGraph(
+      UUID householdId,
+      LocalDate weekStartDate,
+      int generation,
+      PlanStatus status,
+      int numDays,
+      int slotsPerDay) {
     Plan plan =
         Plan.builder()
             .id(UUID.randomUUID())
             .householdId(householdId)
             .weekStartDate(weekStartDate)
-            .generation(1)
-            .status(PlanStatus.GENERATED)
+            .generation(generation)
+            .status(status)
             .triggerKind(TriggerKind.USER_INITIATED)
             .qualityWarning(false)
             .coldStart(false)
