@@ -83,7 +83,13 @@ class HouseholdInvitesServiceTest {
       new SlotConfigurationResolver();
   private final InviteCodeGenerator inviteCodeGenerator = new InviteCodeGenerator();
 
-  private final Instant fixedNow = Instant.parse("2026-05-09T12:00:00Z");
+  // Anchored relative to real wall-clock, NOT a hardcoded date. HouseholdInviteMapper.deriveStatus
+  // compares expiresAt against the real Instant.now() (correct production behaviour — an invite
+  // expires in real time). A hardcoded fixedNow whose +7d/+30d windows lapse in real time turns
+  // this into a time-bomb (it rotted to EXPIRED once the date rolled past 2026-05-16). Anchoring a
+  // day into the real future keeps every fixedNow.plus(...) window safely unexpired.
+  private final Instant fixedNow =
+      Instant.now().truncatedTo(ChronoUnit.DAYS).plus(1, ChronoUnit.DAYS);
   private final Clock fixedClock = Clock.fixed(fixedNow, ZoneOffset.UTC);
 
   private HouseholdServiceImpl service() {
