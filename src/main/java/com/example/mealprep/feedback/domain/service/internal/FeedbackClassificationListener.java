@@ -106,18 +106,22 @@ public class FeedbackClassificationListener {
   /** Visible for unit/integration testing. */
   public void classifyEntry(UUID feedbackId, UUID userId, UUID traceId) {
     // Step 1 — mark CLASSIFYING + increment attempts (REQUIRES_NEW, commits before AI call).
+    // Native UPDATE bypasses Hibernate's @Version dirty-check which races with the publisher's
+    // persistence context on AFTER_COMMIT (round-8 retro: StaleObjectStateException pattern).
+    // We re-load AFTER the update so downstream steps see the fresh state.
     FeedbackEntry entry =
         requiresNewTxTemplate.execute(
-            status ->
-                entryRepository
-                    .findById(feedbackId)
-                    .map(
-                        e -> {
-                          e.setSubmissionStatus(SubmissionStatus.CLASSIFYING);
-                          e.setClassificationAttempts(e.getClassificationAttempts() + 1);
-                          return entryRepository.save(e);
-                        })
-                    .orElseThrow(() -> new FeedbackEntryNotFoundException(feedbackId)));
+            status -> {
+              int rows =
+                  entryRepository.updateSubmissionStatusAndIncrementAttempts(
+                      feedbackId, SubmissionStatus.CLASSIFYING);
+              if (rows == 0) {
+                throw new FeedbackEntryNotFoundException(feedbackId);
+              }
+              return entryRepository
+                  .findById(feedbackId)
+                  .orElseThrow(() -> new FeedbackEntryNotFoundException(feedbackId));
+            });
 
     // Step 2 — build context (no I/O, outside any tx).
     FeedbackClassificationContext context = buildContext(entry);
@@ -186,13 +190,12 @@ public class FeedbackClassificationListener {
   private void revertToReceived(UUID feedbackId) {
     requiresNewTxTemplate.executeWithoutResult(
         status -> {
-          FeedbackEntry e =
-              entryRepository
-                  .findById(feedbackId)
-                  .orElseThrow(() -> new FeedbackEntryNotFoundException(feedbackId));
-          e.setSubmissionStatus(SubmissionStatus.RECEIVED);
-          e.setClassificationAttempts(Math.max(0, e.getClassificationAttempts() - 1));
-          entryRepository.save(e);
+          int rows =
+              entryRepository.updateSubmissionStatusAndDecrementAttempts(
+                  feedbackId, SubmissionStatus.RECEIVED);
+          if (rows == 0) {
+            throw new FeedbackEntryNotFoundException(feedbackId);
+          }
         });
   }
 
@@ -200,13 +203,12 @@ public class FeedbackClassificationListener {
     Instant now = clock.instant();
     requiresNewTxTemplate.executeWithoutResult(
         status -> {
-          FeedbackEntry e =
-              entryRepository
-                  .findById(feedbackId)
-                  .orElseThrow(() -> new FeedbackEntryNotFoundException(feedbackId));
-          e.setSubmissionStatus(SubmissionStatus.FAILED);
-          e.setLastClassifiedAt(now);
-          entryRepository.save(e);
+          int rows =
+              entryRepository.updateSubmissionStatusAndLastClassifiedAt(
+                  feedbackId, SubmissionStatus.FAILED, now);
+          if (rows == 0) {
+            throw new FeedbackEntryNotFoundException(feedbackId);
+          }
         });
     eventPublisher.publishEvent(
         new FeedbackProcessedEvent(feedbackId, userId, Set.of(), true, false, traceId, now));
@@ -217,6 +219,9 @@ public class FeedbackClassificationListener {
     Instant now = clock.instant();
     requiresNewTxTemplate.executeWithoutResult(
         status -> {
+          // Use a managed reference to the entry only as the FK target for the clarification
+          // child row; we do NOT mutate it through Hibernate — the status flip uses native UPDATE
+          // (round-8 retro: avoids @Version race with publisher's persistence context).
           FeedbackEntry e =
               entryRepository
                   .findById(feedbackId)
@@ -239,9 +244,12 @@ public class FeedbackClassificationListener {
                   .build();
           clarificationRepository.save(query);
 
-          e.setSubmissionStatus(SubmissionStatus.CLARIFICATION_PENDING);
-          e.setLastClassifiedAt(now);
-          entryRepository.save(e);
+          int rows =
+              entryRepository.updateSubmissionStatusAndLastClassifiedAt(
+                  feedbackId, SubmissionStatus.CLARIFICATION_PENDING, now);
+          if (rows == 0) {
+            throw new FeedbackEntryNotFoundException(feedbackId);
+          }
         });
     eventPublisher.publishEvent(
         new FeedbackProcessedEvent(feedbackId, userId, Set.of(), false, true, traceId, now));
@@ -261,13 +269,12 @@ public class FeedbackClassificationListener {
     Instant now = clock.instant();
     requiresNewTxTemplate.executeWithoutResult(
         status -> {
-          FeedbackEntry e =
-              entryRepository
-                  .findById(feedbackId)
-                  .orElseThrow(() -> new FeedbackEntryNotFoundException(feedbackId));
-          e.setSubmissionStatus(SubmissionStatus.ROUTED);
-          e.setLastClassifiedAt(now);
-          entryRepository.save(e);
+          int rows =
+              entryRepository.updateSubmissionStatusAndLastClassifiedAt(
+                  feedbackId, SubmissionStatus.ROUTED, now);
+          if (rows == 0) {
+            throw new FeedbackEntryNotFoundException(feedbackId);
+          }
         });
     eventPublisher.publishEvent(
         new FeedbackProcessedEvent(feedbackId, userId, Set.of(), false, false, traceId, now));
@@ -277,13 +284,12 @@ public class FeedbackClassificationListener {
     Instant now = clock.instant();
     requiresNewTxTemplate.executeWithoutResult(
         status -> {
-          FeedbackEntry e =
-              entryRepository
-                  .findById(feedbackId)
-                  .orElseThrow(() -> new FeedbackEntryNotFoundException(feedbackId));
-          e.setSubmissionStatus(SubmissionStatus.CLASSIFIED);
-          e.setLastClassifiedAt(now);
-          entryRepository.save(e);
+          int rows =
+              entryRepository.updateSubmissionStatusAndLastClassifiedAt(
+                  feedbackId, SubmissionStatus.CLASSIFIED, now);
+          if (rows == 0) {
+            throw new FeedbackEntryNotFoundException(feedbackId);
+          }
         });
     // Hand to router (Noop in 01c, real impl in 01d). 01d's router publishes
     // FeedbackProcessedEvent.
