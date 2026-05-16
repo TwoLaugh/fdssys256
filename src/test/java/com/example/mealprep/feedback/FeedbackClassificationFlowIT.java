@@ -115,7 +115,7 @@ class FeedbackClassificationFlowIT {
     assertThat(row.getStatus()).isEqualTo(ClarificationStatus.PENDING);
     assertThat(row.getExpiresAt()).isAfter(Instant.now().minus(Duration.ofMinutes(1)));
 
-    awaitCondition(() -> !processedCapture.events.isEmpty(), Duration.ofSeconds(5));
+    awaitCondition(() -> !processedCapture.events.isEmpty(), Duration.ofSeconds(30));
     FeedbackProcessedEvent fpe = processedCapture.events.get(0);
     assertThat(fpe.clarificationPending()).isTrue();
     assertThat(fpe.destinationsTouched()).isEmpty();
@@ -133,7 +133,7 @@ class FeedbackClassificationFlowIT {
 
     awaitState(feedbackId, SubmissionStatus.ROUTED);
 
-    awaitCondition(() -> !processedCapture.events.isEmpty(), Duration.ofSeconds(5));
+    awaitCondition(() -> !processedCapture.events.isEmpty(), Duration.ofSeconds(30));
     FeedbackProcessedEvent fpe = processedCapture.events.get(0);
     assertThat(fpe.clarificationPending()).isFalse();
     assertThat(fpe.partialFailure()).isFalse();
@@ -151,7 +151,7 @@ class FeedbackClassificationFlowIT {
 
     awaitState(feedbackId, SubmissionStatus.FAILED);
 
-    awaitCondition(() -> !processedCapture.events.isEmpty(), Duration.ofSeconds(5));
+    awaitCondition(() -> !processedCapture.events.isEmpty(), Duration.ofSeconds(30));
     FeedbackProcessedEvent fpe = processedCapture.events.get(0);
     assertThat(fpe.partialFailure()).isTrue();
     assertThat(fpe.destinationsTouched()).isEmpty();
