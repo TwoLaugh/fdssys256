@@ -114,6 +114,36 @@ class FeedbackClassificationListenerTest {
     when(entryRepository.findById(feedbackId)).thenReturn(Optional.of(entry));
     when(entryRepository.save(any(FeedbackEntry.class)))
         .thenAnswer(inv -> inv.getArgument(0, FeedbackEntry.class));
+    // The listener now flips submission_status via native UPDATEs (round-8 retro: avoids the
+    // @Version race with the publisher's persistence context). For the Mockito-backed unit test,
+    // stub the new repo methods to simulate the in-place mutation on the test entity + return
+    // rowcount 1 so the listener's "rows == 0 → NotFound" guard is not tripped.
+    when(entryRepository.updateSubmissionStatusAndIncrementAttempts(
+            org.mockito.ArgumentMatchers.eq(feedbackId), any(SubmissionStatus.class)))
+        .thenAnswer(
+            inv -> {
+              entry.setSubmissionStatus(inv.getArgument(1, SubmissionStatus.class));
+              entry.setClassificationAttempts(entry.getClassificationAttempts() + 1);
+              return 1;
+            });
+    when(entryRepository.updateSubmissionStatusAndDecrementAttempts(
+            org.mockito.ArgumentMatchers.eq(feedbackId), any(SubmissionStatus.class)))
+        .thenAnswer(
+            inv -> {
+              entry.setSubmissionStatus(inv.getArgument(1, SubmissionStatus.class));
+              entry.setClassificationAttempts(Math.max(0, entry.getClassificationAttempts() - 1));
+              return 1;
+            });
+    when(entryRepository.updateSubmissionStatusAndLastClassifiedAt(
+            org.mockito.ArgumentMatchers.eq(feedbackId),
+            any(SubmissionStatus.class),
+            any(java.time.Instant.class)))
+        .thenAnswer(
+            inv -> {
+              entry.setSubmissionStatus(inv.getArgument(1, SubmissionStatus.class));
+              entry.setLastClassifiedAt(inv.getArgument(2, java.time.Instant.class));
+              return 1;
+            });
   }
 
   @Test
