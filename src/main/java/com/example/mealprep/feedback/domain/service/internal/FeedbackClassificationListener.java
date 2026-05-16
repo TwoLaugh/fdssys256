@@ -209,9 +209,11 @@ public class FeedbackClassificationListener {
           if (rows == 0) {
             throw new FeedbackEntryNotFoundException(feedbackId);
           }
+          // Publish INSIDE the tx so @TransactionalEventListener(AFTER_COMMIT) listeners fire on
+          // tx commit. Spring silently drops AFTER_COMMIT events published outside any tx.
+          eventPublisher.publishEvent(
+              new FeedbackProcessedEvent(feedbackId, userId, Set.of(), true, false, traceId, now));
         });
-    eventPublisher.publishEvent(
-        new FeedbackProcessedEvent(feedbackId, userId, Set.of(), true, false, traceId, now));
   }
 
   private void queueClarification(
@@ -250,9 +252,9 @@ public class FeedbackClassificationListener {
           if (rows == 0) {
             throw new FeedbackEntryNotFoundException(feedbackId);
           }
+          eventPublisher.publishEvent(
+              new FeedbackProcessedEvent(feedbackId, userId, Set.of(), false, true, traceId, now));
         });
-    eventPublisher.publishEvent(
-        new FeedbackProcessedEvent(feedbackId, userId, Set.of(), false, true, traceId, now));
   }
 
   private JsonNode buildOptionNode(ConfidenceGate.ScoredClassification scored) {
@@ -275,9 +277,9 @@ public class FeedbackClassificationListener {
           if (rows == 0) {
             throw new FeedbackEntryNotFoundException(feedbackId);
           }
+          eventPublisher.publishEvent(
+              new FeedbackProcessedEvent(feedbackId, userId, Set.of(), false, false, traceId, now));
         });
-    eventPublisher.publishEvent(
-        new FeedbackProcessedEvent(feedbackId, userId, Set.of(), false, false, traceId, now));
   }
 
   private void markClassifiedAndHandOff(UUID feedbackId, ConfidenceGate.GateResult gate) {
