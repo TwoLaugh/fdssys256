@@ -2,6 +2,9 @@ package com.example.mealprep.planner.testdata;
 
 import com.example.mealprep.core.types.SlotKind;
 import com.example.mealprep.planner.api.dto.DailyRollupDocument;
+import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
+import com.example.mealprep.planner.api.dto.PlanCompositionContext;
+import com.example.mealprep.planner.api.dto.RecipePoolSnapshot;
 import com.example.mealprep.planner.api.dto.RollupSummaryDocument;
 import com.example.mealprep.planner.api.dto.ScoreBreakdownDocument;
 import com.example.mealprep.planner.api.dto.WeeklyRollupDocument;
@@ -12,11 +15,21 @@ import com.example.mealprep.planner.domain.entity.PlanStatus;
 import com.example.mealprep.planner.domain.entity.ScheduledRecipe;
 import com.example.mealprep.planner.domain.entity.SlotState;
 import com.example.mealprep.planner.domain.entity.TriggerKind;
+import com.example.mealprep.recipe.api.dto.IngredientDto;
+import com.example.mealprep.recipe.api.dto.RecipeDto;
+import com.example.mealprep.recipe.api.dto.RecipeMetadataDto;
+import com.example.mealprep.recipe.api.dto.RecipeTagsDto;
+import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
+import com.example.mealprep.recipe.domain.entity.Catalogue;
+import com.example.mealprep.recipe.domain.entity.DataQuality;
+import com.example.mealprep.recipe.domain.entity.NutritionStatus;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -157,6 +170,128 @@ public final class PlanTestData {
    */
   public static Plan testActivePlan(UUID householdId, LocalDate weekStartDate, int generation) {
     return basePlanBuilder(householdId, weekStartDate, generation, PlanStatus.ACTIVE).build();
+  }
+
+  // ---- planner-01d Stage-A fixture builders ---------------------------------------------------
+
+  /**
+   * Build a kind-tagged {@link RecipeDto} with the supplied {@code totalTimeMins}, equipment, and
+   * ingredients. Used by the hard-filter and beam-search unit tests.
+   */
+  public static RecipeDto recipeFor(
+      UUID id,
+      SlotKind kind,
+      int totalTimeMins,
+      List<String> equipmentRequired,
+      List<String> ingredientMappingKeys) {
+    UUID branchId = UUID.randomUUID();
+    UUID versionId = UUID.randomUUID();
+    List<IngredientDto> ingredients = new ArrayList<>();
+    int order = 0;
+    for (String key : ingredientMappingKeys) {
+      ingredients.add(
+          new IngredientDto(
+              UUID.randomUUID(),
+              order++,
+              key,
+              key,
+              BigDecimal.ONE,
+              "g",
+              null,
+              false,
+              false,
+              BigDecimal.ONE));
+    }
+    RecipeMetadataDto metadata =
+        new RecipeMetadataDto(
+            2,
+            Math.max(5, totalTimeMins / 3),
+            Math.max(5, totalTimeMins * 2 / 3),
+            totalTimeMins,
+            equipmentRequired,
+            null,
+            null,
+            false,
+            "Generic",
+            List.of(kind.name().toLowerCase(java.util.Locale.ROOT)));
+    RecipeTagsDto tags = new RecipeTagsDto(null, null, null, List.<String>of(), List.<String>of());
+    RecipeVersionDto version =
+        new RecipeVersionDto(
+            versionId,
+            branchId,
+            1,
+            null,
+            null,
+            null,
+            "PENDING",
+            Instant.parse("2024-01-01T00:00:00Z"),
+            "test",
+            null,
+            ingredients,
+            List.of(),
+            metadata,
+            tags,
+            null);
+    return new RecipeDto(
+        id,
+        UUID.randomUUID(),
+        Catalogue.USER,
+        "recipe-" + id,
+        "test recipe",
+        1,
+        branchId,
+        DataQuality.USER_VERIFIED,
+        NutritionStatus.PENDING,
+        null,
+        null,
+        null,
+        null,
+        0L,
+        Instant.parse("2024-01-01T00:00:00Z"),
+        Instant.parse("2024-01-01T00:00:00Z"),
+        version,
+        List.of());
+  }
+
+  /** A breakfast recipe with no equipment and no ingredient mapping keys. */
+  public static RecipeDto trivialRecipe(UUID id, SlotKind kind) {
+    return recipeFor(id, kind, 20, List.<String>of(), List.<String>of());
+  }
+
+  /**
+   * A {@link MealSlotSkeleton} with a single eater (so single-eater shared/per-person filters
+   * pass).
+   */
+  public static MealSlotSkeleton skeletonFor(
+      LocalDate onDate, int slotIndex, SlotKind kind, int timeBudgetMin) {
+    return new MealSlotSkeleton(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        slotIndex,
+        onDate,
+        kind,
+        kind.name().toLowerCase(java.util.Locale.ROOT),
+        timeBudgetMin,
+        true,
+        new ArrayList<>(List.<UUID>of(UUID.randomUUID())));
+  }
+
+  /** A minimal {@link PlanCompositionContext} suitable for unit tests that bypass the filter. */
+  public static PlanCompositionContext minimalContext(
+      List<MealSlotSkeleton> skeletons, List<RecipeDto> recipePool) {
+    return new PlanCompositionContext(
+        UUID.randomUUID(),
+        LocalDate.of(2026, 1, 5),
+        skeletons,
+        Map.<UUID, com.example.mealprep.preference.api.dto.HardConstraintsDto>of(),
+        Map.<UUID, com.example.mealprep.household.api.dto.SoftPreferenceBundleDto>of(),
+        null,
+        null,
+        null,
+        new RecipePoolSnapshot(recipePool, Instant.parse("2026-01-01T00:00:00Z")),
+        List.of(),
+        UUID.randomUUID(),
+        UUID.randomUUID());
   }
 
   private static Plan.PlanBuilder basePlanBuilder(
