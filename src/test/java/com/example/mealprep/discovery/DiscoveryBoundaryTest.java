@@ -1,7 +1,9 @@
 package com.example.mealprep.discovery;
 
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
+import com.example.mealprep.discovery.domain.service.DiscoverySource;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
@@ -54,5 +56,18 @@ class DiscoveryBoundaryTest {
           .as(
               "discovery entities never cross module boundaries —"
                   + " cross-module data transfer is via DTOs in discovery.api.dto.")
+          .allowEmptyShould(true);
+
+  @ArchTest
+  static final ArchRule discoverySourceImplsLiveInSourcePackage =
+      classes()
+          .that()
+          .implement(DiscoverySource.class)
+          .should()
+          .resideInAPackage("com.example.mealprep.discovery.source..")
+          .as(
+              "DiscoverySource implementations live exclusively in"
+                  + " com.example.mealprep.discovery.source.. — the source/ package is"
+                  + " a hard pocket per LLD line 400.")
           .allowEmptyShould(true);
 }
