@@ -1,0 +1,188 @@
+package com.example.mealprep.adaptation;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.example.mealprep.adaptation.ai.RecipeAdaptationResponse;
+import com.example.mealprep.adaptation.config.AdaptationConfig;
+import com.example.mealprep.adaptation.domain.entity.AdaptationJob;
+import com.example.mealprep.adaptation.domain.entity.PendingChange;
+import com.example.mealprep.adaptation.domain.enums.AdaptationClassification;
+import com.example.mealprep.adaptation.domain.enums.ApprovalPolicy;
+import com.example.mealprep.adaptation.domain.enums.ChangeDimension;
+import com.example.mealprep.adaptation.domain.enums.JobPriority;
+import com.example.mealprep.adaptation.domain.enums.JobSource;
+import com.example.mealprep.adaptation.domain.enums.JobStatus;
+import com.example.mealprep.adaptation.domain.enums.PendingChangeStatus;
+import com.example.mealprep.adaptation.domain.repository.PendingChangeRepository;
+import com.example.mealprep.adaptation.domain.service.internal.PendingChangeStore;
+import com.example.mealprep.adaptation.event.PendingChangeCreatedEvent;
+import com.example.mealprep.recipe.domain.entity.Catalogue;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
+
+class PendingChangeStoreTest {
+
+  @Test
+  void create_supersedes_existing_pending_then_inserts_new() {
+    PendingChangeRepository repo = mock(PendingChangeRepository.class);
+    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    AdaptationConfig config = config();
+
+    PendingChange existing = pending(UUID.randomUUID());
+    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
+        .thenReturn(Optional.of(existing));
+
+    PendingChangeStore store = new PendingChangeStore(repo, events, config);
+    UUID newId =
+        store.create(
+            job(),
+            response(),
+            ChangeDimension.SALT_LEVEL,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "v1");
+
+    assertThat(newId).isNotNull();
+    // existing -> SUPERSEDED save, new INSERT save = 2 save invocations on the repository.
+    verify(repo, times(1)).save(existing);
+    verify(repo, times(1)).saveAndFlush(any(PendingChange.class));
+    assertThat(existing.getStatus()).isEqualTo(PendingChangeStatus.SUPERSEDED);
+    assertThat(existing.getSupersededBy()).isEqualTo(newId);
+
+    ArgumentCaptor<PendingChangeCreatedEvent> evCap =
+        ArgumentCaptor.forClass(PendingChangeCreatedEvent.class);
+    verify(events).publishEvent(evCap.capture());
+    assertThat(evCap.getValue().pendingChangeId()).isEqualTo(newId);
+  }
+
+  @Test
+  void race_retry_on_data_integrity_violation_settles_as_superseded() {
+    PendingChangeRepository repo = mock(PendingChangeRepository.class);
+    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+
+    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
+        .thenReturn(Optional.empty())
+        .thenReturn(Optional.of(pending(UUID.randomUUID())));
+    when(repo.saveAndFlush(any(PendingChange.class)))
+        .thenThrow(new DataIntegrityViolationException("constraint"))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    PendingChangeStore store = new PendingChangeStore(repo, events, config());
+    UUID newId =
+        store.create(
+            job(),
+            response(),
+            ChangeDimension.SALT_LEVEL,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "v1");
+    assertThat(newId).isNotNull();
+    verify(repo, times(2)).saveAndFlush(any(PendingChange.class));
+  }
+
+  @Test
+  void no_existing_pending_just_inserts() {
+    PendingChangeRepository repo = mock(PendingChangeRepository.class);
+    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
+        .thenReturn(Optional.empty());
+    PendingChangeStore store = new PendingChangeStore(repo, events, config());
+
+    UUID id =
+        store.create(
+            job(),
+            response(),
+            ChangeDimension.SALT_LEVEL,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "v1");
+
+    assertThat(id).isNotNull();
+    verify(repo, never()).save(any(PendingChange.class));
+    verify(repo, times(1)).saveAndFlush(any(PendingChange.class));
+    verify(events).publishEvent(any(PendingChangeCreatedEvent.class));
+  }
+
+  private static AdaptationJob job() {
+    return AdaptationJob.builder()
+        .id(UUID.randomUUID())
+        .recipeId(UUID.randomUUID())
+        .userId(UUID.randomUUID())
+        .catalogue(Catalogue.USER)
+        .source(JobSource.FEEDBACK)
+        .priority(JobPriority.SYNC)
+        .approvalPolicy(ApprovalPolicy.PENDING_CHANGE)
+        .status(JobStatus.RUNNING)
+        .inputs(JsonNodeFactory.instance.objectNode())
+        .traceId(UUID.randomUUID())
+        .enqueuedAt(Instant.now())
+        .build();
+  }
+
+  private static RecipeAdaptationResponse response() {
+    return new RecipeAdaptationResponse(
+        0,
+        AdaptationClassification.VERSION,
+        "swap salt",
+        "",
+        BigDecimal.valueOf(0.8),
+        BigDecimal.valueOf(0.8),
+        null,
+        JsonNodeFactory.instance.objectNode(),
+        List.of());
+  }
+
+  private static PendingChange pending(UUID id) {
+    return PendingChange.builder()
+        .id(id)
+        .recipeId(UUID.randomUUID())
+        .userId(UUID.randomUUID())
+        .jobId(UUID.randomUUID())
+        .traceId(UUID.randomUUID())
+        .changeDimension(ChangeDimension.SALT_LEVEL)
+        .proposedDiff(JsonNodeFactory.instance.objectNode())
+        .proposedClassification(AdaptationClassification.VERSION)
+        .baseVersionId(UUID.randomUUID())
+        .baseBranchId(UUID.randomUUID())
+        .reasoning("r")
+        .nutritionalNotes("")
+        .confidence(BigDecimal.valueOf(0.8))
+        .impactScore(BigDecimal.valueOf(0.5))
+        .promptTemplateVersion("v0")
+        .status(PendingChangeStatus.PENDING)
+        .createdAt(Instant.now())
+        .expiresAt(Instant.now().plusSeconds(86_400))
+        .build();
+  }
+
+  private static AdaptationConfig config() {
+    return new AdaptationConfig(
+        5,
+        10_000,
+        8_000,
+        12_000,
+        3,
+        3,
+        14,
+        new BigDecimal("0.50"),
+        new BigDecimal("2.00"),
+        null,
+        30,
+        "0 0 4 * * *",
+        "0 30 4 * * *");
+  }
+}
