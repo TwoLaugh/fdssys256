@@ -43,7 +43,7 @@ public interface FeedbackEntryRepository extends JpaRepository<FeedbackEntry, UU
    */
   @Modifying
   @Query(
-      "UPDATE FeedbackEntry e SET e.submissionStatus = :status, e.version = e.version + 1 WHERE"
+      "UPDATE FeedbackEntry e SET e.submissionStatus = :status, e.optimisticVersion = e.optimisticVersion + 1 WHERE"
           + " e.id = :id")
   int updateSubmissionStatus(@Param("id") UUID id, @Param("status") SubmissionStatus status);
 
@@ -51,7 +51,7 @@ public interface FeedbackEntryRepository extends JpaRepository<FeedbackEntry, UU
   @Modifying
   @Query(
       "UPDATE FeedbackEntry e SET e.submissionStatus = :status, e.classificationAttempts ="
-          + " e.classificationAttempts + 1, e.version = e.version + 1 WHERE e.id = :id")
+          + " e.classificationAttempts + 1, e.optimisticVersion = e.optimisticVersion + 1 WHERE e.id = :id")
   int updateSubmissionStatusAndIncrementAttempts(
       @Param("id") UUID id, @Param("status") SubmissionStatus status);
 
@@ -60,7 +60,7 @@ public interface FeedbackEntryRepository extends JpaRepository<FeedbackEntry, UU
   @Query(
       "UPDATE FeedbackEntry e SET e.submissionStatus = :status, e.classificationAttempts ="
           + " CASE WHEN e.classificationAttempts > 0 THEN e.classificationAttempts - 1 ELSE 0"
-          + " END, e.version = e.version + 1 WHERE e.id = :id")
+          + " END, e.optimisticVersion = e.optimisticVersion + 1 WHERE e.id = :id")
   int updateSubmissionStatusAndDecrementAttempts(
       @Param("id") UUID id, @Param("status") SubmissionStatus status);
 
@@ -68,7 +68,7 @@ public interface FeedbackEntryRepository extends JpaRepository<FeedbackEntry, UU
   @Modifying
   @Query(
       "UPDATE FeedbackEntry e SET e.submissionStatus = :status, e.lastClassifiedAt = :at,"
-          + " e.version = e.version + 1 WHERE e.id = :id")
+          + " e.optimisticVersion = e.optimisticVersion + 1 WHERE e.id = :id")
   int updateSubmissionStatusAndLastClassifiedAt(
       @Param("id") UUID id, @Param("status") SubmissionStatus status, @Param("at") Instant at);
 }
