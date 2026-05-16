@@ -1,0 +1,163 @@
+adaptationPendingChanges:
+  get:
+    tags: [Adaptation]
+    operationId: listPendingChangesForUser
+    summary: 'Top-3 ranked pending changes for the authenticated user.'
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: 'List of up to 3 pending change list items, ranked by impact and confidence.'
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/adaptation.yaml#/PendingChangeListItemDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationPendingChange:
+  get:
+    tags: [Adaptation]
+    operationId: getPendingChange
+    summary: 'Single pending change detail.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'The pending change.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/PendingChangeDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Not found or belongs to another user.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationPendingChangeAccept:
+  post:
+    tags: [Adaptation]
+    operationId: acceptPendingChange
+    summary: 'Accept a pending change; writes through RecipeWriteApi.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/adaptation.yaml#/AcceptPendingChangeRequest' }
+    responses:
+      '200':
+        description: 'Accepted.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/PendingChangeDto' }
+      '400':
+        description: 'Validation error.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Stale optimistic version OR superseded.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Not pending OR expired.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationPendingChangeReject:
+  post:
+    tags: [Adaptation]
+    operationId: rejectPendingChange
+    summary: 'Reject a pending change.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/adaptation.yaml#/RejectPendingChangeRequest' }
+    responses:
+      '200':
+        description: 'Rejected.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/PendingChangeDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Not pending.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationRecipePendingHistory:
+  get:
+    tags: [Adaptation]
+    operationId: listRecipePendingHistory
+    summary: 'All pending changes ever proposed for a recipe, latest first.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of pending change list items.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/PendingChangeListItemDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

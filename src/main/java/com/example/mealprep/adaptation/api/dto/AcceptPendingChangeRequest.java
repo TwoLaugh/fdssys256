@@ -1,5 +1,6 @@
 package com.example.mealprep.adaptation.api.dto;
 
+import com.example.mealprep.adaptation.validation.ValidRecipeDiff;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.annotation.Nullable;
 import jakarta.validation.Valid;
@@ -20,4 +21,4 @@ import jakarta.validation.Valid;
  * <p>Per LLD §DTOs lines 375-376; verbatim from {@code lld/adaptation-pipeline.md}.
  */
 public record AcceptPendingChangeRequest(
-    @Nullable @Valid JsonNode userEdits, long expectedOptimisticVersion) {}
+    @Nullable @Valid @ValidRecipeDiff JsonNode userEdits, long expectedOptimisticVersion) {}

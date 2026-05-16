@@ -200,7 +200,10 @@ class AdaptationServiceImplProcessJobSmokeTest {
               traceWriter,
               lockService,
               decisionLogService,
-              events);
+              events,
+              null,
+              null,
+              null);
     }
   }
 }
