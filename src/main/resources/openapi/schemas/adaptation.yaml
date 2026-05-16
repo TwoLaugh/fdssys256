@@ -1,0 +1,135 @@
+ChangeDimension:
+  type: string
+  enum:
+    - SALT_LEVEL
+    - PROTEIN
+    - METHOD_SIMPLIFICATION
+    - PORTION_SIZE
+    - FLAVOUR_BALANCE
+    - ACID_BALANCE
+    - TEXTURE
+    - COOKING_TIME
+    - SUBSTITUTION_PROMOTION
+    - GENERAL
+AdaptationClassification:
+  type: string
+  enum: [VERSION, BRANCH, SUBSTITUTION, NO_CHANGE]
+PendingChangeStatus:
+  type: string
+  enum: [PENDING, ACCEPTED, MODIFIED, REJECTED, EXPIRED, SUPERSEDED]
+PendingChangeListItemDto:
+  type: object
+  description: 'List-row projection of a pending change.'
+  required: [id, recipeId, changeDimension, reasoningPreview, confidence, impactScore, createdAt, expiresAt]
+  properties:
+    id: { type: string, format: uuid }
+    recipeId: { type: string, format: uuid }
+    changeDimension: { $ref: '#/ChangeDimension' }
+    reasoningPreview:
+      type: string
+      maxLength: 200
+      nullable: true
+    confidence: { type: number, format: float, minimum: 0, maximum: 1 }
+    impactScore: { type: number, format: float, minimum: 0, maximum: 1 }
+    createdAt: { type: string, format: date-time }
+    expiresAt: { type: string, format: date-time }
+PendingChangeListItemDtoPage:
+  type: object
+  description: 'Paged response of PendingChangeListItemDto rows.'
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/PendingChangeListItemDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+PendingChangeDto:
+  type: object
+  description: 'Full pending-change projection.'
+  required:
+    - id
+    - recipeId
+    - userId
+    - jobId
+    - traceId
+    - changeDimension
+    - proposedClassification
+    - baseVersionId
+    - baseBranchId
+    - proposedDiff
+    - reasoning
+    - confidence
+    - impactScore
+    - promptTemplateVersion
+    - status
+    - createdAt
+    - expiresAt
+    - optimisticVersion
+  properties:
+    id: { type: string, format: uuid }
+    recipeId: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    jobId: { type: string, format: uuid }
+    traceId: { type: string, format: uuid }
+    changeDimension: { $ref: '#/ChangeDimension' }
+    proposedClassification: { $ref: '#/AdaptationClassification' }
+    baseVersionId: { type: string, format: uuid }
+    baseBranchId: { type: string, format: uuid }
+    proposedDiff:
+      type: object
+      additionalProperties: true
+      description: 'Opaque diff JSON; shape governed by the adaptation pipeline.'
+    reasoning: { type: string }
+    nutritionalNotes:
+      type: string
+      nullable: true
+    confidence: { type: number, format: float, minimum: 0, maximum: 1 }
+    impactScore: { type: number, format: float, minimum: 0, maximum: 1 }
+    promptTemplateVersion: { type: string }
+    status: { $ref: '#/PendingChangeStatus' }
+    supersededBy:
+      type: string
+      format: uuid
+      nullable: true
+    acceptedVersionId:
+      type: string
+      format: uuid
+      nullable: true
+    userEdits:
+      type: object
+      additionalProperties: true
+      nullable: true
+      description: 'Optional user-supplied diff overlay applied at accept time.'
+    createdAt: { type: string, format: date-time }
+    expiresAt: { type: string, format: date-time }
+    resolvedAt:
+      type: string
+      format: date-time
+      nullable: true
+    optimisticVersion: { type: integer, format: int64 }
+AcceptPendingChangeRequest:
+  type: object
+  description: 'Body for accept; expectedOptimisticVersion guards the two-tabs race.'
+  required: [expectedOptimisticVersion]
+  properties:
+    userEdits:
+      type: object
+      additionalProperties: true
+      nullable: true
+      description: 'Optional overlay diff; null means accept the proposal as-is.'
+    expectedOptimisticVersion: { type: integer, format: int64 }
+RejectPendingChangeRequest:
+  type: object
+  description: 'Body for reject; reasonNote is optional and bounded.'
+  properties:
+    reasonNote:
+      type: string
+      maxLength: 200
+      nullable: true

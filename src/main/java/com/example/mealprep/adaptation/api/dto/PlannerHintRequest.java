@@ -2,6 +2,7 @@ package com.example.mealprep.adaptation.api.dto;
 
 import com.example.mealprep.adaptation.domain.enums.HintSeverity;
 import com.example.mealprep.adaptation.domain.enums.HintType;
+import com.example.mealprep.adaptation.validation.ValidPlannerHint;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.annotation.Nullable;
 import jakarta.validation.constraints.NotBlank;
@@ -19,6 +20,7 @@ import java.util.UUID;
  *
  * <p>Per LLD §DTOs lines 337-342; verbatim from {@code lld/adaptation-pipeline.md}.
  */
+@ValidPlannerHint
 public record PlannerHintRequest(
     @NotNull UUID recipeId,
     @NotNull UUID versionId,

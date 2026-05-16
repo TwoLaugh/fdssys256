@@ -234,6 +234,17 @@ paths:
     $ref: 'paths/discovery.yaml#/discoveryAdminSourceDisable'
   /api/v1/discovery/admin/run-orphan-sweep:
     $ref: 'paths/discovery.yaml#/discoveryAdminOrphanSweep'
+  # ===== adaptation =====
+  /api/v1/adaptation/pending-changes:
+    $ref: 'paths/adaptation.yaml#/adaptationPendingChanges'
+  /api/v1/adaptation/pending-changes/{id}:
+    $ref: 'paths/adaptation.yaml#/adaptationPendingChange'
+  /api/v1/adaptation/pending-changes/{id}/accept:
+    $ref: 'paths/adaptation.yaml#/adaptationPendingChangeAccept'
+  /api/v1/adaptation/pending-changes/{id}/reject:
+    $ref: 'paths/adaptation.yaml#/adaptationPendingChangeReject'
+  /api/v1/adaptation/recipes/{recipeId}/pending-history:
+    $ref: 'paths/adaptation.yaml#/adaptationRecipePendingHistory'
 components:
   securitySchemes:
     cookieAuth:
@@ -503,6 +514,15 @@ components:
     ScrapeOutcome: { $ref: 'schemas/discovery.yaml#/ScrapeOutcome' }
     ScrapeSkipReason: { $ref: 'schemas/discovery.yaml#/ScrapeSkipReason' }
     StartDiscoveryJobRequest: { $ref: 'schemas/discovery.yaml#/StartDiscoveryJobRequest' }
+    # adaptation
+    AdaptationClassification: { $ref: 'schemas/adaptation.yaml#/AdaptationClassification' }
+    AdaptationChangeDimension: { $ref: 'schemas/adaptation.yaml#/ChangeDimension' }
+    PendingChangeStatus: { $ref: 'schemas/adaptation.yaml#/PendingChangeStatus' }
+    PendingChangeDto: { $ref: 'schemas/adaptation.yaml#/PendingChangeDto' }
+    PendingChangeListItemDto: { $ref: 'schemas/adaptation.yaml#/PendingChangeListItemDto' }
+    PendingChangeListItemDtoPage: { $ref: 'schemas/adaptation.yaml#/PendingChangeListItemDtoPage' }
+    AcceptPendingChangeRequest: { $ref: 'schemas/adaptation.yaml#/AcceptPendingChangeRequest' }
+    RejectPendingChangeRequest: { $ref: 'schemas/adaptation.yaml#/RejectPendingChangeRequest' }
     # common (cross-module)
     ProblemDetail: { $ref: 'schemas/common.yaml#/ProblemDetail' }
   responses:

@@ -3,23 +3,12 @@ package com.example.mealprep.adaptation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.example.mealprep.adaptation.api.dto.AcceptPendingChangeRequest;
-import com.example.mealprep.adaptation.api.dto.DataModelChangeType;
-import com.example.mealprep.adaptation.api.dto.DataModelJobRequest;
-import com.example.mealprep.adaptation.api.dto.FeedbackJobRequest;
-import com.example.mealprep.adaptation.api.dto.ImportJobRequest;
-import com.example.mealprep.adaptation.api.dto.PlanConstraintsSnapshotDto;
-import com.example.mealprep.adaptation.api.dto.PlanTimeRefineDirectiveRequest;
 import com.example.mealprep.adaptation.api.dto.PlannerHintRequest;
-import com.example.mealprep.adaptation.api.dto.RejectPendingChangeRequest;
 import com.example.mealprep.adaptation.domain.enums.HintSeverity;
 import com.example.mealprep.adaptation.domain.enums.HintType;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
 import com.example.mealprep.adaptation.domain.service.AdaptationServiceImpl;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import java.math.BigDecimal;
-import java.time.Instant;
-import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -57,91 +46,12 @@ class AdaptationServiceImplSkeletonTest {
     assertThat(service.sweepExpiredPendingChanges()).isZero();
   }
 
-  @Test
-  void enqueue_import_job_throws_uoe_with_ticket_01d_marker() {
-    ImportJobRequest req =
-        new ImportJobRequest(
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            com.example.mealprep.recipe.domain.entity.Catalogue.USER,
-            com.example.mealprep.recipe.domain.entity.DataQuality.AI_GENERATED,
-            null,
-            null);
-    assertThatThrownBy(() -> service.enqueueImportJob(req))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("ticket-01d");
-  }
-
-  @Test
-  void enqueue_feedback_job_throws_uoe_with_ticket_01c_marker() {
-    FeedbackJobRequest req =
-        new FeedbackJobRequest(
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            "tastes flat",
-            new FeedbackJobRequest.RatingDeltaDto(BigDecimal.valueOf(-1), null, null, null),
-            UUID.randomUUID(),
-            null);
-    assertThatThrownBy(() -> service.enqueueFeedbackJob(req))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("ticket-01c");
-  }
-
-  @Test
-  void enqueue_data_model_change_jobs_throws_uoe_with_ticket_01d_marker() {
-    DataModelJobRequest req =
-        new DataModelJobRequest(
-            UUID.randomUUID(),
-            DataModelChangeType.PREFERENCE,
-            JsonNodeFactory.instance.objectNode(),
-            Set.of(UUID.randomUUID()),
-            UUID.randomUUID());
-    assertThatThrownBy(() -> service.enqueueDataModelChangeJobs(req))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("ticket-01d");
-  }
-
-  @Test
-  void run_plan_time_refine_job_throws_uoe_with_ticket_01c_marker() {
-    PlanTimeRefineDirectiveRequest req =
-        new PlanTimeRefineDirectiveRequest(
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            new PlanTimeRefineDirectiveRequest.RefineDirectiveDto(
-                com.example.mealprep.adaptation.api.dto.DirectiveKind.COST_DELTA,
-                "drop £2",
-                JsonNodeFactory.instance.objectNode()),
-            new PlanConstraintsSnapshotDto(
-                JsonNodeFactory.instance.objectNode(),
-                BigDecimal.valueOf(40),
-                Set.of("oven"),
-                java.util.Map.of("protein_g", BigDecimal.valueOf(120)),
-                Instant.now()),
-            UUID.randomUUID(),
-            UUID.randomUUID());
-    assertThatThrownBy(() -> service.runPlanTimeRefineJob(req))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("ticket-01c");
-  }
-
-  @Test
-  void accept_pending_change_throws_uoe_with_ticket_01d_marker() {
-    AcceptPendingChangeRequest req = new AcceptPendingChangeRequest(null, 0L);
-    assertThatThrownBy(() -> service.acceptPendingChange(UUID.randomUUID(), req, UUID.randomUUID()))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("ticket-01d");
-  }
-
-  @Test
-  void reject_pending_change_throws_uoe_with_ticket_01d_marker() {
-    RejectPendingChangeRequest req = new RejectPendingChangeRequest(null);
-    assertThatThrownBy(() -> service.rejectPendingChange(UUID.randomUUID(), req, UUID.randomUUID()))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("ticket-01d");
-  }
+  // Note: the original 01b skeleton test asserted UOE on the four trigger entries plus
+  // accept/reject. After 01d wires those methods (skeleton ctor still passes null helpers, so
+  // calls now throw NullPointerException at the first helper deref). The 01d test suite covers
+  // the happy-path behaviour separately; here we only retain the UOE-marker check for
+  // emitPlannerHint
+  // (still 01f's territory) and sweepExpiredPendingChanges' return-zero contract.
 
   @Test
   void emit_planner_hint_throws_uoe_with_ticket_01f_marker() {
@@ -162,16 +72,12 @@ class AdaptationServiceImplSkeletonTest {
   }
 
   @Test
-  void query_methods_throw_uoe() {
+  void query_methods_still_uoe_for_01f_territory() {
     UUID id = UUID.randomUUID();
     org.springframework.data.domain.Pageable page =
         org.springframework.data.domain.PageRequest.of(0, 10);
-    assertThatThrownBy(() -> service.listPendingForUser(id))
-        .isInstanceOf(UnsupportedOperationException.class);
-    assertThatThrownBy(() -> service.listPendingHistoryForRecipe(id))
-        .isInstanceOf(UnsupportedOperationException.class);
-    assertThatThrownBy(() -> service.getPendingChange(id))
-        .isInstanceOf(UnsupportedOperationException.class);
+    // 01d wires listPendingForUser / listPendingHistoryForRecipe / getPendingChange — the
+    // remaining read fan-out methods still throw UOE per ticket 01f's scope.
     assertThatThrownBy(() -> service.getJobsForRecipe(id, page))
         .isInstanceOf(UnsupportedOperationException.class);
     assertThatThrownBy(() -> service.getActiveJobsForUser(id, page))
