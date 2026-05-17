@@ -19,7 +19,8 @@ import org.springframework.validation.annotation.Validated;
  * <p>{@code stageCTimeout} (default {@code PT20S}) and {@code iterationBudget} (default {@code 3})
  * were appended by planner-01g; {@code iterationBudget} is consumed by Stage D (01h/01j) but the
  * key lives at the planner level. planner-01h appends {@code maxAugmentations} (default 5) and
- * {@code maxRefineDirectives} (default 2), bounding the Phase-2 LLM output.
+ * {@code maxRefineDirectives} (default 2), bounding the Phase-2 LLM output. planner-01i appends the
+ * nested {@code midWeek} group (mid-week re-optimisation tunables).
  *
  * <p>Spring Boot 3.x record-shaped {@code @ConfigurationProperties} are auto-{@code
  * ConstructorBinding} so defaults are wired via {@code application.properties} (not record
@@ -44,7 +45,24 @@ public record PlannerProperties(
     @NotNull Duration stageCTimeout,
     @Min(1) int iterationBudget,
     @Min(1) int maxAugmentations,
-    @Min(0) int maxRefineDirectives) {
+    @Min(0) int maxRefineDirectives,
+    @NotNull MidWeek midWeek) {
+
+  /**
+   * Mid-week re-optimisation tunables (planner-01i). Bound under {@code
+   * mealprep.planner.mid-week.*}. Both keys MUST exist in the main AND test {@code
+   * application.properties} — the test file shadows the main one, and {@code @Validated} fails
+   * context load on a missing {@code @NotNull} otherwise.
+   *
+   * <ul>
+   *   <li>{@code lockHoursBeforeSlot} — a still-{@code PLANNED} slot becomes pinned once {@code
+   *       now} is within this many hours of the slot's date (default 24).
+   *   <li>{@code maxSuggestionsPerPlan} — once a plan accumulates this many {@code PENDING +
+   *       REJECTED} re-opt suggestions, further {@code requestReopt} calls are rejected-by-budget
+   *       (default 3) to prevent trigger thrashing.
+   * </ul>
+   */
+  public record MidWeek(@Min(0) int lockHoursBeforeSlot, @Min(1) int maxSuggestionsPerPlan) {}
 
   /**
    * Composite-score weight scheme (planner-01e). v1 is uniform {@code 1/7 ≈ 0.143} per HLD §Initial

@@ -242,7 +242,8 @@ class BeamSearchEngineTest {
         Duration.ofSeconds(20),
         3,
         5,
-        2);
+        2,
+        null);
   }
 
   private static PlanCompositionContext ctxWith(

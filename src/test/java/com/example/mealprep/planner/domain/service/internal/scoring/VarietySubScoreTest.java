@@ -98,7 +98,8 @@ class VarietySubScoreTest {
             java.time.Duration.ofSeconds(20),
             3,
             5,
-            2);
+            2,
+            PlanTestData.defaultMidWeek());
     VarietySubScore tuned = new VarietySubScore(props);
     UUID a = UUID.randomUUID();
     UUID b = UUID.randomUUID();

@@ -42,15 +42,19 @@ class FlywayMigrationIT {
   @Autowired private JdbcTemplate jdbcTemplate;
 
   @Test
-  void allFourPlannerTables_exist() {
+  void allPlannerTables_exist() {
     List<String> tables =
         jdbcTemplate.queryForList(
             "SELECT tablename FROM pg_tables WHERE tablename LIKE 'planner_%' ORDER BY tablename",
             String.class);
+    // planner_plan_reopt_suggestions added by planner-01i (V20260507120400) — the materialised
+    // mid-week re-opt proposal aggregate, distinct from the 01a listener-dedupe
+    // planner_reopt_suggestions row.
     assertThat(tables)
         .containsExactly(
             "planner_days",
             "planner_meal_slots",
+            "planner_plan_reopt_suggestions",
             "planner_plans",
             "planner_reopt_suggestions",
             "planner_scheduled_recipes");
@@ -98,6 +102,9 @@ class FlywayMigrationIT {
                 + "  'idx_planner_scheduled_recipes_batch',"
                 + "  'idx_planner_scheduled_recipes_recipe',"
                 + "  'idx_planner_reopt_pending',"
+                + "  'idx_planner_plan_reopt_plan_trigger_event',"
+                + "  'idx_planner_plan_reopt_plan_status',"
+                + "  'idx_planner_plan_reopt_expiry_sweep',"
                 + "  'uq_planner_plans_active_per_household_week'"
                 + ") ORDER BY indexname",
             String.class);
@@ -106,6 +113,9 @@ class FlywayMigrationIT {
             "idx_planner_days_plan_date",
             "idx_planner_meal_slots_day",
             "idx_planner_meal_slots_plan_state",
+            "idx_planner_plan_reopt_expiry_sweep",
+            "idx_planner_plan_reopt_plan_status",
+            "idx_planner_plan_reopt_plan_trigger_event",
             "idx_planner_plans_household_range",
             "idx_planner_plans_household_week_gen",
             "idx_planner_plans_household_week_status",

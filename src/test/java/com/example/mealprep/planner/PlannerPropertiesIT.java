@@ -50,7 +50,9 @@ class PlannerPropertiesIT {
     "mealprep.planner.stage-c-timeout=PT20S",
     "mealprep.planner.iteration-budget=3",
     "mealprep.planner.max-augmentations=5",
-    "mealprep.planner.max-refine-directives=2"
+    "mealprep.planner.max-refine-directives=2",
+    "mealprep.planner.mid-week.lock-hours-before-slot=24",
+    "mealprep.planner.mid-week.max-suggestions-per-plan=3"
   };
 
   @Autowired private PlannerProperties properties;
@@ -85,6 +87,13 @@ class PlannerPropertiesIT {
     assertThat(properties.scoring().provisions().wasteValueTiers().oneDayOrLess())
         .isEqualByComparingTo("3.0");
     assertThat(properties.scoring().cost().confidenceThreshold()).isEqualByComparingTo("0.1");
+  }
+
+  @Test
+  void binds_mid_week_sub_config_planner_01i() {
+    assertThat(properties.midWeek()).isNotNull();
+    assertThat(properties.midWeek().lockHoursBeforeSlot()).isEqualTo(24);
+    assertThat(properties.midWeek().maxSuggestionsPerPlan()).isEqualTo(3);
   }
 
   @Test
