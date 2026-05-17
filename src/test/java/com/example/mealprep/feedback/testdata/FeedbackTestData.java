@@ -1,5 +1,6 @@
 package com.example.mealprep.feedback.testdata;
 
+import com.example.mealprep.feedback.api.dto.ClassificationOutput;
 import com.example.mealprep.feedback.api.dto.Screen;
 import com.example.mealprep.feedback.api.dto.SubmitFeedbackRequest;
 import com.example.mealprep.feedback.api.dto.UiContextDto;
@@ -122,6 +123,30 @@ public final class FeedbackTestData {
 
   public static SubmitFeedbackRequest submitFeedbackRequest(String text, UiContextDto context) {
     return new SubmitFeedbackRequest(text, context);
+  }
+
+  /** Builds a {@link ClassificationOutput} with a fixed-confidence/destination pair. */
+  public static ClassificationOutput classificationOutput(
+      Destination destination, String confidence, String extractedFeedback, JsonNode payload) {
+    return new ClassificationOutput(
+        destination, new BigDecimal(confidence), extractedFeedback, payload);
+  }
+
+  /** Builds a routing-log row pre-filled with a specific destination + status (for IT seeds). */
+  public static RoutingLogEntry routingLogEntry(
+      FeedbackEntry parent, Destination destination, RoutingStatus status) {
+    return RoutingLogEntry.builder()
+        .id(UUID.randomUUID())
+        .feedbackEntry(parent)
+        .destination(destination)
+        .confidence(new BigDecimal("0.900"))
+        .extractedFeedback("seeded for IT — " + destination)
+        .structuredPayload(samplePayload())
+        .routingDecision(RoutingDecision.AUTO_ROUTED)
+        .status(status)
+        .classificationAttempt(1)
+        .routedAt(Instant.now().truncatedTo(ChronoUnit.MILLIS))
+        .build();
   }
 
   public static MisclassificationCorrection misclassificationCorrection(

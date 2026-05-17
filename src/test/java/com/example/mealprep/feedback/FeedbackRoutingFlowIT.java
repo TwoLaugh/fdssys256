@@ -8,15 +8,20 @@ import com.example.mealprep.feedback.api.dto.ClassificationOutput;
 import com.example.mealprep.feedback.api.dto.ClassificationResult;
 import com.example.mealprep.feedback.api.dto.Screen;
 import com.example.mealprep.feedback.domain.document.UiContextDocument;
-import com.example.mealprep.feedback.domain.entity.ClarificationQuery;
-import com.example.mealprep.feedback.domain.entity.ClarificationStatus;
 import com.example.mealprep.feedback.domain.entity.FeedbackEntry;
+import com.example.mealprep.feedback.domain.entity.RoutingFailureKind;
+import com.example.mealprep.feedback.domain.entity.RoutingLogEntry;
+import com.example.mealprep.feedback.domain.entity.RoutingStatus;
 import com.example.mealprep.feedback.domain.entity.SubmissionStatus;
-import com.example.mealprep.feedback.domain.repository.ClarificationQueryRepository;
 import com.example.mealprep.feedback.domain.repository.FeedbackEntryRepository;
+import com.example.mealprep.feedback.domain.repository.RoutingLogRepository;
 import com.example.mealprep.feedback.event.FeedbackProcessedEvent;
 import com.example.mealprep.feedback.event.FeedbackSubmittedEvent;
 import com.example.mealprep.feedback.spi.Destination;
+import com.example.mealprep.feedback.spi.NutritionFeedbackBridge;
+import com.example.mealprep.feedback.spi.PreferenceFeedbackBridge;
+import com.example.mealprep.feedback.spi.ProvisionsFeedbackBridge;
+import com.example.mealprep.feedback.spi.RecipeFeedbackHandler;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -25,6 +30,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -39,6 +45,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,29 +53,32 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
- * Full async-flow IT for the classification listener. Publishes {@link FeedbackSubmittedEvent}
- * against a pre-persisted entry, registers a canned response via {@link TestAiService}, and asserts
- * the entry transitions to the expected terminal state.
+ * Full async IT: submit → classify → fan out → routing-log rows. Uses {@link TestAiService} to feed
+ * the classification result and {@code @Primary} test-config beans to inject controllable bridge
+ * stubs.
  *
- * <p>Async-race pattern: tests poll for the entity state with a bounded retry rather than {@code
- * Thread.sleep}.
+ * <p>Async race-pattern: polls for terminal-state with a bounded retry, no {@code Thread.sleep}
+ * outside the polling helper.
  */
 @SpringBootTest
-@Import({TestContainersConfig.class, FeedbackClassificationFlowIT.EventCaptureConfig.class})
+@Import({TestContainersConfig.class, FeedbackRoutingFlowIT.RoutingItConfig.class})
 @ActiveProfiles("test")
-class FeedbackClassificationFlowIT {
+class FeedbackRoutingFlowIT {
 
   @Autowired private FeedbackEntryRepository entryRepository;
-  @Autowired private ClarificationQueryRepository clarificationRepository;
-  @Autowired private ApplicationEventPublisher eventPublisher;
+  @Autowired private RoutingLogRepository routingLogRepository;
   @Autowired private TestAiService testAiService;
   @Autowired private JdbcTemplate jdbcTemplate;
   @Autowired private FeedbackProcessedCapture processedCapture;
+  @Autowired private RecordingRecipeHandler recordingRecipe;
+  @Autowired private RecordingPreferenceBridge recordingPreference;
 
   @BeforeEach
   void setUp() {
     processedCapture.clear();
     testAiService.clear();
+    recordingRecipe.reset();
+    recordingPreference.reset();
   }
 
   @AfterEach
@@ -79,94 +89,70 @@ class FeedbackClassificationFlowIT {
     jdbcTemplate.update("DELETE FROM ai_call_log");
     testAiService.clear();
     processedCapture.clear();
+    recordingRecipe.reset();
+    recordingPreference.reset();
   }
 
   @Test
-  void happyPath_allHighConfidence_transitionsToClassified() {
+  void singleRecipeRoute_persistsAppliedRow_andRouted() {
     testAiService.register(
         TaskType.FEEDBACK_CLASSIFICATION, result(output(Destination.RECIPE, "0.92")));
-
-    UUID feedbackId = persistEntry();
-
-    publishAfterCommit(feedbackId);
-
-    // This is the classifier-flow IT (feedback-01c scope): it asserts the *classification step*
-    // ran, not the downstream routing outcome. In 01c the router was a Noop so the entry sat at
-    // CLASSIFIED; in 01d the real FeedbackRouter immediately drives it onward (CLASSIFIED ->
-    // ROUTED/PARTIALLY_FAILED), so awaitState(CLASSIFIED) races a transient state and times out.
-    // Await the classification *evidence* (lastClassifiedAt + attempts) instead — robust to the
-    // router taking over, and that's what this test actually cares about.
-    awaitCondition(
-        () ->
-            entryRepository
-                .findById(feedbackId)
-                .filter(e -> e.getLastClassifiedAt() != null)
-                .filter(e -> e.getClassificationAttempts() == 1)
-                .isPresent(),
-        Duration.ofSeconds(30));
-
-    FeedbackEntry final_ = entryRepository.findById(feedbackId).orElseThrow();
-    assertThat(final_.getLastClassifiedAt()).isNotNull();
-    assertThat(final_.getClassificationAttempts()).isEqualTo(1);
-  }
-
-  @Test
-  void anyBelow050_transitionsToClarificationPending_andWritesQuery() {
-    testAiService.register(
-        TaskType.FEEDBACK_CLASSIFICATION,
-        result(output(Destination.RECIPE, "0.95"), output(Destination.PREFERENCE, "0.30")));
-
-    UUID feedbackId = persistEntry();
-    publishAfterCommit(feedbackId);
-
-    awaitState(feedbackId, SubmissionStatus.CLARIFICATION_PENDING);
-
-    List<ClarificationQuery> rows = clarificationRepository.findAll();
-    assertThat(rows).hasSize(1);
-    ClarificationQuery row = rows.get(0);
-    assertThat(row.getStatus()).isEqualTo(ClarificationStatus.PENDING);
-    assertThat(row.getExpiresAt()).isAfter(Instant.now().minus(Duration.ofMinutes(1)));
-
-    awaitCondition(() -> !processedCapture.events.isEmpty(), Duration.ofSeconds(30));
-    FeedbackProcessedEvent fpe = processedCapture.events.get(0);
-    assertThat(fpe.clarificationPending()).isTrue();
-    assertThat(fpe.destinationsTouched()).isEmpty();
-    assertThat(fpe.partialFailure()).isFalse();
-  }
-
-  @Test
-  void emptyClassifications_transitionsToRouted() {
-    testAiService.register(
-        TaskType.FEEDBACK_CLASSIFICATION,
-        new ClassificationResult(List.of(), new BigDecimal("0.10"), "nothing"));
 
     UUID feedbackId = persistEntry();
     publishAfterCommit(feedbackId);
 
     awaitState(feedbackId, SubmissionStatus.ROUTED);
 
-    awaitCondition(() -> !processedCapture.events.isEmpty(), Duration.ofSeconds(30));
+    List<RoutingLogEntry> rows =
+        routingLogRepository.findByFeedbackEntryIdOrderByRoutedAtAsc(feedbackId);
+    assertThat(rows).hasSize(1);
+    RoutingLogEntry row = rows.get(0);
+    assertThat(row.getDestination()).isEqualTo(Destination.RECIPE);
+    assertThat(row.getStatus()).isEqualTo(RoutingStatus.APPLIED);
+    assertThat(row.getActionTaken()).isEqualTo("recipe-ok");
+    assertThat(row.getCompletedAt()).isNotNull();
+
+    awaitCondition(() -> !processedCapture.events.isEmpty(), Duration.ofSeconds(15));
     FeedbackProcessedEvent fpe = processedCapture.events.get(0);
-    assertThat(fpe.clarificationPending()).isFalse();
+    assertThat(fpe.destinationsTouched()).containsExactly(Destination.RECIPE);
     assertThat(fpe.partialFailure()).isFalse();
-    assertThat(fpe.destinationsTouched()).isEmpty();
   }
 
   @Test
-  void aiInvalidResponse_transitionsToFailed() {
-    // Register a wrong-typed response — TestAiService throws AiInvalidResponseException for type
-    // mismatch.
-    testAiService.register(TaskType.FEEDBACK_CLASSIFICATION, "not a ClassificationResult");
+  void mixedSuccessAndFailure_partialFailureStatus() {
+    recordingPreference.failOnNext = true;
+
+    testAiService.register(
+        TaskType.FEEDBACK_CLASSIFICATION,
+        result(output(Destination.RECIPE, "0.92"), output(Destination.PREFERENCE, "0.85")));
 
     UUID feedbackId = persistEntry();
     publishAfterCommit(feedbackId);
 
-    awaitState(feedbackId, SubmissionStatus.FAILED);
+    awaitState(feedbackId, SubmissionStatus.PARTIALLY_FAILED);
 
-    awaitCondition(() -> !processedCapture.events.isEmpty(), Duration.ofSeconds(30));
+    List<RoutingLogEntry> rows =
+        routingLogRepository.findByFeedbackEntryIdOrderByRoutedAtAsc(feedbackId);
+    assertThat(rows).hasSize(2);
+    RoutingLogEntry recipeRow =
+        rows.stream()
+            .filter(r -> r.getDestination() == Destination.RECIPE)
+            .findFirst()
+            .orElseThrow();
+    RoutingLogEntry prefRow =
+        rows.stream()
+            .filter(r -> r.getDestination() == Destination.PREFERENCE)
+            .findFirst()
+            .orElseThrow();
+    assertThat(recipeRow.getStatus()).isEqualTo(RoutingStatus.APPLIED);
+    assertThat(prefRow.getStatus()).isEqualTo(RoutingStatus.FAILED);
+    assertThat(prefRow.getFailureKind()).isEqualTo(RoutingFailureKind.DESTINATION_BUSINESS);
+
+    awaitCondition(() -> !processedCapture.events.isEmpty(), Duration.ofSeconds(15));
     FeedbackProcessedEvent fpe = processedCapture.events.get(0);
     assertThat(fpe.partialFailure()).isTrue();
-    assertThat(fpe.destinationsTouched()).isEmpty();
+    assertThat(fpe.destinationsTouched())
+        .containsExactlyInAnyOrder(Destination.RECIPE, Destination.PREFERENCE);
   }
 
   // ---------------- helpers ----------------
@@ -210,7 +196,7 @@ class FeedbackClassificationFlowIT {
           Optional<FeedbackEntry> e = entryRepository.findById(feedbackId);
           return e.isPresent() && e.get().getSubmissionStatus() == expected;
         },
-        Duration.ofSeconds(30));
+        Duration.ofSeconds(15));
     FeedbackEntry e = entryRepository.findById(feedbackId).orElseThrow();
     assertThat(e.getSubmissionStatus()).isEqualTo(expected);
   }
@@ -243,13 +229,8 @@ class FeedbackClassificationFlowIT {
     return new ClassificationOutput(dest, new BigDecimal(confidence), "snippet " + dest, payload);
   }
 
-  // ---------------- AFTER_COMMIT publisher helper ----------------
+  // ---------------- test wiring ----------------
 
-  /**
-   * Publishes {@link FeedbackSubmittedEvent} from inside a transaction so the listener's {@code
-   * AFTER_COMMIT} phase fires. {@code @Transactional} ensures the publication participates in a
-   * transaction; the commit emits the event to the async listener.
-   */
   @org.springframework.stereotype.Component
   static class EventPublisherHelper {
     private final ApplicationEventPublisher publisher;
@@ -264,21 +245,6 @@ class FeedbackClassificationFlowIT {
     }
   }
 
-  // ---------------- FeedbackProcessedEvent capture ----------------
-
-  @TestConfiguration
-  static class EventCaptureConfig {
-    @Bean
-    FeedbackProcessedCapture feedbackProcessedCapture() {
-      return new FeedbackProcessedCapture();
-    }
-
-    @Bean
-    EventPublisherHelper eventPublisherHelper(ApplicationEventPublisher publisher) {
-      return new EventPublisherHelper(publisher);
-    }
-  }
-
   static class FeedbackProcessedCapture {
     final List<FeedbackProcessedEvent> events = new CopyOnWriteArrayList<>();
 
@@ -289,6 +255,102 @@ class FeedbackClassificationFlowIT {
 
     void clear() {
       events.clear();
+    }
+  }
+
+  /** Controllable RecipeFeedbackHandler — applies a deterministic result so the IT is hermetic. */
+  static class RecordingRecipeHandler implements RecipeFeedbackHandler {
+    @Override
+    public Result handleRecipeFeedback(Input input) {
+      return new Result(false, "recipe-ok", Map.of("recipeId", input.recipeId().toString()));
+    }
+
+    void reset() {}
+  }
+
+  /**
+   * Controllable PreferenceFeedbackBridge — toggle {@link #failOnNext} to simulate a destination
+   * business exception. Throws {@link
+   * com.example.mealprep.preference.exception.HardConstraintsNotFoundException} which the router
+   * classifies as {@code DESTINATION_BUSINESS}.
+   */
+  static class RecordingPreferenceBridge implements PreferenceFeedbackBridge {
+    volatile boolean failOnNext = false;
+
+    @Override
+    public Result applyFeedback(Input input) {
+      if (failOnNext) {
+        throw new com.example.mealprep.preference.exception.HardConstraintsNotFoundException(
+            input.userId());
+      }
+      return new Result("preference-ok", Map.of());
+    }
+
+    void reset() {
+      failOnNext = false;
+    }
+  }
+
+  static class NoopNutritionBridge implements NutritionFeedbackBridge {
+    @Override
+    public Result applyFeedback(Input input) {
+      return new Result("nutrition-ok", Map.of());
+    }
+  }
+
+  static class NoopProvisionsBridge implements ProvisionsFeedbackBridge {
+    @Override
+    public Result applyFeedback(Input input) {
+      return new Result("provisions-ok", Map.of());
+    }
+  }
+
+  @TestConfiguration
+  static class RoutingItConfig {
+
+    @Bean
+    FeedbackProcessedCapture feedbackProcessedCapture() {
+      return new FeedbackProcessedCapture();
+    }
+
+    @Bean
+    EventPublisherHelper eventPublisherHelper(ApplicationEventPublisher publisher) {
+      return new EventPublisherHelper(publisher);
+    }
+
+    @Bean
+    @Primary
+    RecipeFeedbackHandler recordingRecipeHandler() {
+      return new RecordingRecipeHandler();
+    }
+
+    @Bean
+    @Primary
+    PreferenceFeedbackBridge recordingPreferenceBridge() {
+      return new RecordingPreferenceBridge();
+    }
+
+    @Bean
+    @Primary
+    NutritionFeedbackBridge nutritionFeedbackBridge() {
+      return new NoopNutritionBridge();
+    }
+
+    @Bean
+    @Primary
+    ProvisionsFeedbackBridge provisionsFeedbackBridge() {
+      return new NoopProvisionsBridge();
+    }
+
+    /** Expose the recording impls under their concrete types for the test to mutate. */
+    @Bean
+    RecordingRecipeHandler recordingRecipeHandlerHandle(RecipeFeedbackHandler bean) {
+      return (RecordingRecipeHandler) bean;
+    }
+
+    @Bean
+    RecordingPreferenceBridge recordingPreferenceBridgeHandle(PreferenceFeedbackBridge bean) {
+      return (RecordingPreferenceBridge) bean;
     }
   }
 }
