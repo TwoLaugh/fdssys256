@@ -363,7 +363,8 @@ class PendingChangeLifecycleTest {
         events,
         writeApi,
         mapper,
-        config());
+        config(),
+        null);
   }
 
   private static AdaptationConfig config() {
