@@ -175,7 +175,9 @@ class ClarificationQueryControllerIT {
       throws Exception {
     AuthedUser user = registerUser();
     ClarificationQuery q = seedPendingClarification(user.userId());
-    FeedbackEntry entry = q.getFeedbackEntry();
+    // q.getFeedbackEntry() is a lazy proxy; .getId() is safe (no init) but .getTraceId() later
+    // would throw LazyInitializationException (session closed). Re-fetch the fully-loaded entity.
+    FeedbackEntry entry = entryRepository.findById(q.getFeedbackEntry().getId()).orElseThrow();
     AnswerClarificationRequest req = new AnswerClarificationRequest(Destination.PREFERENCE, null);
 
     mvc.perform(
