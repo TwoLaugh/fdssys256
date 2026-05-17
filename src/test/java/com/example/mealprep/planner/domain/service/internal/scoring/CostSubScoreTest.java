@@ -18,7 +18,12 @@ import org.junit.jupiter.api.Test;
 class CostSubScoreTest {
 
   private static final LocalDate WEEK = LocalDate.of(2026, 1, 5);
-  private final CostSubScore calc = new CostSubScore(PlanTestData.scoringProperties());
+  private final CostSubScore calc =
+      new CostSubScore(
+          PlanTestData.scoringProperties(),
+          new com.example.mealprep.planner.domain.service.internal.rollup.DailyCostAggregator(),
+          new com.example.mealprep.planner.domain.service.internal.rollup.WeeklyCostConfidence(
+              PlanTestData.scoringProperties()));
 
   @Test
   void name_is_cost() {

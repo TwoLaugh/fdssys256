@@ -37,7 +37,11 @@ class ScoringEngineImplTest {
     return List.of(
         new PreferenceSubScore(),
         new NutritionSubScore(),
-        new CostSubScore(props),
+        new CostSubScore(
+            props,
+            new com.example.mealprep.planner.domain.service.internal.rollup.DailyCostAggregator(),
+            new com.example.mealprep.planner.domain.service.internal.rollup.WeeklyCostConfidence(
+                props)),
         new VarietySubScore(props),
         new TimeSubScore(),
         new BatchSubScore(),
