@@ -331,7 +331,9 @@ public final class PlanTestData {
         new BigDecimal("1.5"),
         Duration.ofSeconds(30),
         uniformWeights(),
-        defaultTuning());
+        defaultTuning(),
+        Duration.ofSeconds(20),
+        3);
   }
 
   /**
@@ -565,6 +567,66 @@ public final class PlanTestData {
    */
   public static RecipeDto planWithStaleNutrition(UUID id) {
     return scoredRecipe(id, 30, "Generic", "tofu", "fry", List.of("rice"));
+  }
+
+  // ---- planner-01g Stage-C fixture builders ---------------------------------------------------
+
+  /** A successful (non-fallback) Stage-C result picking {@code chosenIndex}. */
+  public static com.example.mealprep.planner.api.dto.StageCResult stageCResultLlm(
+      int chosenIndex, String reasoning) {
+    return new com.example.mealprep.planner.api.dto.StageCResult(
+        chosenIndex,
+        reasoning,
+        com.example.mealprep.planner.domain.entity.AugmentationSource.LLM,
+        false);
+  }
+
+  /** The deterministic-fallback Stage-C result (index 0, fixed reasoning, fallback=true). */
+  public static com.example.mealprep.planner.api.dto.StageCResult stageCResultFallback() {
+    return new com.example.mealprep.planner.api.dto.StageCResult(
+        0,
+        "AI ranking unavailable; deterministic top-scored candidate selected.",
+        com.example.mealprep.planner.domain.entity.AugmentationSource.LLM,
+        true);
+  }
+
+  /** A single-day {@link CandidateDailyRollupDto} with the given macros (micros empty). */
+  public static com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto dailyRollup(
+      LocalDate date, int kcal) {
+    return new com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto(
+        date,
+        com.example.mealprep.nutrition.domain.entity.ActivityLevel.LIGHT_ACTIVITY,
+        kcal,
+        new BigDecimal("100"),
+        new BigDecimal("200"),
+        new BigDecimal("60"),
+        new BigDecimal("30"),
+        Map.of());
+  }
+
+  /** A one-day {@link CandidatePlanRollupDto} for {@code weekStart}. */
+  public static com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto candidateRollup(
+      LocalDate weekStart, int kcal) {
+    return new com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto(
+        weekStart, weekStart, List.of(dailyRollup(weekStart, kcal)));
+  }
+
+  /**
+   * Two score-sorted candidates and their index-aligned rollups. Candidate 0 is the deterministic
+   * top-scored one (higher kcal here is arbitrary fixture data, not a scoring signal).
+   */
+  public static List<CandidatePlan> twoCandidates(LocalDate weekStart) {
+    return List.of(
+        candidatePlan(
+            weekStart, List.of(assignment(UUID.randomUUID(), UUID.randomUUID(), weekStart, 0, 2))),
+        candidatePlan(
+            weekStart, List.of(assignment(UUID.randomUUID(), UUID.randomUUID(), weekStart, 0, 2))));
+  }
+
+  /** Index-aligned rollups for {@link #twoCandidates(LocalDate)}. */
+  public static List<com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto> twoRollups(
+      LocalDate weekStart) {
+    return List.of(candidateRollup(weekStart, 2100), candidateRollup(weekStart, 1900));
   }
 
   private static Plan.PlanBuilder basePlanBuilder(

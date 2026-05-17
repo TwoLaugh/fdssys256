@@ -46,7 +46,9 @@ class PlannerPropertiesIT {
     "mealprep.planner.scoring.provisions.waste-value-tiers.above-seven-days=1.0",
     "mealprep.planner.scoring.provisions.waste-value-tiers.three-days-or-less=2.0",
     "mealprep.planner.scoring.provisions.waste-value-tiers.one-day-or-less=3.0",
-    "mealprep.planner.scoring.cost.confidence-threshold=0.1"
+    "mealprep.planner.scoring.cost.confidence-threshold=0.1",
+    "mealprep.planner.stage-c-timeout=PT20S",
+    "mealprep.planner.iteration-budget=3"
   };
 
   @Autowired private PlannerProperties properties;
@@ -60,6 +62,12 @@ class PlannerPropertiesIT {
     assertThat(properties.maxPoolPerSlot()).isEqualTo(50);
     assertThat(properties.maxTimeOvershootRatio()).isEqualByComparingTo(new BigDecimal("1.5"));
     assertThat(properties.stageATimeout()).isEqualTo(Duration.ofSeconds(30));
+  }
+
+  @Test
+  void binds_stage_c_timeout_and_iteration_budget_planner_01g() {
+    assertThat(properties.stageCTimeout()).isEqualTo(Duration.ofSeconds(20));
+    assertThat(properties.iterationBudget()).isEqualTo(3);
   }
 
   @Test
