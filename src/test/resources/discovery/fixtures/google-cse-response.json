@@ -1,0 +1,23 @@
+{
+  "kind": "customsearch#search",
+  "items": [
+    {
+      "title": "Best Pad Thai Recipe",
+      "link": "https://example-recipes.test/pad-thai",
+      "displayLink": "example-recipes.test",
+      "snippet": "An authentic pad thai you can make at home."
+    },
+    {
+      "title": "Easy Green Curry",
+      "link": "https://example-recipes.test/green-curry",
+      "displayLink": "example-recipes.test",
+      "snippet": "A 30-minute Thai green curry."
+    },
+    {
+      "title": "Vegetarian Spring Rolls",
+      "link": "https://example-recipes.test/spring-rolls",
+      "displayLink": "example-recipes.test",
+      "snippet": "Crispy spring rolls with a peanut dip."
+    }
+  ]
+}

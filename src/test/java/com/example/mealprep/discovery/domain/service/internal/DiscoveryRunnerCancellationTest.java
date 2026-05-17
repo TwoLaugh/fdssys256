@@ -69,7 +69,11 @@ class DiscoveryRunnerCancellationTest {
   void setUp() {
     DiscoveryProperties properties =
         new DiscoveryProperties(
-            Duration.ofMinutes(10), 30, Duration.ofSeconds(60), Duration.ofHours(1));
+            Duration.ofMinutes(10),
+            30,
+            Duration.ofSeconds(60),
+            Duration.ofHours(1),
+            Duration.ofHours(6));
     runner =
         new DiscoveryJobRunner(
             jobRepository,

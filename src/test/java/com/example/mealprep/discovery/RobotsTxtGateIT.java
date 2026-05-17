@@ -42,7 +42,11 @@ class RobotsTxtGateIT {
     host = "localhost:" + wireMock.port();
     properties =
         new DiscoveryProperties(
-            Duration.ofMinutes(10), 30, Duration.ofSeconds(60), Duration.ofHours(1));
+            Duration.ofMinutes(10),
+            30,
+            Duration.ofSeconds(60),
+            Duration.ofHours(1),
+            Duration.ofHours(6));
     SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
     factory.setConnectTimeout(2_000);
     factory.setReadTimeout(2_000);
@@ -125,7 +129,11 @@ class RobotsTxtGateIT {
     AdvancingClock clock = new AdvancingClock(base);
     DiscoveryProperties shortTtl =
         new DiscoveryProperties(
-            Duration.ofMinutes(10), 30, Duration.ofSeconds(60), Duration.ofMinutes(1));
+            Duration.ofMinutes(10),
+            30,
+            Duration.ofSeconds(60),
+            Duration.ofMinutes(1),
+            Duration.ofHours(6));
     InHouseRobotsTxtGate gate = gateWithClock(shortTtl, clock);
 
     gate.check(URI.create("http://" + host + "/r/1"), "MealPrepAI/1.0");

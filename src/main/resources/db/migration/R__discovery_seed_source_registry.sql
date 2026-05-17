@@ -1,5 +1,0 @@
--- Discovery module — repeatable seed for the source registry.
---
--- 01a ships this file as an empty placeholder so the migration path is in place;
--- 01e populates the ~25-30 curated-source INSERTs with ON CONFLICT (source_key) DO UPDATE.
--- Flyway 9 treats an empty repeatable as a no-op.
