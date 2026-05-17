@@ -6,6 +6,8 @@ import com.example.mealprep.adaptation.api.dto.AdaptationTraceDto;
 import com.example.mealprep.adaptation.api.dto.PendingChangeDto;
 import com.example.mealprep.adaptation.api.dto.PendingChangeListItemDto;
 import com.example.mealprep.adaptation.api.dto.PlannerHintDto;
+import com.example.mealprep.adaptation.domain.enums.JobSource;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -29,6 +31,9 @@ public interface AdaptationQueryService {
 
   /** Single-row read; empty when missing. */
   Optional<PendingChangeDto> getPendingChange(UUID pendingChangeId);
+
+  /** Single-job read by id; empty when missing. Backs the admin job-by-id endpoint. */
+  Optional<AdaptationJobDto> getJob(UUID jobId);
 
   /** Page of jobs for a recipe, newest first. */
   Page<AdaptationJobDto> getJobsForRecipe(UUID recipeId, Pageable pageable);
@@ -54,4 +59,8 @@ public interface AdaptationQueryService {
 
   /** Most-recent {@code DONE} result for a recipe; empty when no successful job has run. */
   Optional<AdaptationResultDto> getMostRecentResultForRecipe(UUID recipeId);
+
+  /** Run-history feed: jobs of a source within a [from, to] enqueue window, newest first. */
+  Page<AdaptationJobDto> getRunHistory(
+      JobSource source, Instant from, Instant to, Pageable pageable);
 }

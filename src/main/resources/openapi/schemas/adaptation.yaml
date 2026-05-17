@@ -133,3 +133,172 @@ RejectPendingChangeRequest:
       type: string
       maxLength: 200
       nullable: true
+# ===== 01f: admin / debug + run-history schemas =====
+JobSource:
+  type: string
+  enum: [IMPORT, FEEDBACK, DATA_MODEL_CHANGE, PLAN_TIME]
+JobPriority:
+  type: string
+  enum: [SYNC, ASYNC, BATCH]
+JobStatus:
+  type: string
+  enum: [PENDING, RUNNING, DONE, FAILED]
+JobFailureReason:
+  type: string
+  enum: [HARD_FILTER, LOW_CONFIDENCE, CHARACTER_BREAK, AI_UNAVAILABLE, LLM_ERROR, REBASE_EXHAUSTED, WRITE_API_CONFLICT, TIMEOUT, UNKNOWN]
+ApprovalPolicy:
+  type: string
+  enum: [PENDING_CHANGE, DIRECT, PLAN_OVERLAY]
+OutcomeKind:
+  type: string
+  enum: [VERSION_CREATED, BRANCH_CREATED, SUBSTITUTION_CREATED, PENDING_CREATED, NO_OP, FAILED]
+ValidationResult:
+  type: string
+  enum: [PASSED, FAILED_HARD, LOW_CONFIDENCE, CHARACTER_BREAK, NO_CHANGE]
+AdaptationJobDto:
+  type: object
+  description: 'Read-side projection of an adaptation job — full lifecycle snapshot.'
+  required: [id, recipeId, userId, catalogue, source, priority, approvalPolicy, status, inputs, traceId, enqueuedAt, optimisticVersion]
+  properties:
+    id: { type: string, format: uuid }
+    recipeId: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    catalogue: { $ref: '../schemas/recipe.yaml#/Catalogue' }
+    source: { $ref: '#/JobSource' }
+    priority: { $ref: '#/JobPriority' }
+    approvalPolicy: { $ref: '#/ApprovalPolicy' }
+    status: { $ref: '#/JobStatus' }
+    failureReason:
+      type: string
+      enum: [HARD_FILTER, LOW_CONFIDENCE, CHARACTER_BREAK, AI_UNAVAILABLE, LLM_ERROR, REBASE_EXHAUSTED, WRITE_API_CONFLICT, TIMEOUT, UNKNOWN]
+      nullable: true
+    failureExcerpt:
+      type: string
+      nullable: true
+    inputs:
+      type: object
+      additionalProperties: true
+      description: 'Opaque trigger-input JSON; shape governed by the pipeline.'
+    promptTemplateVersion:
+      type: string
+      nullable: true
+    traceId: { type: string, format: uuid }
+    parentDecisionId:
+      type: string
+      format: uuid
+      nullable: true
+    enqueuedAt: { type: string, format: date-time }
+    startedAt:
+      type: string
+      format: date-time
+      nullable: true
+    completedAt:
+      type: string
+      format: date-time
+      nullable: true
+    durationMs:
+      type: integer
+      nullable: true
+    optimisticVersion: { type: integer, format: int64 }
+AdaptationJobDtoPage:
+  type: object
+  description: 'Paged response of AdaptationJobDto rows.'
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/AdaptationJobDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+AdaptationTraceDto:
+  type: object
+  description: 'Append-only adaptation-trace projection — one row per completed job.'
+  required: [id, jobId, recipeId, traceId, source, promptTemplateName, promptTemplateVersion, inputsSnapshot, candidates, validationResult, outcomeKind, durationMs, createdAt]
+  properties:
+    id: { type: string, format: uuid }
+    jobId: { type: string, format: uuid }
+    recipeId: { type: string, format: uuid }
+    traceId: { type: string, format: uuid }
+    source: { $ref: '#/JobSource' }
+    promptTemplateName: { type: string }
+    promptTemplateVersion: { type: string }
+    aiCallId:
+      type: string
+      format: uuid
+      nullable: true
+    inputsSnapshot:
+      type: object
+      additionalProperties: true
+      description: 'Opaque snapshot JSON.'
+    rawAiResponse:
+      type: object
+      additionalProperties: true
+      nullable: true
+      description: 'Null when Stage C was auto-skipped.'
+    candidates:
+      type: object
+      additionalProperties: true
+      description: 'Top-N candidate snapshots JSON.'
+    chosenCandidateIndex:
+      type: integer
+      nullable: true
+    classificationDecision:
+      type: string
+      enum: [VERSION, BRANCH, SUBSTITUTION, NO_CHANGE]
+      nullable: true
+    finalDiff:
+      type: object
+      additionalProperties: true
+      nullable: true
+    confidence:
+      type: number
+      format: float
+      nullable: true
+    characterPreservationScore:
+      type: number
+      format: float
+      nullable: true
+    validationResult: { $ref: '#/ValidationResult' }
+    outcomeKind: { $ref: '#/OutcomeKind' }
+    outcomeTargetId:
+      type: string
+      format: uuid
+      nullable: true
+    durationMs: { type: integer }
+    createdAt: { type: string, format: date-time }
+AdaptationTraceDtoPage:
+  type: object
+  description: 'Paged response of AdaptationTraceDto rows.'
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/AdaptationTraceDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+RetryFailedJobRequest:
+  type: object
+  description: 'Admin body: re-enqueue a fresh copy of a FAILED job.'
+  required: [jobId]
+  properties:
+    jobId: { type: string, format: uuid }
+SweepExpiredPendingResponse:
+  type: object
+  description: 'Result of the expired-pending-change sweep; touched is the rows flipped to EXPIRED.'
+  required: [touched]
+  properties:
+    touched: { type: integer }

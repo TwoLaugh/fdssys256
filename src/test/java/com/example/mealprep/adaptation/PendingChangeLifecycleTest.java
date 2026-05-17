@@ -364,6 +364,11 @@ class PendingChangeLifecycleTest {
         writeApi,
         mapper,
         config(),
+        null,
+        null,
+        null,
+        null,
+        null,
         null);
   }
 

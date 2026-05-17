@@ -53,4 +53,11 @@ public interface AdaptationService {
 
   /** Scheduled-job entry; returns the number of rows touched. */
   int sweepExpiredPendingChanges();
+
+  /**
+   * Admin: re-enqueue a fresh copy of a FAILED job. The original must be {@code FAILED} (else 409);
+   * the new row chains {@code parent_decision_id = oldJob.id} for the audit trail and starts {@code
+   * PENDING}. Returns the new job's DTO.
+   */
+  com.example.mealprep.adaptation.api.dto.AdaptationJobDto retryFailedJob(UUID jobId);
 }

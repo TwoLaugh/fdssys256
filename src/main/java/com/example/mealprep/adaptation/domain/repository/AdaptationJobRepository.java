@@ -1,10 +1,13 @@
 package com.example.mealprep.adaptation.domain.repository;
 
 import com.example.mealprep.adaptation.domain.entity.AdaptationJob;
+import com.example.mealprep.adaptation.domain.enums.JobSource;
 import com.example.mealprep.adaptation.domain.enums.JobStatus;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -47,4 +50,23 @@ public interface AdaptationJobRepository extends JpaRepository<AdaptationJob, UU
        and j.status in (com.example.mealprep.adaptation.domain.enums.JobStatus.PENDING,
                         com.example.mealprep.adaptation.domain.enums.JobStatus.RUNNING)""")
   List<AdaptationJob> findActiveByRecipeId(@Param("rid") UUID recipeId);
+
+  /** Active-jobs read for a user filtered to a status set (PENDING + RUNNING), newest first. */
+  Page<AdaptationJob> findByUserIdAndStatusInOrderByEnqueuedAtDesc(
+      UUID userId, Set<JobStatus> statuses, Pageable p);
+
+  /** Run-history feed: jobs of a source within a [from, to] enqueue window, newest first. */
+  Page<AdaptationJob> findBySourceAndEnqueuedAtBetweenOrderByEnqueuedAtDesc(
+      JobSource source, Instant from, Instant to, Pageable p);
+
+  /**
+   * Most-recent {@code DONE} job for a recipe — backs {@code getMostRecentResultForRecipe}. Ordered
+   * by {@code completedAt} desc (falling back to {@code enqueuedAt}); first row wins.
+   */
+  @Query(
+      """
+      select j from AdaptationJob j where j.recipeId = :rid
+       and j.status = com.example.mealprep.adaptation.domain.enums.JobStatus.DONE
+       order by j.completedAt desc nulls last, j.enqueuedAt desc""")
+  List<AdaptationJob> findMostRecentDoneForRecipe(@Param("rid") UUID recipeId, Pageable pageable);
 }

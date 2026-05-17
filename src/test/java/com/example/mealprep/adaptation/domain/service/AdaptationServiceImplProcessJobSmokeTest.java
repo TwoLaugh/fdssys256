@@ -204,6 +204,11 @@ class AdaptationServiceImplProcessJobSmokeTest {
               null,
               null,
               null,
+              null,
+              null,
+              null,
+              null,
+              null,
               null);
     }
   }
