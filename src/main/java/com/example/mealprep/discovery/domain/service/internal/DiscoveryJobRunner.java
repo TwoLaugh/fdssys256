@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -91,6 +92,19 @@ public class DiscoveryJobRunner {
    * finally} block to prevent unbounded growth.
    */
   private final Map<UUID, AtomicBoolean> cancellationRequests = new ConcurrentHashMap<>();
+
+  /**
+   * Per-job sync waiters keyed by {@code jobId}. {@code runJobSync} (01f) registers a {@link
+   * CompletableFuture} BEFORE {@code startJob}'s tx commits; the runner completes it with the
+   * terminal status the moment {@code finalise}/{@code finaliseCrashed}/{@code sweepOrphans}
+   * transitions the job. The sync caller blocks on {@code future.get(timeout)} rather than polling.
+   *
+   * <p>{@code ConcurrentHashMap} for thread-safety: the controller thread registers; the runner (or
+   * orphan-sweep / crash) thread completes. {@link CompletableFuture#complete} is a one-shot — a
+   * second completion attempt is a harmless no-op.
+   */
+  private final Map<UUID, CompletableFuture<DiscoveryJobStatus>> syncWaiters =
+      new ConcurrentHashMap<>();
 
   public DiscoveryJobRunner(
       DiscoveryJobRepository jobRepository,
@@ -161,6 +175,42 @@ public class DiscoveryJobRunner {
    */
   public void requestCancellation(UUID jobId) {
     cancellationRequests.computeIfAbsent(jobId, k -> new AtomicBoolean(false)).set(true);
+  }
+
+  /**
+   * Register a sync waiter for {@code jobId}. Called by {@code DiscoveryServiceImpl.runJobSync}
+   * immediately after {@code startJob} returns the QUEUED DTO — the registration is in-memory and
+   * happens BEFORE the AFTER_COMMIT {@code DiscoveryJobStartedEvent} listener can fire, so the
+   * runner's terminal path always finds the waiter (LLD line 385).
+   */
+  public void registerSyncWaiter(UUID jobId, CompletableFuture<DiscoveryJobStatus> waiter) {
+    syncWaiters.put(jobId, waiter);
+  }
+
+  /**
+   * Remove the sync waiter for {@code jobId}. Called by {@code runJobSync} in a {@code finally}
+   * block so a timed-out call never leaks a map entry.
+   */
+  public void unregisterSyncWaiter(UUID jobId) {
+    syncWaiters.remove(jobId);
+  }
+
+  /** Test-only: current sync-waiter map size, for hygiene assertions in ITs. */
+  int syncWaiterCount() {
+    return syncWaiters.size();
+  }
+
+  /**
+   * Complete (and remove) the sync waiter for {@code jobId} with the job's terminal status, if a
+   * sync caller is blocked on it. No-op when no waiter is registered (async path). Invoked from
+   * every terminal-transition path: {@code finalise}, the cancellation branch, {@code
+   * finaliseCrashed}, and the orphan sweep.
+   */
+  private void completeSyncWaiter(UUID jobId, DiscoveryJobStatus terminalStatus) {
+    CompletableFuture<DiscoveryJobStatus> waiter = syncWaiters.remove(jobId);
+    if (waiter != null) {
+      waiter.complete(terminalStatus);
+    }
   }
 
   /**
@@ -408,6 +458,7 @@ public class DiscoveryJobRunner {
         log.info("discovery job {} cancelled by user; finalising FAILED", jobId);
         transitions.finaliseTo(
             jobId, DiscoveryJobStatus.FAILED, "cancelled by user", sourcesSucceeded, sourcesFailed);
+        completeSyncWaiter(jobId, DiscoveryJobStatus.FAILED);
         publishJobCompleted(jobId, userId, traceId);
         return;
       }
@@ -672,6 +723,9 @@ public class DiscoveryJobRunner {
       List<String> sourcesFailed,
       DiscoveryJob job) {
     transitions.finaliseTo(jobId, terminal, errorSummary, sourcesSucceeded, sourcesFailed);
+    // Unblock any sync caller (01f). AFTER the DB write, BEFORE the completed-event publish (the
+    // publish happens in finaliseTerminal right after this returns) per ticket invariant 11.
+    completeSyncWaiter(jobId, terminal);
     log.info("discovery job {} finalised {} ({})", jobId, terminal, errorSummary);
   }
 
@@ -687,6 +741,7 @@ public class DiscoveryJobRunner {
           "runner crashed: " + cause.getClass().getSimpleName() + ": " + cause.getMessage(),
           job.getSourcesSucceeded(),
           job.getSourcesFailed());
+      completeSyncWaiter(jobId, DiscoveryJobStatus.FAILED);
       publishJobCompleted(jobId, job.getUserId(), job.getTraceId());
     } catch (RuntimeException secondary) {
       log.error("failed to finalise crashed job {} — leaving for orphan sweep", jobId, secondary);
@@ -737,6 +792,10 @@ public class DiscoveryJobRunner {
               job.getSourcesFailed() == null ? Collections.emptyList() : job.getSourcesFailed());
       if (finalised.isPresent()) {
         resumed++;
+        // A sync caller that timed out already returned; but if it is still blocked (e.g. a slow
+        // orphan crossed the heartbeat window while the caller waits) unblock it now (invariant
+        // 13).
+        completeSyncWaiter(job.getId(), DiscoveryJobStatus.FAILED);
         publishJobCompleted(job.getId(), job.getUserId(), job.getTraceId());
       }
     }

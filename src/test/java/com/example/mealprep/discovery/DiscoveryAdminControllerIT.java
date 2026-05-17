@@ -12,6 +12,8 @@ import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.testdata.AuthTestData;
+import com.example.mealprep.discovery.api.dto.StartDiscoveryJobRequest;
+import com.example.mealprep.discovery.domain.entity.DiscoveryJobTrigger;
 import com.example.mealprep.discovery.domain.entity.DiscoverySource;
 import com.example.mealprep.discovery.domain.repository.DiscoverySourceRepository;
 import com.example.mealprep.discovery.testdata.DiscoveryTestData;
@@ -131,6 +133,45 @@ class DiscoveryAdminControllerIT {
   @Test
   void runOrphanSweep_anonymous_returns401() throws Exception {
     mvc.perform(post("/api/v1/discovery/admin/run-orphan-sweep"))
+        .andExpect(status().isUnauthorized());
+  }
+
+  // ===== sync endpoint (01f) =====
+
+  @Test
+  void runJobSync_endpointExists_nonColdStart_returns422_openApiValid() throws Exception {
+    AuthedUser user = registerUser();
+    seedSource("src_a", true);
+
+    StartDiscoveryJobRequest req =
+        new StartDiscoveryJobRequest(
+            DiscoveryJobTrigger.USER_INITIATED,
+            5,
+            DiscoveryTestData.sampleConstraints(),
+            java.util.List.of("src_a"),
+            null);
+
+    mvc.perform(
+            post("/api/v1/discovery/admin/jobs/sync")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(openApi().isValid(openApiValidator))
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/discovery-constraint-invalid"));
+  }
+
+  @Test
+  void runJobSync_anonymous_returns401() throws Exception {
+    StartDiscoveryJobRequest req =
+        new StartDiscoveryJobRequest(
+            DiscoveryJobTrigger.COLD_START, 5, DiscoveryTestData.sampleConstraints(), null, null);
+    mvc.perform(
+            post("/api/v1/discovery/admin/jobs/sync")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
         .andExpect(status().isUnauthorized());
   }
 }

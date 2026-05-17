@@ -1,9 +1,11 @@
 package com.example.mealprep.discovery.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.discovery.exception.DiscoveryAllSourcesUnavailableException;
 import com.example.mealprep.discovery.exception.DiscoveryConstraintInvalidException;
 import com.example.mealprep.discovery.exception.DiscoveryJobAlreadyTerminalException;
 import com.example.mealprep.discovery.exception.DiscoveryJobNotFoundException;
+import com.example.mealprep.discovery.exception.DiscoveryJobTimeoutException;
 import com.example.mealprep.discovery.exception.DiscoverySourceNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
@@ -83,6 +85,39 @@ public class DiscoveryExceptionHandler {
       pd.setProperty("errors", ex.errors());
     }
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(DiscoveryAllSourcesUnavailableException.class)
+  public ResponseEntity<ProblemDetail> handleAllSourcesDown(
+      DiscoveryAllSourcesUnavailableException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.BAD_GATEWAY,
+            ex.getMessage(),
+            "discovery-all-sources-unavailable",
+            "All discovery sources unavailable",
+            req.getRequestURI());
+    if (!ex.failedSources().isEmpty()) {
+      pd.setProperty("failedSources", ex.failedSources());
+    }
+    return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(DiscoveryJobTimeoutException.class)
+  public ResponseEntity<ProblemDetail> handleTimeout(
+      DiscoveryJobTimeoutException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.REQUEST_TIMEOUT,
+            ex.getMessage(),
+            "discovery-job-timeout",
+            "Discovery job timeout",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.REQUEST_TIMEOUT)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

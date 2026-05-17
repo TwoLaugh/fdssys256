@@ -3,6 +3,7 @@ package com.example.mealprep.discovery;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
+import com.example.mealprep.discovery.domain.service.DiscoveryService;
 import com.example.mealprep.discovery.domain.service.DiscoverySource;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
@@ -69,5 +70,29 @@ class DiscoveryBoundaryTest {
               "DiscoverySource implementations live exclusively in"
                   + " com.example.mealprep.discovery.source.. — the source/ package is"
                   + " a hard pocket per LLD line 400.")
+          .allowEmptyShould(true);
+
+  /**
+   * {@code DiscoveryService} is the public facade for the planner (cold-start via {@code
+   * runJobSync}) and the recipe module (user-initiated via {@code startJob}) only. Per LLD line 619
+   * / ticket invariants 20-21. Vacuously true today (no planner/recipe consumers wired yet); it
+   * trips immediately if any other module (notification, feedback, …) pulls discovery in. {@code
+   * DiscoveryQueryService} is deliberately NOT covered (admin/debug callers may live anywhere) per
+   * ticket invariant 22.
+   */
+  @ArchTest
+  static final ArchRule discoveryServiceInjectedOnlyByPlannerAndRecipe =
+      noClasses()
+          .that()
+          .resideOutsideOfPackages(
+              "com.example.mealprep.discovery..",
+              "com.example.mealprep.planner..",
+              "com.example.mealprep.recipe..")
+          .should()
+          .dependOnClassesThat()
+          .areAssignableTo(DiscoveryService.class)
+          .as(
+              "DiscoveryService is injected only by planner.. and recipe.. —"
+                  + " the cold-start / user-initiated boundary per LLD line 619.")
           .allowEmptyShould(true);
 }
