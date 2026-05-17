@@ -32,4 +32,47 @@ public record PlannerProperties(
     @Min(1) int minPoolPerSlot,
     @Min(1) int maxPoolPerSlot,
     @NotNull @DecimalMin("1.0") @DecimalMax("3.0") BigDecimal maxTimeOvershootRatio,
-    @NotNull Duration stageATimeout) {}
+    @NotNull Duration stageATimeout,
+    @NotNull ScoringWeights weights,
+    @NotNull ScoringTuning scoring) {
+
+  /**
+   * Composite-score weight scheme (planner-01e). v1 is uniform {@code 1/7 ≈ 0.143} per HLD §Initial
+   * Weights v1. The sum is intentionally NOT enforced to be {@code 1.0} — the composite is {@code Σ
+   * weight × sub_score}, meaningful for any non-negative vector, and per-sub-score boosting (e.g.
+   * 2× preference) is a deliberate calibration lever. TODO(user): if calibration shows v1 uniform
+   * weights are mis-tuned, override is a properties change (no redeploy), not a code change.
+   */
+  public record ScoringWeights(
+      @NotNull @DecimalMin("0.0") @DecimalMax("1.0") BigDecimal preference,
+      @NotNull @DecimalMin("0.0") @DecimalMax("1.0") BigDecimal nutrition,
+      @NotNull @DecimalMin("0.0") @DecimalMax("1.0") BigDecimal cost,
+      @NotNull @DecimalMin("0.0") @DecimalMax("1.0") BigDecimal variety,
+      @NotNull @DecimalMin("0.0") @DecimalMax("1.0") BigDecimal time,
+      @NotNull @DecimalMin("0.0") @DecimalMax("1.0") BigDecimal batch,
+      @NotNull @DecimalMin("0.0") @DecimalMax("1.0") BigDecimal provisions) {}
+
+  /** Tunable numeric constants for variety / provisions / cost sub-scores (planner-01e). */
+  public record ScoringTuning(
+      @NotNull VarietyTargets variety,
+      @NotNull ProvisionsTuning provisions,
+      @NotNull CostTuning cost) {
+
+    public record VarietyTargets(
+        @Min(1) int cuisine, // default 5
+        @Min(1) int protein, // default 4
+        @Min(1) int cookingMethod, // default 3
+        @Min(1) int maxRepeat) {} // default 2 (used by VarietyGate)
+
+    public record ProvisionsTuning(@NotNull WasteValueTiers wasteValueTiers) {
+
+      public record WasteValueTiers(
+          @NotNull @DecimalMin("0.0") BigDecimal aboveSevenDays, // 1.0
+          @NotNull @DecimalMin("0.0") BigDecimal threeDaysOrLess, // 2.0
+          @NotNull @DecimalMin("0.0") BigDecimal oneDayOrLess) {} // 3.0
+    }
+
+    public record CostTuning(
+        @NotNull @DecimalMin("0.0") @DecimalMax("1.0") BigDecimal confidenceThreshold) {} // 0.1
+  }
+}

@@ -11,6 +11,7 @@ import java.math.RoundingMode;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -21,12 +22,19 @@ import org.springframework.stereotype.Component;
  * verify ordering / top-N / pruning invariants without depending on the real scoring math (which
  * lands in planner-01e).
  *
- * <p>{@code @Profile("test")} gates the bean — the stub MUST NOT register in default or production
- * profiles. 01e's real {@code ScoringEngine} is {@code @Component} without a profile; Spring picks
- * it outside the {@code test} profile.
+ * <p><b>planner-01e adjustment</b>: the gate moved from {@code @Profile("test")} to
+ * {@code @Profile("scoring-stub")}. 01e's real {@link ScoringEngineImpl} is {@code @Component} with
+ * no profile, so it wins in the default AND {@code test} profiles (the latter is what
+ * {@code @SpringBootTest} activates by default). Beam-search / scoring tests that want this
+ * deterministic stub explicitly add the {@code scoring-stub} profile. Because the real impl is also
+ * profile-less (always registered), under {@code scoring-stub} BOTH beans match {@code
+ * ScoringEngine}; {@code @Primary} here disambiguates so the stub wins exactly when its profile is
+ * active. Outside {@code scoring-stub} only the real impl exists, so {@code @Primary} is inert
+ * there.
  */
 @Component
-@Profile("test")
+@Profile("scoring-stub")
+@Primary
 class StubScoringEngine implements ScoringEngine {
 
   private static final BigDecimal SCALE_DOWN =
