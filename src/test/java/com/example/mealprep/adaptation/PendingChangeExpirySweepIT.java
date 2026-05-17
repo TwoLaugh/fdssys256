@@ -3,6 +3,7 @@ package com.example.mealprep.adaptation;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.mealprep.adaptation.domain.entity.AdaptationJob;
+import com.example.mealprep.adaptation.domain.entity.PendingChange;
 import com.example.mealprep.adaptation.domain.enums.AdaptationClassification;
 import com.example.mealprep.adaptation.domain.enums.ApprovalPolicy;
 import com.example.mealprep.adaptation.domain.enums.ChangeDimension;
@@ -10,7 +11,6 @@ import com.example.mealprep.adaptation.domain.enums.JobPriority;
 import com.example.mealprep.adaptation.domain.enums.JobSource;
 import com.example.mealprep.adaptation.domain.enums.JobStatus;
 import com.example.mealprep.adaptation.domain.enums.PendingChangeStatus;
-import com.example.mealprep.adaptation.domain.entity.PendingChange;
 import com.example.mealprep.adaptation.domain.repository.AdaptationJobRepository;
 import com.example.mealprep.adaptation.domain.repository.PendingChangeRepository;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
@@ -33,9 +33,10 @@ import org.springframework.test.context.ActiveProfiles;
  * wave-3 retro 0012) and asserts the sweep flips only the expired ones.
  *
  * <p>Each PendingChange needs a parent {@code adaptation_jobs} row — {@code
- * adaptation_pending_changes.job_id} is a NOT NULL FK ({@code adaptation_pending_changes_job_id_fkey},
- * ON DELETE CASCADE). Seeding a random jobId with no parent row violates the FK (round-6 retro:
- * direct-repo seeds must satisfy the whole FK graph, not just the table under test).
+ * adaptation_pending_changes.job_id} is a NOT NULL FK ({@code
+ * adaptation_pending_changes_job_id_fkey}, ON DELETE CASCADE). Seeding a random jobId with no
+ * parent row violates the FK (round-6 retro: direct-repo seeds must satisfy the whole FK graph, not
+ * just the table under test).
  */
 @SpringBootTest
 @Import(TestContainersConfig.class)
