@@ -1,16 +1,30 @@
 package com.example.mealprep.discovery.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.discovery.api.dto.DiscoveryJobDto;
 import com.example.mealprep.discovery.api.dto.DiscoverySourceDto;
 import com.example.mealprep.discovery.api.dto.OrphanSweepResultDto;
+import com.example.mealprep.discovery.api.dto.StartDiscoveryJobRequest;
+import com.example.mealprep.discovery.domain.entity.DiscoveryJobStatus;
 import com.example.mealprep.discovery.domain.service.DiscoveryService;
+import com.example.mealprep.discovery.exception.DiscoveryAllSourcesUnavailableException;
+import com.example.mealprep.discovery.exception.DiscoveryJobTimeoutException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import java.time.Duration;
+import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -25,6 +39,7 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 @RequestMapping("/api/v1/discovery/admin")
 @Tag(name = "Discovery")
+@Validated
 public class DiscoveryAdminController {
 
   private final DiscoveryService discoveryService;
@@ -53,6 +68,50 @@ public class DiscoveryAdminController {
     return discoveryService.disableSource(sourceKey);
   }
 
+  @PostMapping(
+      path = "/jobs/sync",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Synchronously run a COLD_START discovery job; blocks up to timeoutSeconds (capped"
+              + " server-side). Returns the terminal DTO on completion or the partial DTO on a"
+              + " non-strict timeout. strictTimeout=true yields 408 on deadline expiry.")
+  public ResponseEntity<DiscoveryJobDto> runJobSync(
+      @Valid @RequestBody StartDiscoveryJobRequest request,
+      @RequestParam(name = "timeoutSeconds", defaultValue = "60") @Min(1) @Max(300)
+          int timeoutSeconds,
+      @RequestParam(name = "strictTimeout", defaultValue = "false") boolean strictTimeout) {
+    UUID userId = requireUserId();
+    Duration timeout = Duration.ofSeconds(timeoutSeconds);
+    DiscoveryJobDto result = discoveryService.runJobSync(userId, request, timeout);
+
+    // Status → HTTP mapping (ticket invariant 14/15):
+    //   SUCCEEDED / PARTIAL                 → 200 (terminal DTO)
+    //   RUNNING + strictTimeout=true        → 408 (timeout; partial DTO conveyed via ProblemDetail)
+    //   RUNNING + strictTimeout=false       → 200 (partial DTO acceptable per LLD line 543)
+    //   FAILED + all sources down           → 502 (no source produced any success)
+    //   FAILED + other                      → 200 (valid terminal; planner inspects the DTO)
+    if (result.status() == DiscoveryJobStatus.RUNNING && strictTimeout) {
+      throw new DiscoveryJobTimeoutException(result.id(), timeout);
+    }
+    if (result.status() == DiscoveryJobStatus.FAILED && allSourcesDown(result)) {
+      throw new DiscoveryAllSourcesUnavailableException(result.id(), result.sourcesFailed());
+    }
+    return ResponseEntity.ok(result);
+  }
+
+  /**
+   * All-sources-down heuristic per ticket invariant 15 (simplest v1): the job FAILED, at least one
+   * source was attempted-and-failed, and not a single source succeeded. Approximate but workable —
+   * the requested-source set may be null so we cannot compare against a resolved count here.
+   */
+  private static boolean allSourcesDown(DiscoveryJobDto dto) {
+    boolean anyFailed = dto.sourcesFailed() != null && !dto.sourcesFailed().isEmpty();
+    boolean noneSucceeded = dto.sourcesSucceeded() == null || dto.sourcesSucceeded().isEmpty();
+    return anyFailed && noneSucceeded;
+  }
+
   @PostMapping(path = "/run-orphan-sweep", produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(
       summary =
@@ -64,7 +123,11 @@ public class DiscoveryAdminController {
   }
 
   private void requireAuthenticated() {
-    currentUserResolver
+    requireUserId();
+  }
+
+  private UUID requireUserId() {
+    return currentUserResolver
         .currentUserId()
         .orElseThrow(
             () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required."));

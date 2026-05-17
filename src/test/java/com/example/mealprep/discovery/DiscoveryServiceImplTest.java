@@ -74,7 +74,13 @@ class DiscoveryServiceImplTest {
             scrapeLogMapper,
             eventPublisher,
             new ObjectMapper(),
-            runner);
+            runner,
+            new com.example.mealprep.discovery.config.DiscoveryProperties(
+                java.time.Duration.ofMinutes(10),
+                30,
+                java.time.Duration.ofSeconds(60),
+                java.time.Duration.ofHours(1),
+                java.time.Duration.ofHours(6)));
   }
 
   // ---------- startJob ----------
@@ -155,13 +161,19 @@ class DiscoveryServiceImplTest {
   // ---------- runJobSync ----------
 
   @Test
-  void runJobSync_throwsUnsupportedOperation() {
+  void runJobSync_nonColdStartTrigger_throws422_doesNotEnqueue() {
     StartDiscoveryJobRequest req =
         new StartDiscoveryJobRequest(
-            DiscoveryJobTrigger.COLD_START, 5, DiscoveryTestData.sampleConstraints(), null, null);
+            DiscoveryJobTrigger.USER_INITIATED,
+            5,
+            DiscoveryTestData.sampleConstraints(),
+            null,
+            null);
     assertThatThrownBy(() -> service.runJobSync(UUID.randomUUID(), req, Duration.ofSeconds(10)))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("discovery-01f");
+        .isInstanceOf(DiscoveryConstraintInvalidException.class)
+        .hasMessageContaining("COLD_START");
+    verify(jobRepository, never()).saveAndFlush(any(DiscoveryJob.class));
+    verify(runner, never()).registerSyncWaiter(any(), any());
   }
 
   // ---------- cancelJob ----------

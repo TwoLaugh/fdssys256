@@ -240,6 +240,8 @@ paths:
     $ref: 'paths/discovery.yaml#/discoveryAdminSourceDisable'
   /api/v1/discovery/admin/run-orphan-sweep:
     $ref: 'paths/discovery.yaml#/discoveryAdminOrphanSweep'
+  /api/v1/discovery/admin/jobs/sync:
+    $ref: 'paths/discovery.yaml#/discoveryAdminJobsSync'
   # ===== adaptation =====
   /api/v1/adaptation/pending-changes:
     $ref: 'paths/adaptation.yaml#/adaptationPendingChanges'

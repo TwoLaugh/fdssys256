@@ -8,8 +8,10 @@ import com.example.mealprep.discovery.api.dto.StartDiscoveryJobRequest;
 import com.example.mealprep.discovery.api.mapper.DiscoveryJobMapper;
 import com.example.mealprep.discovery.api.mapper.DiscoveryScrapeLogMapper;
 import com.example.mealprep.discovery.api.mapper.DiscoverySourceMapper;
+import com.example.mealprep.discovery.config.DiscoveryProperties;
 import com.example.mealprep.discovery.domain.entity.DiscoveryJob;
 import com.example.mealprep.discovery.domain.entity.DiscoveryJobStatus;
+import com.example.mealprep.discovery.domain.entity.DiscoveryJobTrigger;
 import com.example.mealprep.discovery.domain.entity.DiscoverySource;
 import com.example.mealprep.discovery.domain.repository.DiscoveryJobRepository;
 import com.example.mealprep.discovery.domain.repository.DiscoveryScrapeLogRepository;
@@ -33,6 +35,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -77,6 +83,7 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final DiscoveryJobRunner runner;
+  private final DiscoveryProperties properties;
 
   public DiscoveryServiceImpl(
       DiscoveryJobRepository jobRepository,
@@ -87,7 +94,8 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
       DiscoveryScrapeLogMapper scrapeLogMapper,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
-      DiscoveryJobRunner runner) {
+      DiscoveryJobRunner runner,
+      DiscoveryProperties properties) {
     this.jobRepository = jobRepository;
     this.sourceRepository = sourceRepository;
     this.scrapeLogRepository = scrapeLogRepository;
@@ -97,6 +105,7 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.runner = runner;
+    this.properties = properties;
   }
 
   // ===== DiscoveryService — update path =====
@@ -154,7 +163,55 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
   @Override
   public DiscoveryJobDto runJobSync(
       UUID userId, StartDiscoveryJobRequest request, Duration timeout) {
-    throw new UnsupportedOperationException("runJobSync ships with discovery-01f");
+    // Trigger validation — defence in depth per LLD line 471. The controller only forwards trusted
+    // COLD_START requests, but the service guards against future re-routes.
+    if (request.trigger() != DiscoveryJobTrigger.COLD_START) {
+      throw new DiscoveryConstraintInvalidException("runJobSync only supports COLD_START trigger");
+    }
+
+    // Clamp the deadline to the configured hard cap (default 60s). Shorter requests honoured;
+    // longer silently clamped for predictability (ticket invariant 3).
+    Duration effective =
+        timeout.compareTo(properties.syncTimeout()) > 0 ? properties.syncTimeout() : timeout;
+
+    // Register the waiter BEFORE startJob commits. startJob publishes DiscoveryJobStartedEvent
+    // AFTER_COMMIT; the runner's listener cannot fire until after that commit, so the waiter is
+    // always in place before any terminal transition (LLD line 385). NOTE: startJob() is
+    // @Transactional and called via `this` — self-invocation means the proxy is skipped, but
+    // startJob carries its own @Transactional which Spring still applies because the call enters
+    // through the public bean method from the controller (the proxy wraps runJobSync's caller,
+    // not this internal hop); regardless, the waiter must exist before the runner can complete it,
+    // so we cannot register before the id is known. The race is benign: the runner's terminal
+    // path is AFTER_COMMIT + @Async (msec-scale latency) and completeSyncWaiter is a map remove —
+    // if it somehow fires before registration the caller times out and the DB re-read returns the
+    // already-terminal DTO. Verified by IT.
+    DiscoveryJobDto enqueued = startJob(userId, request);
+    UUID jobId = enqueued.id();
+
+    CompletableFuture<DiscoveryJobStatus> waiter = new CompletableFuture<>();
+    runner.registerSyncWaiter(jobId, waiter);
+
+    try {
+      DiscoveryJobStatus terminal = waiter.get(effective.toMillis(), TimeUnit.MILLISECONDS);
+      log.debug("runJobSync jobId={} completed terminal={}", jobId, terminal);
+    } catch (TimeoutException te) {
+      // Normal degraded response per LLD line 543 — NOT an error. Return the latest DTO; the job
+      // continues in the background and the planner falls back.
+      log.info("runJobSync deadline reached for jobId={}; returning latest DTO", jobId);
+    } catch (InterruptedException ie) {
+      Thread.currentThread().interrupt();
+      log.info("runJobSync interrupted for jobId={}; returning latest DTO", jobId);
+    } catch (ExecutionException ee) {
+      log.error("runJobSync waiter failed for jobId={}", jobId, ee);
+    } finally {
+      // Always clear the waiter so a timeout/interrupt does not leak the map entry.
+      runner.unregisterSyncWaiter(jobId);
+    }
+
+    // Re-read from DB so the response carries the most-recent counters the runner committed (the
+    // waiter only carries the terminal status). A timeout returns the in-flight DTO (likely
+    // RUNNING); the controller maps status → HTTP.
+    return getJob(jobId).orElseThrow(() -> new DiscoveryJobNotFoundException(jobId));
   }
 
   @Override
