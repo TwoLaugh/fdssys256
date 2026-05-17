@@ -153,8 +153,7 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
    * Spring only weaves tx advice on public methods.
    */
   @Transactional
-  public DiscoveryJobDto startJobWithId(
-      UUID userId, StartDiscoveryJobRequest request, UUID jobId) {
+  public DiscoveryJobDto startJobWithId(UUID userId, StartDiscoveryJobRequest request, UUID jobId) {
     List<DiscoverySource> resolved = resolveSources(request.sourceKeys());
     if (resolved.isEmpty()) {
       throw new DiscoveryConstraintInvalidException(
