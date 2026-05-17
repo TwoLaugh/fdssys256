@@ -16,6 +16,7 @@ import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.testdata.AuthTestData;
 import com.example.mealprep.discovery.api.dto.DiscoveryConstraints;
 import com.example.mealprep.discovery.api.dto.StartDiscoveryJobRequest;
+import com.example.mealprep.discovery.domain.entity.DiscoveryJob;
 import com.example.mealprep.discovery.domain.entity.DiscoveryJobStatus;
 import com.example.mealprep.discovery.domain.entity.DiscoveryJobTrigger;
 import com.example.mealprep.discovery.domain.entity.DiscoverySource;
@@ -320,7 +321,9 @@ class DiscoveryJobsControllerIT {
   void cancel_queuedJob_flipsToFailed_returns200() throws Exception {
     AuthedUser user = registerUser();
     seedSource("src_a", true);
-    UUID jobId = seedAndPostJob(user);
+    // Seed directly as QUEUED — POSTing would trigger the async runner which moves it to RUNNING
+    // before cancel reads it (then cancel takes the RUNNING branch and the job stays RUNNING).
+    UUID jobId = seedJobRow(user, DiscoveryJobStatus.QUEUED);
 
     mvc.perform(post("/api/v1/discovery/jobs/" + jobId + "/cancel").cookie(user.cookie()))
         .andExpect(status().isOk())
@@ -340,9 +343,9 @@ class DiscoveryJobsControllerIT {
   void cancel_terminalJob_returns422() throws Exception {
     AuthedUser user = registerUser();
     seedSource("src_a", true);
-    UUID jobId = seedAndPostJob(user);
-    // Manually flip status to SUCCEEDED to simulate a completed job.
-    jdbcTemplate.update("UPDATE discovery_jobs SET status = 'SUCCEEDED' WHERE id = ?", jobId);
+    // Seed directly as terminal — POSTing would trigger the async runner which races the
+    // jdbcTemplate UPDATE (runner can overwrite SUCCEEDED back to RUNNING before cancel reads).
+    UUID jobId = seedJobRow(user, DiscoveryJobStatus.SUCCEEDED);
 
     mvc.perform(post("/api/v1/discovery/jobs/" + jobId + "/cancel").cookie(user.cookie()))
         .andExpect(status().isUnprocessableEntity())
@@ -366,6 +369,20 @@ class DiscoveryJobsControllerIT {
   }
 
   // ---------------- helpers ----------------
+
+  /**
+   * Inserts a DiscoveryJob row directly in the given status WITHOUT going through POST /jobs. The
+   * POST path publishes an event the async DiscoveryJobRunner consumes, which would race the seeded
+   * state (a QUEUED job becomes RUNNING before the test's cancel call). A directly-saved row is
+   * never picked up — the runner only processes POST-triggered jobs, and the @Scheduled orphan
+   * sweep only touches long-RUNNING jobs after a 5-minute initial delay. This keeps the
+   * cancel-contract tests deterministic.
+   */
+  private UUID seedJobRow(AuthedUser user, DiscoveryJobStatus status) {
+    DiscoveryJob job = DiscoveryTestData.sampleJob(user.userId());
+    job.setStatus(status);
+    return jobRepository.save(job).getId();
+  }
 
   private UUID seedAndPostJob(AuthedUser user) throws Exception {
     StartDiscoveryJobRequest req =
