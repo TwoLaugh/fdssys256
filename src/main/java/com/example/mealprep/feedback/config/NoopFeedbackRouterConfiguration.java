@@ -1,5 +1,7 @@
 package com.example.mealprep.feedback.config;
 
+import com.example.mealprep.feedback.domain.entity.RoutingFailureKind;
+import com.example.mealprep.feedback.domain.entity.RoutingStatus;
 import com.example.mealprep.feedback.domain.service.internal.ConfidenceGate;
 import com.example.mealprep.feedback.domain.service.internal.FeedbackRouter;
 import java.util.List;
@@ -47,6 +49,17 @@ public class NoopFeedbackRouterConfiguration {
               + " feedback-01d's real router is not on the classpath — entry stays at CLASSIFIED.",
           feedbackId,
           classifications == null ? 0 : classifications.size());
+    }
+
+    @Override
+    public RouteReplayResult routeOneForReplay(
+        UUID feedbackId, ConfidenceGate.ScoredClassification scored) {
+      log.warn(
+          "NoopFeedbackRouter.routeOneForReplay invoked for feedbackId={};"
+              + " feedback-01d's real router is not on the classpath — replay is a no-op.",
+          feedbackId);
+      return new RouteReplayResult(
+          UUID.randomUUID(), RoutingStatus.FAILED, RoutingFailureKind.UNKNOWN);
     }
   }
 }

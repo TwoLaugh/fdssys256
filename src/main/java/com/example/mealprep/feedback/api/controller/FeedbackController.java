@@ -1,7 +1,9 @@
 package com.example.mealprep.feedback.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.feedback.api.dto.CorrectionRequest;
 import com.example.mealprep.feedback.api.dto.FeedbackEntryDto;
+import com.example.mealprep.feedback.api.dto.MisclassificationCorrectionDto;
 import com.example.mealprep.feedback.api.dto.SubmitFeedbackRequest;
 import com.example.mealprep.feedback.api.dto.SubmitFeedbackResponse;
 import com.example.mealprep.feedback.domain.service.FeedbackQueryService;
@@ -92,6 +94,33 @@ public class FeedbackController {
     return queryService
         .getById(userId, feedbackId)
         .orElseThrow(() -> new FeedbackEntryNotFoundException(feedbackId));
+  }
+
+  @PostMapping(
+      path = "/{feedbackId}/routes/{routingId}/correct",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary = "User-driven correction of a single routing decision.",
+      description =
+          "Cancels the original route best-effort, re-fires the corrected destination, records "
+              + "ground truth. 200 / 400 / 404 / 422.")
+  public SubmitFeedbackResponse correct(
+      @PathVariable UUID feedbackId,
+      @PathVariable UUID routingId,
+      @Valid @RequestBody CorrectionRequest request) {
+    UUID userId = requireCurrentUserId();
+    return updateService.correctMisclassification(userId, feedbackId, routingId, request);
+  }
+
+  @GetMapping(path = "/corrections", produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary = "Paginated list of the caller's misclassification corrections; ground-truth audit.")
+  public Page<MisclassificationCorrectionDto> listCorrections(
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    UUID userId = requireCurrentUserId();
+    return queryService.listCorrections(userId, PageRequest.of(page, size));
   }
 
   private UUID requireCurrentUserId() {

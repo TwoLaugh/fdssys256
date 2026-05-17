@@ -173,3 +173,47 @@ AnswerClarificationRequest:
       type: string
       maxLength: 4000
       nullable: true
+CorrectionReplayStatus:
+  type: string
+  enum: [PENDING_REPLAY, APPLIED, FAILED, DESTINATION_REJECTED]
+CorrectionRequest:
+  type: object
+  required: [newDestination]
+  properties:
+    newDestination: { $ref: '#/Destination' }
+    userCorrectionNote: { type: string, maxLength: 512, nullable: true }
+MisclassificationCorrectionDto:
+  type: object
+  required: [id, feedbackEntryId, originalRoutingId, correctedDestination, originalDestination, originalConfidence, actorUserId, replayStatus, occurredAt, createdAt]
+  properties:
+    id: { type: string, format: uuid }
+    feedbackEntryId: { type: string, format: uuid }
+    originalRoutingId: { type: string, format: uuid }
+    correctedDestination: { $ref: '#/Destination' }
+    originalDestination: { $ref: '#/Destination' }
+    originalConfidence: { type: number, format: float, minimum: 0, maximum: 1 }
+    userCorrectionNote: { type: string, maxLength: 512, nullable: true }
+    actorUserId: { type: string, format: uuid }
+    replayRoutingId:
+      type: string
+      format: uuid
+      nullable: true
+    replayStatus: { $ref: '#/CorrectionReplayStatus' }
+    occurredAt: { type: string, format: date-time }
+    createdAt: { type: string, format: date-time }
+MisclassificationCorrectionDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/MisclassificationCorrectionDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }

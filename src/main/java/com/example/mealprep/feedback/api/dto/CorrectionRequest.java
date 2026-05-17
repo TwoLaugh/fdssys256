@@ -1,18 +1,20 @@
 package com.example.mealprep.feedback.api.dto;
 
 import com.example.mealprep.feedback.spi.Destination;
+import com.example.mealprep.feedback.validation.ValidDestination;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 /**
- * Request body for the future {@code POST /api/v1/feedback/{feedbackId}/corrections/{routingId}}
- * endpoint. The shape is declared in 01b so {@link
- * com.example.mealprep.feedback.domain.service.FeedbackUpdateService#correctMisclassification}
- * compiles; the endpoint + full validation (including the {@code @ValidDestination} class-level
- * validator referenced by LLD §Validation) land in feedback-01f.
+ * Request body for {@code POST /api/v1/feedback/{feedbackId}/routes/{routingId}/correct}
+ * (lld/feedback.md §Flow 4, ticket 01f §1). {@code newDestination} must be a recognised {@link
+ * Destination} ({@code @ValidDestination}); the structural validity of the correction (e.g. RECIPE
+ * needs a recipeId) is checked in the service layer as a 422 {@code
+ * InvalidCorrectionTargetException}.
  *
- * <p>01b ships a plain {@code @NotNull} on {@code newDestination} — the full validator is deferred
- * per the ticket's "placeholder validator" note.
+ * <p>Field renamed from 01b's {@code note} placeholder to {@code userCorrectionNote} to match the
+ * entity / mapper / OpenAPI schema.
  */
 public record CorrectionRequest(
-    @NotNull Destination newDestination, @Size(max = 512) String note) {}
+    @NotNull @ValidDestination Destination newDestination,
+    @Size(max = 512) String userCorrectionNote) {}
