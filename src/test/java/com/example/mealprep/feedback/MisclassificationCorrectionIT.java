@@ -274,8 +274,15 @@ class MisclassificationCorrectionIT {
       return new CorrectedEventCapture();
     }
 
-    /** Recording reverter overriding the Noop preference reverter. */
+    /**
+     * Recording reverter overriding the Noop preference reverter. {@code @Primary} is required: the
+     * Noop {@code defaultPreferenceReverter} is {@code @ConditionalOnMissingBean}, but the
+     * conditional evaluates before this {@code @TestConfiguration} import registers, so BOTH beans
+     * exist → {@code NoUniqueBeanDefinitionException} on {@code FeedbackServiceImpl}'s constructor.
+     * Same round-6 retro fix as the sibling bridges below.
+     */
     @Bean
+    @Primary
     PreferenceFeedbackReverter recordingPreferenceReverter() {
       return REVERT_CTX::set;
     }
