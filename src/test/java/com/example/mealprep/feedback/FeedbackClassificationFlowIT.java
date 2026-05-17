@@ -90,12 +90,24 @@ class FeedbackClassificationFlowIT {
 
     publishAfterCommit(feedbackId);
 
-    awaitState(feedbackId, SubmissionStatus.CLASSIFIED);
+    // This is the classifier-flow IT (feedback-01c scope): it asserts the *classification step*
+    // ran, not the downstream routing outcome. In 01c the router was a Noop so the entry sat at
+    // CLASSIFIED; in 01d the real FeedbackRouter immediately drives it onward (CLASSIFIED ->
+    // ROUTED/PARTIALLY_FAILED), so awaitState(CLASSIFIED) races a transient state and times out.
+    // Await the classification *evidence* (lastClassifiedAt + attempts) instead — robust to the
+    // router taking over, and that's what this test actually cares about.
+    awaitCondition(
+        () ->
+            entryRepository
+                .findById(feedbackId)
+                .filter(e -> e.getLastClassifiedAt() != null)
+                .filter(e -> e.getClassificationAttempts() == 1)
+                .isPresent(),
+        Duration.ofSeconds(30));
 
     FeedbackEntry final_ = entryRepository.findById(feedbackId).orElseThrow();
     assertThat(final_.getLastClassifiedAt()).isNotNull();
     assertThat(final_.getClassificationAttempts()).isEqualTo(1);
-    // No FeedbackProcessedEvent — router (Noop) does not publish.
   }
 
   @Test
