@@ -43,7 +43,7 @@ class EventPublicationIT {
   @AfterEach
   void cleanup() {
     repo.deleteAll();
-    capture.events.clear();
+    capture.captured().clear();
   }
 
   @Test
@@ -64,9 +64,9 @@ class EventPublicationIT {
 
     adaptationService.emitPlannerHint(req, UUID.randomUUID());
 
-    assertThat(capture.events).hasSize(1);
-    assertThat(capture.events.get(0).recipeId()).isEqualTo(recipeId);
-    assertThat(capture.events.get(0).versionId()).isEqualTo(versionId);
+    assertThat(capture.captured()).hasSize(1);
+    assertThat(capture.captured().get(0).recipeId()).isEqualTo(recipeId);
+    assertThat(capture.captured().get(0).versionId()).isEqualTo(versionId);
   }
 
   @TestConfiguration
@@ -78,12 +78,24 @@ class EventPublicationIT {
   }
 
   static class PlannerHintEmittedCapture {
-    final List<PlannerHintEmittedEvent> events = new CopyOnWriteArrayList<>();
+    private final List<PlannerHintEmittedEvent> events = new CopyOnWriteArrayList<>();
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void on(PlannerHintEmittedEvent event) {
       events.add(event);
+    }
+
+    /**
+     * Expose the captured list via a METHOD, never a field. The {@code @Transactional} on {@link
+     * #on} forces a CGLIB proxy; the proxy is instantiated by Objenesis WITHOUT running field
+     * initializers, so direct field access ({@code capture.events}) reads the proxy's null field
+     * while the listener mutates the target's real list. A method call goes through the proxy and
+     * delegates to the target, returning the populated list (wave-3 retro: never read a field off a
+     * {@code @Transactional}/proxied bean — use an accessor).
+     */
+    List<PlannerHintEmittedEvent> captured() {
+      return events;
     }
   }
 }
