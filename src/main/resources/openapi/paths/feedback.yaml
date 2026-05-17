@@ -82,3 +82,111 @@ feedbackById:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+feedbackClarifications:
+  get:
+    tags: [Feedback - clarifications]
+    operationId: listClarificationQueries
+    summary: 'Paginated list of the caller''s clarification queries; optional status filter.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: status
+        required: false
+        schema: { type: string, enum: [PENDING, ANSWERED, EXPIRED] }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of clarification queries.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/feedback.yaml#/ClarificationQueryDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+feedbackClarificationById:
+  get:
+    tags: [Feedback - clarifications]
+    operationId: getClarificationQuery
+    summary: 'Fetch a single clarification query.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: queryId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'The clarification query.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/feedback.yaml#/ClarificationQueryDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Not found, or belongs to another user.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+feedbackClarificationAnswer:
+  post:
+    tags: [Feedback - clarifications]
+    operationId: answerClarificationQuery
+    summary: 'Answer a pending clarification; re-classification fires automatically afterwards.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: queryId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/feedback.yaml#/AnswerClarificationRequest' }
+    responses:
+      '200':
+        description: 'Answer accepted; re-classification queued.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/feedback.yaml#/SubmitFeedbackResponse' }
+      '400':
+        description: 'Validation error (neither field provided, or oversized text).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Query not found, or belongs to another user.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '410':
+        description: 'Query expired; client should re-submit the original feedback.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Query already answered.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

@@ -12,6 +12,7 @@ import com.example.mealprep.feedback.api.dto.FeedbackEntryDto;
 import com.example.mealprep.feedback.api.dto.RoutingDecisionDto;
 import com.example.mealprep.feedback.api.dto.SubmitFeedbackRequest;
 import com.example.mealprep.feedback.api.dto.SubmitFeedbackResponse;
+import com.example.mealprep.feedback.api.mapper.ClarificationQueryMapper;
 import com.example.mealprep.feedback.api.mapper.FeedbackEntryMapper;
 import com.example.mealprep.feedback.api.mapper.RoutingLogMapper;
 import com.example.mealprep.feedback.domain.entity.ClarificationQuery;
@@ -24,9 +25,12 @@ import com.example.mealprep.feedback.domain.repository.FeedbackEntryRepository;
 import com.example.mealprep.feedback.domain.repository.RoutingLogRepository;
 import com.example.mealprep.feedback.domain.service.FeedbackQueryService;
 import com.example.mealprep.feedback.domain.service.FeedbackUpdateService;
+import com.example.mealprep.feedback.domain.service.internal.ClarificationExpirer;
 import com.example.mealprep.feedback.event.FeedbackSubmittedEvent;
 import com.example.mealprep.feedback.testdata.FeedbackTestData;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -56,7 +60,11 @@ class FeedbackServiceImplTest {
   @Mock private ClarificationQueryRepository clarificationQueryRepository;
   @Mock private FeedbackEntryMapper entryMapper;
   @Mock private RoutingLogMapper routingLogMapper;
+  @Mock private ClarificationQueryMapper clarificationQueryMapper;
+  @Mock private ClarificationExpirer clarificationExpirer;
   @Mock private ApplicationEventPublisher eventPublisher;
+
+  private final Clock clock = Clock.fixed(Instant.parse("2026-05-10T00:00:00Z"), ZoneOffset.UTC);
 
   private Object serviceObject;
 
@@ -83,7 +91,10 @@ class FeedbackServiceImplTest {
               ClarificationQueryRepository.class,
               FeedbackEntryMapper.class,
               RoutingLogMapper.class,
-              ApplicationEventPublisher.class);
+              ClarificationQueryMapper.class,
+              ClarificationExpirer.class,
+              ApplicationEventPublisher.class,
+              Clock.class);
       ctor.setAccessible(true);
       serviceObject =
           ctor.newInstance(
@@ -92,7 +103,10 @@ class FeedbackServiceImplTest {
               clarificationQueryRepository,
               entryMapper,
               routingLogMapper,
-              eventPublisher);
+              clarificationQueryMapper,
+              clarificationExpirer,
+              eventPublisher,
+              clock);
       return serviceObject;
     } catch (ReflectiveOperationException e) {
       throw new IllegalStateException("Could not instantiate FeedbackServiceImpl", e);
@@ -350,32 +364,20 @@ class FeedbackServiceImplTest {
   // ---------------- deferred methods throw ----------------
 
   @Test
-  void deferredMethods_throwUnsupported_withTicketReference() {
+  void stillDeferredMethods_throwUnsupported_withTicketReference() {
     UUID userId = UUID.randomUUID();
     UUID id = UUID.randomUUID();
     FeedbackUpdateService u = updateService();
     FeedbackQueryService q = queryService();
 
+    // 01e implemented answerClarificationQuery / expireOldClarificationQueries /
+    // listClarificationQueries / getClarificationQuery — only the 01f/01g surface stays deferred.
     assertThatThrownBy(() -> u.correctMisclassification(userId, id, id, /* request= */ null))
         .isInstanceOf(UnsupportedOperationException.class)
         .hasMessageContaining("feedback-01f");
-    assertThatThrownBy(() -> u.answerClarificationQuery(userId, id, /* request= */ null))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("feedback-01e");
     assertThatThrownBy(u::retryStuckClassifications)
         .isInstanceOf(UnsupportedOperationException.class)
         .hasMessageContaining("feedback-01g");
-    assertThatThrownBy(u::expireOldClarificationQueries)
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("feedback-01g");
-    assertThatThrownBy(
-            () ->
-                q.listClarificationQueries(userId, ClarificationStatus.PENDING, Pageable.unpaged()))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("feedback-01e");
-    assertThatThrownBy(() -> q.getClarificationQuery(userId, id))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("feedback-01e");
     assertThatThrownBy(() -> q.listCorrections(userId, Pageable.unpaged()))
         .isInstanceOf(UnsupportedOperationException.class)
         .hasMessageContaining("feedback-01f");

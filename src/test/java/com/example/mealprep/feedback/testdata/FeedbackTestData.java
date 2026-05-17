@@ -1,5 +1,6 @@
 package com.example.mealprep.feedback.testdata;
 
+import com.example.mealprep.feedback.api.dto.AnswerClarificationRequest;
 import com.example.mealprep.feedback.api.dto.ClassificationOutput;
 import com.example.mealprep.feedback.api.dto.Screen;
 import com.example.mealprep.feedback.api.dto.SubmitFeedbackRequest;
@@ -107,6 +108,39 @@ public final class FeedbackTestData {
         .status(ClarificationStatus.PENDING)
         .expiresAt(Instant.now().plus(7, ChronoUnit.DAYS).truncatedTo(ChronoUnit.MILLIS))
         .build();
+  }
+
+  /** A clarification already answered by the user (for re-classification-context tests). */
+  public static ClarificationQuery answeredClarificationQuery(
+      FeedbackEntry parent, Destination selected, String userText) {
+    Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+    return ClarificationQuery.builder()
+        .id(UUID.randomUUID())
+        .feedbackEntry(parent)
+        .classifierOptionsJson(sampleClarifierOptions())
+        .questionText("Did you mean the recipe or the standing preference?")
+        .status(ClarificationStatus.ANSWERED)
+        .selectedDestination(selected)
+        .userClarificationText(userText)
+        .answeredAt(now)
+        .expiresAt(now.plus(7, ChronoUnit.DAYS))
+        .build();
+  }
+
+  /** A PENDING clarification whose 7-day TTL has already elapsed (expiry-sweep tests). */
+  public static ClarificationQuery expiredClarificationQuery(FeedbackEntry parent) {
+    return ClarificationQuery.builder()
+        .id(UUID.randomUUID())
+        .feedbackEntry(parent)
+        .classifierOptionsJson(sampleClarifierOptions())
+        .questionText("Did you mean the recipe or the standing preference?")
+        .status(ClarificationStatus.PENDING)
+        .expiresAt(Instant.now().minus(1, ChronoUnit.DAYS).truncatedTo(ChronoUnit.MILLIS))
+        .build();
+  }
+
+  public static AnswerClarificationRequest answerRequest(Destination selected, String userText) {
+    return new AnswerClarificationRequest(selected, userText);
   }
 
   public static UiContextDto uiContextDto(UUID recipeId) {

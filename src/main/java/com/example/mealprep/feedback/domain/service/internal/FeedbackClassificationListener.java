@@ -162,15 +162,32 @@ public class FeedbackClassificationListener {
 
   // ---------------- helpers ----------------
 
+  /**
+   * Builds the classifier context. On the re-classification path (feedback-01e) the most-recently
+   * ANSWERED clarification for this entry, if any, supplies the user's free-text refinement and
+   * destination hint. First-attempt entries have no answered clarification → both empty. Uses
+   * "most-recent answer only" per the 01e LLD divergence (no accumulation across rounds in v1).
+   */
   private FeedbackClassificationContext buildContext(FeedbackEntry entry) {
     UiContextDto dto = toDto(entry.getUiContext());
+    Optional<ClarificationQuery> answered =
+        Optional.ofNullable(
+                clarificationRepository.findFirstByFeedbackEntryIdAndStatusOrderByAnsweredAtDesc(
+                    entry.getId(), ClarificationStatus.ANSWERED))
+            .orElse(Optional.empty());
+    Optional<String> userClarificationText =
+        answered
+            .map(ClarificationQuery::getUserClarificationText)
+            .filter(t -> t != null && !t.isBlank());
+    Optional<Destination> userSelectedHint =
+        answered.map(ClarificationQuery::getSelectedDestination).filter(d -> d != null);
     return new FeedbackClassificationContext(
         entry.getUserId(),
         entry.getTraceId(),
         entry.getText(),
         dto,
-        Optional.empty(),
-        Optional.<Destination>empty(),
+        userClarificationText,
+        userSelectedHint,
         entry.getClassificationAttempts());
   }
 
