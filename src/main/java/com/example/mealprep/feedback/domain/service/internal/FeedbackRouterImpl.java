@@ -137,6 +137,109 @@ public class FeedbackRouterImpl implements FeedbackRouter {
   }
 
   /**
+   * Correction-replay entry point (ticket 01f §11). Routes one synthetic classification through the
+   * same {@code REQUIRES_NEW} per-destination dispatch as {@link #routeAll}, returning the new
+   * routing-log id + the dispatch outcome. Does NOT reconcile entry status or publish {@code
+   * FeedbackProcessedEvent} — {@code correctMisclassification} owns that.
+   */
+  @Override
+  public RouteReplayResult routeOneForReplay(
+      UUID feedbackId, ConfidenceGate.ScoredClassification scored) {
+    FeedbackEntry entry =
+        entryRepository
+            .findById(feedbackId)
+            .orElseThrow(() -> new FeedbackEntryNotFoundException(feedbackId));
+    UUID userId = entry.getUserId();
+    UUID traceId = entry.getTraceId();
+    UiContextDto uiContext = toDto(entry.getUiContext());
+    int attempt = entry.getClassificationAttempts();
+    UUID routingLogId = UUID.randomUUID();
+
+    DispatchResult result;
+    try {
+      result =
+          requiresNewTxTemplate.execute(
+              status ->
+                  routeOneCapturing(
+                      routingLogId, entry, userId, traceId, uiContext, scored, attempt));
+    } catch (RuntimeException unrecoverable) {
+      log.error(
+          "Catastrophic replay routeOne failure for feedbackId={} dest={}: {}",
+          feedbackId,
+          scored.classification().destination(),
+          unrecoverable.toString());
+      persistFailureLog(
+          routingLogId,
+          entry,
+          scored,
+          attempt,
+          RoutingFailureKind.UNKNOWN,
+          unrecoverable.getMessage());
+      result = DispatchResult.failed(RoutingFailureKind.UNKNOWN, unrecoverable.getMessage());
+    }
+    return new RouteReplayResult(routingLogId, result.status(), result.failureKind());
+  }
+
+  /**
+   * Same persist→dispatch→update as {@link #routeOne} but returns the full {@link DispatchResult}
+   * (the replay flow needs the {@code failureKind} to map the correction's {@code replayStatus}).
+   * {@link #routeOne} is kept signature-stable for 01d's {@code routeAll}.
+   */
+  DispatchResult routeOneCapturing(
+      UUID routingLogId,
+      FeedbackEntry entry,
+      UUID userId,
+      UUID traceId,
+      UiContextDto uiContext,
+      ConfidenceGate.ScoredClassification scored,
+      int attempt) {
+
+    Instant routedAt = clock.instant();
+    RoutingLogEntry logRow =
+        RoutingLogEntry.builder()
+            .id(routingLogId)
+            .feedbackEntry(entry)
+            .destination(scored.classification().destination())
+            .confidence(scored.classification().confidence())
+            .extractedFeedback(scored.classification().extractedFeedback())
+            .structuredPayload(scored.classification().structuredPayload())
+            .routingDecision(scored.decision())
+            .status(RoutingStatus.PENDING)
+            .classificationAttempt(attempt)
+            .routedAt(routedAt)
+            .build();
+    routingLogRepository.save(logRow);
+
+    DestinationDispatcher dispatcher = registry.resolve(scored.classification().destination());
+    DispatchContext ctx =
+        new DispatchContext(
+            entry.getId(),
+            userId,
+            traceId,
+            routingLogId,
+            uiContext,
+            scored.classification(),
+            attempt);
+
+    DispatchResult result;
+    try {
+      result = dispatcher.dispatch(ctx);
+    } catch (Exception ex) {
+      result = classifyException(ex);
+    }
+
+    logRow.setStatus(result.status());
+    logRow.setActionTaken(truncate(result.actionTaken()));
+    logRow.setDestinationResultJson(result.destinationResultJson());
+    logRow.setFailureKind(result.failureKind());
+    logRow.setFailureMessage(truncate(stripSecrets(result.failureMessage())));
+    logRow.setCompletedAt(clock.instant());
+    routingLogRepository.save(logRow);
+
+    return result;
+  }
+
+  /**
    * Persist the PENDING log row, dispatch, then UPDATE the row with the dispatcher's outcome. Runs
    * inside the {@code requiresNewTxTemplate} the caller wraps it in.
    */

@@ -2,6 +2,7 @@ package com.example.mealprep.feedback.testdata;
 
 import com.example.mealprep.feedback.api.dto.AnswerClarificationRequest;
 import com.example.mealprep.feedback.api.dto.ClassificationOutput;
+import com.example.mealprep.feedback.api.dto.CorrectionRequest;
 import com.example.mealprep.feedback.api.dto.Screen;
 import com.example.mealprep.feedback.api.dto.SubmitFeedbackRequest;
 import com.example.mealprep.feedback.api.dto.UiContextDto;
@@ -16,6 +17,7 @@ import com.example.mealprep.feedback.domain.entity.RoutingLogEntry;
 import com.example.mealprep.feedback.domain.entity.RoutingStatus;
 import com.example.mealprep.feedback.domain.entity.SubmissionStatus;
 import com.example.mealprep.feedback.spi.Destination;
+import com.example.mealprep.feedback.spi.RevertContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -181,6 +183,22 @@ public final class FeedbackTestData {
         .classificationAttempt(1)
         .routedAt(Instant.now().truncatedTo(ChronoUnit.MILLIS))
         .build();
+  }
+
+  /** A correction request targeting {@code newDestination} with an optional note. */
+  public static CorrectionRequest correctionRequest(Destination newDestination, String note) {
+    return new CorrectionRequest(newDestination, note);
+  }
+
+  /** A {@link RevertContext} for reverter-SPI tests. */
+  public static RevertContext revertContext(UUID originalRoutingId, Destination original) {
+    return new RevertContext(
+        originalRoutingId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        original,
+        samplePayload(),
+        sampleDestinationResult());
   }
 
   public static MisclassificationCorrection misclassificationCorrection(

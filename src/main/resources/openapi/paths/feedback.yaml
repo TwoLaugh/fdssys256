@@ -190,3 +190,55 @@ feedbackClarificationAnswer:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+feedbackCorrectRoute:
+  post:
+    tags: [Feedback]
+    operationId: correctMisclassification
+    summary: 'User-driven correction of a single routing decision. Cancels the original route best-effort, re-fires the corrected destination, records ground truth.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: feedbackId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: routingId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/feedback.yaml#/CorrectionRequest' }
+    responses:
+      '200':
+        description: 'Correction accepted; replay outcome reflected in routes.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/feedback.yaml#/SubmitFeedbackResponse' }
+      '400': { description: 'Validation error', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '401': { description: 'Unauthenticated', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '404': { description: 'Feedback or routing not found / belongs to another user', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+      '422': { description: 'Correction target invalid (no-op / chain / structural mismatch)', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }
+
+feedbackCorrections:
+  get:
+    tags: [Feedback]
+    operationId: listCorrections
+    summary: 'Paginated list of the caller''s misclassification corrections; ground-truth audit log.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of corrections.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/feedback.yaml#/MisclassificationCorrectionDtoPage' }
+      '401': { description: 'Unauthenticated', content: { application/problem+json: { schema: { $ref: '../schemas/common.yaml#/ProblemDetail' } } } }

@@ -221,6 +221,10 @@ paths:
     $ref: 'paths/feedback.yaml#/feedbackClarificationById'
   /api/v1/feedback/clarifications/{queryId}/answer:
     $ref: 'paths/feedback.yaml#/feedbackClarificationAnswer'
+  /api/v1/feedback/{feedbackId}/routes/{routingId}/correct:
+    $ref: 'paths/feedback.yaml#/feedbackCorrectRoute'
+  /api/v1/feedback/corrections:
+    $ref: 'paths/feedback.yaml#/feedbackCorrections'
   # ===== discovery =====
   /api/v1/discovery/jobs:
     $ref: 'paths/discovery.yaml#/discoveryJobs'
@@ -490,6 +494,10 @@ components:
     ClarificationQueryDto: { $ref: 'schemas/feedback.yaml#/ClarificationQueryDto' }
     ClarificationQueryDtoPage: { $ref: 'schemas/feedback.yaml#/ClarificationQueryDtoPage' }
     ClarificationStatus: { $ref: 'schemas/feedback.yaml#/ClarificationStatus' }
+    CorrectionReplayStatus: { $ref: 'schemas/feedback.yaml#/CorrectionReplayStatus' }
+    CorrectionRequest: { $ref: 'schemas/feedback.yaml#/CorrectionRequest' }
+    MisclassificationCorrectionDto: { $ref: 'schemas/feedback.yaml#/MisclassificationCorrectionDto' }
+    MisclassificationCorrectionDtoPage: { $ref: 'schemas/feedback.yaml#/MisclassificationCorrectionDtoPage' }
     Destination: { $ref: 'schemas/feedback.yaml#/Destination' }
     FeedbackEntryDto: { $ref: 'schemas/feedback.yaml#/FeedbackEntryDto' }
     FeedbackEntryDtoPage: { $ref: 'schemas/feedback.yaml#/FeedbackEntryDtoPage' }

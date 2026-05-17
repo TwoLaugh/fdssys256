@@ -5,6 +5,7 @@ import com.example.mealprep.feedback.exception.ClarificationQueryAlreadyAnswered
 import com.example.mealprep.feedback.exception.ClarificationQueryExpiredException;
 import com.example.mealprep.feedback.exception.ClarificationQueryNotFoundException;
 import com.example.mealprep.feedback.exception.FeedbackEntryNotFoundException;
+import com.example.mealprep.feedback.exception.InvalidCorrectionTargetException;
 import com.example.mealprep.feedback.exception.RoutingDecisionNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
@@ -99,6 +100,21 @@ public class FeedbackExceptionHandler {
             ex.getMessage(),
             "clarification-query-already-answered",
             "Clarification query already answered",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(InvalidCorrectionTargetException.class)
+  public ResponseEntity<ProblemDetail> handleInvalidCorrectionTarget(
+      InvalidCorrectionTargetException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "invalid-correction-target",
+            "Invalid correction target",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)

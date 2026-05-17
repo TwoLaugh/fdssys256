@@ -14,6 +14,7 @@ import com.example.mealprep.feedback.api.dto.SubmitFeedbackRequest;
 import com.example.mealprep.feedback.api.dto.SubmitFeedbackResponse;
 import com.example.mealprep.feedback.api.mapper.ClarificationQueryMapper;
 import com.example.mealprep.feedback.api.mapper.FeedbackEntryMapper;
+import com.example.mealprep.feedback.api.mapper.MisclassificationCorrectionMapper;
 import com.example.mealprep.feedback.api.mapper.RoutingLogMapper;
 import com.example.mealprep.feedback.domain.entity.ClarificationQuery;
 import com.example.mealprep.feedback.domain.entity.ClarificationStatus;
@@ -22,11 +23,17 @@ import com.example.mealprep.feedback.domain.entity.RoutingLogEntry;
 import com.example.mealprep.feedback.domain.entity.SubmissionStatus;
 import com.example.mealprep.feedback.domain.repository.ClarificationQueryRepository;
 import com.example.mealprep.feedback.domain.repository.FeedbackEntryRepository;
+import com.example.mealprep.feedback.domain.repository.MisclassificationCorrectionRepository;
 import com.example.mealprep.feedback.domain.repository.RoutingLogRepository;
 import com.example.mealprep.feedback.domain.service.FeedbackQueryService;
 import com.example.mealprep.feedback.domain.service.FeedbackUpdateService;
 import com.example.mealprep.feedback.domain.service.internal.ClarificationExpirer;
+import com.example.mealprep.feedback.domain.service.internal.CorrectionReplayer;
 import com.example.mealprep.feedback.event.FeedbackSubmittedEvent;
+import com.example.mealprep.feedback.spi.NutritionFeedbackReverter;
+import com.example.mealprep.feedback.spi.PreferenceFeedbackReverter;
+import com.example.mealprep.feedback.spi.ProvisionsFeedbackReverter;
+import com.example.mealprep.feedback.spi.RecipeFeedbackReverter;
 import com.example.mealprep.feedback.testdata.FeedbackTestData;
 import java.time.Clock;
 import java.time.Instant;
@@ -58,10 +65,17 @@ class FeedbackServiceImplTest {
   @Mock private FeedbackEntryRepository feedbackEntryRepository;
   @Mock private RoutingLogRepository routingLogRepository;
   @Mock private ClarificationQueryRepository clarificationQueryRepository;
+  @Mock private MisclassificationCorrectionRepository misclassificationCorrectionRepository;
   @Mock private FeedbackEntryMapper entryMapper;
   @Mock private RoutingLogMapper routingLogMapper;
   @Mock private ClarificationQueryMapper clarificationQueryMapper;
+  @Mock private MisclassificationCorrectionMapper misclassificationCorrectionMapper;
   @Mock private ClarificationExpirer clarificationExpirer;
+  @Mock private CorrectionReplayer correctionReplayer;
+  @Mock private PreferenceFeedbackReverter preferenceReverter;
+  @Mock private NutritionFeedbackReverter nutritionReverter;
+  @Mock private ProvisionsFeedbackReverter provisionsReverter;
+  @Mock private RecipeFeedbackReverter recipeReverter;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final Clock clock = Clock.fixed(Instant.parse("2026-05-10T00:00:00Z"), ZoneOffset.UTC);
@@ -89,10 +103,17 @@ class FeedbackServiceImplTest {
               FeedbackEntryRepository.class,
               RoutingLogRepository.class,
               ClarificationQueryRepository.class,
+              MisclassificationCorrectionRepository.class,
               FeedbackEntryMapper.class,
               RoutingLogMapper.class,
               ClarificationQueryMapper.class,
+              MisclassificationCorrectionMapper.class,
               ClarificationExpirer.class,
+              CorrectionReplayer.class,
+              PreferenceFeedbackReverter.class,
+              NutritionFeedbackReverter.class,
+              ProvisionsFeedbackReverter.class,
+              RecipeFeedbackReverter.class,
               ApplicationEventPublisher.class,
               Clock.class);
       ctor.setAccessible(true);
@@ -101,10 +122,17 @@ class FeedbackServiceImplTest {
               feedbackEntryRepository,
               routingLogRepository,
               clarificationQueryRepository,
+              misclassificationCorrectionRepository,
               entryMapper,
               routingLogMapper,
               clarificationQueryMapper,
+              misclassificationCorrectionMapper,
               clarificationExpirer,
+              correctionReplayer,
+              preferenceReverter,
+              nutritionReverter,
+              provisionsReverter,
+              recipeReverter,
               eventPublisher,
               clock);
       return serviceObject;
@@ -365,21 +393,50 @@ class FeedbackServiceImplTest {
 
   @Test
   void stillDeferredMethods_throwUnsupported_withTicketReference() {
-    UUID userId = UUID.randomUUID();
-    UUID id = UUID.randomUUID();
     FeedbackUpdateService u = updateService();
-    FeedbackQueryService q = queryService();
 
     // 01e implemented answerClarificationQuery / expireOldClarificationQueries /
-    // listClarificationQueries / getClarificationQuery — only the 01f/01g surface stays deferred.
-    assertThatThrownBy(() -> u.correctMisclassification(userId, id, id, /* request= */ null))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("feedback-01f");
+    // listClarificationQueries / getClarificationQuery; 01f implemented correctMisclassification /
+    // listCorrections — only retryStuckClassifications (01g) stays deferred.
     assertThatThrownBy(u::retryStuckClassifications)
         .isInstanceOf(UnsupportedOperationException.class)
         .hasMessageContaining("feedback-01g");
-    assertThatThrownBy(() -> q.listCorrections(userId, Pageable.unpaged()))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("feedback-01f");
+  }
+
+  // ---------------- listCorrections (01f) ----------------
+
+  @Test
+  void listCorrections_delegatesToRepo_andMaps() {
+    UUID userId = UUID.randomUUID();
+    Pageable pageable = PageRequest.of(0, 20);
+    FeedbackEntry parent = FeedbackTestData.feedbackEntry(userId, "x");
+    var correction =
+        FeedbackTestData.misclassificationCorrection(parent, UUID.randomUUID(), userId);
+    Page<com.example.mealprep.feedback.domain.entity.MisclassificationCorrection> page =
+        new PageImpl<>(List.of(correction));
+    var dto =
+        new com.example.mealprep.feedback.api.dto.MisclassificationCorrectionDto(
+            correction.getId(),
+            parent.getId(),
+            correction.getOriginalRoutingId(),
+            correction.getCorrectedDestination(),
+            correction.getOriginalDestination(),
+            correction.getOriginalConfidence(),
+            correction.getUserCorrectionNote(),
+            userId,
+            null,
+            correction.getReplayStatus(),
+            correction.getOccurredAt(),
+            Instant.now());
+    when(misclassificationCorrectionRepository.findByFeedbackEntryUserIdOrderByOccurredAtDesc(
+            userId, pageable))
+        .thenReturn(page);
+    when(misclassificationCorrectionMapper.toDto(correction)).thenReturn(dto);
+
+    Page<com.example.mealprep.feedback.api.dto.MisclassificationCorrectionDto> result =
+        queryService().listCorrections(userId, pageable);
+
+    assertThat(result.getContent()).hasSize(1);
+    assertThat(result.getContent().get(0).id()).isEqualTo(correction.getId());
   }
 }

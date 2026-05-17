@@ -9,10 +9,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 /**
- * Spring Data repository for {@link MisclassificationCorrection}. Package-private; cross-module
- * callers go through {@code FeedbackQueryService}.
+ * Spring Data repository for {@link MisclassificationCorrection}. {@code public} so {@code
+ * FeedbackServiceImpl} (which lives in {@code feedback.domain.service} per the LLD style guide) can
+ * inject it; the {@code FeedbackBoundaryTest} cross-module-import rule still blocks out-of-module
+ * use — cross-module callers go through {@code FeedbackQueryService}.
  */
-interface MisclassificationCorrectionRepository
+public interface MisclassificationCorrectionRepository
     extends JpaRepository<MisclassificationCorrection, UUID> {
 
   Page<MisclassificationCorrection> findByFeedbackEntryUserIdOrderByOccurredAtDesc(
