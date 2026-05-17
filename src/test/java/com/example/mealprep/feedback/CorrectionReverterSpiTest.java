@@ -18,6 +18,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.ActiveProfiles;
 
 /**
@@ -57,7 +58,12 @@ class CorrectionReverterSpiTest {
 
   @TestConfiguration
   static class FakeReverterConfig {
+    // @Primary: the Noop defaultPreferenceReverter is @ConditionalOnMissingBean, but the
+    // conditional evaluates before this @TestConfiguration import registers, so BOTH beans exist
+    // -> NoUniqueBeanDefinitionException. @Primary resolves the ambiguity to the fake (round-6
+    // retro: test-side override of an SPI-with-Noop needs @Primary, not just the conditional).
     @Bean
+    @Primary
     PreferenceFeedbackReverter fakePreferenceReverter() {
       return CAPTURED::set;
     }
