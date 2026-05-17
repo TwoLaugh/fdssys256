@@ -4,6 +4,7 @@ import com.example.mealprep.adaptation.exception.AdaptationAiUnavailableExceptio
 import com.example.mealprep.adaptation.exception.AdaptationCharacterBreakException;
 import com.example.mealprep.adaptation.exception.AdaptationHardConstraintViolationException;
 import com.example.mealprep.adaptation.exception.AdaptationJobNotFoundException;
+import com.example.mealprep.adaptation.exception.AdaptationJobNotRetryableException;
 import com.example.mealprep.adaptation.exception.AdaptationLowConfidenceException;
 import com.example.mealprep.adaptation.exception.AdaptationTraceNotFoundException;
 import com.example.mealprep.adaptation.exception.LockTimeoutException;
@@ -116,6 +117,36 @@ public class AdaptationExceptionHandler {
       RebaseExhaustedException ex, HttpServletRequest req) {
     return conflict(
         ex.getMessage(), "adaptation-rebase-exhausted", "Adaptation rebase exhausted", req);
+  }
+
+  @ExceptionHandler(AdaptationJobNotRetryableException.class)
+  public ResponseEntity<ProblemDetail> handleJobNotRetryable(
+      AdaptationJobNotRetryableException ex, HttpServletRequest req) {
+    return conflict(
+        ex.getMessage(), "adaptation-job-not-retryable", "Adaptation job not retryable", req);
+  }
+
+  // ---------------- 400: bad request ----------------
+
+  /**
+   * Spring's default 400 for a missing required query/path param is otherwise swallowed into a 500
+   * by the project-wide {@code @ExceptionHandler(Exception.class)} catch-all because this advice is
+   * {@code @Order(HIGHEST_PRECEDENCE)} (wave-3 retro 0012). Map it explicitly to 400.
+   */
+  @ExceptionHandler(org.springframework.web.bind.MissingServletRequestParameterException.class)
+  public ResponseEntity<ProblemDetail> handleMissingParam(
+      org.springframework.web.bind.MissingServletRequestParameterException ex,
+      HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.BAD_REQUEST,
+            ex.getMessage(),
+            "missing-request-parameter",
+            "Missing request parameter",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
   }
 
   // ---------------- 503: AI unavailable ----------------

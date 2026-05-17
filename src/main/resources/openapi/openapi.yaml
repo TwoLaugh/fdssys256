@@ -257,6 +257,24 @@ paths:
     $ref: 'paths/adaptation.yaml#/adaptationPendingChangeReject'
   /api/v1/adaptation/recipes/{recipeId}/pending-history:
     $ref: 'paths/adaptation.yaml#/adaptationRecipePendingHistory'
+  /api/v1/adaptation/jobs/{jobId}:
+    $ref: 'paths/adaptation.yaml#/adaptationJob'
+  /api/v1/adaptation/jobs/{jobId}/trace:
+    $ref: 'paths/adaptation.yaml#/adaptationJobTrace'
+  /api/v1/adaptation/recipes/{recipeId}/jobs:
+    $ref: 'paths/adaptation.yaml#/adaptationRecipeJobs'
+  /api/v1/adaptation/recipes/{recipeId}/traces:
+    $ref: 'paths/adaptation.yaml#/adaptationRecipeTraces'
+  /api/v1/adaptation/admin/sweep-expired-pending:
+    $ref: 'paths/adaptation.yaml#/adaptationAdminSweepExpired'
+  /api/v1/adaptation/admin/retry-failed-job:
+    $ref: 'paths/adaptation.yaml#/adaptationAdminRetryFailedJob'
+  /api/v1/adaptation/admin/prompt-versions/{name}/{version}/traces:
+    $ref: 'paths/adaptation.yaml#/adaptationAdminPromptVersionTraces'
+  /api/v1/adaptation/run-history:
+    $ref: 'paths/adaptation.yaml#/adaptationRunHistory'
+  /api/v1/adaptation/run-history/by-prompt-version:
+    $ref: 'paths/adaptation.yaml#/adaptationRunHistoryByPromptVersion'
 components:
   securitySchemes:
     cookieAuth:
@@ -544,6 +562,19 @@ components:
     PendingChangeListItemDtoPage: { $ref: 'schemas/adaptation.yaml#/PendingChangeListItemDtoPage' }
     AcceptPendingChangeRequest: { $ref: 'schemas/adaptation.yaml#/AcceptPendingChangeRequest' }
     RejectPendingChangeRequest: { $ref: 'schemas/adaptation.yaml#/RejectPendingChangeRequest' }
+    AdaptationJobSource: { $ref: 'schemas/adaptation.yaml#/JobSource' }
+    AdaptationJobPriority: { $ref: 'schemas/adaptation.yaml#/JobPriority' }
+    AdaptationJobStatus: { $ref: 'schemas/adaptation.yaml#/JobStatus' }
+    AdaptationJobFailureReason: { $ref: 'schemas/adaptation.yaml#/JobFailureReason' }
+    AdaptationApprovalPolicy: { $ref: 'schemas/adaptation.yaml#/ApprovalPolicy' }
+    AdaptationOutcomeKind: { $ref: 'schemas/adaptation.yaml#/OutcomeKind' }
+    AdaptationValidationResult: { $ref: 'schemas/adaptation.yaml#/ValidationResult' }
+    AdaptationJobDto: { $ref: 'schemas/adaptation.yaml#/AdaptationJobDto' }
+    AdaptationJobDtoPage: { $ref: 'schemas/adaptation.yaml#/AdaptationJobDtoPage' }
+    AdaptationTraceDto: { $ref: 'schemas/adaptation.yaml#/AdaptationTraceDto' }
+    AdaptationTraceDtoPage: { $ref: 'schemas/adaptation.yaml#/AdaptationTraceDtoPage' }
+    RetryFailedJobRequest: { $ref: 'schemas/adaptation.yaml#/RetryFailedJobRequest' }
+    SweepExpiredPendingResponse: { $ref: 'schemas/adaptation.yaml#/SweepExpiredPendingResponse' }
     # common (cross-module)
     ProblemDetail: { $ref: 'schemas/common.yaml#/ProblemDetail' }
   responses:

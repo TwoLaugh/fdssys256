@@ -6,7 +6,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.example.mealprep.adaptation.api.dto.PlannerHintRequest;
 import com.example.mealprep.adaptation.domain.enums.HintSeverity;
 import com.example.mealprep.adaptation.domain.enums.HintType;
-import com.example.mealprep.adaptation.domain.service.AdaptationService;
 import com.example.mealprep.adaptation.domain.service.AdaptationServiceImpl;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.util.UUID;
@@ -14,12 +13,13 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 /**
- * Asserts the 01b skeleton: every write/read method throws {@link UnsupportedOperationException}
- * with a ticket marker — except {@link AdaptationService#sweepExpiredPendingChanges()} which
- * returns {@code 0} (the safe no-op for the inter-ticket {@code @Scheduled} window).
- *
- * <p>The repository mocks are passed as-is — no behaviour is exercised; only that the bean
- * constructs and routes calls to UOE.
+ * Skeleton-constructor sanity for the post-01f wiring. The 6-arg skeleton ctor leaves every helper
+ * (mappers, emitter, refresher) {@code null}; 01f implements the read fan-out + emit + sweep so the
+ * pre-01f UOE assertions no longer hold. This test now asserts the 01f contract: {@code
+ * sweepExpiredPendingChanges} runs against the (mocked) repo and returns 0; {@code emitPlannerHint}
+ * NPEs because the skeleton ctor never wired a {@link
+ * com.example.mealprep.adaptation.domain.service.internal.PlannerHintEmitter}; the read methods
+ * resolve against the empty repo mocks.
  */
 class AdaptationServiceImplSkeletonTest {
 
@@ -41,20 +41,13 @@ class AdaptationServiceImplSkeletonTest {
                   .class));
 
   @Test
-  void sweep_expired_pending_changes_returns_zero() {
-    // Safe no-op for the scheduled cron job during the inter-ticket window.
+  void sweep_expired_pending_changes_returns_zero_with_no_expired_rows() {
+    // Mocked repo returns an empty list → no DB writes, returns 0.
     assertThat(service.sweepExpiredPendingChanges()).isZero();
   }
 
-  // Note: the original 01b skeleton test asserted UOE on the four trigger entries plus
-  // accept/reject. After 01d wires those methods (skeleton ctor still passes null helpers, so
-  // calls now throw NullPointerException at the first helper deref). The 01d test suite covers
-  // the happy-path behaviour separately; here we only retain the UOE-marker check for
-  // emitPlannerHint
-  // (still 01f's territory) and sweepExpiredPendingChanges' return-zero contract.
-
   @Test
-  void emit_planner_hint_throws_uoe_with_ticket_01f_marker() {
+  void emit_planner_hint_npes_when_emitter_not_wired_in_skeleton_ctor() {
     PlannerHintRequest req =
         new PlannerHintRequest(
             UUID.randomUUID(),
@@ -66,33 +59,13 @@ class AdaptationServiceImplSkeletonTest {
             HintSeverity.INFO,
             null,
             UUID.randomUUID());
+    // Skeleton ctor leaves plannerHintEmitter null — exercised only via the full Spring wiring.
     assertThatThrownBy(() -> service.emitPlannerHint(req, UUID.randomUUID()))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("ticket-01f");
+        .isInstanceOf(NullPointerException.class);
   }
 
-  @Test
-  void query_methods_still_uoe_for_01f_territory() {
-    UUID id = UUID.randomUUID();
-    org.springframework.data.domain.Pageable page =
-        org.springframework.data.domain.PageRequest.of(0, 10);
-    // 01d wires listPendingForUser / listPendingHistoryForRecipe / getPendingChange — the
-    // remaining read fan-out methods still throw UOE per ticket 01f's scope.
-    assertThatThrownBy(() -> service.getJobsForRecipe(id, page))
-        .isInstanceOf(UnsupportedOperationException.class);
-    assertThatThrownBy(() -> service.getActiveJobsForUser(id, page))
-        .isInstanceOf(UnsupportedOperationException.class);
-    assertThatThrownBy(() -> service.getTracesForRecipe(id, page))
-        .isInstanceOf(UnsupportedOperationException.class);
-    assertThatThrownBy(() -> service.getTracesForPromptVersion("n", "v", page))
-        .isInstanceOf(UnsupportedOperationException.class);
-    assertThatThrownBy(() -> service.getTraceForJob(id))
-        .isInstanceOf(UnsupportedOperationException.class);
-    assertThatThrownBy(() -> service.getActiveHintsForVersion(id))
-        .isInstanceOf(UnsupportedOperationException.class);
-    assertThatThrownBy(() -> service.getActiveHintsForVersions(java.util.List.of(id)))
-        .isInstanceOf(UnsupportedOperationException.class);
-    assertThatThrownBy(() -> service.getMostRecentResultForRecipe(id))
-        .isInstanceOf(UnsupportedOperationException.class);
-  }
+  // The read fan-out (getJob / getActiveHintsForVersion* / getTraceForJob / …) is exercised with
+  // proper mapper mocks in AdaptationQueryServiceImplTest. The 6-arg skeleton ctor leaves the
+  // mappers null, so those methods can't be driven here — pre-01f this test asserted UOE; 01f
+  // implements them, and the realistic coverage lives in the dedicated query-service test.
 }

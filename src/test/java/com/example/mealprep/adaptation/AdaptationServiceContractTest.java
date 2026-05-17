@@ -76,9 +76,14 @@ class AdaptationServiceContractTest {
         AdaptationService.class.getMethod("sweepExpiredPendingChanges");
     assertThat(sweepExpiredPendingChanges.getReturnType()).isEqualTo(int.class);
 
-    // Sanity: the interface declares exactly the eight verbs above (no accidental extras).
+    // 01f adds the admin retry-failed-job verb.
+    Method retryFailedJob = AdaptationService.class.getMethod("retryFailedJob", UUID.class);
+    assertThat(retryFailedJob.getReturnType())
+        .isEqualTo(com.example.mealprep.adaptation.api.dto.AdaptationJobDto.class);
+
+    // Sanity: the interface declares exactly the nine verbs above (no accidental extras).
     long declared = AdaptationService.class.getDeclaredMethods().length;
-    assertThat(declared).isEqualTo(8);
+    assertThat(declared).isEqualTo(9);
   }
 
   @Test
@@ -138,8 +143,22 @@ class AdaptationServiceContractTest {
                 .getReturnType())
         .isEqualTo(Optional.class);
 
+    // 01f adds the admin single-job read + the run-history (source + window) feed.
+    assertThat(AdaptationQueryService.class.getMethod("getJob", UUID.class).getReturnType())
+        .isEqualTo(Optional.class);
+    assertThat(
+            AdaptationQueryService.class
+                .getMethod(
+                    "getRunHistory",
+                    com.example.mealprep.adaptation.domain.enums.JobSource.class,
+                    java.time.Instant.class,
+                    java.time.Instant.class,
+                    Pageable.class)
+                .getReturnType())
+        .isEqualTo(Page.class);
+
     long declared = AdaptationQueryService.class.getDeclaredMethods().length;
-    assertThat(declared).isEqualTo(11);
+    assertThat(declared).isEqualTo(13);
   }
 
   /**
@@ -166,7 +185,9 @@ class AdaptationServiceContractTest {
             "getTraceForJob",
             "getActiveHintsForVersion",
             "getActiveHintsForVersions",
-            "getMostRecentResultForRecipe");
+            "getMostRecentResultForRecipe",
+            "getJob",
+            "getRunHistory");
   }
 
   @Test

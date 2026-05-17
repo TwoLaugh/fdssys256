@@ -19,7 +19,10 @@ import com.example.mealprep.adaptation.api.dto.PlanTimeRefineDirectiveRequest;
 import com.example.mealprep.adaptation.api.dto.PlannerHintDto;
 import com.example.mealprep.adaptation.api.dto.PlannerHintRequest;
 import com.example.mealprep.adaptation.api.dto.RejectPendingChangeRequest;
+import com.example.mealprep.adaptation.api.mapper.AdaptationJobMapper;
+import com.example.mealprep.adaptation.api.mapper.AdaptationTraceMapper;
 import com.example.mealprep.adaptation.api.mapper.PendingChangeMapper;
+import com.example.mealprep.adaptation.api.mapper.PlannerHintMapper;
 import com.example.mealprep.adaptation.config.AdaptationConfig;
 import com.example.mealprep.adaptation.domain.entity.AdaptationJob;
 import com.example.mealprep.adaptation.domain.entity.PendingChange;
@@ -45,8 +48,10 @@ import com.example.mealprep.adaptation.domain.service.internal.CandidateGenerato
 import com.example.mealprep.adaptation.domain.service.internal.ChangeDimensionResolver;
 import com.example.mealprep.adaptation.domain.service.internal.CharacterPreservationGate;
 import com.example.mealprep.adaptation.domain.service.internal.ConfidenceFloorGate;
+import com.example.mealprep.adaptation.domain.service.internal.FingerprintRefresher;
 import com.example.mealprep.adaptation.domain.service.internal.JobReadyEvent;
 import com.example.mealprep.adaptation.domain.service.internal.PendingChangeStore;
+import com.example.mealprep.adaptation.domain.service.internal.PlannerHintEmitter;
 import com.example.mealprep.adaptation.domain.service.internal.ScoringEngine;
 import com.example.mealprep.adaptation.event.AdaptationCandidateProducedEvent;
 import com.example.mealprep.adaptation.event.AdaptationJobCompletedEvent;
@@ -56,6 +61,8 @@ import com.example.mealprep.adaptation.event.PendingChangeRejectedEvent;
 import com.example.mealprep.adaptation.exception.AdaptationAiUnavailableException;
 import com.example.mealprep.adaptation.exception.AdaptationCharacterBreakException;
 import com.example.mealprep.adaptation.exception.AdaptationException;
+import com.example.mealprep.adaptation.exception.AdaptationJobNotFoundException;
+import com.example.mealprep.adaptation.exception.AdaptationJobNotRetryableException;
 import com.example.mealprep.adaptation.exception.LockTimeoutException;
 import com.example.mealprep.adaptation.exception.PendingChangeExpiredException;
 import com.example.mealprep.adaptation.exception.PendingChangeNotFoundException;
@@ -153,6 +160,14 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   // placeholder loader when absent (keeps the 01b/01c skeleton + smoke tests green).
   private final AdaptationContextAssembler contextAssembler;
 
+  // 01f — planner-hint emit + fingerprint refresh + read-fan-out mappers. Nullable in the older
+  // skeleton ctors (the 12 query/emit bodies guard or are only reachable via the full wiring).
+  private final PlannerHintEmitter plannerHintEmitter;
+  private final FingerprintRefresher fingerprintRefresher;
+  private final AdaptationJobMapper jobMapper;
+  private final AdaptationTraceMapper traceMapper;
+  private final PlannerHintMapper plannerHintMapper;
+
   // Self-proxy: processJob() is intentionally non-transactional (long AI calls run outside any
   // tx). It calls acquireLockOrFailJob() which is @Transactional(REQUIRED) so the MANDATORY
   // advisory-lock acquire has a tx. A plain this.acquireLockOrFailJob() is a Spring
@@ -176,6 +191,11 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         fingerprintRepository,
         plannerHintRepository,
         nutritionalKnowledgeRepository,
+        null,
+        null,
+        null,
+        null,
+        null,
         null,
         null,
         null,
@@ -220,7 +240,12 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
       RecipeWriteApi recipeWriteApi,
       PendingChangeMapper pendingChangeMapper,
       AdaptationConfig adaptationConfig,
-      AdaptationContextAssembler contextAssembler) {
+      AdaptationContextAssembler contextAssembler,
+      PlannerHintEmitter plannerHintEmitter,
+      FingerprintRefresher fingerprintRefresher,
+      AdaptationJobMapper jobMapper,
+      AdaptationTraceMapper traceMapper,
+      PlannerHintMapper plannerHintMapper) {
     this.jobRepository = jobRepository;
     this.pendingChangeRepository = pendingChangeRepository;
     this.traceRepository = traceRepository;
@@ -242,6 +267,11 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
     this.pendingChangeMapper = pendingChangeMapper;
     this.adaptationConfig = adaptationConfig;
     this.contextAssembler = contextAssembler;
+    this.plannerHintEmitter = plannerHintEmitter;
+    this.fingerprintRefresher = fingerprintRefresher;
+    this.jobMapper = jobMapper;
+    this.traceMapper = traceMapper;
+    this.plannerHintMapper = plannerHintMapper;
   }
 
   // ---------------------------------------------------------------------------
@@ -482,14 +512,68 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
     return pendingChangeMapper.toDto(pc);
   }
 
+  /**
+   * Persist a planner-noticed hint. {@code @Transactional(REQUIRED)} — the {@link
+   * PlannerHintEmitter} insert + auto-invalidate + event publish all run in one tx so {@code
+   * PlannerHintEmittedEvent} (an {@code AFTER_COMMIT} listener target) is published inside an
+   * active tx. {@code emittedByJobId} is taken from the request (null for planner-noticed hints).
+   */
   @Override
+  @Transactional
   public PlannerHintDto emitPlannerHint(PlannerHintRequest request, UUID actorUserId) {
-    throw new UnsupportedOperationException(UOE_TICKET_01F);
+    var record = plannerHintEmitter.emit(request, request.emittedByJobId());
+    return plannerHintMapper.toDto(record);
   }
 
   @Override
+  @Transactional
   public int sweepExpiredPendingChanges() {
-    return 0;
+    List<PendingChange> expired =
+        pendingChangeRepository.findExpiredPending(Instant.now(), PageRequest.of(0, 500));
+    Instant now = Instant.now();
+    for (PendingChange pc : expired) {
+      pc.setStatus(PendingChangeStatus.EXPIRED);
+      pc.setResolvedAt(now);
+    }
+    // Hibernate flushes dirty managed entities on tx commit; no explicit saveAll needed.
+    // Per-run cap of 500 keeps the tx short — the next cron tick picks up any remainder.
+    return expired.size();
+  }
+
+  @Override
+  @Transactional
+  public AdaptationJobDto retryFailedJob(UUID jobId) {
+    AdaptationJob old =
+        jobRepository
+            .findById(jobId)
+            .orElseThrow(
+                () -> new AdaptationJobNotFoundException("adaptation job not found: " + jobId));
+    if (old.getStatus() != JobStatus.FAILED) {
+      throw new AdaptationJobNotRetryableException(
+          "job is " + old.getStatus() + ", only FAILED jobs may be retried: " + jobId);
+    }
+    UUID newId = UUID.randomUUID();
+    AdaptationJob retry =
+        AdaptationJob.builder()
+            .id(newId)
+            .recipeId(old.getRecipeId())
+            .userId(old.getUserId())
+            .catalogue(old.getCatalogue())
+            .source(old.getSource())
+            .priority(old.getPriority())
+            .approvalPolicy(old.getApprovalPolicy())
+            .status(JobStatus.PENDING)
+            .inputs(old.getInputs())
+            .traceId(UUID.randomUUID())
+            .parentDecisionId(old.getId())
+            .enqueuedAt(Instant.now())
+            .build();
+    jobRepository.saveAndFlush(retry);
+    // BATCH-priority jobs are picked up by BatchJobOrchestrator's cron — no JobReadyEvent.
+    if (old.getPriority() != JobPriority.BATCH) {
+      events.publishEvent(new JobReadyEvent(newId));
+    }
+    return jobMapper.toDto(retry);
   }
 
   // ---------------------------------------------------------------------------
@@ -587,6 +671,12 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         // DIRECT / PLAN_OVERLAY apply paths land in 01d / 01e. For 01c the trace records NO_OP.
         outcome = OutcomeKind.NO_OP;
       }
+
+      // Step 7b (01f) — post-apply hooks. On a new-version / branch write the prior version's
+      // planner hints are stale (body changed) → invalidate them; on a BRANCH the AI response
+      // carries the fingerprint inline (LLD §Decisions §3) → refresh it. Guarded on the helpers
+      // being wired (skeleton-ctor unit tests pass them null) and a known current version.
+      applyPostWriteHooks(job, response, finalClassification, context, outcome, outcomeTargetId);
 
       // Step 8 — Trace + decision log.
       int durationMs = (int) (System.currentTimeMillis() - startMillis);
@@ -766,6 +856,43 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         null,
         null,
         null);
+  }
+
+  /**
+   * 01f post-apply hooks (LLD line 769). Only fires when the version write actually moved the body:
+   * a {@code PENDING_CREATED} outcome did NOT write a new version (it awaits user accept) so hints
+   * stay valid; a direct {@code VERSION_CREATED}/{@code BRANCH_CREATED} (01e apply paths) DID.
+   * Guarded null-safe so the skeleton-ctor unit wirings (helpers null) are unaffected.
+   */
+  private void applyPostWriteHooks(
+      AdaptationJob job,
+      RecipeAdaptationResponse response,
+      AdaptationClassification finalClassification,
+      AdaptationContext context,
+      OutcomeKind outcome,
+      UUID outcomeTargetId) {
+    if (outcome != OutcomeKind.VERSION_CREATED && outcome != OutcomeKind.BRANCH_CREATED) {
+      return; // no body-moving write happened (PENDING / NO_OP / FAILED) — hints stay valid.
+    }
+    RecipeVersionDto current = context == null ? null : context.currentVersion();
+    if (plannerHintEmitter != null && current != null) {
+      plannerHintEmitter.invalidateHintsForOldVersion(current.id());
+    }
+    if (fingerprintRefresher != null
+        && finalClassification == AdaptationClassification.BRANCH
+        && response.finalDiffJson() != null
+        && outcomeTargetId != null
+        && current != null) {
+      // BRANCH outcome: outcomeTargetId is the new branch's v1 versionId; the fingerprint rides
+      // inline on the AI response (no second AI call per LLD §Decisions §3).
+      fingerprintRefresher.refreshOnBranch(
+          job.getRecipeId(),
+          outcomeTargetId,
+          outcomeTargetId,
+          response.finalDiffJson(),
+          response.finalDiffJson().toString(),
+          job.getId());
+    }
   }
 
   private void publishCandidateProduced(AdaptationJob job, List<AdaptationCandidateDto> topN) {
@@ -989,43 +1116,93 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   }
 
   @Override
+  @Transactional(readOnly = true)
+  public Optional<AdaptationJobDto> getJob(UUID jobId) {
+    return jobRepository.findById(jobId).map(jobMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
   public Page<AdaptationJobDto> getJobsForRecipe(UUID recipeId, Pageable pageable) {
-    throw new UnsupportedOperationException(UOE_TICKET_01F);
+    return jobRepository
+        .findByRecipeIdOrderByEnqueuedAtDesc(recipeId, pageable)
+        .map(jobMapper::toDto);
   }
 
   @Override
+  @Transactional(readOnly = true)
   public Page<AdaptationJobDto> getActiveJobsForUser(UUID userId, Pageable pageable) {
-    throw new UnsupportedOperationException(UOE_TICKET_01F);
+    return jobRepository
+        .findByUserIdAndStatusInOrderByEnqueuedAtDesc(
+            userId, java.util.Set.of(JobStatus.PENDING, JobStatus.RUNNING), pageable)
+        .map(jobMapper::toDto);
   }
 
   @Override
+  @Transactional(readOnly = true)
   public Page<AdaptationTraceDto> getTracesForRecipe(UUID recipeId, Pageable pageable) {
-    throw new UnsupportedOperationException(UOE_TICKET_01F);
+    return traceRepository
+        .findByRecipeIdOrderByCreatedAtDesc(recipeId, pageable)
+        .map(traceMapper::toDto);
   }
 
   @Override
+  @Transactional(readOnly = true)
   public Page<AdaptationTraceDto> getTracesForPromptVersion(
       String name, String version, Pageable pageable) {
-    throw new UnsupportedOperationException(UOE_TICKET_01F);
+    return traceRepository
+        .findByPromptTemplateNameAndPromptTemplateVersionOrderByCreatedAtDesc(
+            name, version, pageable)
+        .map(traceMapper::toDto);
   }
 
   @Override
+  @Transactional(readOnly = true)
   public Optional<AdaptationTraceDto> getTraceForJob(UUID jobId) {
-    throw new UnsupportedOperationException(UOE_TICKET_01F);
+    return traceRepository.findByJobId(jobId).map(traceMapper::toDto);
   }
 
   @Override
+  @Transactional(readOnly = true)
   public List<PlannerHintDto> getActiveHintsForVersion(UUID versionId) {
-    throw new UnsupportedOperationException(UOE_TICKET_01F);
+    return plannerHintRepository.findActiveForVersion(versionId).stream()
+        .map(plannerHintMapper::toDto)
+        .toList();
   }
 
   @Override
+  @Transactional(readOnly = true)
   public Map<UUID, List<PlannerHintDto>> getActiveHintsForVersions(List<UUID> versionIds) {
-    throw new UnsupportedOperationException(UOE_TICKET_01F);
+    if (versionIds == null || versionIds.isEmpty()) {
+      return Map.of();
+    }
+    // Single IN query (N+1 protection); group by versionId. Versions with no active hints are
+    // absent from the map — no empty-list entries.
+    return plannerHintRepository.findActiveForVersions(versionIds).stream()
+        .collect(
+            java.util.stream.Collectors.groupingBy(
+                com.example.mealprep.adaptation.domain.entity.PlannerHintRecord::getVersionId,
+                java.util.stream.Collectors.mapping(
+                    plannerHintMapper::toDto, java.util.stream.Collectors.toList())));
   }
 
   @Override
+  @Transactional(readOnly = true)
   public Optional<AdaptationResultDto> getMostRecentResultForRecipe(UUID recipeId) {
-    throw new UnsupportedOperationException(UOE_TICKET_01C);
+    List<AdaptationJob> done =
+        jobRepository.findMostRecentDoneForRecipe(recipeId, PageRequest.of(0, 1));
+    if (done.isEmpty()) {
+      return Optional.empty();
+    }
+    return Optional.of(loadResultFromTrace(done.get(0)));
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Page<AdaptationJobDto> getRunHistory(
+      JobSource source, Instant from, Instant to, Pageable pageable) {
+    return jobRepository
+        .findBySourceAndEnqueuedAtBetweenOrderByEnqueuedAtDesc(source, from, to, pageable)
+        .map(jobMapper::toDto);
   }
 }

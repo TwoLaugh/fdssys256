@@ -161,3 +161,322 @@ adaptationRecipePendingHistory:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+# ===== 01f: admin / debug + run-history (ROLE_ADMIN) =====
+adaptationJob:
+  get:
+    tags: [Adaptation]
+    operationId: getAdaptationJob
+    summary: 'Admin: fetch a job by id.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: jobId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'The job.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/AdaptationJobDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Not admin.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Job not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationJobTrace:
+  get:
+    tags: [Adaptation]
+    operationId: getAdaptationJobTrace
+    summary: 'Admin: fetch the trace for a job.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: jobId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'The trace.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/AdaptationTraceDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Not admin.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No trace for that job.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationRecipeJobs:
+  get:
+    tags: [Adaptation]
+    operationId: getAdaptationRecipeJobs
+    summary: 'Admin: page of jobs for a recipe, newest first.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of jobs.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/AdaptationJobDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Not admin.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationRecipeTraces:
+  get:
+    tags: [Adaptation]
+    operationId: getAdaptationRecipeTraces
+    summary: 'Admin: page of traces for a recipe, newest first.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of traces.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/AdaptationTraceDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Not admin.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationAdminSweepExpired:
+  post:
+    tags: [Adaptation]
+    operationId: sweepExpiredPending
+    summary: 'Admin: ad-hoc invoke the expired-pending-change sweep.'
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: 'Sweep result; touched is the number of rows flipped to EXPIRED.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/SweepExpiredPendingResponse' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Not admin.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationAdminRetryFailedJob:
+  post:
+    tags: [Adaptation]
+    operationId: retryFailedJob
+    summary: 'Admin: re-enqueue a fresh copy of a FAILED job.'
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/adaptation.yaml#/RetryFailedJobRequest' }
+    responses:
+      '200':
+        description: 'The newly-enqueued job.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/AdaptationJobDto' }
+      '400':
+        description: 'Validation error.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Not admin.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Job not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Job is not in FAILED state.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationAdminPromptVersionTraces:
+  get:
+    tags: [Adaptation]
+    operationId: getAdminPromptVersionTraces
+    summary: 'Admin: traces filtered by prompt-template name + version.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+      - in: path
+        name: version
+        required: true
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of traces.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/AdaptationTraceDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Not admin.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationRunHistory:
+  get:
+    tags: [Adaptation]
+    operationId: getRunHistory
+    summary: 'Admin: run history filtered by source + enqueue-time window, newest first.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: source
+        required: true
+        schema: { $ref: '../schemas/adaptation.yaml#/JobSource' }
+      - in: query
+        name: from
+        required: true
+        schema: { type: string, format: date-time }
+      - in: query
+        name: to
+        required: true
+        schema: { type: string, format: date-time }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of jobs.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/AdaptationJobDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Not admin.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adaptationRunHistoryByPromptVersion:
+  get:
+    tags: [Adaptation]
+    operationId: getRunHistoryByPromptVersion
+    summary: 'Admin: traces filtered by prompt-template name + version, newest first.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: name
+        required: true
+        schema: { type: string }
+      - in: query
+        name: version
+        required: true
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of traces.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/adaptation.yaml#/AdaptationTraceDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Not admin.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
