@@ -18,7 +18,9 @@ import com.example.mealprep.adaptation.api.dto.RejectPendingChangeRequest;
 import com.example.mealprep.adaptation.domain.service.AdaptationQueryService;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
 import com.example.mealprep.adaptation.domain.service.NutritionalKnowledgeService;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -206,7 +208,23 @@ class AdaptationServiceContractTest {
     // Touch every type that sibling tickets will import; compilation is the assertion.
     assertThat(AdaptationResultDto.class.getDeclaredFields()).isNotEmpty();
     assertThat(AdaptationJobDto.class.getDeclaredFields()).isNotEmpty();
-    assertThat(PendingChangeListItemDto.class.getDeclaredFields()).hasSize(8);
+    // Count only real declared fields. Under Pitest/JaCoCo the class is instrumented with
+    // synthetic probe fields ($jacocoData, $$$pitXXX), so a raw getDeclaredFields().hasSize(8)
+    // fails the Pitest baseline green-suite check even though the DTO genuinely has 8 fields.
+    assertThat(realFieldCount(PendingChangeListItemDto.class)).isEqualTo(8);
     assertThat(AdaptationTraceDto.class.getDeclaredFields()).isNotEmpty();
+  }
+
+  /**
+   * Declared-field count excluding coverage/mutation instrumentation. Pitest and JaCoCo add
+   * synthetic probe fields (names starting with {@code $}); a raw {@code getDeclaredFields()} count
+   * is non-deterministic between a plain surefire run and the Pitest baseline run.
+   */
+  private static long realFieldCount(Class<?> type) {
+    return Arrays.stream(type.getDeclaredFields())
+        .filter(f -> !f.isSynthetic())
+        .filter(f -> !f.getName().startsWith("$"))
+        .map(Field::getName)
+        .count();
   }
 }
