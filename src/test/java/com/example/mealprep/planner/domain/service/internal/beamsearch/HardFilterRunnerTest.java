@@ -55,7 +55,15 @@ class HardFilterRunnerTest {
     filterService = Mockito.mock(HardConstraintFilterService.class);
     properties =
         new PlannerProperties(
-            DayOfWeek.MONDAY, 20, 5, 3, 50, new BigDecimal("1.5"), Duration.ofSeconds(30));
+            DayOfWeek.MONDAY,
+            20,
+            5,
+            3,
+            50,
+            new BigDecimal("1.5"),
+            Duration.ofSeconds(30),
+            null,
+            null);
     runner = new HardFilterRunner(filterService, properties);
     when(filterService.check(any(UUID.class), anyList()))
         .thenReturn(new FilterResult(true, List.of()));
@@ -178,7 +186,15 @@ class HardFilterRunnerTest {
   void pool_exceeding_max_is_capped_in_id_order() {
     properties =
         new PlannerProperties(
-            DayOfWeek.MONDAY, 20, 5, 3, 3, new BigDecimal("1.5"), Duration.ofSeconds(30));
+            DayOfWeek.MONDAY,
+            20,
+            5,
+            3,
+            3,
+            new BigDecimal("1.5"),
+            Duration.ofSeconds(30),
+            null,
+            null);
     runner = new HardFilterRunner(filterService, properties);
 
     MealSlotSkeleton slot = PlanTestData.skeletonFor(WEEK_START, 0, SlotKind.DINNER, 60);
@@ -230,7 +246,8 @@ class HardFilterRunnerTest {
         new RecipePoolSnapshot(recipes, Instant.parse("2026-01-01T00:00:00Z")),
         List.of(),
         UUID.randomUUID(),
-        UUID.randomUUID());
+        UUID.randomUUID(),
+        Map.of());
   }
 
   private static ProvisionForPlannerBundleDto provisionsWith(List<String> equipmentNames) {

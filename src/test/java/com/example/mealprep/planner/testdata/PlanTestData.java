@@ -1,13 +1,16 @@
 package com.example.mealprep.planner.testdata;
 
 import com.example.mealprep.core.types.SlotKind;
+import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.DailyRollupDocument;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.RecipePoolSnapshot;
 import com.example.mealprep.planner.api.dto.RollupSummaryDocument;
 import com.example.mealprep.planner.api.dto.ScoreBreakdownDocument;
+import com.example.mealprep.planner.api.dto.SlotAssignment;
 import com.example.mealprep.planner.api.dto.WeeklyRollupDocument;
+import com.example.mealprep.planner.config.PlannerProperties;
 import com.example.mealprep.planner.domain.entity.Day;
 import com.example.mealprep.planner.domain.entity.MealSlot;
 import com.example.mealprep.planner.domain.entity.Plan;
@@ -21,9 +24,12 @@ import com.example.mealprep.recipe.api.dto.RecipeMetadataDto;
 import com.example.mealprep.recipe.api.dto.RecipeTagsDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.domain.entity.Catalogue;
+import com.example.mealprep.recipe.domain.entity.Complexity;
 import com.example.mealprep.recipe.domain.entity.DataQuality;
 import com.example.mealprep.recipe.domain.entity.NutritionStatus;
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -291,7 +297,250 @@ public final class PlanTestData {
         new RecipePoolSnapshot(recipePool, Instant.parse("2026-01-01T00:00:00Z")),
         List.of(),
         UUID.randomUUID(),
-        UUID.randomUUID());
+        UUID.randomUUID(),
+        Map.of());
+  }
+
+  // ---- planner-01e scoring fixture builders ---------------------------------------------------
+
+  /**
+   * v1-uniform weights (0.143 each) + default tuning constants, matching application.properties.
+   */
+  public static PlannerProperties.ScoringWeights uniformWeights() {
+    BigDecimal w = new BigDecimal("0.143");
+    return new PlannerProperties.ScoringWeights(w, w, w, w, w, w, w);
+  }
+
+  public static PlannerProperties.ScoringTuning defaultTuning() {
+    return new PlannerProperties.ScoringTuning(
+        new PlannerProperties.ScoringTuning.VarietyTargets(5, 4, 3, 2),
+        new PlannerProperties.ScoringTuning.ProvisionsTuning(
+            new PlannerProperties.ScoringTuning.ProvisionsTuning.WasteValueTiers(
+                new BigDecimal("1.0"), new BigDecimal("2.0"), new BigDecimal("3.0"))),
+        new PlannerProperties.ScoringTuning.CostTuning(new BigDecimal("0.1")));
+  }
+
+  /** Full {@link PlannerProperties} wired with the v1-uniform scoring block for unit tests. */
+  public static PlannerProperties scoringProperties() {
+    return new PlannerProperties(
+        DayOfWeek.MONDAY,
+        20,
+        5,
+        3,
+        50,
+        new BigDecimal("1.5"),
+        Duration.ofSeconds(30),
+        uniformWeights(),
+        defaultTuning());
+  }
+
+  /**
+   * Build a recipe with explicit cuisine / protein / cooking-method / totalTime, suitable for the
+   * variety + time sub-score tests. Ingredient mapping keys drive cost / provisions.
+   */
+  public static RecipeDto scoredRecipe(
+      UUID id,
+      int totalTimeMins,
+      String cuisine,
+      String protein,
+      String cookingMethod,
+      List<String> ingredientMappingKeys) {
+    UUID branchId = UUID.randomUUID();
+    UUID versionId = UUID.randomUUID();
+    List<IngredientDto> ingredients = new ArrayList<>();
+    int order = 0;
+    for (String key : ingredientMappingKeys) {
+      ingredients.add(
+          new IngredientDto(
+              UUID.randomUUID(),
+              order++,
+              key,
+              key,
+              BigDecimal.ONE,
+              "g",
+              null,
+              false,
+              false,
+              BigDecimal.ONE));
+    }
+    RecipeMetadataDto metadata =
+        new RecipeMetadataDto(
+            2,
+            Math.max(5, totalTimeMins / 3),
+            Math.max(5, totalTimeMins * 2 / 3),
+            totalTimeMins,
+            List.<String>of(),
+            null,
+            null,
+            false,
+            cuisine,
+            List.of("dinner"));
+    RecipeTagsDto tags =
+        new RecipeTagsDto(
+            protein, cookingMethod, Complexity.MODERATE, List.<String>of(), List.<String>of());
+    RecipeVersionDto version =
+        new RecipeVersionDto(
+            versionId,
+            branchId,
+            1,
+            null,
+            null,
+            null,
+            "PENDING",
+            Instant.parse("2024-01-01T00:00:00Z"),
+            "test",
+            null,
+            ingredients,
+            List.of(),
+            metadata,
+            tags,
+            null);
+    return new RecipeDto(
+        id,
+        UUID.randomUUID(),
+        Catalogue.USER,
+        "recipe-" + id,
+        "test recipe",
+        1,
+        branchId,
+        DataQuality.USER_VERIFIED,
+        NutritionStatus.PENDING,
+        null,
+        null,
+        null,
+        null,
+        0L,
+        Instant.parse("2024-01-01T00:00:00Z"),
+        Instant.parse("2024-01-01T00:00:00Z"),
+        version,
+        List.of());
+  }
+
+  /**
+   * A {@link SlotAssignment} on {@code onDate} for {@code recipeId} with the given slot id and
+   * servings. {@code slotId} must match the {@link MealSlotSkeleton#slotId()} used by the
+   * time-budget lookup.
+   */
+  public static SlotAssignment assignment(
+      UUID slotId, UUID recipeId, LocalDate onDate, int slotIndex, int servings) {
+    return new SlotAssignment(
+        UUID.randomUUID(),
+        slotId,
+        slotIndex,
+        onDate,
+        SlotKind.DINNER,
+        recipeId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        servings,
+        false);
+  }
+
+  public static CandidatePlan candidatePlan(LocalDate weekStart, List<SlotAssignment> assignments) {
+    return new CandidatePlan(UUID.randomUUID(), weekStart, assignments, null);
+  }
+
+  /**
+   * Context carrying a recipe pool + slot skeletons + optional provisions + optional nutrition
+   * targets, suitable for the sub-score / gate unit tests.
+   */
+  public static PlanCompositionContext scoringContext(
+      List<MealSlotSkeleton> skeletons,
+      List<RecipeDto> recipePool,
+      com.example.mealprep.provisions.api.dto.ProvisionForPlannerBundleDto provisions,
+      Map<UUID, com.example.mealprep.household.api.dto.SoftPreferenceBundleDto> softPrefs,
+      Map<UUID, com.example.mealprep.nutrition.api.dto.TargetsDto> nutritionByUserId) {
+    return new PlanCompositionContext(
+        UUID.randomUUID(),
+        LocalDate.of(2026, 1, 5),
+        skeletons,
+        Map.<UUID, com.example.mealprep.preference.api.dto.HardConstraintsDto>of(),
+        softPrefs,
+        null,
+        provisions,
+        null,
+        new RecipePoolSnapshot(recipePool, Instant.parse("2026-01-01T00:00:00Z")),
+        List.of(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        nutritionByUserId);
+  }
+
+  /** A budget DTO with the given weekly target in GBP (null target = no budget row). */
+  public static com.example.mealprep.provisions.api.dto.BudgetDto budget(BigDecimal weeklyTarget) {
+    return new com.example.mealprep.provisions.api.dto.BudgetDto(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        weeklyTarget,
+        "GBP",
+        BigDecimal.ZERO,
+        com.example.mealprep.provisions.api.dto.PriceSensitivity.moderate,
+        weeklyTarget != null,
+        null,
+        0L);
+  }
+
+  public static com.example.mealprep.provisions.api.dto.SupplierProductDto supplierProduct(
+      String mappingKey, BigDecimal price) {
+    return new com.example.mealprep.provisions.api.dto.SupplierProductDto(
+        UUID.randomUUID(),
+        "prod-" + mappingKey,
+        "Tesco",
+        mappingKey,
+        price,
+        price,
+        "g",
+        null,
+        null,
+        "grocery",
+        null,
+        LocalDate.of(2026, 1, 1),
+        List.of(),
+        mappingKey,
+        0L);
+  }
+
+  /** Active inventory item with a relative expiry anchored to real wall-clock (no time-bomb). */
+  public static com.example.mealprep.provisions.api.dto.InventoryItemDto inventoryItem(
+      String mappingKey, BigDecimal quantity, int daysToExpiryFromToday) {
+    return new com.example.mealprep.provisions.api.dto.InventoryItemDto(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        mappingKey,
+        "grocery",
+        com.example.mealprep.provisions.domain.entity.StorageLocation.CUPBOARD,
+        com.example.mealprep.provisions.domain.entity.TrackingMode.QUANTITY,
+        quantity,
+        "g",
+        BigDecimal.ZERO,
+        com.example.mealprep.provisions.domain.entity.StapleStatus.STOCKED,
+        false,
+        LocalDate.now().plusDays(daysToExpiryFromToday),
+        mappingKey,
+        null,
+        com.example.mealprep.provisions.domain.entity.ItemSource.MANUAL_ADD,
+        null,
+        com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus.ACTIVE,
+        null,
+        Instant.parse("2026-01-01T00:00:00Z"),
+        Instant.parse("2026-01-01T00:00:00Z"),
+        0L);
+  }
+
+  public static com.example.mealprep.provisions.api.dto.ProvisionForPlannerBundleDto
+      provisionsBundle(
+          com.example.mealprep.provisions.api.dto.BudgetDto budget,
+          Map<String, com.example.mealprep.provisions.api.dto.SupplierProductDto> prices,
+          List<com.example.mealprep.provisions.api.dto.InventoryItemDto> activeInventory) {
+    return new com.example.mealprep.provisions.api.dto.ProvisionForPlannerBundleDto(
+        UUID.randomUUID(),
+        activeInventory,
+        List.of(),
+        List.of(),
+        budget,
+        prices,
+        new com.example.mealprep.provisions.api.dto.BundleStaleness(
+            0, false, Instant.parse("2026-01-01T00:00:00Z")));
   }
 
   private static Plan.PlanBuilder basePlanBuilder(

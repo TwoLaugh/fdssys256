@@ -3,6 +3,7 @@ package com.example.mealprep.planner.api.dto;
 import com.example.mealprep.household.api.dto.HouseholdSettingsDto;
 import com.example.mealprep.household.api.dto.MergedSoftPreferencesDto;
 import com.example.mealprep.household.api.dto.SoftPreferenceBundleDto;
+import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.preference.api.dto.HardConstraintsDto;
 import com.example.mealprep.provisions.api.dto.ProvisionForPlannerBundleDto;
 import java.time.LocalDate;
@@ -21,6 +22,15 @@ import java.util.UUID;
  *
  * <p>{@code pinnedAssignments} is empty for fresh generation; the re-opt path (planner-01i)
  * populates it from {@code PinningRules}.
+ *
+ * <p>planner-01e extension: {@code nutritionByUserId} carries each member's {@code TargetsDto} so
+ * {@code NutritionSubScore} / {@code NutritionFloorGate} can score against per-macro targets +
+ * enforcement direction. It is {@link org.springframework.lang.Nullable} with an empty-map
+ * convention for fresh-generation cases where the composer has not yet wired nutrition (01j wires
+ * the full bundle). The compact constructor normalises {@code null} → empty map so calculators
+ * never null-check. NOTE: the ticket referenced a {@code NutritionForPlannerBundleDto}; that type
+ * does not exist in this codebase — the canonical nutrition read shape is {@code
+ * NutritionQueryService.getTargets(userId) -> TargetsDto}, which 01e uses directly.
  */
 public record PlanCompositionContext(
     UUID householdId,
@@ -34,4 +44,10 @@ public record PlanCompositionContext(
     RecipePoolSnapshot recipePool,
     List<SlotAssignment> pinnedAssignments,
     UUID traceId,
-    UUID decisionId) {}
+    UUID decisionId,
+    Map<UUID, TargetsDto> nutritionByUserId) {
+
+  public PlanCompositionContext {
+    nutritionByUserId = nutritionByUserId == null ? Map.of() : nutritionByUserId;
+  }
+}

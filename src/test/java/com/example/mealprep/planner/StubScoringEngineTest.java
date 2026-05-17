@@ -29,7 +29,7 @@ import org.springframework.test.context.ActiveProfiles;
  */
 @SpringBootTest
 @Import(TestContainersConfig.class)
-@ActiveProfiles("test")
+@ActiveProfiles({"test", "scoring-stub"})
 class StubScoringEngineTest {
 
   @Autowired private ScoringEngine engine;
@@ -92,7 +92,8 @@ class StubScoringEngineTest {
         new RecipePoolSnapshot(List.of(), Instant.parse("2026-01-01T00:00:00Z")),
         List.of(),
         UUID.randomUUID(),
-        UUID.randomUUID());
+        UUID.randomUUID(),
+        Map.of());
   }
 
   private static UUID uuidOf(int seed) {

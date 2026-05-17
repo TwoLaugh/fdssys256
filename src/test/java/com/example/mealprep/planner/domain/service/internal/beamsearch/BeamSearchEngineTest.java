@@ -169,7 +169,8 @@ class BeamSearchEngineTest {
             new RecipePoolSnapshot(List.<RecipeDto>of(), Instant.parse("2026-01-01T00:00:00Z")),
             List.of(pinned),
             UUID.randomUUID(),
-            UUID.randomUUID());
+            UUID.randomUUID(),
+            Map.of());
 
     BeamSearchOutcome outcome = engine.search(ctx, new BeamSearchConfig(5, 1, 50));
 
@@ -228,7 +229,8 @@ class BeamSearchEngineTest {
   // ---- helpers --------------------------------------------------------------------------------
 
   private static PlannerProperties newProps(Duration timeout) {
-    return new PlannerProperties(DayOfWeek.MONDAY, 20, 5, 3, 50, new BigDecimal("1.5"), timeout);
+    return new PlannerProperties(
+        DayOfWeek.MONDAY, 20, 5, 3, 50, new BigDecimal("1.5"), timeout, null, null);
   }
 
   private static PlanCompositionContext ctxWith(
@@ -245,7 +247,8 @@ class BeamSearchEngineTest {
         new RecipePoolSnapshot(recipes, Instant.parse("2026-01-01T00:00:00Z")),
         List.of(),
         UUID.randomUUID(),
-        UUID.randomUUID());
+        UUID.randomUUID(),
+        Map.of());
   }
 
   private static ProvisionForPlannerBundleDto simpleProvisions() {

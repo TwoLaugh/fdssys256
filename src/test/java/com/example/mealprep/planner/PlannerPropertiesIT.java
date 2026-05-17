@@ -27,6 +27,28 @@ import org.springframework.test.context.ActiveProfiles;
 @ActiveProfiles("test")
 class PlannerPropertiesIT {
 
+  /**
+   * The planner-01e scoring keys, supplied to the standalone binder so negative-validation tests
+   * isolate the field under test rather than tripping the new {@code @NotNull weights/scoring}.
+   */
+  private static final String[] SCORING_KEYS = {
+    "mealprep.planner.weights.preference=0.143",
+    "mealprep.planner.weights.nutrition=0.143",
+    "mealprep.planner.weights.cost=0.143",
+    "mealprep.planner.weights.variety=0.143",
+    "mealprep.planner.weights.time=0.143",
+    "mealprep.planner.weights.batch=0.143",
+    "mealprep.planner.weights.provisions=0.143",
+    "mealprep.planner.scoring.variety.cuisine=5",
+    "mealprep.planner.scoring.variety.protein=4",
+    "mealprep.planner.scoring.variety.cooking-method=3",
+    "mealprep.planner.scoring.variety.max-repeat=2",
+    "mealprep.planner.scoring.provisions.waste-value-tiers.above-seven-days=1.0",
+    "mealprep.planner.scoring.provisions.waste-value-tiers.three-days-or-less=2.0",
+    "mealprep.planner.scoring.provisions.waste-value-tiers.one-day-or-less=3.0",
+    "mealprep.planner.scoring.cost.confidence-threshold=0.1"
+  };
+
   @Autowired private PlannerProperties properties;
 
   @Test
@@ -41,6 +63,19 @@ class PlannerPropertiesIT {
   }
 
   @Test
+  void binds_scoring_weights_and_tuning_block_planner_01e() {
+    assertThat(properties.weights().preference()).isEqualByComparingTo("0.143");
+    assertThat(properties.weights().provisions()).isEqualByComparingTo("0.143");
+    assertThat(properties.scoring().variety().cuisine()).isEqualTo(5);
+    assertThat(properties.scoring().variety().protein()).isEqualTo(4);
+    assertThat(properties.scoring().variety().cookingMethod()).isEqualTo(3);
+    assertThat(properties.scoring().variety().maxRepeat()).isEqualTo(2);
+    assertThat(properties.scoring().provisions().wasteValueTiers().oneDayOrLess())
+        .isEqualByComparingTo("3.0");
+    assertThat(properties.scoring().cost().confidenceThreshold()).isEqualByComparingTo("0.1");
+  }
+
+  @Test
   void beam_width_zero_fails_validation() {
     new ApplicationContextRunner()
         .withUserConfiguration(PlannerPropertiesBindStandaloneConfig.class)
@@ -52,6 +87,7 @@ class PlannerPropertiesIT {
             "mealprep.planner.max-pool-per-slot=50",
             "mealprep.planner.max-time-overshoot-ratio=1.5",
             "mealprep.planner.stage-a-timeout=PT30S")
+        .withPropertyValues(SCORING_KEYS)
         .run(
             ctx -> {
               assertThat(ctx).hasFailed();
@@ -72,6 +108,7 @@ class PlannerPropertiesIT {
             "mealprep.planner.max-pool-per-slot=50",
             "mealprep.planner.max-time-overshoot-ratio=3.5",
             "mealprep.planner.stage-a-timeout=PT30S")
+        .withPropertyValues(SCORING_KEYS)
         .run(
             ctx -> {
               assertThat(ctx).hasFailed();
