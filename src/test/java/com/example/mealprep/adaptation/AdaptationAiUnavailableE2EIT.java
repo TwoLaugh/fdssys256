@@ -25,6 +25,9 @@ import com.example.mealprep.recipe.domain.entity.DataQuality;
 import com.example.mealprep.recipe.domain.entity.NutritionStatus;
 import com.example.mealprep.recipe.domain.entity.VersionTrigger;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
+import com.example.mealprep.recipe.domain.service.RecipeSubstitutionRecorder;
+import com.example.mealprep.recipe.domain.service.RecipeUpdateService;
+import com.example.mealprep.recipe.spi.RecipeWriteApi;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.math.BigDecimal;
@@ -65,7 +68,15 @@ class AdaptationAiUnavailableE2EIT {
   @Autowired private JdbcTemplate jdbcTemplate;
 
   @MockBean private AiService aiService;
+  // RecipeServiceImpl implements RecipeQueryService, RecipeUpdateService,
+  // RecipeSubstitutionRecorder AND RecipeWriteApi. @MockBean on one interface evicts the whole
+  // real bean, so the other interfaces (esp. RecipeWriteApi, an AdaptationServiceImpl ctor dep)
+  // lose their bean -> NoSuchBeanDefinitionException at context load. Round-6 retro: mock every
+  // interface the multi-interface impl provides.
   @MockBean private RecipeQueryService recipeQueryService;
+  @MockBean private RecipeUpdateService recipeUpdateService;
+  @MockBean private RecipeSubstitutionRecorder recipeSubstitutionRecorder;
+  @MockBean private RecipeWriteApi recipeWriteApi;
 
   @AfterEach
   void cleanup() {
