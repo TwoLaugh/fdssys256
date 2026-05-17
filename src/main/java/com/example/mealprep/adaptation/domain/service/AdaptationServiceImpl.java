@@ -81,7 +81,9 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -150,6 +152,14 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   // 01e — real context loader. Nullable in older ctors; processJob falls back to the 01c
   // placeholder loader when absent (keeps the 01b/01c skeleton + smoke tests green).
   private final AdaptationContextAssembler contextAssembler;
+
+  // Self-proxy: processJob() is intentionally non-transactional (long AI calls run outside any
+  // tx). It calls acquireLockOrFailJob() which is @Transactional(REQUIRED) so the MANDATORY
+  // advisory-lock acquire has a tx. A plain this.acquireLockOrFailJob() is a Spring
+  // self-invocation — the proxy is bypassed, no tx is created, and lockService.tryAcquire()
+  // (MANDATORY) throws IllegalTransactionStateException. Routing the call through the injected
+  // proxy makes the @Transactional boundary apply. @Lazy breaks the constructor cycle.
+  @Autowired @Lazy private AdaptationServiceImpl self;
 
   /** Skeleton constructor — retained for backwards-compatibility with 01b unit tests. */
   public AdaptationServiceImpl(
@@ -501,8 +511,10 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         job.getSource());
     long startMillis = System.currentTimeMillis();
     try {
-      // Step 1 — Acquire advisory lock.
-      acquireLockOrFailJob(job);
+      // Step 1 — Acquire advisory lock. Via self-proxy so the @Transactional(REQUIRED) boundary
+      // applies (processJob itself is non-transactional; a direct this.call would bypass it and
+      // the MANDATORY lock would throw).
+      self.acquireLockOrFailJob(job);
 
       // Step 2 — Load context via the 01e assembler (falls back to the 01c placeholder when the
       // assembler bean is absent, e.g. older skeleton-constructor unit wirings).
