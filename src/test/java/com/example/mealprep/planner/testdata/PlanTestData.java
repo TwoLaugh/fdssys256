@@ -543,6 +543,30 @@ public final class PlanTestData {
             0, false, Instant.parse("2026-01-01T00:00:00Z")));
   }
 
+  // ---- planner-01f rollup fixture builders ----------------------------------------------------
+
+  /**
+   * A full 7-day {@link CandidatePlan}: one DINNER slot per day, all pointing at {@code recipeId}.
+   * Used by the rollup builder IT/tests to assert the 7-entry sorted daily list.
+   */
+  public static CandidatePlan weeklyPlanFixture(LocalDate weekStart, UUID recipeId) {
+    List<SlotAssignment> assignments = new ArrayList<>();
+    for (int d = 0; d < 7; d++) {
+      assignments.add(assignment(UUID.randomUUID(), recipeId, weekStart.plusDays(d), 0, 2));
+    }
+    return candidatePlan(weekStart, assignments);
+  }
+
+  /**
+   * A recipe whose {@code nutritionStatus} is {@code PENDING} (the codebase's "nutrition not yet
+   * calculated" signal), so the rollup's {@code staleIngredientCount} counts it. Identical shape to
+   * {@link #scoredRecipe} which already defaults to {@code PENDING} — named for intent at call
+   * sites that specifically exercise the stale-count path.
+   */
+  public static RecipeDto planWithStaleNutrition(UUID id) {
+    return scoredRecipe(id, 30, "Generic", "tofu", "fry", List.of("rice"));
+  }
+
   private static Plan.PlanBuilder basePlanBuilder(
       UUID householdId, LocalDate weekStartDate, int generation, PlanStatus status) {
     return Plan.builder()

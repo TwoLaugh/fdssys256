@@ -2,17 +2,13 @@ package com.example.mealprep.planner.domain.service.internal.scoring;
 
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
-import com.example.mealprep.planner.api.dto.SlotAssignment;
 import com.example.mealprep.planner.config.PlannerProperties;
+import com.example.mealprep.planner.domain.service.internal.rollup.DailyCostAggregator;
+import com.example.mealprep.planner.domain.service.internal.rollup.WeeklyCostConfidence;
 import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.ProvisionForPlannerBundleDto;
-import com.example.mealprep.provisions.api.dto.SupplierProductDto;
-import com.example.mealprep.recipe.api.dto.IngredientDto;
-import com.example.mealprep.recipe.api.dto.RecipeDto;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.Map;
-import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 /**
@@ -35,6 +31,12 @@ import org.springframework.stereotype.Component;
  * regression to neutral, exactly the LOCKED formula's intent). Estimated weekly cost = Σ
  * (supplierPrice × ingredient.quantity × servings) over priced ingredients. Currency assumed GBP
  * matching {@code BudgetDto.weeklyTarget}.
+ *
+ * <p><b>planner-01f refactor</b>: the estimated-weekly-cost walk and the confidence-weighted mean
+ * are delegated to the shared {@link DailyCostAggregator} / {@link WeeklyCostConfidence} helpers
+ * (also used by 01f's {@code RollupBuilder}) so the cost sub-score and the weekly rollup never
+ * drift. The LOCKED formula and its output are byte-identical to 01e — only the per-ingredient walk
+ * moved behind the helpers.
  */
 @Component
 class CostSubScore implements SubScoreCalculator {
@@ -42,9 +44,16 @@ class CostSubScore implements SubScoreCalculator {
   private static final BigDecimal HALF = new BigDecimal("0.5");
 
   private final PlannerProperties properties;
+  private final DailyCostAggregator costAggregator;
+  private final WeeklyCostConfidence costConfidence;
 
-  CostSubScore(PlannerProperties properties) {
+  CostSubScore(
+      PlannerProperties properties,
+      DailyCostAggregator costAggregator,
+      WeeklyCostConfidence costConfidence) {
     this.properties = properties;
+    this.costAggregator = costAggregator;
+    this.costConfidence = costConfidence;
   }
 
   @Override
@@ -62,50 +71,8 @@ class CostSubScore implements SubScoreCalculator {
       return HALF.setScale(6, RoundingMode.HALF_UP); // no budget → neutral
     }
 
-    Map<String, SupplierProductDto> prices =
-        provisions.supplierPricesByMappingKey() == null
-            ? Map.of()
-            : provisions.supplierPricesByMappingKey();
-    Map<UUID, RecipeDto> recipes = ScoringSupport.recipeIndex(ctx);
-    BigDecimal threshold = properties.scoring().cost().confidenceThreshold();
-
-    BigDecimal estimatedCost = BigDecimal.ZERO;
-    BigDecimal confSum = BigDecimal.ZERO;
-    int ingredientCount = 0;
-
-    if (plan.assignments() != null) {
-      for (SlotAssignment a : plan.assignments()) {
-        RecipeDto recipe = ScoringSupport.findRecipe(recipes, a.recipeId()).orElse(null);
-        if (recipe == null
-            || recipe.currentVersionBody() == null
-            || recipe.currentVersionBody().ingredients() == null) {
-          continue;
-        }
-        for (IngredientDto ing : recipe.currentVersionBody().ingredients()) {
-          ingredientCount++;
-          SupplierProductDto product =
-              ing.ingredientMappingKey() == null ? null : prices.get(ing.ingredientMappingKey());
-          BigDecimal confidence = product == null ? BigDecimal.ZERO : BigDecimal.ONE;
-          if (confidence.compareTo(threshold) < 0) {
-            confidence = BigDecimal.ZERO;
-          }
-          confSum = confSum.add(confidence);
-          if (product != null && product.price() != null && ing.quantity() != null) {
-            estimatedCost =
-                estimatedCost.add(
-                    product
-                        .price()
-                        .multiply(ing.quantity())
-                        .multiply(BigDecimal.valueOf(a.servings())));
-          }
-        }
-      }
-    }
-
-    BigDecimal meanConfidence =
-        ingredientCount == 0
-            ? BigDecimal.ZERO
-            : confSum.divide(BigDecimal.valueOf(ingredientCount), 6, RoundingMode.HALF_UP);
+    BigDecimal estimatedCost = costAggregator.totalCost(plan, ctx);
+    BigDecimal meanConfidence = costConfidence.compute(plan, ctx);
 
     BigDecimal rawCostFit =
         BigDecimal.ONE

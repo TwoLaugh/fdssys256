@@ -27,7 +27,10 @@ class NutritionFloorGateTest {
   private static final LocalDate WEEK = LocalDate.of(2026, 1, 5);
 
   private final NutritionFloorGateService service = Mockito.mock(NutritionFloorGateService.class);
-  private final NutritionFloorGate gate = new NutritionFloorGate(service);
+  private final NutritionFloorGate gate =
+      new NutritionFloorGate(
+          service,
+          new com.example.mealprep.planner.domain.service.internal.rollup.DailyMacroAggregator());
 
   @Test
   void empty_plan_passes_without_calling_service() {
