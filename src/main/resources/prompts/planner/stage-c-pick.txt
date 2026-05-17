@@ -1,0 +1,25 @@
+You will receive N candidate weekly meal plans for a household, each summarised as a per-day
+rollup. Your job is to pick the single best plan and briefly explain why.
+
+Household constraints summary:
+{{constraints_summary}}
+
+Household size: {{household_size}}
+Week starting: {{week_start}}
+Generation trigger: {{trigger}}
+
+Candidates (indexed from 0):
+{{#candidates}}
+--- Candidate {{index}} ---
+Days:
+{{#rollup.perDay}}
+  {{date}}: {{calories}} kcal, protein {{proteinG}}g, fat {{fatG}}g, carbs {{carbsG}}g, fibre {{fibreG}}g
+{{/rollup.perDay}}
+{{/candidates}}
+
+Pick the candidate that best balances:
+1. Nutrition convergence to the household's targets.
+2. Variety across days.
+3. Constraint satisfaction (no hard-floor breaches).
+
+Return your choice via the tool call. Keep the reasoning under 3 sentences.

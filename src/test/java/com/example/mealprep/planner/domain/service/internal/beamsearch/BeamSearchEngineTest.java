@@ -230,7 +230,17 @@ class BeamSearchEngineTest {
 
   private static PlannerProperties newProps(Duration timeout) {
     return new PlannerProperties(
-        DayOfWeek.MONDAY, 20, 5, 3, 50, new BigDecimal("1.5"), timeout, null, null);
+        DayOfWeek.MONDAY,
+        20,
+        5,
+        3,
+        50,
+        new BigDecimal("1.5"),
+        timeout,
+        null,
+        null,
+        Duration.ofSeconds(20),
+        3);
   }
 
   private static PlanCompositionContext ctxWith(
