@@ -32,4 +32,19 @@ public interface ClarificationQueryRepository extends JpaRepository<Clarificatio
    */
   Optional<ClarificationQuery> findFirstByFeedbackEntryIdAndStatus(
       UUID feedbackEntryId, ClarificationStatus status);
+
+  /**
+   * Used by {@code listClarificationQueries} when no {@code status} filter is supplied — the
+   * user-facing inbox, oldest first (LLD line 188).
+   */
+  Page<ClarificationQuery> findByFeedbackEntryUserIdOrderByCreatedAtAsc(
+      UUID userId, Pageable pageable);
+
+  /**
+   * Used by 01c's {@code FeedbackClassificationListener.buildContext} on the re-classification
+   * path: the most-recently answered clarification for an entry carries the user's hint + free-text
+   * to feed back into the classifier.
+   */
+  Optional<ClarificationQuery> findFirstByFeedbackEntryIdAndStatusOrderByAnsweredAtDesc(
+      UUID feedbackEntryId, ClarificationStatus status);
 }

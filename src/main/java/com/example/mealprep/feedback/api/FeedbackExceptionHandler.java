@@ -1,6 +1,9 @@
 package com.example.mealprep.feedback.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.feedback.exception.ClarificationQueryAlreadyAnsweredException;
+import com.example.mealprep.feedback.exception.ClarificationQueryExpiredException;
+import com.example.mealprep.feedback.exception.ClarificationQueryNotFoundException;
 import com.example.mealprep.feedback.exception.FeedbackEntryNotFoundException;
 import com.example.mealprep.feedback.exception.RoutingDecisionNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -52,6 +55,52 @@ public class FeedbackExceptionHandler {
             "Routing decision not found",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(ClarificationQueryNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleClarificationQueryNotFound(
+      ClarificationQueryNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "clarification-query-not-found",
+            "Clarification query not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(ClarificationQueryExpiredException.class)
+  public ResponseEntity<ProblemDetail> handleClarificationQueryExpired(
+      ClarificationQueryExpiredException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.GONE,
+            ex.getMessage(),
+            "clarification-query-expired",
+            "Clarification query expired",
+            req.getRequestURI());
+    pd.setProperty("feedbackEntryId", ex.feedbackEntryId());
+    return ResponseEntity.status(HttpStatus.GONE)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(ClarificationQueryAlreadyAnsweredException.class)
+  public ResponseEntity<ProblemDetail> handleClarificationQueryAlreadyAnswered(
+      ClarificationQueryAlreadyAnsweredException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "clarification-query-already-answered",
+            "Clarification query already answered",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

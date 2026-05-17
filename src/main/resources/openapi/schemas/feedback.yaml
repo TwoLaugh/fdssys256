@@ -123,3 +123,53 @@ FeedbackEntryDtoPage:
     last: { type: boolean }
     empty: { type: boolean }
     numberOfElements: { type: integer }
+ClarificationStatus:
+  type: string
+  enum: [PENDING, ANSWERED, EXPIRED]
+ClarificationOptionDto:
+  type: object
+  required: [destination, snippet]
+  properties:
+    destination: { $ref: '#/Destination' }
+    snippet: { type: string }
+    classifierJustification: { type: string, nullable: true }
+ClarificationQueryDto:
+  type: object
+  required: [id, feedbackEntryId, questionText, options, status, expiresAt, createdAt]
+  properties:
+    id: { type: string, format: uuid }
+    feedbackEntryId: { type: string, format: uuid }
+    questionText: { type: string, maxLength: 512 }
+    options:
+      type: array
+      items: { $ref: '#/ClarificationOptionDto' }
+    status: { $ref: '#/ClarificationStatus' }
+    expiresAt: { type: string, format: date-time }
+    createdAt: { type: string, format: date-time }
+ClarificationQueryDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/ClarificationQueryDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+AnswerClarificationRequest:
+  type: object
+  properties:
+    selectedDestination:
+      type: string
+      enum: [RECIPE, PREFERENCE, NUTRITION, PROVISIONS]
+      nullable: true
+    userClarificationText:
+      type: string
+      maxLength: 4000
+      nullable: true
