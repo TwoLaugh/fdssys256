@@ -24,6 +24,8 @@ import com.example.mealprep.discovery.exception.DiscoveryJobAlreadyTerminalExcep
 import com.example.mealprep.discovery.exception.DiscoveryJobNotFoundException;
 import com.example.mealprep.discovery.exception.DiscoverySourceNotFoundException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -41,7 +43,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -85,6 +89,27 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
   private final DiscoveryJobRunner runner;
   private final DiscoveryProperties properties;
 
+  // Self-proxy: runJobSync (non-transactional, blocks on the sync waiter) calls startJob, which is
+  // @Transactional and publishes DiscoveryJobStartedEvent AFTER_COMMIT. A plain this.startJob() is
+  // a Spring self-invocation — the proxy is bypassed, startJob runs tx-less, the AFTER_COMMIT
+  // event is silently dropped, the runner never processes the job, and runJobSync times out
+  // returning a QUEUED DTO (round-5 self-invocation + round-3 AFTER_COMMIT-drop, compounded).
+  // Route the call through the injected proxy so startJob's tx boundary applies; @Lazy breaks
+  // the constructor cycle. Hand-constructed unit tests leave `self` null -> fall back to `this`.
+  @Autowired @Lazy private DiscoveryServiceImpl self;
+
+  // runJobSync's final re-read must reflect the runner's cross-thread terminal UPDATE. The runner
+  // commits RUNNING/FAILED on its own thread+EM; this request thread loaded the QUEUED row in
+  // startJobWithId. Production runs spring.jpa.open-in-view=false (fresh EM per repo call → fresh
+  // read), but the test classpath's application.properties shadows main and does NOT mirror that
+  // key, so OSIV is ON under @SpringBootTest: one EM is bound to the request thread for the whole
+  // request, its L1 still holds the stale QUEUED entity, and findById returns it instead of
+  // hitting the DB. Clearing the persistence context before the re-read makes the read correct
+  // regardless of the OSIV setting (wave-2 retro: test props shadow main; wave-3 addendum:
+  // cross-thread async update + same-request re-read needs an explicit L1 evict). Hand-constructed
+  // unit tests inject no EM → null → guarded.
+  @PersistenceContext private EntityManager entityManager;
+
   public DiscoveryServiceImpl(
       DiscoveryJobRepository jobRepository,
       DiscoverySourceRepository sourceRepository,
@@ -113,6 +138,23 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
   @Override
   @Transactional
   public DiscoveryJobDto startJob(UUID userId, StartDiscoveryJobRequest request) {
+    return startJobWithId(userId, request, UUID.randomUUID());
+  }
+
+  /**
+   * Body of {@link #startJob} parameterised by a caller-supplied job id. {@code runJobSync} needs
+   * the id BEFORE the {@code DiscoveryJobStartedEvent} is published so it can register the sync
+   * waiter ahead of the {@code @Async} AFTER_COMMIT runner — otherwise the runner can finalise the
+   * job and call {@code completeSyncWaiter} before the waiter exists (slow CI / fast-failing
+   * source), the waiter never completes, the caller times out, and the re-read catches the job
+   * pre-claim as {@code QUEUED} (round-6 retro: register-before-publish, not register-after).
+   *
+   * <p>Public (not on the interface) so the self-proxy's {@code @Transactional} advice applies —
+   * Spring only weaves tx advice on public methods.
+   */
+  @Transactional
+  public DiscoveryJobDto startJobWithId(
+      UUID userId, StartDiscoveryJobRequest request, UUID jobId) {
     List<DiscoverySource> resolved = resolveSources(request.sourceKeys());
     if (resolved.isEmpty()) {
       throw new DiscoveryConstraintInvalidException(
@@ -127,7 +169,7 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
 
     DiscoveryJob job =
         DiscoveryJob.builder()
-            .id(UUID.randomUUID())
+            .id(jobId)
             .userId(userId)
             .trigger(request.trigger())
             .requestedCount(request.requestedCount())
@@ -174,24 +216,22 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
     Duration effective =
         timeout.compareTo(properties.syncTimeout()) > 0 ? properties.syncTimeout() : timeout;
 
-    // Register the waiter BEFORE startJob commits. startJob publishes DiscoveryJobStartedEvent
-    // AFTER_COMMIT; the runner's listener cannot fire until after that commit, so the waiter is
-    // always in place before any terminal transition (LLD line 385). NOTE: startJob() is
-    // @Transactional and called via `this` — self-invocation means the proxy is skipped, but
-    // startJob carries its own @Transactional which Spring still applies because the call enters
-    // through the public bean method from the controller (the proxy wraps runJobSync's caller,
-    // not this internal hop); regardless, the waiter must exist before the runner can complete it,
-    // so we cannot register before the id is known. The race is benign: the runner's terminal
-    // path is AFTER_COMMIT + @Async (msec-scale latency) and completeSyncWaiter is a map remove —
-    // if it somehow fires before registration the caller times out and the DB re-read returns the
-    // already-terminal DTO. Verified by IT.
-    DiscoveryJobDto enqueued = startJob(userId, request);
-    UUID jobId = enqueued.id();
-
+    // Pre-generate the job id and register the sync waiter BEFORE startJob publishes
+    // DiscoveryJobStartedEvent. Ordering is load-bearing: startJob is @Transactional and publishes
+    // AFTER_COMMIT; the runner's listener is @Async + AFTER_COMMIT. If we registered the waiter
+    // after startJob returned (post-commit), a fast/failing source on slow CI lets the runner
+    // finalise the job and call completeSyncWaiter before the waiter exists — the waiter never
+    // completes, runJobSync times out, and the re-read catches the job pre-claim as QUEUED
+    // (observed: sync_fastColdStart got "QUEUED", sync_allSourcesDown got 200 not 502).
+    // Registering first closes the race entirely. MUST still route startJobWithId through the
+    // self-proxy — a direct this.startJobWithId() is a Spring self-invocation that bypasses the
+    // @Transactional proxy, so it would run tx-less and the AFTER_COMMIT event would be dropped.
+    UUID jobId = UUID.randomUUID();
     CompletableFuture<DiscoveryJobStatus> waiter = new CompletableFuture<>();
     runner.registerSyncWaiter(jobId, waiter);
 
     try {
+      ((self != null) ? self : this).startJobWithId(userId, request, jobId);
       DiscoveryJobStatus terminal = waiter.get(effective.toMillis(), TimeUnit.MILLISECONDS);
       log.debug("runJobSync jobId={} completed terminal={}", jobId, terminal);
     } catch (TimeoutException te) {
@@ -210,7 +250,12 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
 
     // Re-read from DB so the response carries the most-recent counters the runner committed (the
     // waiter only carries the terminal status). A timeout returns the in-flight DTO (likely
-    // RUNNING); the controller maps status → HTTP.
+    // RUNNING); the controller maps status → HTTP. Evict the request-thread persistence context
+    // first so the read reflects the runner's cross-thread UPDATE rather than the stale QUEUED L1
+    // entry (see the entityManager field comment — OSIV-on under the shadowed test properties).
+    if (entityManager != null) {
+      entityManager.clear();
+    }
     return getJob(jobId).orElseThrow(() -> new DiscoveryJobNotFoundException(jobId));
   }
 

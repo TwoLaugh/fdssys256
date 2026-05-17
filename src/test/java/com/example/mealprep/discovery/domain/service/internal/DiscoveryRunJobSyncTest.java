@@ -3,7 +3,6 @@ package com.example.mealprep.discovery.domain.service.internal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -83,20 +82,22 @@ class DiscoveryRunJobSyncTest {
         DiscoveryJobTrigger.COLD_START, 5, DiscoveryTestData.sampleConstraints(), null, null);
   }
 
-  /** Stub the startJob persistence + mapper path so runJobSync can enqueue. */
-  private UUID stubEnqueue(UUID userId, DiscoveryJobStatus reReadStatus) {
+  /**
+   * Stub the startJob persistence + mapper path so runJobSync can enqueue. runJobSync now
+   * pre-generates the job id internally (register-before-publish race fix), so it is no longer
+   * observable via the returned DTO — stubs are id-agnostic ({@code any()}) and the internal id is
+   * recovered, when needed, from the {@code registerSyncWaiter} captor.
+   */
+  private void stubEnqueue(UUID userId, DiscoveryJobStatus reReadStatus) {
     DiscoverySource a = DiscoveryTestData.sampleSource("src_a");
     when(sourceRepository.findByEnabledTrue()).thenReturn(List.of(a));
     when(jobRepository.saveAndFlush(any(DiscoveryJob.class))).thenAnswer(inv -> inv.getArgument(0));
-    UUID jobId = UUID.randomUUID();
     when(jobMapper.toDto(any(DiscoveryJob.class)))
-        .thenReturn(jobDto(jobId, userId, DiscoveryJobStatus.QUEUED))
-        .thenReturn(jobDto(jobId, userId, reReadStatus));
+        .thenReturn(jobDto(UUID.randomUUID(), userId, DiscoveryJobStatus.QUEUED))
+        .thenReturn(jobDto(UUID.randomUUID(), userId, reReadStatus));
     DiscoveryJob reRead = DiscoveryTestData.sampleJob(userId);
-    reRead.setId(jobId);
     reRead.setStatus(reReadStatus);
-    when(jobRepository.findById(jobId)).thenReturn(Optional.of(reRead));
-    return jobId;
+    when(jobRepository.findById(any())).thenReturn(Optional.of(reRead));
   }
 
   @Test
@@ -114,9 +115,10 @@ class DiscoveryRunJobSyncTest {
   @Test
   void runJobSync_runnerCompletesBeforeDeadline_returnsTerminalDto_cleansUpWaiter() {
     UUID userId = UUID.randomUUID();
-    UUID jobId = stubEnqueue(userId, DiscoveryJobStatus.SUCCEEDED);
+    stubEnqueue(userId, DiscoveryJobStatus.SUCCEEDED);
 
     ArgumentCaptor<CompletableFuture<DiscoveryJobStatus>> waiterCaptor = captor();
+    ArgumentCaptor<UUID> idCaptor = ArgumentCaptor.forClass(UUID.class);
     // Complete the waiter the moment the runner registers it (simulates a fast terminal).
     org.mockito.Mockito.doAnswer(
             inv -> {
@@ -125,31 +127,32 @@ class DiscoveryRunJobSyncTest {
               return null;
             })
         .when(runner)
-        .registerSyncWaiter(eq(jobId), any());
+        .registerSyncWaiter(any(), any());
 
     DiscoveryJobDto result = service.runJobSync(userId, coldStartReq(), Duration.ofSeconds(5));
 
     assertThat(result.status()).isEqualTo(DiscoveryJobStatus.SUCCEEDED);
-    verify(runner).registerSyncWaiter(eq(jobId), waiterCaptor.capture());
-    verify(runner).unregisterSyncWaiter(jobId);
+    verify(runner).registerSyncWaiter(idCaptor.capture(), waiterCaptor.capture());
+    // The waiter is registered and cleaned up under the same internally-generated id.
+    verify(runner).unregisterSyncWaiter(idCaptor.getValue());
   }
 
   @Test
   void runJobSync_deadlineReachedWhileRunning_returnsLatestDto_doesNotThrow_cleansUpWaiter() {
     UUID userId = UUID.randomUUID();
-    UUID jobId = stubEnqueue(userId, DiscoveryJobStatus.RUNNING);
+    stubEnqueue(userId, DiscoveryJobStatus.RUNNING);
     // Runner never completes the waiter → the get(timeout) times out internally.
 
     DiscoveryJobDto result = service.runJobSync(userId, coldStartReq(), Duration.ofMillis(50));
 
     assertThat(result.status()).isEqualTo(DiscoveryJobStatus.RUNNING);
-    verify(runner).unregisterSyncWaiter(jobId);
+    verify(runner).unregisterSyncWaiter(any());
   }
 
   @Test
   void runJobSync_timeoutClampedToSyncCap() {
     UUID userId = UUID.randomUUID();
-    UUID jobId = stubEnqueue(userId, DiscoveryJobStatus.SUCCEEDED);
+    stubEnqueue(userId, DiscoveryJobStatus.SUCCEEDED);
     org.mockito.Mockito.doAnswer(
             inv -> {
               CompletableFuture<DiscoveryJobStatus> w = inv.getArgument(1);
@@ -157,7 +160,7 @@ class DiscoveryRunJobSyncTest {
               return null;
             })
         .when(runner)
-        .registerSyncWaiter(eq(jobId), any());
+        .registerSyncWaiter(any(), any());
 
     // Caller asks for 999s; the service must clamp to the 60s cap. We can't observe the literal
     // clamp without timing, but the call must still return promptly (waiter completed) and not
@@ -165,7 +168,7 @@ class DiscoveryRunJobSyncTest {
     DiscoveryJobDto result = service.runJobSync(userId, coldStartReq(), Duration.ofSeconds(999));
 
     assertThat(result.status()).isEqualTo(DiscoveryJobStatus.SUCCEEDED);
-    verify(runner).unregisterSyncWaiter(jobId);
+    verify(runner).unregisterSyncWaiter(any());
   }
 
   @Test
