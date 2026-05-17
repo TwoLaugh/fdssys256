@@ -513,8 +513,9 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
     try {
       // Step 1 — Acquire advisory lock. Via self-proxy so the @Transactional(REQUIRED) boundary
       // applies (processJob itself is non-transactional; a direct this.call would bypass it and
-      // the MANDATORY lock would throw).
-      self.acquireLockOrFailJob(job);
+      // the MANDATORY lock would throw). Hand-constructed unit tests (skeleton ctor, no Spring)
+      // leave `self` null + mock lockService, so MANDATORY isn't enforced — fall back to `this`.
+      ((self != null) ? self : this).acquireLockOrFailJob(job);
 
       // Step 2 — Load context via the 01e assembler (falls back to the 01c placeholder when the
       // assembler bean is absent, e.g. older skeleton-constructor unit wirings).
