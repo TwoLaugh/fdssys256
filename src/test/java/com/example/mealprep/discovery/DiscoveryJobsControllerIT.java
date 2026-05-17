@@ -360,8 +360,13 @@ class DiscoveryJobsControllerIT {
     // RUNNING). The runner sees the flag at its next iteration and finalises FAILED.
     AuthedUser user = registerUser();
     seedSource("src_a", true);
-    UUID jobId = seedAndPostJob(user);
-    jdbcTemplate.update("UPDATE discovery_jobs SET status = 'RUNNING' WHERE id = ?", jobId);
+    // Seed directly as RUNNING — seedAndPostJob would POST and spawn the live async
+    // DiscoveryJobRunner on a background thread that outlives this test, then write
+    // discovery_scrape_log rows / saveAndFlush the DiscoveryJob AFTER @AfterEach deletes them
+    // -> FK violation + StaleObjectStateException reddening main. This test only asserts the
+    // cancel HTTP contract (200 + still-RUNNING DTO); it does not exercise the runner, so a
+    // direct RUNNING seed covers it deterministically (same pattern as the other cancel tests).
+    UUID jobId = seedJobRow(user, DiscoveryJobStatus.RUNNING);
 
     mvc.perform(post("/api/v1/discovery/jobs/" + jobId + "/cancel").cookie(user.cookie()))
         .andExpect(status().isOk())
