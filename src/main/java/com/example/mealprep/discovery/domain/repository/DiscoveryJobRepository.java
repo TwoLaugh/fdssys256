@@ -40,7 +40,11 @@ public interface DiscoveryJobRepository extends JpaRepository<DiscoveryJob, UUID
    * controller's read and write (round-8 retro: StaleObjectStateException pattern). Bumps
    * optimisticVersion so subsequent JPA reads observe the new state cleanly.
    */
-  @Modifying
+  // clearAutomatically + flushAutomatically: the cancel flow loads the job via
+  // findByIdAndUserId (managed, QUEUED) before this bulk UPDATE. Without clearing, the controller's
+  // post-cancel re-read returns the stale first-level-cached QUEUED entity instead of the
+  // freshly-UPDATEd FAILED row (textbook @Modifying stale-persistence-context trap).
+  @Modifying(clearAutomatically = true, flushAutomatically = true)
   @Query(
       "UPDATE DiscoveryJob j SET j.status = :status, j.completedAt = :completedAt,"
           + " j.errorSummary = :errorSummary, j.optimisticVersion = j.optimisticVersion + 1"
