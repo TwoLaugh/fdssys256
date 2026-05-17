@@ -1,0 +1,26 @@
+The chosen weekly meal plan has been selected. Review it and propose up to 5 small augmentations
+plus up to 2 refine-directives that would improve the household's nutrition / variety / pantry use.
+
+Constraints summary:
+{{ constraints_summary }}
+
+Chosen plan (per-day rollup):
+{% for d in chosen_plan.perDay %}
+  {{ d.date }}: {{ d.calories }} kcal, protein {{ d.proteinG }}g
+{% endfor %}
+
+Known nutrition gaps:
+{% for g in nutrition_gaps %}
+  {{ g.date }}: {{ g.macro }} actual {{ g.actual }} vs target {{ g.target }} ({{ g.direction }})
+{% endfor %}
+
+Allowed augmentation types:
+- ADD_SNACK: insert a new snack slot or scheduled recipe (returns targetSlotId, newRecipeId, servings)
+- INGREDIENT_SWAP: swap one ingredient in a slot's recipe (targetSlotId, fromIngredientKey, toIngredientKey)
+- REPAIR: flag an issue with a resolution string (targetSlotId, issue, resolution) — no recipe change
+
+Allowed refine-directive types:
+- SUBSTITUTE_INGREDIENT: ask the optimiser to find an adapted recipe (slot, fromKey, toKey)
+- REDUCE_TIME: ask the optimiser for a faster variant (slot, currentTimeMin, targetTimeMin)
+
+Return your proposals via the tool call. Limit to {{ max_augmentations }} augmentations and {{ max_refine_directives }} directives.

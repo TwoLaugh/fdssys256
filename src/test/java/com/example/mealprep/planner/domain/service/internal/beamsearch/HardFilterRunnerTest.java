@@ -65,7 +65,9 @@ class HardFilterRunnerTest {
             null,
             null,
             Duration.ofSeconds(20),
-            3);
+            3,
+            5,
+            2);
     runner = new HardFilterRunner(filterService, properties);
     when(filterService.check(any(UUID.class), anyList()))
         .thenReturn(new FilterResult(true, List.of()));
@@ -198,7 +200,9 @@ class HardFilterRunnerTest {
             null,
             null,
             Duration.ofSeconds(20),
-            3);
+            3,
+            5,
+            2);
     runner = new HardFilterRunner(filterService, properties);
 
     MealSlotSkeleton slot = PlanTestData.skeletonFor(WEEK_START, 0, SlotKind.DINNER, 60);
