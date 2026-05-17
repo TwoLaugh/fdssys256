@@ -1,0 +1,32 @@
+# Recipe Adaptation — Mode: {{mode}}
+
+## Recipe
+{{recipe}}
+
+## Candidates
+{{candidates}}
+
+## Soft preferences
+{{softPreferences}}
+
+## Nutrition targets
+{{nutritionTargets}}
+
+## Curated nutritional knowledge
+{{knowledgeBundle}}
+
+## Trigger-specific context
+
+{{#if feedbackText}}Feedback: {{feedbackText}}{{/if}}
+{{#if ratingDelta}}Rating delta: {{ratingDelta}}{{/if}}
+{{#if directive}}Refine directive: {{directive}}{{/if}}
+{{#if dataModelChange}}Data-model change: {{dataModelChange}}{{/if}}
+
+## Hard constraints hash (for prompt-cache stability)
+{{hardConstraintsHash}}
+
+## Instructions
+
+Select the best candidate from the list above that satisfies the trigger goal while preserving the
+recipe's culinary character. Respond with a structured RecipeAdaptationResponse via the tool. When
+no candidate adequately satisfies the goal, set classification = NO_CHANGE and chosenCandidateIndex = -1.

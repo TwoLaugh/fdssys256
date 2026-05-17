@@ -139,7 +139,8 @@ class AdaptationServiceTriggerEntriesTest {
         events,
         mock(RecipeWriteApi.class),
         mock(PendingChangeMapper.class),
-        config());
+        config(),
+        null);
   }
 
   private static AdaptationConfig config() {

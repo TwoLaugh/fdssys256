@@ -1,7 +1,9 @@
 package com.example.mealprep.adaptation.domain.service;
 
 import com.example.mealprep.adaptation.ai.AdaptationContext;
+import com.example.mealprep.adaptation.ai.AdaptationContextAssembler;
 import com.example.mealprep.adaptation.ai.RecipeAdaptationResponse;
+import com.example.mealprep.adaptation.ai.TriggerInputs;
 import com.example.mealprep.adaptation.api.dto.AcceptPendingChangeRequest;
 import com.example.mealprep.adaptation.api.dto.AdaptationCandidateDto;
 import com.example.mealprep.adaptation.api.dto.AdaptationJobDto;
@@ -145,6 +147,10 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   private final PendingChangeMapper pendingChangeMapper;
   private final AdaptationConfig adaptationConfig;
 
+  // 01e — real context loader. Nullable in older ctors; processJob falls back to the 01c
+  // placeholder loader when absent (keeps the 01b/01c skeleton + smoke tests green).
+  private final AdaptationContextAssembler contextAssembler;
+
   /** Skeleton constructor — retained for backwards-compatibility with 01b unit tests. */
   public AdaptationServiceImpl(
       AdaptationJobRepository jobRepository,
@@ -160,6 +166,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         fingerprintRepository,
         plannerHintRepository,
         nutritionalKnowledgeRepository,
+        null,
         null,
         null,
         null,
@@ -202,7 +209,8 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
       ApplicationEventPublisher events,
       RecipeWriteApi recipeWriteApi,
       PendingChangeMapper pendingChangeMapper,
-      AdaptationConfig adaptationConfig) {
+      AdaptationConfig adaptationConfig,
+      AdaptationContextAssembler contextAssembler) {
     this.jobRepository = jobRepository;
     this.pendingChangeRepository = pendingChangeRepository;
     this.traceRepository = traceRepository;
@@ -223,6 +231,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
     this.recipeWriteApi = recipeWriteApi;
     this.pendingChangeMapper = pendingChangeMapper;
     this.adaptationConfig = adaptationConfig;
+    this.contextAssembler = contextAssembler;
   }
 
   // ---------------------------------------------------------------------------
@@ -495,8 +504,9 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
       // Step 1 — Acquire advisory lock.
       acquireLockOrFailJob(job);
 
-      // Step 2 — Load context (placeholder — 01e refines the loader).
-      AdaptationContext context = loadContextPlaceholder(job);
+      // Step 2 — Load context via the 01e assembler (falls back to the 01c placeholder when the
+      // assembler bean is absent, e.g. older skeleton-constructor unit wirings).
+      AdaptationContext context = loadContext(job);
 
       // Step 3 — Stage A candidate generation.
       List<AdaptationCandidateDto> candidates = candidateGenerator.generate(job, context);
@@ -690,9 +700,43 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   }
 
   /**
+   * 01e context load. Delegates to {@link AdaptationContextAssembler} (real peer-module reads) when
+   * the bean is wired; falls back to {@link #loadContextPlaceholder} for the older skeleton-ctor
+   * unit wirings that pass a null assembler. The trigger-specific payload is parsed from {@code
+   * job.getInputs()} per source.
+   */
+  AdaptationContext loadContext(AdaptationJob job) {
+    if (contextAssembler == null) {
+      return loadContextPlaceholder(job);
+    }
+    return contextAssembler.assemble(job, List.of(), triggerInputsFromJob(job));
+  }
+
+  /**
+   * Parse the source-specific {@link TriggerInputs} from the job's {@code inputs} JSONB. 01d
+   * persists an empty inputs object today, so every variant is constructed null/empty-tolerant; the
+   * assembler folds nulls into the context cleanly via the {@code TriggerInputs} accessor defaults.
+   */
+  TriggerInputs triggerInputsFromJob(AdaptationJob job) {
+    com.fasterxml.jackson.databind.JsonNode inputs = job.getInputs();
+    return switch (job.getSource()) {
+      case FEEDBACK -> {
+        String text =
+            inputs != null && inputs.hasNonNull("feedbackText")
+                ? inputs.get("feedbackText").asText()
+                : null;
+        yield new TriggerInputs.FeedbackTriggerInputs(text, null);
+      }
+      case PLAN_TIME -> new TriggerInputs.PlanTimeTriggerInputs(null, null);
+      case DATA_MODEL_CHANGE -> new TriggerInputs.DataModelTriggerInputs(null, inputs);
+      case IMPORT -> new TriggerInputs.ImportTriggerInputs(inputs);
+    };
+  }
+
+  /**
    * Placeholder loader. 01e ships the real {@code AdaptationContextAssembler} that calls the peer
    * QueryServices. 01c only needs enough context to drive Stage A — the strategies tolerate
-   * null/empty fields.
+   * null/empty fields. Retained as the fallback for the older skeleton-ctor unit wirings.
    */
   AdaptationContext loadContextPlaceholder(AdaptationJob job) {
     return new AdaptationContext(

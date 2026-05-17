@@ -203,6 +203,7 @@ class AdaptationServiceImplProcessJobSmokeTest {
               events,
               null,
               null,
+              null,
               null);
     }
   }
