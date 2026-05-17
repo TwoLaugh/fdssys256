@@ -174,14 +174,17 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
       runner.requestCancellation(jobId);
       return;
     }
-    // QUEUED branch: flip atomically and also set the cancellation flag for safety (no-op since
-    // the runner hasn't started yet — the map will be cleared by the runner's finally block if
-    // the listener somehow picks the job up between our save and the cancel signal).
+    // QUEUED branch: flip via native UPDATE (round-8 retro). The async DiscoveryJobRunner may
+    // pick this job up between our read above and the write; a load+setStatus+saveAndFlush races
+    // its persistence context and throws StaleObjectStateException (@Version on DiscoveryJob).
+    // The native UPDATE bumps optimisticVersion in one statement, side-stepping the dirty-check.
     runner.requestCancellation(jobId);
-    job.setStatus(DiscoveryJobStatus.FAILED);
-    job.setCompletedAt(Instant.now());
-    job.setErrorSummary("cancelled by user");
-    jobRepository.saveAndFlush(job);
+    int rows =
+        jobRepository.markCancelled(
+            jobId, DiscoveryJobStatus.FAILED, Instant.now(), "cancelled by user");
+    if (rows == 0) {
+      throw new DiscoveryJobNotFoundException(jobId);
+    }
   }
 
   @Override

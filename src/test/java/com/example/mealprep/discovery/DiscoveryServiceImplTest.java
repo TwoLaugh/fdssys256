@@ -174,13 +174,24 @@ class DiscoveryServiceImplTest {
     job.setId(jobId);
     job.setStatus(DiscoveryJobStatus.QUEUED);
     when(jobRepository.findByIdAndUserId(jobId, userId)).thenReturn(Optional.of(job));
-    when(jobRepository.saveAndFlush(any(DiscoveryJob.class))).thenAnswer(inv -> inv.getArgument(0));
+    // The QUEUED branch now flips via native UPDATE (round-8 retro: avoids @Version race with the
+    // async runner). Stub the rowcount = 1 and verify the call instead of asserting in-memory
+    // entity state (the service no longer mutates the loaded entity).
+    when(jobRepository.markCancelled(
+            org.mockito.ArgumentMatchers.eq(jobId),
+            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.FAILED),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq("cancelled by user")))
+        .thenReturn(1);
 
     service.cancelJob(userId, jobId);
 
-    assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.FAILED);
-    assertThat(job.getErrorSummary()).isEqualTo("cancelled by user");
-    assertThat(job.getCompletedAt()).isNotNull();
+    verify(jobRepository)
+        .markCancelled(
+            org.mockito.ArgumentMatchers.eq(jobId),
+            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.FAILED),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq("cancelled by user"));
     verify(runner).requestCancellation(jobId);
   }
 
