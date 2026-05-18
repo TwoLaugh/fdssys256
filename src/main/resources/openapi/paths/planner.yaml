@@ -135,6 +135,345 @@ plansRange:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 
+plansGenerate:
+  post:
+    tags: [Plans]
+    operationId: generatePlan
+    summary: 'Compose + persist a new plan (Stage A->D). 201 + Location; 200 + cached body on an Idempotency-Key replay.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: header
+        name: Idempotency-Key
+        required: false
+        schema: { type: string, maxLength: 200 }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/planner.yaml#/GeneratePlanRequest' }
+    responses:
+      '200':
+        description: 'Idempotency-Key replay — cached plan returned.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanDto' }
+      '201':
+        description: 'Plan generated.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanDto' }
+      '400':
+        description: 'Validation error.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Caller is not a member of the target household.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+planAccept:
+  post:
+    tags: [Plans]
+    operationId: acceptPlan
+    summary: 'Accept a GENERATED plan (-> ACTIVE).'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: planId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Accepted plan.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Forbidden.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Plan not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Invalid plan state transition.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+planReject:
+  post:
+    tags: [Plans]
+    operationId: rejectPlan
+    summary: 'Reject a GENERATED plan (-> REJECTED). Idempotent.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: planId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/planner.yaml#/RejectPlanRequest' }
+    responses:
+      '200':
+        description: 'Rejected plan.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Forbidden.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Plan not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Invalid plan state transition.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+planAbandon:
+  post:
+    tags: [Plans]
+    operationId: abandonPlan
+    summary: 'Abandon an ACTIVE plan (-> ABANDONED).'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: planId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/planner.yaml#/AbandonPlanRequest' }
+    responses:
+      '200':
+        description: 'Abandoned plan.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Forbidden.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Plan not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Invalid plan state transition.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+planRevert:
+  post:
+    tags: [Plans]
+    operationId: revertPlan
+    summary: 'Revert: supersede an ACTIVE plan and create a fresh GENERATED generation copy.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: planId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '201':
+        description: 'New generation created.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanDto' }
+      '400':
+        description: 'Plan not in a revertable state.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Forbidden.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Plan not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+planSlotState:
+  patch:
+    tags: [Plans]
+    operationId: changeSlotState
+    summary: "Transition a single slot's state."
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: planId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: slotId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/planner.yaml#/SlotStateChangeRequest' }
+    responses:
+      '200':
+        description: 'Plan with the updated slot.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanDto' }
+      '400':
+        description: 'Validation error.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Forbidden.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Plan or slot not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Invalid slot state transition.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+reoptSuggestionAccept:
+  post:
+    tags: [Plans]
+    operationId: acceptReoptSuggestion
+    summary: 'Accept a mid-week re-opt suggestion: applies it onto a new generation.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: planId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: suggestionId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'The accepted suggestion.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanReoptSuggestionDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Forbidden.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Plan or suggestion not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+reoptSuggestionReject:
+  post:
+    tags: [Plans]
+    operationId: rejectReoptSuggestion
+    summary: 'Reject a mid-week re-opt suggestion. No plan change.'
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: planId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: suggestionId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'The rejected suggestion.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanReoptSuggestionDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Forbidden.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Plan or suggestion not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
 plansSuggestions:
   get:
     tags: [Plans]

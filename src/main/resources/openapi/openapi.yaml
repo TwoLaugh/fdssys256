@@ -208,8 +208,24 @@ paths:
     $ref: 'paths/planner.yaml#/plansHistory'
   /api/v1/plans/suggestions:
     $ref: 'paths/planner.yaml#/plansSuggestions'
+  /api/v1/plans/generate:
+    $ref: 'paths/planner.yaml#/plansGenerate'
   /api/v1/plans/{planId}:
     $ref: 'paths/planner.yaml#/planById'
+  /api/v1/plans/{planId}/accept:
+    $ref: 'paths/planner.yaml#/planAccept'
+  /api/v1/plans/{planId}/reject:
+    $ref: 'paths/planner.yaml#/planReject'
+  /api/v1/plans/{planId}/abandon:
+    $ref: 'paths/planner.yaml#/planAbandon'
+  /api/v1/plans/{planId}/revert:
+    $ref: 'paths/planner.yaml#/planRevert'
+  /api/v1/plans/{planId}/slots/{slotId}/state:
+    $ref: 'paths/planner.yaml#/planSlotState'
+  /api/v1/plans/{planId}/reopt-suggestions/{suggestionId}/accept:
+    $ref: 'paths/planner.yaml#/reoptSuggestionAccept'
+  /api/v1/plans/{planId}/reopt-suggestions/{suggestionId}/reject:
+    $ref: 'paths/planner.yaml#/reoptSuggestionReject'
   # ===== feedback =====
   /api/v1/feedback:
     $ref: 'paths/feedback.yaml#/feedback'
@@ -508,6 +524,13 @@ components:
     PlanDtoPage: { $ref: 'schemas/planner.yaml#/PlanDtoPage' }
     ReoptSuggestionDto: { $ref: 'schemas/planner.yaml#/ReoptSuggestionDto' }
     ReoptSuggestionDtoPage: { $ref: 'schemas/planner.yaml#/ReoptSuggestionDtoPage' }
+    GeneratePlanRequest: { $ref: 'schemas/planner.yaml#/GeneratePlanRequest' }
+    RejectPlanRequest: { $ref: 'schemas/planner.yaml#/RejectPlanRequest' }
+    AbandonPlanRequest: { $ref: 'schemas/planner.yaml#/AbandonPlanRequest' }
+    SlotStateChangeRequest: { $ref: 'schemas/planner.yaml#/SlotStateChangeRequest' }
+    ProposedSlotChange: { $ref: 'schemas/planner.yaml#/ProposedSlotChange' }
+    ProposedReoptAssignmentsDocument: { $ref: 'schemas/planner.yaml#/ProposedReoptAssignmentsDocument' }
+    PlanReoptSuggestionDto: { $ref: 'schemas/planner.yaml#/PlanReoptSuggestionDto' }
     # feedback
     AnswerClarificationRequest: { $ref: 'schemas/feedback.yaml#/AnswerClarificationRequest' }
     ClarificationOptionDto: { $ref: 'schemas/feedback.yaml#/ClarificationOptionDto' }

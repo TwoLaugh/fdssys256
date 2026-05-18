@@ -374,7 +374,13 @@ class PlannerEventListenerIT {
   @TestConfiguration
   static class ReoptTestWiring {
 
+    // planner-01j merged the production ReoptContextBuilder (PlanCompositionContextBuilder); this
+    // IT keeps its deterministic in-line builder as @Primary so the listener/materiality
+    // assertions stay deterministic and MidWeekReoptCoordinator's single-ReoptContextBuilder
+    // injection is unambiguous (matches MidWeekReoptFlowIT; round-6 retro: test stand-in carries
+    // @Primary, not the prod impl).
     @Bean
+    @org.springframework.context.annotation.Primary
     ReoptContextBuilder reoptContextBuilder() {
       return (activePlan, nonPinnedSlots, pinnedAssignments, traceId) -> {
         List<MealSlotSkeleton> skeletons = new ArrayList<>();

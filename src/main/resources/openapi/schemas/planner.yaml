@@ -263,6 +263,69 @@ PlanDtoPage:
     empty: { type: boolean }
     numberOfElements: { type: integer }
 
+GeneratePlanRequest:
+  type: object
+  required: [householdId, weekStartDate]
+  properties:
+    householdId: { type: string, format: uuid }
+    weekStartDate: { type: string, format: date }
+    forceRegenerateIfActive: { type: boolean, default: false }
+
+RejectPlanRequest:
+  type: object
+  properties:
+    reason: { type: string, maxLength: 255, nullable: true }
+
+AbandonPlanRequest:
+  type: object
+  properties:
+    reason: { type: string, maxLength: 255, nullable: true }
+
+SlotStateChangeRequest:
+  type: object
+  required: [newState]
+  properties:
+    newState: { $ref: '#/SlotState' }
+
+ProposedSlotChange:
+  type: object
+  required: [slotId, newRecipeId, newServings]
+  properties:
+    slotId: { type: string, format: uuid }
+    oldRecipeId: { type: string, format: uuid, nullable: true }
+    newRecipeId: { type: string, format: uuid }
+    newRecipeVersionId: { type: string, format: uuid, nullable: true }
+    newRecipeBranchId: { type: string, format: uuid, nullable: true }
+    newServings: { type: integer }
+    reason: { type: string, nullable: true }
+
+ProposedReoptAssignmentsDocument:
+  type: object
+  required: [schemaVersion, changes]
+  properties:
+    schemaVersion: { type: integer }
+    changes:
+      type: array
+      items: { $ref: '#/ProposedSlotChange' }
+
+PlanReoptSuggestionDto:
+  type: object
+  required: [id, planId, triggerKind, traceId, summary, status, proposedAssignments, createdAt]
+  properties:
+    id: { type: string, format: uuid }
+    planId: { type: string, format: uuid }
+    triggerKind: { $ref: '#/ReoptTriggerKind' }
+    triggerEventId: { type: string, format: uuid, nullable: true }
+    traceId: { type: string, format: uuid }
+    decisionId: { type: string, format: uuid, nullable: true }
+    summary: { type: string, maxLength: 255 }
+    status:
+      type: string
+      enum: [PENDING, ACCEPTED, REJECTED, EXPIRED]
+    proposedAssignments: { $ref: '#/ProposedReoptAssignmentsDocument' }
+    createdAt: { type: string, format: date-time }
+    expiresAt: { type: string, format: date-time, nullable: true }
+
 ReoptSuggestionDtoPage:
   type: object
   additionalProperties: true

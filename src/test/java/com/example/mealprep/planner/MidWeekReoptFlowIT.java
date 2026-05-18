@@ -165,7 +165,12 @@ class MidWeekReoptFlowIT {
   @TestConfiguration
   static class ReoptTestWiring {
 
+    // planner-01j merged the production ReoptContextBuilder (PlanCompositionContextBuilder); this
+    // IT keeps its deterministic in-line builder as @Primary so the algorithm-focused assertions
+    // (material-diff, idempotency, no-degrees-of-freedom) stay hermetic and don't depend on the
+    // production bundle fan-out.
     @Bean
+    @org.springframework.context.annotation.Primary
     ReoptContextBuilder reoptContextBuilder() {
       return (activePlan, nonPinnedSlots, pinnedAssignments, traceId) -> {
         List<MealSlotSkeleton> skeletons = new ArrayList<>();
