@@ -93,6 +93,18 @@ class PlansControllerIT {
   @Autowired private PlatformTransactionManager transactionManager;
 
   @MockBean private HouseholdQueryService householdQueryService;
+
+  // HouseholdServiceImpl implements HouseholdQueryService, HouseholdUpdateService AND
+  // HouseholdMergeService; @MockBean on one evicts the single shared impl, so the other two
+  // interfaces lose their bean and HouseholdModule fails to wire (wave-3 retro: multi-interface
+  // @Service @MockBean eviction). Mock the siblings too so the full context loads.
+  @MockBean
+  private com.example.mealprep.household.domain.service.HouseholdUpdateService
+      householdUpdateService;
+
+  @MockBean
+  private com.example.mealprep.household.domain.service.HouseholdMergeService householdMergeService;
+
   @MockBean private PlanCompositionContextBuilder contextBuilder;
   @MockBean private BeamSearchEngine beamSearchEngine;
   @MockBean private RollupBuilder rollupBuilder;

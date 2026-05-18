@@ -28,7 +28,6 @@ import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 /**
@@ -52,16 +51,14 @@ import org.springframework.stereotype.Component;
  * <p>Also the production {@link ReoptContextBuilder} the {@code MidWeekReoptCoordinator}
  * (planner-01i) waits on: {@link #buildForReopt} narrows the context to the non-pinned slots.
  *
- * <p>{@code @Primary}: planner-01i/01k ITs ({@code MidWeekReoptFlowIT}, {@code
- * PlannerEventListenerIT}) were authored before this real impl existed and supply a test-scoped
- * stand-in {@code ReoptContextBuilder} bean. With this real {@code @Component} now also on the
- * classpath, the {@code MidWeekReoptCoordinator}'s single-{@code ReoptContextBuilder} injection is
- * ambiguous (NoUniqueBeanDefinitionException). This is the production impl — mark it
- * {@code @Primary} so it deterministically wins everywhere (round-6 retro: a real impl that
- * coexists with an SPI stand-in needs {@code @Primary}, not just a conditional).
+ * <p>This is the SOLE production {@code ReoptContextBuilder} (no {@code @Primary} needed: in the
+ * running app it is the only bean of the type). The planner-01i/01k ITs that predate it supply a
+ * test-scoped stand-in and mark THAT {@code @Primary} so their algorithm-deterministic assertions
+ * win in-test (round-6 retro: the test-side stand-in carries {@code @Primary}, not the prod impl —
+ * a prod {@code @Primary} would collide with the already-{@code @Primary} stand-in: "more than one
+ * primary bean").
  */
 @Component
-@Primary
 public class PlanCompositionContextBuilder implements ReoptContextBuilder {
 
   private static final Logger log = LoggerFactory.getLogger(PlanCompositionContextBuilder.class);
