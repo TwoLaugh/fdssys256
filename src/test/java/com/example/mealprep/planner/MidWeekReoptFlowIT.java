@@ -76,6 +76,8 @@ class MidWeekReoptFlowIT {
     jdbcTemplate.update("DELETE FROM planner_meal_slots");
     jdbcTemplate.update("DELETE FROM planner_days");
     jdbcTemplate.update("DELETE FROM planner_plans");
+    // planner-01l: the coordinator now writes real decision_log rows. Single DELETE (self-FK).
+    jdbcTemplate.update("DELETE FROM decision_log");
   }
 
   private Object coordinator() throws Exception {

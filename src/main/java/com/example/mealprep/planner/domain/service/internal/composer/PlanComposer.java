@@ -5,9 +5,6 @@ import com.example.mealprep.adaptation.api.dto.PlanTimeRefineDirectiveRequest;
 import com.example.mealprep.adaptation.domain.enums.AdaptationClassification;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
 import com.example.mealprep.adaptation.exception.AdaptationAiUnavailableException;
-import com.example.mealprep.core.audit.api.dto.DecisionLogScale;
-import com.example.mealprep.core.audit.api.dto.DecisionLogWriteRequest;
-import com.example.mealprep.core.audit.domain.service.DecisionLogService;
 import com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto;
 import com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto;
 import com.example.mealprep.nutrition.domain.entity.ActivityLevel;
@@ -23,6 +20,9 @@ import com.example.mealprep.planner.config.PlannerProperties;
 import com.example.mealprep.planner.domain.entity.Plan;
 import com.example.mealprep.planner.domain.service.internal.beamsearch.BeamSearchConfig;
 import com.example.mealprep.planner.domain.service.internal.beamsearch.BeamSearchEngine;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.DecisionLogEntry;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.DecisionLogWriter;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.PlannerDecisionKind;
 import com.example.mealprep.planner.domain.service.internal.rollup.RollupBuilder;
 import com.example.mealprep.planner.domain.service.internal.stagec.Phase2Augmenter;
 import com.example.mealprep.planner.domain.service.internal.stagec.StageCInvoker;
@@ -65,8 +65,11 @@ import org.springframework.transaction.annotation.Transactional;
  * dropped — gotcha). The composer does not self-invoke any other {@code @Transactional} method, so
  * no {@code @Lazy self} indirection is needed.
  *
- * <p><b>Decision-log</b> writes are null-tolerant via {@code ObjectProvider<DecisionLogService>}
- * (planner-01l owns the writer); each row chains {@code parentDecisionId} to the previous.
+ * <p><b>Decision-log</b> writes go through {@link DecisionLogWriter} (planner-01l). Each stage row
+ * chains its {@code parentDecisionId} to the previous stage's id, forming a single connected DAG
+ * rooted at the {@code PLAN_GENERATION_START} row. The writer is {@code REQUIRES_NEW} so the audit
+ * survives a composer rollback; a failed row write returns {@code null} and the chain degrades to
+ * "no parent recorded" rather than aborting generation.
  *
  * <p><b>Idempotency-Key</b> is an in-memory Caffeine cache keyed by {@code (userId,
  * idempotencyKey)} with a 5-minute TTL holding the produced plan id (NOT a DB table for v1, per
@@ -89,8 +92,7 @@ public class PlanComposer {
   private final RefineDirectiveMapper refineDirectiveMapper;
   private final AdaptationService adaptationService;
   private final ApplicationEventPublisher eventPublisher;
-  private final org.springframework.beans.factory.ObjectProvider<DecisionLogService>
-      decisionLogProvider;
+  private final DecisionLogWriter decisionLogWriter;
   private final PlannerProperties properties;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -109,7 +111,7 @@ public class PlanComposer {
       RefineDirectiveMapper refineDirectiveMapper,
       AdaptationService adaptationService,
       ApplicationEventPublisher eventPublisher,
-      org.springframework.beans.factory.ObjectProvider<DecisionLogService> decisionLogProvider,
+      DecisionLogWriter decisionLogWriter,
       PlannerProperties properties,
       ObjectMapper objectMapper,
       Clock clock) {
@@ -122,7 +124,7 @@ public class PlanComposer {
     this.refineDirectiveMapper = refineDirectiveMapper;
     this.adaptationService = adaptationService;
     this.eventPublisher = eventPublisher;
-    this.decisionLogProvider = decisionLogProvider;
+    this.decisionLogWriter = decisionLogWriter;
     this.properties = properties;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -155,18 +157,19 @@ public class PlanComposer {
     UUID planId = UUID.randomUUID();
     long startNanos = System.nanoTime();
 
+    // Decision-log row 1 — PLAN_GENERATION_START (trace root: parentDecisionId = null).
     UUID decisionId =
-        writeDecisionLog(
-            traceId,
-            null,
-            "plan_generation_start",
-            request.householdId(),
-            requestUserId,
-            inputs(request, traceId),
-            null,
-            "Composer entry",
-            1,
-            null);
+        decisionLogWriter.write(
+            new DecisionLogEntry(
+                PlannerDecisionKind.PLAN_GENERATION_START,
+                planId,
+                requestUserId,
+                null,
+                traceId,
+                inputs(request, traceId),
+                null,
+                "Composer entry",
+                "user"));
 
     // Stage A context.
     PlanCompositionContext context =
@@ -184,17 +187,17 @@ public class PlanComposer {
       qualityWarning = true;
     }
     UUID stageADecision =
-        writeDecisionLog(
-            traceId,
-            decisionId,
-            "stage_a_done",
-            request.householdId(),
-            requestUserId,
-            null,
-            null,
-            "Stage A produced " + candidates.size() + " candidate(s)",
-            1,
-            null);
+        decisionLogWriter.write(
+            new DecisionLogEntry(
+                PlannerDecisionKind.STAGE_A_DONE,
+                planId,
+                requestUserId,
+                decisionId,
+                traceId,
+                objectMapper.createObjectNode(),
+                stageAOutputs(candidates),
+                "Stage A produced " + candidates.size() + " candidate(s)",
+                "user"));
 
     if (candidates.isEmpty()) {
       // No recipe pool / no feasible candidate: persist a minimal quality-warning plan so the
@@ -204,7 +207,7 @@ public class PlanComposer {
       Plan plan =
           planPersister.persist(empty, request, context, planId, emptyRollup(), false, true);
       finishDecisionLog(
-          traceId, stageADecision, request, requestUserId, plan, startNanos, "no-candidates");
+          traceId, stageADecision, planId, requestUserId, plan, startNanos, "no-candidates");
       publishGenerated(plan, traceId);
       cacheIdempotent(requestUserId, idempotencyKey, plan.getId());
       return plan.getId();
@@ -215,6 +218,18 @@ public class PlanComposer {
         candidates.stream().map(c -> rollupBuilder.build(c, context)).toList();
     List<CandidatePlanRollupDto> rollupDtos =
         rollups.stream().map(PlanComposer::toRollupDto).toList();
+    UUID stageBDecision =
+        decisionLogWriter.write(
+            new DecisionLogEntry(
+                PlannerDecisionKind.STAGE_B_DONE,
+                planId,
+                requestUserId,
+                stageADecision,
+                traceId,
+                objectMapper.createObjectNode(),
+                objectMapper.createObjectNode().put("rollupCount", rollups.size()),
+                "Stage B rolled up " + rollups.size() + " candidate(s)",
+                "user"));
 
     // Stage C — LLM pick-of-N.
     StageCResult stageC = stageCInvoker.pickOne(candidates, rollupDtos, context, traceId);
@@ -225,37 +240,37 @@ public class PlanComposer {
     CandidatePlan chosen = candidates.get(chosenIndex);
     RollupSummaryDocument chosenRollup = rollups.get(chosenIndex);
     UUID stageCDecision =
-        writeDecisionLog(
-            traceId,
-            stageADecision,
-            "stage_c_done",
-            request.householdId(),
-            requestUserId,
-            null,
-            null,
-            stageC.reasoning(),
-            1,
-            null);
+        decisionLogWriter.write(
+            new DecisionLogEntry(
+                PlannerDecisionKind.STAGE_C_DONE,
+                planId,
+                requestUserId,
+                stageBDecision,
+                traceId,
+                stageCInputs(candidates.size()),
+                stageCOutputs(chosenIndex, stageC.reasoning(), qualityWarning),
+                stageC.reasoning(),
+                "user"));
 
     // Phase 2 — augment + emit refine-directive proposals.
     var phase2 = phase2Augmenter.augment(chosen, rollupDtos.get(chosenIndex), context, traceId);
     boolean aiAugmented = !stageC.fallback() && !phase2.applied().isEmpty();
     UUID phase2Decision =
-        writeDecisionLog(
-            traceId,
-            stageCDecision,
-            "phase_2_done",
-            request.householdId(),
-            requestUserId,
-            null,
-            null,
-            "Phase 2 applied "
-                + phase2.applied().size()
-                + " augmentation(s); "
-                + phase2.emittedDirectives().size()
-                + " refine-directive(s) emitted",
-            1,
-            null);
+        decisionLogWriter.write(
+            new DecisionLogEntry(
+                PlannerDecisionKind.PHASE_2_DONE,
+                planId,
+                requestUserId,
+                stageCDecision,
+                traceId,
+                objectMapper.createObjectNode(),
+                phase2Outputs(phase2.applied().size(), phase2.emittedDirectives().size()),
+                "Phase 2 applied "
+                    + phase2.applied().size()
+                    + " augmentation(s); "
+                    + phase2.emittedDirectives().size()
+                    + " refine-directive(s) emitted",
+                "user"));
 
     // Stage D — route emitted refine-directive proposals to the adaptation pipeline. The
     // current Phase-2 impl emits an empty directive list (it defers the cross-module assembly to
@@ -291,11 +306,31 @@ public class PlanComposer {
               requestUserId,
               planId,
               target.slotId(),
+              // Cross-module chain (ticket invariant #4): the adaptation pipeline writes its own
+              // decision rows with parent_decision_id = this. The shared decision_log table
+              // enforces the FK, so phase2Decision MUST be a real persisted row id (it is, unless
+              // the row write failed — then the mapper falls back to the trace id).
               phase2Decision,
               context);
       try {
         AdaptationResultDto result = adaptationService.runPlanTimeRefineJob(stageDRequest);
         applyAdaptationResult(mutatedAssignments, slotIdx, result);
+        // STAGE_D_OUTCOME — one row per routed directive, parented to PHASE_2 (planner stage) and
+        // recording the adaptation job id + classification (invariant #4 / #8).
+        decisionLogWriter.write(
+            new DecisionLogEntry(
+                PlannerDecisionKind.STAGE_D_OUTCOME,
+                planId,
+                requestUserId,
+                phase2Decision,
+                traceId,
+                objectMapper
+                    .createObjectNode()
+                    .put("slotId", String.valueOf(target.slotId()))
+                    .put("directiveKind", String.valueOf(directive.kind())),
+                stageDOutputs(result),
+                "Stage D routed directive -> " + result.classification(),
+                "user"));
       } catch (AdaptationAiUnavailableException ex) {
         // Block-and-prompt fallback: log WARN, skip this directive, keep original recipe.
         log.warn(
@@ -304,6 +339,24 @@ public class PlanComposer {
             traceId,
             ex.getMessage());
         qualityWarning = true;
+        decisionLogWriter.write(
+            new DecisionLogEntry(
+                PlannerDecisionKind.STAGE_D_OUTCOME,
+                planId,
+                requestUserId,
+                phase2Decision,
+                traceId,
+                objectMapper
+                    .createObjectNode()
+                    .put("slotId", String.valueOf(target.slotId()))
+                    .put("directiveKind", String.valueOf(directive.kind())),
+                objectMapper
+                    .createObjectNode()
+                    .put("adaptationJobId", (String) null)
+                    .put("classification", "AI_UNAVAILABLE")
+                    .put("versionIdCreated", (String) null),
+                "Stage D adaptation unavailable; original recipe retained",
+                "user"));
       }
     }
 
@@ -315,7 +368,7 @@ public class PlanComposer {
         planPersister.persist(
             mutated, request, context, planId, chosenRollup, aiAugmented, qualityWarning);
 
-    finishDecisionLog(traceId, phase2Decision, request, requestUserId, plan, startNanos, "ok");
+    finishDecisionLog(traceId, phase2Decision, planId, requestUserId, plan, startNanos, "ok");
     publishGenerated(plan, traceId);
     cacheIdempotent(requestUserId, idempotencyKey, plan.getId());
     return plan.getId();
@@ -450,7 +503,7 @@ public class PlanComposer {
     return userId + "|" + idempotencyKey;
   }
 
-  // ---- decision log (null-tolerant) ----------------------------------------------------------
+  // ---- decision-log payload builders (ticket invariant #8 shapes) ----------------------------
 
   private ObjectNode inputs(GeneratePlanRequest request, UUID traceId) {
     ObjectNode node = objectMapper.createObjectNode();
@@ -460,10 +513,72 @@ public class PlanComposer {
     return node;
   }
 
+  /** {@code STAGE_A_DONE.outputs}: {@code {topNRecipeIds, topNScores, poolSizes}}. */
+  private ObjectNode stageAOutputs(List<CandidatePlan> candidates) {
+    ObjectNode node = objectMapper.createObjectNode();
+    var recipeIds = node.putArray("topNRecipeIds");
+    var scores = node.putArray("topNScores");
+    ObjectNode poolSizes = node.putObject("poolSizes");
+    for (CandidatePlan c : candidates) {
+      recipeIds.add(c.candidateId() == null ? null : c.candidateId().toString());
+      if (c.scoreResult() != null && c.scoreResult().composite() != null) {
+        scores.add(c.scoreResult().composite());
+      } else {
+        scores.add((java.math.BigDecimal) null);
+      }
+      for (SlotAssignment a : c.assignments()) {
+        if (a.slotId() != null) {
+          poolSizes.put(a.slotId().toString(), 1);
+        }
+      }
+    }
+    return node;
+  }
+
+  /** {@code STAGE_C_DONE.inputs}: {@code {rollupCount, promptVersion}}. */
+  private ObjectNode stageCInputs(int rollupCount) {
+    ObjectNode node = objectMapper.createObjectNode();
+    node.put("rollupCount", rollupCount);
+    node.put("promptVersion", "planner-stage-c-v1");
+    return node;
+  }
+
+  /** {@code STAGE_C_DONE.outputs}: {@code {chosenIndex, reasoning, qualityWarnings}}. */
+  private ObjectNode stageCOutputs(int chosenIndex, String reasoning, boolean qualityWarning) {
+    ObjectNode node = objectMapper.createObjectNode();
+    node.put("chosenIndex", chosenIndex);
+    node.put("reasoning", reasoning);
+    var warnings = node.putArray("qualityWarnings");
+    if (qualityWarning) {
+      warnings.add("stage-a-degraded-to-greedy");
+    }
+    return node;
+  }
+
+  /** {@code PHASE_2_DONE.outputs}: {@code {augmentations, refineDirectiveCount}}. */
+  private ObjectNode phase2Outputs(int appliedCount, int refineDirectiveCount) {
+    ObjectNode node = objectMapper.createObjectNode();
+    node.putArray("augmentations"); // ids not exposed by the current Phase-2 result shape
+    node.put("augmentationCount", appliedCount);
+    node.put("refineDirectiveCount", refineDirectiveCount);
+    return node;
+  }
+
+  /**
+   * {@code STAGE_D_OUTCOME.outputs}: {@code {adaptationJobId, classification, versionIdCreated}}.
+   */
+  private ObjectNode stageDOutputs(AdaptationResultDto result) {
+    ObjectNode node = objectMapper.createObjectNode();
+    node.put("adaptationJobId", result.jobId() == null ? null : result.jobId().toString());
+    node.put("classification", String.valueOf(result.classification()));
+    node.put("versionIdCreated", result.versionIdCreated().map(UUID::toString).orElse(null));
+    return node;
+  }
+
   private void finishDecisionLog(
       UUID traceId,
       @Nullable UUID parent,
-      GeneratePlanRequest request,
+      UUID planId,
       UUID requestUserId,
       Plan plan,
       long startNanos,
@@ -473,57 +588,17 @@ public class PlanComposer {
     out.put("status", plan.getStatus().name());
     out.put("qualityWarning", plan.isQualityWarning());
     out.put("outcome", outcome);
-    int durationMs = (int) ((System.nanoTime() - startNanos) / 1_000_000L);
-    writeDecisionLog(
-        traceId,
-        parent,
-        "plan_generation_complete",
-        request.householdId(),
-        requestUserId,
-        null,
-        out,
-        "Composer exit",
-        1,
-        durationMs);
-  }
-
-  @Nullable
-  private UUID writeDecisionLog(
-      UUID traceId,
-      @Nullable UUID parentDecisionId,
-      String kind,
-      UUID scopeId,
-      UUID actorUserId,
-      @Nullable ObjectNode inputs,
-      @Nullable ObjectNode outputs,
-      String reasoning,
-      int iteration,
-      @Nullable Integer durationMs) {
-    DecisionLogService writer = decisionLogProvider.getIfAvailable();
-    if (writer == null) {
-      log.debug("DecisionLogService unavailable (planner-01l not merged); skipping {} row", kind);
-      return null;
-    }
-    try {
-      return writer.write(
-          new DecisionLogWriteRequest(
-              traceId,
-              parentDecisionId,
-              kind,
-              scopeId,
-              DecisionLogScale.WEEK,
-              "user",
-              actorUserId,
-              inputs,
-              null,
-              outputs,
-              reasoning,
-              null,
-              iteration,
-              durationMs));
-    } catch (RuntimeException ex) {
-      log.warn("Failed to write {} decision-log row: {}", kind, ex.toString());
-      return null;
-    }
+    out.put("durationMs", (int) ((System.nanoTime() - startNanos) / 1_000_000L));
+    decisionLogWriter.write(
+        new DecisionLogEntry(
+            PlannerDecisionKind.PLAN_GENERATION_COMPLETE,
+            planId,
+            requestUserId,
+            parent,
+            traceId,
+            objectMapper.createObjectNode(),
+            out,
+            "Composer exit",
+            "user"));
   }
 }

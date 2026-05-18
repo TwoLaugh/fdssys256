@@ -99,6 +99,10 @@ class PlanComposerIT {
     jdbcTemplate.update("DELETE FROM planner_meal_slots");
     jdbcTemplate.update("DELETE FROM planner_days");
     jdbcTemplate.update("DELETE FROM planner_plans");
+    // planner-01l: the composer now writes real decision_log rows (REQUIRES_NEW, so they survive
+    // the test's tx). Single DELETE — the table self-FKs on parent_decision_id; row-by-row delete
+    // would trip it.
+    jdbcTemplate.update("DELETE FROM decision_log");
   }
 
   private UUID slotId = UUID.randomUUID();

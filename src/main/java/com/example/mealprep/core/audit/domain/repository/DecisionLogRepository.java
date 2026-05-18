@@ -22,6 +22,12 @@ public interface DecisionLogRepository extends JpaRepository<DecisionLog, UUID> 
   List<DecisionLog> findByTraceIdOrderByCreatedAtAsc(UUID traceId);
 
   /**
+   * Fetch every row for a {@code (scope_kind, scope_id)} pair, earliest-first by {@code
+   * created_at}. Uses {@code idx_decision_log_scope_created}. Backs scope-scoped admin reads.
+   */
+  List<DecisionLog> findByScopeKindAndScopeIdOrderByCreatedAtAsc(String scopeKind, UUID scopeId);
+
+  /**
    * Walk {@code parent_decision_id} recursively starting from {@code decisionId}'s parent, up to
    * {@code maxDepth} levels. Returns ancestors only; the input row itself is not included. Order:
    * root-first (deepest ancestor at index 0).

@@ -1,8 +1,5 @@
 package com.example.mealprep.planner.domain.service.internal.reopt;
 
-import com.example.mealprep.core.audit.api.dto.DecisionLogScale;
-import com.example.mealprep.core.audit.api.dto.DecisionLogWriteRequest;
-import com.example.mealprep.core.audit.domain.service.DecisionLogService;
 import com.example.mealprep.planner.api.dto.BeamSearchOutcome;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
@@ -24,6 +21,9 @@ import com.example.mealprep.planner.domain.repository.MealPrepPlanReoptSuggestio
 import com.example.mealprep.planner.domain.repository.PlanRepository;
 import com.example.mealprep.planner.domain.service.internal.beamsearch.BeamSearchConfig;
 import com.example.mealprep.planner.domain.service.internal.beamsearch.BeamSearchEngine;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.DecisionLogEntry;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.DecisionLogWriter;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.PlannerDecisionKind;
 import com.example.mealprep.planner.domain.service.internal.rollup.RollupBuilder;
 import com.example.mealprep.planner.event.ReoptSuggestedEvent;
 import com.example.mealprep.planner.exception.PlanNotFoundException;
@@ -42,7 +42,6 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
@@ -62,9 +61,12 @@ import org.springframework.transaction.annotation.Transactional;
  * receives it (a no-active-tx publish would be dropped) — invariant #12.
  *
  * <p>Soft deps not yet merged are constructor-injected {@link Nullable} and degraded gracefully:
- * {@link ReoptContextBuilder} (planner-01j), {@link ReoptStageCInvoker} (planner-01g), {@link
- * DecisionLogService} (core.audit — present, but written null-tolerantly via {@link ObjectProvider}
- * so a future extraction can't brick the path) — invariants #8 / #11.
+ * {@link ReoptContextBuilder} (planner-01j), {@link ReoptStageCInvoker} (planner-01g). Decision-log
+ * rows go through {@link DecisionLogWriter} (planner-01l): a {@code MID_WEEK_REOPT_REQUEST} row at
+ * entry (parent = the listener's {@code LISTENER_TRIGGER} decision id, ticket invariant #4) and a
+ * {@code MID_WEEK_REOPT_RESULT} row at exit carrying the suggestion id or a {@code skippedReason}
+ * (ticket invariant #8). The writer is {@code REQUIRES_NEW}, so these rows survive a caller
+ * rollback.
  */
 @Component
 public class MidWeekReoptCoordinator {
@@ -95,7 +97,7 @@ public class MidWeekReoptCoordinator {
   private final ObjectMapper objectMapper;
   @Nullable private final ReoptContextBuilder contextBuilder;
   @Nullable private final ReoptStageCInvoker stageCInvoker;
-  private final ObjectProvider<DecisionLogService> decisionLogProvider;
+  private final DecisionLogWriter decisionLogWriter;
 
   MidWeekReoptCoordinator(
       PlanRepository planRepository,
@@ -107,7 +109,7 @@ public class MidWeekReoptCoordinator {
       ObjectMapper objectMapper,
       @Nullable ReoptContextBuilder contextBuilder,
       @Nullable ReoptStageCInvoker stageCInvoker,
-      ObjectProvider<DecisionLogService> decisionLogProvider) {
+      DecisionLogWriter decisionLogWriter) {
     this.planRepository = planRepository;
     this.suggestionRepository = suggestionRepository;
     this.beamSearchEngine = beamSearchEngine;
@@ -117,11 +119,13 @@ public class MidWeekReoptCoordinator {
     this.objectMapper = objectMapper;
     this.contextBuilder = contextBuilder;
     this.stageCInvoker = stageCInvoker;
-    this.decisionLogProvider = decisionLogProvider;
+    this.decisionLogWriter = decisionLogWriter;
   }
 
   /**
-   * Re-optimise the remaining slots of an active plan.
+   * Re-optimise the remaining slots of an active plan. 4-arg overload: no upstream {@code
+   * LISTENER_TRIGGER} decision id (direct / test invocation) — the {@code MID_WEEK_REOPT_REQUEST}
+   * row is then a trace root.
    *
    * @param planId the plan to re-opt
    * @param trigger the classified trigger kind
@@ -133,6 +137,24 @@ public class MidWeekReoptCoordinator {
   @Transactional(propagation = Propagation.REQUIRED)
   public Optional<UUID> requestReopt(
       UUID planId, ReoptTriggerKind trigger, UUID triggerEventId, UUID traceId) {
+    return requestReopt(planId, trigger, triggerEventId, traceId, null);
+  }
+
+  /**
+   * Re-optimise the remaining slots of an active plan, chaining the decision log to the listener's
+   * {@code LISTENER_TRIGGER} row (planner-01l, ticket invariant #4).
+   *
+   * @param parentDecisionId the listener's {@code LISTENER_TRIGGER} decision id; {@code null} for a
+   *     direct/test invocation (the request row is then a trace root). MUST be a real persisted
+   *     {@code decision_log} id — the shared table enforces the parent FK.
+   */
+  @Transactional(propagation = Propagation.REQUIRED)
+  public Optional<UUID> requestReopt(
+      UUID planId,
+      ReoptTriggerKind trigger,
+      UUID triggerEventId,
+      UUID traceId,
+      @Nullable UUID parentDecisionId) {
 
     Plan plan =
         planRepository.findById(planId).orElseThrow(() -> new PlanNotFoundException(planId));
@@ -141,6 +163,22 @@ public class MidWeekReoptCoordinator {
     if (NON_REOPTABLE.contains(plan.getStatus())) {
       throw new PlanNotReoptableException(planId, plan.getStatus());
     }
+
+    String triggeredBy = trigger == ReoptTriggerKind.USER ? "user" : "system";
+
+    // MID_WEEK_REOPT_REQUEST — entry row; parent = listener's LISTENER_TRIGGER decision id.
+    UUID requestDecisionId =
+        decisionLogWriter.write(
+            new DecisionLogEntry(
+                PlannerDecisionKind.MID_WEEK_REOPT_REQUEST,
+                planId,
+                null, // re-opt is event-driven; no single acting user
+                parentDecisionId,
+                traceId,
+                requestInputs(planId, trigger, triggerEventId),
+                null,
+                "Mid-week re-opt requested (" + trigger + ")",
+                triggeredBy));
 
     // (4) Idempotency on triggerEventId — listener-retry safe.
     Optional<MealPrepPlanReoptSuggestion> existing =
@@ -151,6 +189,14 @@ public class MidWeekReoptCoordinator {
           planId,
           triggerEventId,
           existing.get().getId());
+      writeResult(
+          plan,
+          triggeredBy,
+          requestDecisionId,
+          traceId,
+          existing.get().getId(),
+          null,
+          "Idempotent replay of existing suggestion");
       return Optional.of(existing.get().getId());
     }
 
@@ -162,13 +208,14 @@ public class MidWeekReoptCoordinator {
           planId,
           budgetUsed,
           properties.midWeek().maxSuggestionsPerPlan());
-      writeDecisionLog(
+      writeResult(
           plan,
-          trigger,
-          triggerEventId,
+          triggeredBy,
+          requestDecisionId,
           traceId,
-          inputs(planId, trigger, triggerEventId, 0, 0),
-          outputs(null, List.of(), "rejected-by-budget: " + budgetUsed + " active suggestions"));
+          null,
+          "budget_exhausted",
+          "rejected-by-budget: " + budgetUsed + " active suggestions");
       return Optional.empty();
     }
 
@@ -189,12 +236,20 @@ public class MidWeekReoptCoordinator {
       }
     }
 
-    // (6) No-degrees-of-freedom guard — no decision-log row, no event.
+    // (6) No-degrees-of-freedom guard.
     if (nonPinnedSlots.isEmpty()) {
       log.info(
           "Mid-week re-opt for plan={} has no degrees of freedom (all {} slots pinned); skipping",
           planId,
           allSlots.size());
+      writeResult(
+          plan,
+          triggeredBy,
+          requestDecisionId,
+          traceId,
+          null,
+          "no_degrees_of_freedom",
+          "All " + allSlots.size() + " slot(s) pinned");
       return Optional.empty();
     }
 
@@ -204,6 +259,14 @@ public class MidWeekReoptCoordinator {
           "ReoptContextBuilder unavailable (planner-01j not merged); skipping re-opt for plan={}."
               + " The algorithm is exercised end-to-end by MidWeekReoptFlowIT's inline builder.",
           planId);
+      writeResult(
+          plan,
+          triggeredBy,
+          requestDecisionId,
+          traceId,
+          null,
+          "no_material_change",
+          "ReoptContextBuilder unavailable");
       return Optional.empty();
     }
     List<SlotAssignment> pinnedAssignments = toPinnedAssignments(pinnedSlots);
@@ -218,6 +281,14 @@ public class MidWeekReoptCoordinator {
     List<CandidatePlan> candidates = outcome.candidates();
     if (candidates.isEmpty()) {
       log.info("Stage-A produced no candidates for re-opt of plan={}; skipping", planId);
+      writeResult(
+          plan,
+          triggeredBy,
+          requestDecisionId,
+          traceId,
+          null,
+          "no_material_change",
+          "Stage-A produced no candidates");
       return Optional.empty();
     }
     List<RollupSummaryDocument> rollups =
@@ -258,6 +329,14 @@ public class MidWeekReoptCoordinator {
           "Mid-week re-opt for plan={} produced no material change (Stage-C plan == original);"
               + " no suggestion written",
           planId);
+      writeResult(
+          plan,
+          triggeredBy,
+          requestDecisionId,
+          traceId,
+          null,
+          "no_material_change",
+          "Stage-C plan identical to original");
       return Optional.empty();
     }
 
@@ -282,17 +361,23 @@ public class MidWeekReoptCoordinator {
             .swept(false)
             .build();
 
-    // (11) Decision-log row (null-tolerant until 01l). parent = triggerEventId (15).
+    // (11) MID_WEEK_REOPT_RESULT — exit row chained to the REQUEST row (planner-01l).
     List<UUID> affectedSlotIds = changes.stream().map(ProposedSlotChange::slotId).toList();
-    UUID decisionId =
-        writeDecisionLog(
-            plan,
-            trigger,
-            triggerEventId,
-            traceId,
-            inputs(planId, trigger, triggerEventId, pinnedSlots.size(), nonPinnedSlots.size()),
-            outputs(suggestion.getId(), affectedSlotIds, summary));
-    suggestion.setDecisionId(decisionId);
+    UUID resultDecisionId =
+        decisionLogWriter.write(
+            new DecisionLogEntry(
+                PlannerDecisionKind.MID_WEEK_REOPT_RESULT,
+                planId,
+                null,
+                requestDecisionId,
+                traceId,
+                resultDetailInputs(
+                    pinnedSlots.size(), nonPinnedSlots.size(), affectedSlotIds, summary),
+                resultOutputs(suggestion.getId(), null),
+                summary,
+                triggeredBy));
+    // The suggestion's decisionId anchors to the request row (its stable trace head).
+    suggestion.setDecisionId(requestDecisionId != null ? requestDecisionId : resultDecisionId);
 
     suggestionRepository.save(suggestion);
 
@@ -385,25 +470,21 @@ public class MidWeekReoptCoordinator {
     }
   }
 
-  private ObjectNode inputs(
-      UUID planId,
-      ReoptTriggerKind trigger,
-      UUID triggerEventId,
-      int pinnedSlotCount,
-      int unpinnedSlotCount) {
+  /** {@code MID_WEEK_REOPT_REQUEST.inputs}: trigger correlation + the trigger-event id. */
+  private ObjectNode requestInputs(UUID planId, ReoptTriggerKind trigger, UUID triggerEventId) {
     ObjectNode node = objectMapper.createObjectNode();
     node.put("planId", planId.toString());
     node.put("trigger", trigger.name());
     node.put("triggerEventId", triggerEventId.toString());
-    node.put("pinnedSlotCount", pinnedSlotCount);
-    node.put("unpinnedSlotCount", unpinnedSlotCount);
     return node;
   }
 
-  private ObjectNode outputs(
-      @Nullable UUID suggestionId, List<UUID> affectedSlotIds, String summary) {
+  /** Detail inputs for the RESULT row: pin split + affected slots + summary. */
+  private ObjectNode resultDetailInputs(
+      int pinnedSlotCount, int unpinnedSlotCount, List<UUID> affectedSlotIds, String summary) {
     ObjectNode node = objectMapper.createObjectNode();
-    node.put("suggestionId", suggestionId == null ? null : suggestionId.toString());
+    node.put("pinnedSlotCount", pinnedSlotCount);
+    node.put("unpinnedSlotCount", unpinnedSlotCount);
     node.set(
         "affectedSlotIds",
         objectMapper.valueToTree(affectedSlotIds.stream().map(UUID::toString).toList()));
@@ -411,49 +492,37 @@ public class MidWeekReoptCoordinator {
     return node;
   }
 
+  /** {@code MID_WEEK_REOPT_RESULT.outputs}: {@code {suggestionId | null, skippedReason | null}}. */
+  private ObjectNode resultOutputs(@Nullable UUID suggestionId, @Nullable String skippedReason) {
+    ObjectNode node = objectMapper.createObjectNode();
+    node.put("suggestionId", suggestionId == null ? null : suggestionId.toString());
+    node.put("skippedReason", skippedReason);
+    return node;
+  }
+
   /**
-   * Writes a {@code kind=mid_week_reopt} decision-log row null-tolerantly (invariant #11). Returns
-   * the assigned decision id, or {@code null} if the writer is unavailable (01l not merged).
+   * Write a {@code MID_WEEK_REOPT_RESULT} row chained to the entry {@code MID_WEEK_REOPT_REQUEST}
+   * row. {@code skippedReason} is one of {@code no_degrees_of_freedom | no_material_change |
+   * budget_exhausted}, or {@code null} on the success path (ticket invariant #8).
    */
-  @Nullable
-  private UUID writeDecisionLog(
+  private void writeResult(
       Plan plan,
-      ReoptTriggerKind trigger,
-      UUID triggerEventId,
+      String triggeredBy,
+      @Nullable UUID requestDecisionId,
       UUID traceId,
-      ObjectNode inputs,
-      ObjectNode outputs) {
-    DecisionLogService writer = decisionLogProvider.getIfAvailable();
-    if (writer == null) {
-      log.warn(
-          "DecisionLogService unavailable (planner-01l not merged); skipping mid_week_reopt"
-              + " decision-log row for plan={}",
-          plan.getId());
-      return null;
-    }
-    try {
-      return writer.write(
-          new DecisionLogWriteRequest(
-              traceId,
-              triggerEventId, // (15) parent_decision_id — chain from the listener's decision id
-              "mid_week_reopt",
-              plan.getId(),
-              DecisionLogScale.WEEK,
-              trigger == ReoptTriggerKind.USER ? "user" : "system",
-              null,
-              inputs,
-              null,
-              outputs,
-              "Mid-week re-opt scoped to non-pinned slots",
-              null,
-              1,
-              null));
-    } catch (RuntimeException ex) {
-      log.warn(
-          "Failed to write mid_week_reopt decision-log row for plan={}: {}",
-          plan.getId(),
-          ex.toString());
-      return null;
-    }
+      @Nullable UUID suggestionId,
+      @Nullable String skippedReason,
+      String reasoning) {
+    decisionLogWriter.write(
+        new DecisionLogEntry(
+            PlannerDecisionKind.MID_WEEK_REOPT_RESULT,
+            plan.getId(),
+            null,
+            requestDecisionId,
+            traceId,
+            objectMapper.createObjectNode(),
+            resultOutputs(suggestionId, skippedReason),
+            reasoning,
+            triggeredBy));
   }
 }

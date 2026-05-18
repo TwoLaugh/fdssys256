@@ -6,13 +6,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import com.example.mealprep.core.audit.api.dto.DecisionLogWriteRequest;
-import com.example.mealprep.core.audit.domain.service.DecisionLogService;
 import com.example.mealprep.planner.api.dto.BeamSearchOutcome;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
@@ -29,6 +26,9 @@ import com.example.mealprep.planner.domain.entity.SlotState;
 import com.example.mealprep.planner.domain.repository.MealPrepPlanReoptSuggestionRepository;
 import com.example.mealprep.planner.domain.repository.PlanRepository;
 import com.example.mealprep.planner.domain.service.internal.beamsearch.BeamSearchEngine;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.DecisionLogEntry;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.DecisionLogWriter;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.PlannerDecisionKind;
 import com.example.mealprep.planner.domain.service.internal.reopt.ReoptContextBuilder;
 import com.example.mealprep.planner.domain.service.internal.reopt.ReoptStageCInvoker;
 import com.example.mealprep.planner.domain.service.internal.rollup.RollupBuilder;
@@ -50,15 +50,17 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 
 /**
- * Pure unit test for the package-private {@code MidWeekReoptCoordinator} (planner-01i). Stubs the
- * Stage A&rarr;C helpers and verifies each acceptance invariant: idempotency,
- * no-degrees-of-freedom, diff-materiality, budget, the active-plan precondition, and the happy-path
- * suggestion write + AFTER_COMMIT event. The coordinator is reflectively constructed
- * (package-private to {@code domain.service.internal.reopt}).
+ * Pure unit test for the package-private {@code MidWeekReoptCoordinator} (planner-01i + 01l). Stubs
+ * the Stage A&rarr;C helpers and the {@link DecisionLogWriter}, and verifies each acceptance
+ * invariant: idempotency, no-degrees-of-freedom, diff-materiality, budget, the active-plan
+ * precondition, the happy-path suggestion write + AFTER_COMMIT event, and the planner-01l
+ * decision-log contract (a {@code MID_WEEK_REOPT_REQUEST} entry row chained to the listener's
+ * decision id + a {@code MID_WEEK_REOPT_RESULT} exit row carrying the suggestion id or a {@code
+ * skippedReason}). The coordinator is reflectively constructed (package-private to {@code
+ * domain.service.internal.reopt}).
  *
  * <p>Slot dates are anchored 50 years in the future so the {@code PinningSetCalculator}'s
  * wall-clock 24h lock window never spuriously pins a "regenerable" PLANNED slot (no time-bomb).
@@ -76,31 +78,33 @@ class MidWeekReoptCoordinatorTest {
   @Mock private ApplicationEventPublisher eventPublisher;
   @Mock private ReoptContextBuilder contextBuilder;
   @Mock private ReoptStageCInvoker stageCInvoker;
-  @Mock private DecisionLogService decisionLogService;
-  @Mock private ObjectProvider<DecisionLogService> decisionLogProvider;
+  @Mock private DecisionLogWriter decisionLogWriter;
 
   private Object coordinator;
 
-  @BeforeEach
-  void setUp() throws Exception {
+  private Object newCoordinator(Object ctxBuilder, Object stageC) throws Exception {
     Class<?> cls =
         Class.forName(
             "com.example.mealprep.planner.domain.service.internal.reopt"
                 + ".MidWeekReoptCoordinator");
     Constructor<?> ctor = cls.getDeclaredConstructors()[0];
     ctor.setAccessible(true);
-    coordinator =
-        ctor.newInstance(
-            planRepository,
-            suggestionRepository,
-            beamSearchEngine,
-            rollupBuilder,
-            eventPublisher,
-            PlanTestData.scoringProperties(),
-            new ObjectMapper(),
-            contextBuilder,
-            stageCInvoker,
-            decisionLogProvider);
+    return ctor.newInstance(
+        planRepository,
+        suggestionRepository,
+        beamSearchEngine,
+        rollupBuilder,
+        eventPublisher,
+        PlanTestData.scoringProperties(),
+        new ObjectMapper(),
+        ctxBuilder,
+        stageC,
+        decisionLogWriter);
+  }
+
+  @BeforeEach
+  void setUp() throws Exception {
+    coordinator = newCoordinator(contextBuilder, stageCInvoker);
   }
 
   @SuppressWarnings("unchecked")
@@ -180,13 +184,16 @@ class MidWeekReoptCoordinatorTest {
     when(rollupBuilder.build(any(), any())).thenReturn(PlanTestData.emptyRollup());
     when(stageCInvoker.pickOne(anyList(), anyList(), any(), any()))
         .thenReturn(new ReoptStageCInvoker.Result(0, "picked top"));
-    // Lenient: the no-material-change path returns before any decision-log write.
-    org.mockito.Mockito.lenient()
-        .when(decisionLogProvider.getIfAvailable())
-        .thenReturn(decisionLogService);
-    org.mockito.Mockito.lenient()
-        .when(decisionLogService.write(any(DecisionLogWriteRequest.class)))
-        .thenReturn(UUID.randomUUID());
+  }
+
+  private void stubWriter() {
+    when(decisionLogWriter.write(any(DecisionLogEntry.class))).thenReturn(UUID.randomUUID());
+  }
+
+  private List<DecisionLogEntry> capturedEntries() {
+    ArgumentCaptor<DecisionLogEntry> cap = ArgumentCaptor.forClass(DecisionLogEntry.class);
+    verify(decisionLogWriter, org.mockito.Mockito.atLeastOnce()).write(cap.capture());
+    return cap.getAllValues();
   }
 
   @Test
@@ -210,6 +217,8 @@ class MidWeekReoptCoordinatorTest {
                     plan.getId(), ReoptTriggerKind.USER, UUID.randomUUID(), UUID.randomUUID()))
         .isInstanceOf(PlanNotReoptableException.class);
     verifyNoInteractions(beamSearchEngine);
+    // Terminal-plan precondition fails before the REQUEST row is written.
+    verifyNoInteractions(decisionLogWriter);
   }
 
   @Test
@@ -222,6 +231,7 @@ class MidWeekReoptCoordinatorTest {
         .thenReturn(Optional.empty());
     when(suggestionRepository.countByPlanIdAndStatusIn(eq(plan.getId()), any())).thenReturn(0L);
     stubPipeline(candidateSwappingAll(plan));
+    stubWriter();
 
     Optional<UUID> result =
         requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
@@ -239,19 +249,26 @@ class MidWeekReoptCoordinatorTest {
     when(planRepository.findById(plan.getId())).thenReturn(Optional.of(plan));
     when(suggestionRepository.findByPlanIdAndTriggerEventId(plan.getId(), triggerEventId))
         .thenReturn(Optional.of(existing));
+    stubWriter();
 
     Optional<UUID> result =
         requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
 
     assertThat(result).hasValue(existingId);
-    // No re-run, no new write, no event.
+    // No re-run, no new suggestion, no event.
     verifyNoInteractions(beamSearchEngine);
     verify(suggestionRepository, never()).save(any());
     verify(eventPublisher, never()).publishEvent(any());
+    // REQUEST + RESULT(idempotent) rows still recorded.
+    List<DecisionLogEntry> kinds = capturedEntries();
+    assertThat(kinds)
+        .extracting(DecisionLogEntry::kind)
+        .containsExactly(
+            PlannerDecisionKind.MID_WEEK_REOPT_REQUEST, PlannerDecisionKind.MID_WEEK_REOPT_RESULT);
   }
 
   @Test
-  void requestReopt_allSlotsPinned_returnsEmpty_noDecisionLog_noEvent() throws Throwable {
+  void requestReopt_allSlotsPinned_returnsEmpty_writesSkippedResult_noEvent() throws Throwable {
     Plan plan = generatedPlan();
     slotsOf(plan).forEach(s -> s.setState(SlotState.EATEN));
     UUID triggerEventId = UUID.randomUUID();
@@ -259,6 +276,7 @@ class MidWeekReoptCoordinatorTest {
     when(suggestionRepository.findByPlanIdAndTriggerEventId(plan.getId(), triggerEventId))
         .thenReturn(Optional.empty());
     when(suggestionRepository.countByPlanIdAndStatusIn(eq(plan.getId()), any())).thenReturn(0L);
+    stubWriter();
 
     Optional<UUID> result =
         requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
@@ -267,7 +285,10 @@ class MidWeekReoptCoordinatorTest {
     verifyNoInteractions(beamSearchEngine);
     verify(suggestionRepository, never()).save(any());
     verify(eventPublisher, never()).publishEvent(any());
-    verify(decisionLogService, never()).write(any());
+    DecisionLogEntry resultRow = lastResultRow();
+    assertThat(resultRow.outputs().get("skippedReason").asText())
+        .isEqualTo("no_degrees_of_freedom");
+    assertThat(resultRow.outputs().get("suggestionId").isNull()).isTrue();
   }
 
   @Test
@@ -279,6 +300,7 @@ class MidWeekReoptCoordinatorTest {
         .thenReturn(Optional.empty());
     when(suggestionRepository.countByPlanIdAndStatusIn(eq(plan.getId()), any())).thenReturn(0L);
     stubPipeline(candidateKeepingAll(plan));
+    stubWriter();
 
     Optional<UUID> result =
         requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
@@ -286,10 +308,12 @@ class MidWeekReoptCoordinatorTest {
     assertThat(result).isEmpty();
     verify(suggestionRepository, never()).save(any());
     verify(eventPublisher, never()).publishEvent(any());
+    assertThat(lastResultRow().outputs().get("skippedReason").asText())
+        .isEqualTo("no_material_change");
   }
 
   @Test
-  void requestReopt_budgetExhausted_returnsEmpty_writesBudgetDecisionLogNote() throws Throwable {
+  void requestReopt_budgetExhausted_returnsEmpty_writesBudgetSkippedResult() throws Throwable {
     Plan plan = generatedPlan();
     UUID triggerEventId = UUID.randomUUID();
     when(planRepository.findById(plan.getId())).thenReturn(Optional.of(plan));
@@ -297,8 +321,7 @@ class MidWeekReoptCoordinatorTest {
         .thenReturn(Optional.empty());
     // Default maxSuggestionsPerPlan = 3 -> 3 active suggestions exhausts the budget.
     when(suggestionRepository.countByPlanIdAndStatusIn(eq(plan.getId()), any())).thenReturn(3L);
-    when(decisionLogProvider.getIfAvailable()).thenReturn(decisionLogService);
-    when(decisionLogService.write(any())).thenReturn(UUID.randomUUID());
+    stubWriter();
 
     Optional<UUID> result =
         requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
@@ -307,10 +330,8 @@ class MidWeekReoptCoordinatorTest {
     verifyNoInteractions(beamSearchEngine);
     verify(suggestionRepository, never()).save(any());
     verify(eventPublisher, never()).publishEvent(any());
-    ArgumentCaptor<DecisionLogWriteRequest> cap =
-        ArgumentCaptor.forClass(DecisionLogWriteRequest.class);
-    verify(decisionLogService).write(cap.capture());
-    assertThat(cap.getValue().chosen().get("summary").asText()).contains("rejected-by-budget");
+    assertThat(lastResultRow().outputs().get("skippedReason").asText())
+        .isEqualTo("budget_exhausted");
   }
 
   @Test
@@ -321,8 +342,7 @@ class MidWeekReoptCoordinatorTest {
     when(suggestionRepository.findByPlanIdAndTriggerEventId(plan.getId(), triggerEventId))
         .thenReturn(Optional.empty());
     when(suggestionRepository.countByPlanIdAndStatusIn(eq(plan.getId()), any())).thenReturn(3L);
-    when(decisionLogProvider.getIfAvailable()).thenReturn(decisionLogService);
-    when(decisionLogService.write(any())).thenReturn(UUID.randomUUID());
+    stubWriter();
 
     requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
 
@@ -339,11 +359,16 @@ class MidWeekReoptCoordinatorTest {
     Plan plan = generatedPlan();
     UUID triggerEventId = UUID.randomUUID();
     UUID traceId = UUID.randomUUID();
+    UUID requestDecisionId = UUID.randomUUID();
     when(planRepository.findById(plan.getId())).thenReturn(Optional.of(plan));
     when(suggestionRepository.findByPlanIdAndTriggerEventId(plan.getId(), triggerEventId))
         .thenReturn(Optional.empty());
     when(suggestionRepository.countByPlanIdAndStatusIn(eq(plan.getId()), any())).thenReturn(0L);
     stubPipeline(candidateSwappingAll(plan));
+    // First write (REQUEST) returns a stable id we then assert the suggestion + RESULT chain on.
+    when(decisionLogWriter.write(any(DecisionLogEntry.class)))
+        .thenReturn(requestDecisionId)
+        .thenReturn(UUID.randomUUID());
 
     Optional<UUID> result =
         requestReopt(plan.getId(), ReoptTriggerKind.PROVISIONS, triggerEventId, traceId);
@@ -365,6 +390,8 @@ class MidWeekReoptCoordinatorTest {
         .isEqualTo(saved.getCreatedAt().plus(java.time.Duration.ofHours(24)));
     assertThat(saved.getProposedAssignments().changes()).hasSize(3);
     assertThat(saved.getProposedAssignments().schemaVersion()).isEqualTo(1);
+    // Suggestion's decisionId anchors to the REQUEST row.
+    assertThat(saved.getDecisionId()).isEqualTo(requestDecisionId);
 
     ArgumentCaptor<ReoptSuggestedEvent> eCap = ArgumentCaptor.forClass(ReoptSuggestedEvent.class);
     verify(eventPublisher).publishEvent(eCap.capture());
@@ -375,14 +402,18 @@ class MidWeekReoptCoordinatorTest {
     assertThat(ev.traceId()).isEqualTo(traceId);
     assertThat(ev.affectedSlotIds()).hasSize(3);
 
-    // Decision-log row written with the triggerEventId as parent (trace propagation #15).
-    ArgumentCaptor<DecisionLogWriteRequest> dCap =
-        ArgumentCaptor.forClass(DecisionLogWriteRequest.class);
-    verify(decisionLogService).write(dCap.capture());
-    assertThat(dCap.getValue().parentDecisionId()).isEqualTo(triggerEventId);
-    assertThat(dCap.getValue().scopeKind()).isEqualTo("mid_week_reopt");
-    assertThat(dCap.getValue().inputs().get("pinnedSlotCount").asInt()).isZero();
-    assertThat(dCap.getValue().inputs().get("unpinnedSlotCount").asInt()).isEqualTo(3);
+    // planner-01l: REQUEST entry row + RESULT exit row chained to it; RESULT carries suggestionId.
+    List<DecisionLogEntry> entries = capturedEntries();
+    DecisionLogEntry request = entries.get(0);
+    DecisionLogEntry resultRow = entries.get(entries.size() - 1);
+    assertThat(request.kind()).isEqualTo(PlannerDecisionKind.MID_WEEK_REOPT_REQUEST);
+    assertThat(request.planId()).isEqualTo(plan.getId());
+    assertThat(request.traceId()).isEqualTo(traceId);
+    assertThat(resultRow.kind()).isEqualTo(PlannerDecisionKind.MID_WEEK_REOPT_RESULT);
+    assertThat(resultRow.parentDecisionId()).isEqualTo(requestDecisionId);
+    assertThat(resultRow.outputs().get("suggestionId").asText())
+        .isEqualTo(saved.getId().toString());
+    assertThat(resultRow.outputs().get("skippedReason").isNull()).isTrue();
   }
 
   @Test
@@ -397,6 +428,7 @@ class MidWeekReoptCoordinatorTest {
         .thenReturn(Optional.empty());
     when(suggestionRepository.countByPlanIdAndStatusIn(eq(plan.getId()), any())).thenReturn(0L);
     stubPipeline(candidateSwappingAll(plan));
+    stubWriter();
 
     Optional<UUID> result =
         requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
@@ -409,30 +441,11 @@ class MidWeekReoptCoordinatorTest {
     assertThat(sCap.getValue().getProposedAssignments().changes()).hasSize(2);
     assertThat(sCap.getValue().getProposedAssignments().changes())
         .noneMatch(c -> c.slotId().equals(slots.get(0).getId()));
-    verify(decisionLogService, times(1)).write(any());
   }
 
   @Test
   void requestReopt_stageCInvokerNull_fallsBackToTopScored() throws Throwable {
-    // Re-construct with null stageCInvoker (01g not merged) — degrade to index 0.
-    Class<?> cls =
-        Class.forName(
-            "com.example.mealprep.planner.domain.service.internal.reopt"
-                + ".MidWeekReoptCoordinator");
-    Constructor<?> ctor = cls.getDeclaredConstructors()[0];
-    ctor.setAccessible(true);
-    coordinator =
-        ctor.newInstance(
-            planRepository,
-            suggestionRepository,
-            beamSearchEngine,
-            rollupBuilder,
-            eventPublisher,
-            PlanTestData.scoringProperties(),
-            new ObjectMapper(),
-            contextBuilder,
-            null,
-            decisionLogProvider);
+    coordinator = newCoordinator(contextBuilder, null);
 
     Plan plan = generatedPlan();
     UUID triggerEventId = UUID.randomUUID();
@@ -446,8 +459,7 @@ class MidWeekReoptCoordinatorTest {
     when(beamSearchEngine.search(any(), any()))
         .thenReturn(new BeamSearchOutcome(List.of(chosen), false));
     when(rollupBuilder.build(any(), any())).thenReturn(PlanTestData.emptyRollup());
-    when(decisionLogProvider.getIfAvailable()).thenReturn(decisionLogService);
-    when(decisionLogService.write(any())).thenReturn(UUID.randomUUID());
+    stubWriter();
 
     Optional<UUID> result =
         requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
@@ -457,25 +469,8 @@ class MidWeekReoptCoordinatorTest {
   }
 
   @Test
-  void requestReopt_contextBuilderNull_returnsEmpty() throws Throwable {
-    Class<?> cls =
-        Class.forName(
-            "com.example.mealprep.planner.domain.service.internal.reopt"
-                + ".MidWeekReoptCoordinator");
-    Constructor<?> ctor = cls.getDeclaredConstructors()[0];
-    ctor.setAccessible(true);
-    coordinator =
-        ctor.newInstance(
-            planRepository,
-            suggestionRepository,
-            beamSearchEngine,
-            rollupBuilder,
-            eventPublisher,
-            PlanTestData.scoringProperties(),
-            new ObjectMapper(),
-            null,
-            stageCInvoker,
-            decisionLogProvider);
+  void requestReopt_contextBuilderNull_returnsEmpty_writesSkippedResult() throws Throwable {
+    coordinator = newCoordinator(null, stageCInvoker);
 
     Plan plan = generatedPlan();
     UUID triggerEventId = UUID.randomUUID();
@@ -483,11 +478,23 @@ class MidWeekReoptCoordinatorTest {
     when(suggestionRepository.findByPlanIdAndTriggerEventId(plan.getId(), triggerEventId))
         .thenReturn(Optional.empty());
     when(suggestionRepository.countByPlanIdAndStatusIn(eq(plan.getId()), any())).thenReturn(0L);
+    stubWriter();
 
     Optional<UUID> result =
         requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
 
     assertThat(result).isEmpty();
     verify(suggestionRepository, never()).save(any());
+    assertThat(lastResultRow().outputs().get("skippedReason").asText())
+        .isEqualTo("no_material_change");
+  }
+
+  /** The last {@code MID_WEEK_REOPT_RESULT} entry the writer received. */
+  private DecisionLogEntry lastResultRow() {
+    List<DecisionLogEntry> entries = capturedEntries();
+    return entries.stream()
+        .filter(e -> e.kind() == PlannerDecisionKind.MID_WEEK_REOPT_RESULT)
+        .reduce((a, b) -> b)
+        .orElseThrow(() -> new AssertionError("no MID_WEEK_REOPT_RESULT row written"));
   }
 }

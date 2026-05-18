@@ -342,3 +342,34 @@ ReoptSuggestionDtoPage:
     last: { type: boolean }
     empty: { type: boolean }
     numberOfElements: { type: integer }
+
+PlannerDecisionRowDto:
+  type: object
+  required: [decisionId, traceId, inputs, createdAt]
+  properties:
+    decisionId: { type: string, format: uuid }
+    parentDecisionId: { type: string, format: uuid, nullable: true }
+    traceId: { type: string, format: uuid }
+    kind: { type: string, nullable: true, example: "STAGE_C_DONE" }
+    inputs:
+      type: object
+      additionalProperties: true
+    outputs:
+      type: object
+      nullable: true
+      additionalProperties: true
+    reasoning: { type: string, nullable: true }
+    createdAt: { type: string, format: date-time }
+
+PlannerDecisionChainDto:
+  type: object
+  required: [planId, rows]
+  description: >-
+    A plan's decision-log chain (planner-01l). rows is ordered by createdAt ascending and forms a
+    single connected DAG via parentDecisionId. Plans generated before planner-01l shipped have no
+    rows (empty list; no retroactive backfill).
+  properties:
+    planId: { type: string, format: uuid }
+    rows:
+      type: array
+      items: { $ref: '#/PlannerDecisionRowDto' }
