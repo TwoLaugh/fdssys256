@@ -226,6 +226,8 @@ paths:
     $ref: 'paths/planner.yaml#/reoptSuggestionAccept'
   /api/v1/plans/{planId}/reopt-suggestions/{suggestionId}/reject:
     $ref: 'paths/planner.yaml#/reoptSuggestionReject'
+  /api/v1/admin/planner/decisions/{planId}:
+    $ref: 'paths/planner.yaml#/adminPlannerDecisions'
   # ===== feedback =====
   /api/v1/feedback:
     $ref: 'paths/feedback.yaml#/feedback'
@@ -531,6 +533,8 @@ components:
     ProposedSlotChange: { $ref: 'schemas/planner.yaml#/ProposedSlotChange' }
     ProposedReoptAssignmentsDocument: { $ref: 'schemas/planner.yaml#/ProposedReoptAssignmentsDocument' }
     PlanReoptSuggestionDto: { $ref: 'schemas/planner.yaml#/PlanReoptSuggestionDto' }
+    PlannerDecisionRowDto: { $ref: 'schemas/planner.yaml#/PlannerDecisionRowDto' }
+    PlannerDecisionChainDto: { $ref: 'schemas/planner.yaml#/PlannerDecisionChainDto' }
     # feedback
     AnswerClarificationRequest: { $ref: 'schemas/feedback.yaml#/AnswerClarificationRequest' }
     ClarificationOptionDto: { $ref: 'schemas/feedback.yaml#/ClarificationOptionDto' }

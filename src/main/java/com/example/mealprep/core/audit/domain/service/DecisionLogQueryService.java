@@ -23,6 +23,14 @@ public interface DecisionLogQueryService {
   List<DecisionLogDto> getByTraceId(UUID traceId);
 
   /**
+   * Fetch all entries for a {@code (scopeKind, scopeId)} pair, ordered by {@code createdAt}
+   * ascending. Backs scope-scoped admin reads (e.g. the planner's "decisions about this plan"
+   * endpoint). Uses {@code idx_decision_log_scope_created}. Returns an empty list — never null —
+   * when no entries match (e.g. a plan generated before the writing module shipped).
+   */
+  List<DecisionLogDto> getByScope(String scopeKind, UUID scopeId);
+
+  /**
    * Walk {@code parentDecisionId} recursively up to {@code maxDepth} levels. The returned {@link
    * AncestryResponse} carries the chain root-first plus a {@code cycleDetected} flag set when the
    * depth cap was reached (likely indicating a malformed cycle).

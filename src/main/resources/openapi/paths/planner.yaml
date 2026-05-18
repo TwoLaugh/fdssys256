@@ -505,3 +505,35 @@ plansSuggestions:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+adminPlannerDecisions:
+  get:
+    tags: [AdminPlannerDecisions]
+    operationId: getPlannerDecisionChain
+    summary: "Get a plan's decision-log chain (flat, created_at order)."
+    description: >-
+      Returns every PLANNER-scope decision row for the plan as a single connected DAG. The optional
+      traceId filter narrows to one generation/re-opt trace. Plans generated before planner-01l
+      shipped have no rows (empty list; no retroactive backfill).
+    security:
+      - cookieAuth: [admin]
+    parameters:
+      - in: path
+        name: planId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: traceId
+        required: false
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: "The plan's decision chain (rows empty for pre-01l plans)."
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlannerDecisionChainDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

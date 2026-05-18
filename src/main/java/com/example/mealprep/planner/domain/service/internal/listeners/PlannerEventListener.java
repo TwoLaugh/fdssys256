@@ -11,9 +11,14 @@ import com.example.mealprep.planner.domain.entity.PlanStatus;
 import com.example.mealprep.planner.domain.entity.ReoptTriggerKind;
 import com.example.mealprep.planner.domain.entity.ScheduledRecipe;
 import com.example.mealprep.planner.domain.repository.PlanRepository;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.DecisionLogEntry;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.DecisionLogWriter;
+import com.example.mealprep.planner.domain.service.internal.decisionlog.PlannerDecisionKind;
 import com.example.mealprep.planner.domain.service.internal.reopt.MidWeekReoptCoordinator;
 import com.example.mealprep.preference.event.HardConstraintsUpdatedEvent;
 import com.example.mealprep.provisions.event.ProvisionChangedEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
@@ -82,6 +87,8 @@ class PlannerEventListener {
   private final NutritionMaterialityFilter nutritionMaterialityFilter;
   private final PreferenceMaterialityFilter preferenceMaterialityFilter;
   private final HouseholdMaterialityFilter householdMaterialityFilter;
+  private final DecisionLogWriter decisionLogWriter;
+  private final ObjectMapper objectMapper;
 
   PlannerEventListener(
       PlanRepository planRepository,
@@ -90,7 +97,9 @@ class PlannerEventListener {
       ProvisionMaterialityFilter provisionMaterialityFilter,
       NutritionMaterialityFilter nutritionMaterialityFilter,
       PreferenceMaterialityFilter preferenceMaterialityFilter,
-      HouseholdMaterialityFilter householdMaterialityFilter) {
+      HouseholdMaterialityFilter householdMaterialityFilter,
+      DecisionLogWriter decisionLogWriter,
+      ObjectMapper objectMapper) {
     this.planRepository = planRepository;
     this.reoptCoordinator = reoptCoordinator;
     this.householdQueryService = householdQueryService;
@@ -98,6 +107,8 @@ class PlannerEventListener {
     this.nutritionMaterialityFilter = nutritionMaterialityFilter;
     this.preferenceMaterialityFilter = preferenceMaterialityFilter;
     this.householdMaterialityFilter = householdMaterialityFilter;
+    this.decisionLogWriter = decisionLogWriter;
+    this.objectMapper = objectMapper;
   }
 
   // ---- Trigger listener 1: provisions-01g -----------------------------------------------------
@@ -251,15 +262,39 @@ class PlannerEventListener {
   // ---- helpers --------------------------------------------------------------------------------
 
   /**
-   * Calls the coordinator. {@link MidWeekReoptCoordinator#requestReopt} is
-   * {@code @Transactional(REQUIRED)} so it joins this listener's {@code REQUIRES_NEW} tx; the
-   * {@code ReoptSuggestedEvent} it publishes therefore has an active tx and is delivered to {@code
-   * AFTER_COMMIT} subscribers. Idempotent on {@code (planId, triggerEventId)}.
+   * Emit a {@code LISTENER_TRIGGER} decision-log row (planner-01l, ticket invariant #4) linking the
+   * external source event to the planner re-opt, then call the coordinator with that row's id as
+   * the parent.
+   *
+   * <p>The {@code LISTENER_TRIGGER} row is a trace root ({@code parentDecisionId = null}) —
+   * upstream events don't carry decision ids; the cross-event correlation rides the {@code
+   * trace_id} field (it READS the source event's trace id, never mints a new one — ticket gotcha).
+   * {@link MidWeekReoptCoordinator#requestReopt} is {@code @Transactional(REQUIRED)} so it joins
+   * this listener's {@code REQUIRES_NEW} tx; the {@code ReoptSuggestedEvent} it publishes therefore
+   * has an active tx and is delivered to {@code AFTER_COMMIT} subscribers. Idempotent on {@code
+   * (planId, triggerEventId)}.
    */
   private Optional<UUID> requestReopt(
       Plan plan, ReoptTriggerKind trigger, UUID triggerEventId, UUID upstreamTraceId) {
     UUID traceId = upstreamTraceId != null ? upstreamTraceId : UUID.randomUUID();
-    return reoptCoordinator.requestReopt(plan.getId(), trigger, triggerEventId, traceId);
+    ObjectNode inputs = objectMapper.createObjectNode();
+    inputs.put("trigger", trigger.name());
+    inputs.put("triggerEventId", triggerEventId.toString());
+    inputs.put("sourceTraceId", traceId.toString());
+    UUID listenerDecisionId =
+        decisionLogWriter.write(
+            new DecisionLogEntry(
+                PlannerDecisionKind.LISTENER_TRIGGER,
+                plan.getId(),
+                null,
+                null, // root: upstream events have no decision id; correlation is via trace_id
+                traceId,
+                inputs,
+                null,
+                "External " + trigger + " event routed to mid-week re-opt",
+                trigger == ReoptTriggerKind.USER ? "user" : "system"));
+    return reoptCoordinator.requestReopt(
+        plan.getId(), trigger, triggerEventId, traceId, listenerDecisionId);
   }
 
   /**

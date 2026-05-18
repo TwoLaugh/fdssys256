@@ -98,6 +98,9 @@ class PlannerEventListenerIT {
     jdbcTemplate.update("DELETE FROM planner_plans");
     jdbcTemplate.update("DELETE FROM household_member");
     jdbcTemplate.update("DELETE FROM household");
+    // planner-01l: the listener writes LISTENER_TRIGGER + the coordinator writes
+    // REQUEST/RESULT decision_log rows. Single DELETE (self-FK on parent_decision_id).
+    jdbcTemplate.update("DELETE FROM decision_log");
   }
 
   private Plan seedPlan(UUID householdId) {

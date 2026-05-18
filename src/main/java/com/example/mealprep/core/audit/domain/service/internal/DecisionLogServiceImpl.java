@@ -80,6 +80,13 @@ public class DecisionLogServiceImpl implements DecisionLogService, DecisionLogQu
 
   @Override
   @Transactional(readOnly = true)
+  public List<DecisionLogDto> getByScope(String scopeKind, UUID scopeId) {
+    return mapper.toDtos(
+        repository.findByScopeKindAndScopeIdOrderByCreatedAtAsc(scopeKind, scopeId));
+  }
+
+  @Override
+  @Transactional(readOnly = true)
   public AncestryResponse getAncestry(UUID decisionId, int maxDepth) {
     int clamped = Math.max(1, Math.min(ANCESTRY_DEPTH_CAP, maxDepth));
     List<DecisionLog> ancestors = repository.findAncestry(decisionId, clamped);
