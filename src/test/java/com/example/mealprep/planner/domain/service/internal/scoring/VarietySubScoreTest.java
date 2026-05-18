@@ -96,7 +96,9 @@ class VarietySubScoreTest {
                 PlanTestData.defaultTuning().provisions(),
                 PlanTestData.defaultTuning().cost()),
             java.time.Duration.ofSeconds(20),
-            3);
+            3,
+            5,
+            2);
     VarietySubScore tuned = new VarietySubScore(props);
     UUID a = UUID.randomUUID();
     UUID b = UUID.randomUUID();

@@ -333,7 +333,9 @@ public final class PlanTestData {
         uniformWeights(),
         defaultTuning(),
         Duration.ofSeconds(20),
-        3);
+        3,
+        5,
+        2);
   }
 
   /**
@@ -627,6 +629,32 @@ public final class PlanTestData {
   public static List<com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto> twoRollups(
       LocalDate weekStart) {
     return List.of(candidateRollup(weekStart, 2100), candidateRollup(weekStart, 1900));
+  }
+
+  // ---- planner-01h Phase-2 augmentation fixture builders --------------------------------------
+
+  /** Raw LLM {@code ADD_SNACK} proposal targeting {@code slotId} / {@code recipeId}. */
+  public static com.example.mealprep.planner.api.dto.AugmentationProposal addSnackProposal(
+      UUID slotId, UUID recipeId, int servings) {
+    return new com.example.mealprep.planner.api.dto.AugmentationProposal(
+        "ADD_SNACK", slotId, recipeId, servings, null, null, null, null, "fill a nutrition gap");
+  }
+
+  /** Raw LLM {@code SUBSTITUTE_INGREDIENT} refine-directive proposal. */
+  public static com.example.mealprep.planner.api.dto.RefineDirectiveProposal
+      refineDirectiveProposal(UUID slotId, String fromKey, String toKey) {
+    return new com.example.mealprep.planner.api.dto.RefineDirectiveProposal(
+        "SUBSTITUTE_INGREDIENT", slotId, fromKey, toKey, null, null, "swap for nutrition");
+  }
+
+  /** A {@code Phase2AugmentationResponse} with the supplied raw augmentation proposals. */
+  public static com.example.mealprep.planner.domain.service.internal.stagec
+          .Phase2AugmentationResponse
+      phase2Response(
+          List<com.example.mealprep.planner.api.dto.AugmentationProposal> augmentations,
+          List<com.example.mealprep.planner.api.dto.RefineDirectiveProposal> refineDirectives) {
+    return new com.example.mealprep.planner.domain.service.internal.stagec
+        .Phase2AugmentationResponse(augmentations, refineDirectives);
   }
 
   private static Plan.PlanBuilder basePlanBuilder(
