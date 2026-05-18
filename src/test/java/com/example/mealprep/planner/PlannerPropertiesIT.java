@@ -52,7 +52,10 @@ class PlannerPropertiesIT {
     "mealprep.planner.max-augmentations=5",
     "mealprep.planner.max-refine-directives=2",
     "mealprep.planner.mid-week.lock-hours-before-slot=24",
-    "mealprep.planner.mid-week.max-suggestions-per-plan=3"
+    "mealprep.planner.mid-week.max-suggestions-per-plan=3",
+    "mealprep.planner.materiality.nutrition-variance-pct=0.15",
+    "mealprep.planner.materiality.nutrition-min-redistributable-meals=3",
+    "mealprep.planner.materiality.preference-soft-delta-points=10"
   };
 
   @Autowired private PlannerProperties properties;
@@ -94,6 +97,14 @@ class PlannerPropertiesIT {
     assertThat(properties.midWeek()).isNotNull();
     assertThat(properties.midWeek().lockHoursBeforeSlot()).isEqualTo(24);
     assertThat(properties.midWeek().maxSuggestionsPerPlan()).isEqualTo(3);
+  }
+
+  @Test
+  void binds_materiality_sub_config_planner_01k() {
+    assertThat(properties.materiality()).isNotNull();
+    assertThat(properties.materiality().nutritionVariancePct()).isEqualByComparingTo("0.15");
+    assertThat(properties.materiality().nutritionMinRedistributableMeals()).isEqualTo(3);
+    assertThat(properties.materiality().preferenceSoftDeltaPoints()).isEqualTo(10);
   }
 
   @Test

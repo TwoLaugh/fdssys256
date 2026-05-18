@@ -67,7 +67,7 @@ import org.springframework.transaction.annotation.Transactional;
  * so a future extraction can't brick the path) — invariants #8 / #11.
  */
 @Component
-class MidWeekReoptCoordinator {
+public class MidWeekReoptCoordinator {
 
   private static final Logger log = LoggerFactory.getLogger(MidWeekReoptCoordinator.class);
 

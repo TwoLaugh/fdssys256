@@ -3,6 +3,7 @@ package com.example.mealprep.planner.domain.repository;
 import com.example.mealprep.planner.domain.entity.Plan;
 import com.example.mealprep.planner.domain.entity.PlanStatus;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -73,4 +74,19 @@ public interface PlanRepository extends JpaRepository<Plan, UUID> {
    * client-side. Backed by the PK index.
    */
   List<Plan> findByIdIn(List<UUID> ids);
+
+  /**
+   * All "active" (re-optimisable) plans for a household across all weeks. planner-01k's event
+   * listeners use this to find candidate plans to re-opt after an upstream change. "Active" is the
+   * {@code GENERATED} + {@code ACTIVE} status pair — the lifecycle states a mid-week re-opt
+   * suggestion can attach to (terminal states {@code SUPERSEDED/COMPLETED/REJECTED/ABANDONED} and
+   * the transient {@code DRAFT} are not re-optimisable; the coordinator re-asserts this in {@code
+   * MidWeekReoptCoordinator#requestReopt}).
+   *
+   * <p>Backed by {@code idx_planner_plans_household_week_status} (household prefix). v1 supports
+   * one active plan per household but the query returns a list — the listener does not assume
+   * cardinality. No {@code @EntityGraph} (Hibernate-6 multi-bag trap, see class Javadoc); the
+   * listener forces the lazy day/slot/recipe graph inside its own {@code REQUIRES_NEW} read tx.
+   */
+  List<Plan> findByHouseholdIdAndStatusIn(UUID householdId, Collection<PlanStatus> statuses);
 }

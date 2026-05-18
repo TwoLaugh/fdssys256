@@ -20,7 +20,9 @@ import org.springframework.validation.annotation.Validated;
  * were appended by planner-01g; {@code iterationBudget} is consumed by Stage D (01h/01j) but the
  * key lives at the planner level. planner-01h appends {@code maxAugmentations} (default 5) and
  * {@code maxRefineDirectives} (default 2), bounding the Phase-2 LLM output. planner-01i appends the
- * nested {@code midWeek} group (mid-week re-optimisation tunables).
+ * nested {@code midWeek} group (mid-week re-optimisation tunables). planner-01k appends the nested
+ * {@code materiality} group (the event-listener materiality-filter thresholds — see {@code
+ * Materiality}).
  *
  * <p>Spring Boot 3.x record-shaped {@code @ConfigurationProperties} are auto-{@code
  * ConstructorBinding} so defaults are wired via {@code application.properties} (not record
@@ -46,7 +48,8 @@ public record PlannerProperties(
     @Min(1) int iterationBudget,
     @Min(1) int maxAugmentations,
     @Min(0) int maxRefineDirectives,
-    @NotNull MidWeek midWeek) {
+    @NotNull MidWeek midWeek,
+    @NotNull Materiality materiality) {
 
   /**
    * Mid-week re-optimisation tunables (planner-01i). Bound under {@code
@@ -63,6 +66,30 @@ public record PlannerProperties(
    * </ul>
    */
   public record MidWeek(@Min(0) int lockHoursBeforeSlot, @Min(1) int maxSuggestionsPerPlan) {}
+
+  /**
+   * Event-listener materiality-filter thresholds (planner-01k). Bound under {@code
+   * mealprep.planner.materiality.*}. Every key MUST exist in the main AND test {@code
+   * application.properties} — the test file shadows the main one, and {@code @Validated} fails
+   * context load on a missing {@code @NotNull} otherwise.
+   *
+   * <ul>
+   *   <li>{@code nutritionVariancePct} — minimum absolute macro divergence (a fraction; {@code
+   *       0.15} == 15%, per HLD) for a {@code NutritionIntakeDivergedEvent} to be material. Below
+   *       this the divergence is noise; surfacing a re-opt would thrash. Default {@code 0.15}.
+   *   <li>{@code nutritionMinRedistributableMeals} — a divergence is only actionable if the plan
+   *       still has at least this many unplanned/unpinned meals left in the week to redistribute
+   *       macros over. Default {@code 3}.
+   *   <li>{@code preferenceSoftDeltaPoints} — minimum soft-preference delta-point swing for a
+   *       pure-soft {@code HardConstraintsUpdatedEvent} field-change to be material.
+   *       Hard-constraint changes (allergy/dietary-identity) are ALWAYS material regardless of
+   *       this; this only gates small soft-preference nudges. Default {@code 10}.
+   * </ul>
+   */
+  public record Materiality(
+      @NotNull @DecimalMin("0.0") @DecimalMax("1.0") BigDecimal nutritionVariancePct,
+      @Min(0) int nutritionMinRedistributableMeals,
+      @Min(0) int preferenceSoftDeltaPoints) {}
 
   /**
    * Composite-score weight scheme (planner-01e). v1 is uniform {@code 1/7 ≈ 0.143} per HLD §Initial
