@@ -217,10 +217,16 @@ class PlanComposerIT {
 
     UUID planId = tx().execute(t -> composer.compose(request(household), UUID.randomUUID(), null));
 
-    Plan reloaded = planRepository.findById(planId).orElseThrow();
-    UUID persistedRecipeId =
-        reloaded.getDays().get(0).getSlots().get(0).getScheduledRecipe().getRecipeId();
-    assertThat(persistedRecipeId).isEqualTo(newVersion);
+    // Reload + lazy navigation MUST run inside a session: OSIV is off (prod parity, mirrored into
+    // test props), so Plan.days/slots are uninitialised on a detached findById result (wave-3
+    // retro: lazy access outside a tx → LazyInitializationException).
+    tx().executeWithoutResult(
+            t -> {
+              Plan reloaded = planRepository.findById(planId).orElseThrow();
+              UUID persistedRecipeId =
+                  reloaded.getDays().get(0).getSlots().get(0).getScheduledRecipe().getRecipeId();
+              assertThat(persistedRecipeId).isEqualTo(newVersion);
+            });
   }
 
   @Test
@@ -238,10 +244,13 @@ class PlanComposerIT {
 
     UUID planId = tx().execute(t -> composer.compose(request(household), UUID.randomUUID(), null));
 
-    Plan reloaded = planRepository.findById(planId).orElseThrow();
-    UUID persistedRecipeId =
-        reloaded.getDays().get(0).getSlots().get(0).getScheduledRecipe().getRecipeId();
-    assertThat(persistedRecipeId).isEqualTo(newBranch);
+    tx().executeWithoutResult(
+            t -> {
+              Plan reloaded = planRepository.findById(planId).orElseThrow();
+              UUID persistedRecipeId =
+                  reloaded.getDays().get(0).getSlots().get(0).getScheduledRecipe().getRecipeId();
+              assertThat(persistedRecipeId).isEqualTo(newBranch);
+            });
   }
 
   @Test
@@ -258,9 +267,19 @@ class PlanComposerIT {
 
     UUID planId = tx().execute(t -> composer.compose(request(household), UUID.randomUUID(), null));
 
-    Plan reloaded = planRepository.findById(planId).orElseThrow();
-    assertThat(reloaded.getDays().get(0).getSlots().get(0).getScheduledRecipe().getRecipeId())
-        .isEqualTo(originalRecipeId);
+    tx().executeWithoutResult(
+            t -> {
+              Plan reloaded = planRepository.findById(planId).orElseThrow();
+              assertThat(
+                      reloaded
+                          .getDays()
+                          .get(0)
+                          .getSlots()
+                          .get(0)
+                          .getScheduledRecipe()
+                          .getRecipeId())
+                  .isEqualTo(originalRecipeId);
+            });
   }
 
   @Test
@@ -277,10 +296,20 @@ class PlanComposerIT {
 
     UUID planId = tx().execute(t -> composer.compose(request(household), UUID.randomUUID(), null));
 
-    Plan reloaded = planRepository.findById(planId).orElseThrow();
-    assertThat(reloaded.getDays().get(0).getSlots().get(0).getScheduledRecipe().getRecipeId())
-        .isEqualTo(originalRecipeId);
-    assertThat(reloaded.isQualityWarning()).isFalse();
+    tx().executeWithoutResult(
+            t -> {
+              Plan reloaded = planRepository.findById(planId).orElseThrow();
+              assertThat(
+                      reloaded
+                          .getDays()
+                          .get(0)
+                          .getSlots()
+                          .get(0)
+                          .getScheduledRecipe()
+                          .getRecipeId())
+                  .isEqualTo(originalRecipeId);
+              assertThat(reloaded.isQualityWarning()).isFalse();
+            });
   }
 
   @Test
@@ -295,11 +324,21 @@ class PlanComposerIT {
 
     UUID planId = tx().execute(t -> composer.compose(request(household), UUID.randomUUID(), null));
 
-    Plan reloaded = planRepository.findById(planId).orElseThrow();
-    assertThat(reloaded.getStatus()).isEqualTo(PlanStatus.GENERATED);
-    assertThat(reloaded.isQualityWarning()).isTrue();
-    assertThat(reloaded.getDays().get(0).getSlots().get(0).getScheduledRecipe().getRecipeId())
-        .isEqualTo(originalRecipeId);
+    tx().executeWithoutResult(
+            t -> {
+              Plan reloaded = planRepository.findById(planId).orElseThrow();
+              assertThat(reloaded.getStatus()).isEqualTo(PlanStatus.GENERATED);
+              assertThat(reloaded.isQualityWarning()).isTrue();
+              assertThat(
+                      reloaded
+                          .getDays()
+                          .get(0)
+                          .getSlots()
+                          .get(0)
+                          .getScheduledRecipe()
+                          .getRecipeId())
+                  .isEqualTo(originalRecipeId);
+            });
   }
 
   @Test
