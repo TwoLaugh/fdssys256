@@ -102,6 +102,15 @@ class PlansControllerIT {
   @MockBean
   private com.example.mealprep.adaptation.domain.service.AdaptationService adaptationService;
 
+  // AdaptationServiceImpl implements BOTH AdaptationService and AdaptationQueryService; @MockBean
+  // on
+  // one interface evicts the single shared impl bean, leaving AdaptationAdminController unable to
+  // wire AdaptationQueryService → context-load failure (wave-3 retro: multi-interface @Service
+  // @MockBean eviction). Mock the sibling interface too so the full context still loads.
+  @MockBean
+  private com.example.mealprep.adaptation.domain.service.AdaptationQueryService
+      adaptationQueryService;
+
   private TransactionTemplate tx() {
     return new TransactionTemplate(transactionManager);
   }

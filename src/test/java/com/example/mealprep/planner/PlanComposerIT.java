@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 
 import com.example.mealprep.adaptation.api.dto.AdaptationResultDto;
 import com.example.mealprep.adaptation.domain.enums.AdaptationClassification;
+import com.example.mealprep.adaptation.domain.service.AdaptationQueryService;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
 import com.example.mealprep.adaptation.exception.AdaptationAiUnavailableException;
 import com.example.mealprep.core.types.SlotKind;
@@ -78,6 +79,13 @@ class PlanComposerIT {
   @MockBean private StageCInvoker stageCInvoker;
   @MockBean private Phase2Augmenter phase2Augmenter;
   @MockBean private AdaptationService adaptationService;
+
+  // AdaptationServiceImpl implements BOTH AdaptationService and AdaptationQueryService; @MockBean
+  // on
+  // one interface evicts the single shared impl bean, leaving AdaptationAdminController unable to
+  // wire AdaptationQueryService → context-load failure (wave-3 retro: multi-interface @Service
+  // @MockBean eviction). Mock the sibling interface too so the full context still loads.
+  @MockBean private AdaptationQueryService adaptationQueryService;
 
   private TransactionTemplate tx() {
     return new TransactionTemplate(transactionManager);
