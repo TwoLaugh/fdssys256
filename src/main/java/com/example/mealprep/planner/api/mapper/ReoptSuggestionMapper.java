@@ -1,6 +1,8 @@
 package com.example.mealprep.planner.api.mapper;
 
+import com.example.mealprep.planner.api.dto.PlanReoptSuggestionDto;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
+import com.example.mealprep.planner.domain.entity.MealPrepPlanReoptSuggestion;
 import com.example.mealprep.planner.domain.entity.ReoptSuggestion;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -33,6 +35,28 @@ public abstract class ReoptSuggestionMapper {
         entity.getExpiresAt(),
         entity.getCreatedAt(),
         entity.getResolvedAt());
+  }
+
+  /**
+   * Maps the planner-01i {@link MealPrepPlanReoptSuggestion} aggregate (the materialised mid-week
+   * re-opt proposal) to its read shape. Used by planner-01j's accept/reject endpoints.
+   */
+  public PlanReoptSuggestionDto toPlanReoptDto(MealPrepPlanReoptSuggestion entity) {
+    if (entity == null) {
+      return null;
+    }
+    return new PlanReoptSuggestionDto(
+        entity.getId(),
+        entity.getPlanId(),
+        entity.getTriggerKind(),
+        entity.getTriggerEventId(),
+        entity.getTraceId(),
+        entity.getDecisionId(),
+        entity.getSummary(),
+        entity.getStatus(),
+        entity.getProposedAssignments(),
+        entity.getCreatedAt(),
+        entity.getExpiresAt());
   }
 
   public List<ReoptSuggestionDto> toDtos(List<ReoptSuggestion> entities) {
