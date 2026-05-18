@@ -325,6 +325,14 @@ public final class PlanTestData {
     return new PlannerProperties.MidWeek(24, 3);
   }
 
+  /**
+   * Default materiality sub-config (planner-01k): nutrition variance 15%, &ge;3 redistributable
+   * meals, soft-preference delta 10 points — matches application.properties.
+   */
+  public static PlannerProperties.Materiality defaultMateriality() {
+    return new PlannerProperties.Materiality(new BigDecimal("0.15"), 3, 10);
+  }
+
   /** Full {@link PlannerProperties} wired with the v1-uniform scoring block for unit tests. */
   public static PlannerProperties scoringProperties() {
     return new PlannerProperties(
@@ -341,7 +349,8 @@ public final class PlanTestData {
         3,
         5,
         2,
-        defaultMidWeek());
+        defaultMidWeek(),
+        defaultMateriality());
   }
 
   /**

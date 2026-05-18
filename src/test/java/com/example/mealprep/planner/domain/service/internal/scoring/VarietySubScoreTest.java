@@ -99,7 +99,8 @@ class VarietySubScoreTest {
             3,
             5,
             2,
-            PlanTestData.defaultMidWeek());
+            PlanTestData.defaultMidWeek(),
+            PlanTestData.defaultMateriality());
     VarietySubScore tuned = new VarietySubScore(props);
     UUID a = UUID.randomUUID();
     UUID b = UUID.randomUUID();
