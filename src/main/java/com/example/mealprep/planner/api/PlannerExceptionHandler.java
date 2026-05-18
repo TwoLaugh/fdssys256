@@ -6,6 +6,7 @@ import com.example.mealprep.planner.exception.InvalidPlanStateTransitionExceptio
 import com.example.mealprep.planner.exception.InvalidSlotStateTransitionException;
 import com.example.mealprep.planner.exception.MealSlotNotFoundException;
 import com.example.mealprep.planner.exception.PlanNotFoundException;
+import com.example.mealprep.planner.exception.PlanNotReoptableException;
 import com.example.mealprep.planner.exception.ReoptSuggestionNotFoundException;
 import com.example.mealprep.planner.exception.RevertTargetNotInHistoryException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -70,6 +71,21 @@ public class PlannerExceptionHandler {
             "Re-opt suggestion not found",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(PlanNotReoptableException.class)
+  public ResponseEntity<ProblemDetail> handlePlanNotReoptable(
+      PlanNotReoptableException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.BAD_REQUEST,
+            ex.getMessage(),
+            "plan-not-reoptable",
+            "Plan is not re-optable",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

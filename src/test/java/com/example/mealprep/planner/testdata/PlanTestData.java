@@ -320,6 +320,11 @@ public final class PlanTestData {
         new PlannerProperties.ScoringTuning.CostTuning(new BigDecimal("0.1")));
   }
 
+  /** Default mid-week sub-config (planner-01i): lock=24h, maxSuggestionsPerPlan=3. */
+  public static PlannerProperties.MidWeek defaultMidWeek() {
+    return new PlannerProperties.MidWeek(24, 3);
+  }
+
   /** Full {@link PlannerProperties} wired with the v1-uniform scoring block for unit tests. */
   public static PlannerProperties scoringProperties() {
     return new PlannerProperties(
@@ -335,7 +340,8 @@ public final class PlanTestData {
         Duration.ofSeconds(20),
         3,
         5,
-        2);
+        2,
+        defaultMidWeek());
   }
 
   /**
