@@ -356,6 +356,15 @@
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
                 <version>${jacoco.version}</version>
+                <!-- Exclude non-meaningful-to-test code from coverage report+check:
+                     MapStruct-generated *MapperImpl (generated source) and the
+                     Noop* SPI-default placeholder stubs (intentional no-ops). -->
+                <configuration>
+                    <excludes>
+                        <exclude>**/*MapperImpl.class</exclude>
+                        <exclude>**/Noop*.class</exclude>
+                    </excludes>
+                </configuration>
                 <executions>
                     <execution>
                         <id>jacoco-prepare-agent</id>
@@ -459,6 +468,8 @@
                     <excludedClasses>
                         <param>com.example.mealprep.MealPrepApplication</param>
                         <param>com.example.mealprep.config.*</param>
+                        <param>com.example.mealprep.*MapperImpl</param>
+                        <param>com.example.mealprep.*Noop*</param>
                     </excludedClasses>
                     <outputFormats>
                         <outputFormat>HTML</outputFormat>
