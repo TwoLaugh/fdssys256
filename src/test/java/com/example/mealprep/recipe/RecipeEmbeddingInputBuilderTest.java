@@ -124,6 +124,36 @@ class RecipeEmbeddingInputBuilderTest {
   }
 
   @Test
+  void loadAndCompose_blankOrNullDisplayNames_areFilteredOut() {
+    // The ingredient stream filter `s -> s != null && !s.isBlank()` must drop blank/null names so
+    // the composed string has no stray commas — kills the L83 "replaced boolean return with true"
+    // mutant which would include the blank entries.
+    UUID versionId = UUID.randomUUID();
+    Recipe recipe =
+        Recipe.builder()
+            .id(UUID.randomUUID())
+            .userId(UUID.randomUUID())
+            .catalogue(Catalogue.USER)
+            .name("Soup")
+            .description(null)
+            .currentVersion(1)
+            .currentBranchId(UUID.randomUUID())
+            .dataQuality(DataQuality.USER_VERIFIED)
+            .nutritionStatus(NutritionStatus.PENDING)
+            .build();
+    RecipeVersion version = bareVersion(versionId, recipe);
+    version.setIngredients(
+        List.of(
+            ingredient(version, 0, "stock"),
+            ingredient(version, 1, "   "),
+            ingredient(version, 2, null),
+            ingredient(version, 3, "carrot")));
+    when(versionRepository.findById(versionId)).thenReturn(Optional.of(version));
+
+    assertThat(builder().loadAndCompose(versionId)).isEqualTo("Soup stock,carrot");
+  }
+
+  @Test
   void loadAndCompose_deterministicOrdering_byLineOrder() {
     UUID versionId = UUID.randomUUID();
     Recipe recipe =
