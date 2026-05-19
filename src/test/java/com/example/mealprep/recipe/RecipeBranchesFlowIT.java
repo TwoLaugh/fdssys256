@@ -1,10 +1,12 @@
 package com.example.mealprep.recipe;
 
+import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
@@ -39,6 +41,7 @@ import org.springframework.test.web.servlet.MvcResult;
 class RecipeBranchesFlowIT {
 
   @Autowired private MockMvc mvc;
+  @Autowired private OpenApiInteractionValidator openApiValidator;
   @Autowired private ObjectMapper objectMapper;
   @Autowired private UserRepository userRepository;
   @Autowired private SessionRepository sessionRepository;
@@ -71,6 +74,7 @@ class RecipeBranchesFlowIT {
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(body)))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     Cookie cookie = result.getResponse().getCookie(authProperties.cookieName());
     String userIdJson =
@@ -90,6 +94,7 @@ class RecipeBranchesFlowIT {
                     .content(
                         objectMapper.writeValueAsString(RecipeTestData.defaultCreateRequest())))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     UUID recipeId =
         UUID.fromString(
@@ -100,7 +105,8 @@ class RecipeBranchesFlowIT {
         .andExpect(jsonPath("$.length()").value(1))
         .andExpect(jsonPath("$[0].name").value("main"))
         .andExpect(jsonPath("$[0].recipeId").value(recipeId.toString()))
-        .andExpect(jsonPath("$[0].currentVersion").value(1));
+        .andExpect(jsonPath("$[0].currentVersion").value(1))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -109,7 +115,8 @@ class RecipeBranchesFlowIT {
     mvc.perform(get("/api/v1/recipes/" + UUID.randomUUID() + "/branches").cookie(user.cookie()))
         .andExpect(status().isNotFound())
         .andExpect(
-            jsonPath("$.type").value("https://mealprep.example.com/problems/recipe-not-found"));
+            jsonPath("$.type").value("https://mealprep.example.com/problems/recipe-not-found"))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -123,6 +130,7 @@ class RecipeBranchesFlowIT {
                     .content(
                         objectMapper.writeValueAsString(RecipeTestData.defaultCreateRequest())))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     UUID recipeId =
         UUID.fromString(
@@ -131,12 +139,14 @@ class RecipeBranchesFlowIT {
     jdbcTemplate.update("UPDATE recipe_recipes SET deleted_at = now() WHERE id = ?", recipeId);
 
     mvc.perform(get("/api/v1/recipes/" + recipeId + "/branches").cookie(user.cookie()))
-        .andExpect(status().isNotFound());
+        .andExpect(status().isNotFound())
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
   void list_returns401_whenAnonymous() throws Exception {
     mvc.perform(get("/api/v1/recipes/" + UUID.randomUUID() + "/branches"))
-        .andExpect(status().isUnauthorized());
+        .andExpect(status().isUnauthorized())
+        .andExpect(openApi().isValid(openApiValidator));
   }
 }

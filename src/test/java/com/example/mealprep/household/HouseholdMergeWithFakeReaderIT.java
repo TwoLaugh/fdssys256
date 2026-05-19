@@ -1,10 +1,12 @@
 package com.example.mealprep.household;
 
+import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
@@ -55,6 +57,7 @@ import org.springframework.test.web.servlet.MvcResult;
 class HouseholdMergeWithFakeReaderIT {
 
   @Autowired private MockMvc mvc;
+  @Autowired private OpenApiInteractionValidator openApiValidator;
   @Autowired private ObjectMapper objectMapper;
   @Autowired private UserRepository userRepository;
   @Autowired private SessionRepository sessionRepository;
@@ -87,6 +90,7 @@ class HouseholdMergeWithFakeReaderIT {
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(body)))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     Cookie cookie = result.getResponse().getCookie(authProperties.cookieName());
     UUID userId =
@@ -103,7 +107,8 @@ class HouseholdMergeWithFakeReaderIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.mergedTasteProfile.ingredientLikes.onion").value(0.7));
+        .andExpect(jsonPath("$.mergedTasteProfile.ingredientLikes.onion").value(0.7))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   /**
