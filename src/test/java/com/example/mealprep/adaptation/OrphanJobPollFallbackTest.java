@@ -64,6 +64,50 @@ class OrphanJobPollFallbackTest {
     verify(events, never()).publishEvent(any(JobReadyEvent.class));
   }
 
+  @Test
+  void skips_old_non_pending_jobs() {
+    // Old + non-BATCH but RUNNING: the status filter must exclude it. A BooleanTrue
+    // mutant on `j.getStatus() == PENDING` would let this through and re-publish.
+    AdaptationJob oldRunning =
+        job(JobPriority.ASYNC, JobStatus.RUNNING, Instant.now().minusSeconds(600));
+    AdaptationJobRepository repo = mock(AdaptationJobRepository.class);
+    when(repo.findNextPendingJobs(any(Pageable.class))).thenReturn(List.of(oldRunning));
+    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+
+    new OrphanJobPollFallback(repo, events).poll();
+
+    verify(events, never()).publishEvent(any(JobReadyEvent.class));
+  }
+
+  @Test
+  void skips_jobs_with_null_enqueuedAt() {
+    AdaptationJob noTime = job(JobPriority.ASYNC, JobStatus.PENDING, null);
+    AdaptationJobRepository repo = mock(AdaptationJobRepository.class);
+    when(repo.findNextPendingJobs(any(Pageable.class))).thenReturn(List.of(noTime));
+    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+
+    new OrphanJobPollFallback(repo, events).poll();
+
+    verify(events, never()).publishEvent(any(JobReadyEvent.class));
+  }
+
+  @Test
+  void publishes_event_carrying_the_orphan_job_id() {
+    UUID jobId = UUID.randomUUID();
+    AdaptationJob old = job(JobPriority.SYNC, JobStatus.PENDING, Instant.now().minusSeconds(600));
+    old.setId(jobId);
+    AdaptationJobRepository repo = mock(AdaptationJobRepository.class);
+    when(repo.findNextPendingJobs(any(Pageable.class))).thenReturn(List.of(old));
+    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+
+    new OrphanJobPollFallback(repo, events).poll();
+
+    org.mockito.ArgumentCaptor<JobReadyEvent> cap =
+        org.mockito.ArgumentCaptor.forClass(JobReadyEvent.class);
+    verify(events).publishEvent(cap.capture());
+    org.assertj.core.api.Assertions.assertThat(cap.getValue().jobId()).isEqualTo(jobId);
+  }
+
   private static AdaptationJob job(JobPriority priority, JobStatus status, Instant enqueuedAt) {
     return AdaptationJob.builder()
         .id(UUID.randomUUID())

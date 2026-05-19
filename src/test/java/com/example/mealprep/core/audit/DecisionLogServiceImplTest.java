@@ -149,6 +149,38 @@ class DecisionLogServiceImplTest {
     assertThat(result).isEmpty();
   }
 
+  // ---------------- getByScope ----------------
+
+  @Test
+  void getByScope_mapsRepoList_forScopeKindAndId() {
+    String scopeKind = "plan-week";
+    UUID scopeId = UUID.randomUUID();
+    List<DecisionLog> entities =
+        List.of(sampleEntity(UUID.randomUUID()), sampleEntity(UUID.randomUUID()));
+    List<DecisionLogDto> dtos = List.of(sampleDto(UUID.randomUUID()), sampleDto(UUID.randomUUID()));
+    when(repository.findByScopeKindAndScopeIdOrderByCreatedAtAsc(scopeKind, scopeId))
+        .thenReturn(entities);
+    when(mapper.toDtos(entities)).thenReturn(dtos);
+
+    List<DecisionLogDto> result = service.getByScope(scopeKind, scopeId);
+
+    assertThat(result).isEqualTo(dtos);
+    verify(repository).findByScopeKindAndScopeIdOrderByCreatedAtAsc(scopeKind, scopeId);
+  }
+
+  @Test
+  void getByScope_returnsEmptyList_whenNoMatches() {
+    String scopeKind = "recipe";
+    UUID scopeId = UUID.randomUUID();
+    when(repository.findByScopeKindAndScopeIdOrderByCreatedAtAsc(scopeKind, scopeId))
+        .thenReturn(List.of());
+    when(mapper.toDtos(List.of())).thenReturn(List.of());
+
+    List<DecisionLogDto> result = service.getByScope(scopeKind, scopeId);
+
+    assertThat(result).isEmpty();
+  }
+
   // ---------------- getAncestry ----------------
 
   @Test

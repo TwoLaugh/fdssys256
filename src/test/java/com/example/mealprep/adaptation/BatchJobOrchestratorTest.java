@@ -3,6 +3,7 @@ package com.example.mealprep.adaptation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -63,6 +64,78 @@ class BatchJobOrchestratorTest {
     // Deferred: processJob NOT called on the BATCH job; enqueuedAt is bumped via saveAndFlush.
     verify(svc, times(0)).processJob(batchJob);
     assertThat(batchJob.getEnqueuedAt()).isAfter(Instant.now().minusSeconds(5));
+  }
+
+  @Test
+  void loadNextBatch_filters_out_non_batch_and_non_pending_jobs() {
+    // Over-fetch returns a mix; only the BATCH+PENDING one is processable.
+    AdaptationJob batchPending = job(JobPriority.BATCH, JobStatus.PENDING);
+    AdaptationJob syncPending = job(JobPriority.SYNC, JobStatus.PENDING);
+    AdaptationJob batchRunning = job(JobPriority.BATCH, JobStatus.RUNNING);
+
+    AdaptationJobRepository repo = mock(AdaptationJobRepository.class);
+    when(repo.findNextPendingJobs(any(Pageable.class)))
+        .thenReturn(List.of(syncPending, batchRunning, batchPending));
+    when(repo.findActiveByRecipeId(any())).thenReturn(List.of());
+
+    AdaptationServiceImpl svc = mock(AdaptationServiceImpl.class);
+    new BatchJobOrchestrator(repo, svc).runBatchSweep();
+
+    // Only the BATCH+PENDING job survives both filters (kills both BooleanTrue filter
+    // mutants: a `return true` filter would also process the SYNC and RUNNING jobs).
+    verify(svc, times(1)).processJob(batchPending);
+    verify(svc, never()).processJob(syncPending);
+    verify(svc, never()).processJob(batchRunning);
+  }
+
+  @Test
+  void does_not_defer_when_only_other_active_job_is_terminal() {
+    // hasActiveNonBatchForRecipe: the other (non-BATCH) job is SUCCEEDED — neither PENDING
+    // nor RUNNING — so it must NOT count as active. A negated status conditional would
+    // wrongly defer and skip processing.
+    UUID recipeId = UUID.randomUUID();
+    AdaptationJob batchJob = job(JobPriority.BATCH, JobStatus.PENDING);
+    batchJob.setRecipeId(recipeId);
+    AdaptationJob doneSync = job(JobPriority.SYNC, JobStatus.DONE);
+    doneSync.setRecipeId(recipeId);
+
+    AdaptationJobRepository repo = mock(AdaptationJobRepository.class);
+    when(repo.findNextPendingJobs(any(Pageable.class))).thenReturn(List.of(batchJob));
+    when(repo.findActiveByRecipeId(recipeId)).thenReturn(List.of(batchJob, doneSync));
+
+    AdaptationServiceImpl svc = mock(AdaptationServiceImpl.class);
+    new BatchJobOrchestrator(repo, svc).runBatchSweep();
+
+    verify(svc, times(1)).processJob(batchJob);
+  }
+
+  @Test
+  void empty_batch_short_circuits_without_touching_service() {
+    AdaptationJobRepository repo = mock(AdaptationJobRepository.class);
+    when(repo.findNextPendingJobs(any(Pageable.class))).thenReturn(List.of());
+    AdaptationServiceImpl svc = mock(AdaptationServiceImpl.class);
+
+    new BatchJobOrchestrator(repo, svc).runBatchSweep();
+
+    verify(svc, never()).processJob(any());
+  }
+
+  @Test
+  void runtime_exception_in_processJob_is_swallowed_and_sweep_continues() {
+    AdaptationJob first = job(JobPriority.BATCH, JobStatus.PENDING);
+    AdaptationJob second = job(JobPriority.BATCH, JobStatus.PENDING);
+    AdaptationJobRepository repo = mock(AdaptationJobRepository.class);
+    when(repo.findNextPendingJobs(any(Pageable.class))).thenReturn(List.of(first, second));
+    when(repo.findActiveByRecipeId(any())).thenReturn(List.of());
+
+    AdaptationServiceImpl svc = mock(AdaptationServiceImpl.class);
+    org.mockito.Mockito.doThrow(new RuntimeException("boom")).when(svc).processJob(first);
+
+    new BatchJobOrchestrator(repo, svc).runBatchSweep();
+
+    // The throwing job must not abort the loop: the second job is still processed.
+    verify(svc, times(1)).processJob(first);
+    verify(svc, times(1)).processJob(second);
   }
 
   private static AdaptationJob job(JobPriority priority, JobStatus status) {

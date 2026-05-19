@@ -117,6 +117,121 @@ class PendingChangeStoreTest {
     verify(events).publishEvent(any(PendingChangeCreatedEvent.class));
   }
 
+  @Test
+  void supersede_sets_resolvedAt_on_existing_row() {
+    PendingChangeRepository repo = mock(PendingChangeRepository.class);
+    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    PendingChange existing = pending(UUID.randomUUID());
+    // Sanity: fixture leaves resolvedAt null so we can prove the store sets it.
+    assertThat(existing.getResolvedAt()).isNull();
+    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
+        .thenReturn(Optional.of(existing));
+
+    PendingChangeStore store = new PendingChangeStore(repo, events, config());
+    store.create(
+        job(), response(), ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), "v1");
+
+    // Kills the VoidMethodCall mutant that removes setResolvedAt(now).
+    assertThat(existing.getResolvedAt()).isNotNull();
+  }
+
+  @Test
+  void inserted_row_uses_finalDiffJson_when_present_and_carries_branch_fields() {
+    PendingChangeRepository repo = mock(PendingChangeRepository.class);
+    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
+        .thenReturn(Optional.empty());
+    PendingChangeStore store = new PendingChangeStore(repo, events, config());
+
+    var finalDiff = JsonNodeFactory.instance.objectNode().put("k", "v");
+    RecipeAdaptationResponse resp =
+        new RecipeAdaptationResponse(
+            0,
+            AdaptationClassification.VERSION,
+            "reasoned",
+            "notes",
+            BigDecimal.valueOf(0.91),
+            BigDecimal.valueOf(0.8),
+            null,
+            finalDiff,
+            List.of());
+
+    store.create(
+        job(), resp, ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), "v7");
+
+    ArgumentCaptor<PendingChange> cap = ArgumentCaptor.forClass(PendingChange.class);
+    verify(repo).saveAndFlush(cap.capture());
+    PendingChange saved = cap.getValue();
+    // diffNode: finalDiffJson != null -> returns it (kills NegateConditional + NullReturn).
+    assertThat(saved.getProposedDiff()).isEqualTo(finalDiff);
+    // reasoning non-null path; promptTemplateVersion non-null path; PENDING (not retry).
+    assertThat(saved.getReasoning()).isEqualTo("reasoned");
+    assertThat(saved.getPromptTemplateVersion()).isEqualTo("v7");
+    assertThat(saved.getStatus()).isEqualTo(PendingChangeStatus.PENDING);
+    // safe(confidence): non-null passes through unchanged.
+    assertThat(saved.getConfidence()).isEqualByComparingTo("0.91");
+  }
+
+  @Test
+  void inserted_row_defaults_when_response_fields_and_template_are_null() {
+    PendingChangeRepository repo = mock(PendingChangeRepository.class);
+    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
+        .thenReturn(Optional.empty());
+    PendingChangeStore store = new PendingChangeStore(repo, events, config());
+
+    // null reasoning, null finalDiffJson, null confidence, null promptTemplateVersion.
+    RecipeAdaptationResponse resp =
+        new RecipeAdaptationResponse(
+            0,
+            AdaptationClassification.VERSION,
+            null,
+            "",
+            null,
+            BigDecimal.valueOf(0.8),
+            null,
+            null,
+            List.of());
+
+    store.create(
+        job(), resp, ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), null);
+
+    ArgumentCaptor<PendingChange> cap = ArgumentCaptor.forClass(PendingChange.class);
+    verify(repo).saveAndFlush(cap.capture());
+    PendingChange saved = cap.getValue();
+    // reasoning() == null -> "" ; promptTemplateVersion == null -> "v0".
+    assertThat(saved.getReasoning()).isEmpty();
+    assertThat(saved.getPromptTemplateVersion()).isEqualTo("v0");
+    // diffNode: finalDiffJson == null -> empty object node (not null).
+    assertThat(saved.getProposedDiff()).isNotNull();
+    assertThat(saved.getProposedDiff().isObject()).isTrue();
+    assertThat(saved.getProposedDiff().isEmpty()).isTrue();
+    // safe(null) -> BigDecimal.ZERO.
+    assertThat(saved.getConfidence()).isEqualByComparingTo("0");
+  }
+
+  @Test
+  void retry_path_inserts_row_flagged_superseded() {
+    PendingChangeRepository repo = mock(PendingChangeRepository.class);
+    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
+        .thenReturn(Optional.empty())
+        .thenReturn(Optional.of(pending(UUID.randomUUID())));
+    when(repo.saveAndFlush(any(PendingChange.class)))
+        .thenThrow(new DataIntegrityViolationException("constraint"))
+        .thenAnswer(inv -> inv.getArgument(0));
+    PendingChangeStore store = new PendingChangeStore(repo, events, config());
+
+    store.create(
+        job(), response(), ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), "v1");
+
+    ArgumentCaptor<PendingChange> cap = ArgumentCaptor.forClass(PendingChange.class);
+    verify(repo, times(2)).saveAndFlush(cap.capture());
+    // 2nd (retry) insert must be flagged SUPERSEDED — kills the ternary-negation mutant on
+    // the `retryAsSuperseded ? SUPERSEDED : PENDING` status selection.
+    assertThat(cap.getAllValues().get(1).getStatus()).isEqualTo(PendingChangeStatus.SUPERSEDED);
+  }
+
   private static AdaptationJob job() {
     return AdaptationJob.builder()
         .id(UUID.randomUUID())

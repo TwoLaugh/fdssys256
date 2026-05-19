@@ -48,6 +48,24 @@ class ConfidenceFloorGateTest {
     assertThat(gate.evaluate(r)).isEqualTo(ValidationResult.LOW_CONFIDENCE);
   }
 
+  @Test
+  void confidence_exactly_at_floor_passes() {
+    // floor == 0.50; compareTo >= 0 is inclusive, so exactly 0.50 must PASS.
+    // A `> 0` boundary mutant would flag this as LOW_CONFIDENCE.
+    assertThat(gate.evaluate(response(new BigDecimal("0.50")))).isEqualTo(ValidationResult.PASSED);
+  }
+
+  @Test
+  void confidence_one_ulp_below_floor_is_low() {
+    assertThat(gate.evaluate(response(new BigDecimal("0.49"))))
+        .isEqualTo(ValidationResult.LOW_CONFIDENCE);
+  }
+
+  @Test
+  void null_response_treated_as_low() {
+    assertThat(gate.evaluate(null)).isEqualTo(ValidationResult.LOW_CONFIDENCE);
+  }
+
   private static RecipeAdaptationResponse response(BigDecimal conf) {
     return new RecipeAdaptationResponse(
         0,

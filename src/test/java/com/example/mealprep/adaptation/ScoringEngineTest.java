@@ -62,6 +62,61 @@ class ScoringEngineTest {
     assertThat(engine.shouldAutoSkipStageC(List.of(only))).isTrue();
   }
 
+  @Test
+  void auto_skip_false_for_empty_or_null_topN() {
+    assertThat(engine.shouldAutoSkipStageC(List.of())).isFalse();
+    assertThat(engine.shouldAutoSkipStageC(null)).isFalse();
+  }
+
+  @Test
+  void auto_skip_true_when_runner_up_score_is_exactly_zero() {
+    // runner.signum() <= 0 boundary: signum == 0 must take the trivial-win branch.
+    // A `< 0` mutant would fall through to the ratio path and divide-by-zero / mis-decide.
+    AdaptationCandidateDto top = candidate(0, BigDecimal.valueOf(0.9), BigDecimal.ZERO);
+    AdaptationCandidateDto runner = candidate(1, BigDecimal.ZERO, BigDecimal.ZERO);
+    assertThat(engine.shouldAutoSkipStageC(List.of(top, runner))).isTrue();
+  }
+
+  @Test
+  void auto_skip_true_when_runner_up_score_is_negative() {
+    AdaptationCandidateDto top = candidate(0, BigDecimal.valueOf(0.9), BigDecimal.ZERO);
+    AdaptationCandidateDto runner = candidate(1, BigDecimal.valueOf(-0.2), BigDecimal.ZERO);
+    assertThat(engine.shouldAutoSkipStageC(List.of(top, runner))).isTrue();
+  }
+
+  @Test
+  void auto_skip_false_when_ratio_exactly_equals_threshold() {
+    // autoSkipTopRatio == 2.00. top/runner == 0.8/0.4 == 2.00 exactly.
+    // Rule is STRICT `> ratio`, so equality must NOT skip. A `>=` boundary mutant flips this.
+    AdaptationCandidateDto top = candidate(0, new BigDecimal("0.80"), BigDecimal.ZERO);
+    AdaptationCandidateDto runner = candidate(1, new BigDecimal("0.40"), BigDecimal.ZERO);
+    assertThat(engine.shouldAutoSkipStageC(List.of(top, runner))).isFalse();
+  }
+
+  @Test
+  void auto_skip_true_when_ratio_just_over_threshold() {
+    AdaptationCandidateDto top = candidate(0, new BigDecimal("0.81"), BigDecimal.ZERO);
+    AdaptationCandidateDto runner = candidate(1, new BigDecimal("0.40"), BigDecimal.ZERO);
+    assertThat(engine.shouldAutoSkipStageC(List.of(top, runner))).isTrue();
+  }
+
+  @Test
+  void selectTopN_caps_at_configured_top_n() {
+    // config.candidateTopN() == 5; supply 7 -> exactly 5 returned, indices 0..4.
+    List<AdaptationCandidateDto> many =
+        java.util.stream.IntStream.range(0, 7)
+            .mapToObj(i -> candidate(i, BigDecimal.valueOf(0.9 - i * 0.05), BigDecimal.valueOf(i)))
+            .toList();
+    List<AdaptationCandidateDto> out = engine.selectTopN(many);
+    assertThat(out).hasSize(5);
+    assertThat(out).extracting(AdaptationCandidateDto::index).containsExactly(0, 1, 2, 3, 4);
+  }
+
+  @Test
+  void selectTopN_null_input_returns_empty() {
+    assertThat(engine.selectTopN(null)).isEmpty();
+  }
+
   private static AdaptationCandidateDto candidate(
       int index, BigDecimal taste, BigDecimal kcalDelta) {
     AdaptationRollupDto rollup =
