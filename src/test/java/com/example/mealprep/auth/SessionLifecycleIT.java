@@ -1,5 +1,6 @@
 package com.example.mealprep.auth;
 
+import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -7,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.entity.Session;
@@ -14,6 +16,7 @@ import com.example.mealprep.auth.domain.entity.User;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.testdata.AuthTestData;
+import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.Cookie;
@@ -34,11 +37,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestContainersConfig.class)
+@Import({TestContainersConfig.class, OpenApiValidatorConfig.class})
 @ActiveProfiles("test")
 class SessionLifecycleIT {
 
   @Autowired private MockMvc mvc;
+  @Autowired private OpenApiInteractionValidator openApiValidator;
   @Autowired private ObjectMapper objectMapper;
   @Autowired private UserRepository userRepository;
   @Autowired private SessionRepository sessionRepository;
@@ -61,6 +65,7 @@ class SessionLifecycleIT {
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(body)))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     Cookie cookie = result.getResponse().getCookie(authProperties.cookieName());
     UUID userId =
@@ -75,19 +80,24 @@ class SessionLifecycleIT {
     mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.username").value(fixture.username))
-        .andExpect(jsonPath("$.userId").value(fixture.userId.toString()));
+        .andExpect(jsonPath("$.userId").value(fixture.userId.toString()))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
   void getMe_returns401_withoutCookie() throws Exception {
-    mvc.perform(get("/api/v1/auth/me")).andExpect(status().isUnauthorized());
+    mvc.perform(get("/api/v1/auth/me"))
+        .andExpect(status().isUnauthorized())
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
   void getMe_returns401_withMangledCookie() throws Exception {
     Cookie tampered = new Cookie(authProperties.cookieName(), "this-is-not-a-valid-token");
 
-    mvc.perform(get("/api/v1/auth/me").cookie(tampered)).andExpect(status().isUnauthorized());
+    mvc.perform(get("/api/v1/auth/me").cookie(tampered))
+        .andExpect(status().isUnauthorized())
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -98,7 +108,9 @@ class SessionLifecycleIT {
     session.setExpiresAt(Instant.now().minus(1, ChronoUnit.DAYS));
     sessionRepository.saveAndFlush(session);
 
-    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie)).andExpect(status().isUnauthorized());
+    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie))
+        .andExpect(status().isUnauthorized())
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -109,7 +121,9 @@ class SessionLifecycleIT {
     session.setRevokedAt(Instant.now());
     sessionRepository.saveAndFlush(session);
 
-    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie)).andExpect(status().isUnauthorized());
+    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie))
+        .andExpect(status().isUnauthorized())
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -120,7 +134,9 @@ class SessionLifecycleIT {
     user.setDeletedAt(Instant.now());
     userRepository.saveAndFlush(user);
 
-    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie)).andExpect(status().isUnauthorized());
+    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie))
+        .andExpect(status().isUnauthorized())
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -129,13 +145,16 @@ class SessionLifecycleIT {
 
     mvc.perform(post("/api/v1/auth/logout").cookie(fixture.cookie))
         .andExpect(status().isNoContent())
-        .andExpect(cookie().maxAge(authProperties.cookieName(), 0));
+        .andExpect(cookie().maxAge(authProperties.cookieName(), 0))
+        .andExpect(openApi().isValid(openApiValidator));
 
     Session session = sessionRepository.findAll().get(0);
     assertThat(session.getRevokedAt()).isNotNull();
 
     // Subsequent /me with the same cookie should now fail.
-    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie)).andExpect(status().isUnauthorized());
+    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie))
+        .andExpect(status().isUnauthorized())
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -144,7 +163,8 @@ class SessionLifecycleIT {
 
     mvc.perform(post("/api/v1/auth/logout").cookie(tampered))
         .andExpect(status().isNoContent())
-        .andExpect(cookie().maxAge(authProperties.cookieName(), 0));
+        .andExpect(cookie().maxAge(authProperties.cookieName(), 0))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -152,8 +172,12 @@ class SessionLifecycleIT {
     RegisteredFixture fixture = register();
     Instant beforeFirstRequest = sessionRepository.findAll().get(0).getLastSeenAt();
 
-    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie)).andExpect(status().isOk());
-    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie)).andExpect(status().isOk());
+    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie))
+        .andExpect(status().isOk())
+        .andExpect(openApi().isValid(openApiValidator));
+    mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie))
+        .andExpect(status().isOk())
+        .andExpect(openApi().isValid(openApiValidator));
 
     Instant afterRequests = sessionRepository.findAll().get(0).getLastSeenAt();
     assertThat(afterRequests).isEqualTo(beforeFirstRequest);

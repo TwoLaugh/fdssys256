@@ -1,10 +1,12 @@
 package com.example.mealprep.recipe;
 
+import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
@@ -41,6 +43,7 @@ import org.springframework.test.web.servlet.MvcResult;
 class RecipeSubstitutionsFlowIT {
 
   @Autowired private MockMvc mvc;
+  @Autowired private OpenApiInteractionValidator openApiValidator;
   @Autowired private ObjectMapper objectMapper;
   @Autowired private UserRepository userRepository;
   @Autowired private SessionRepository sessionRepository;
@@ -74,6 +77,7 @@ class RecipeSubstitutionsFlowIT {
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(body)))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     Cookie cookie = result.getResponse().getCookie(authProperties.cookieName());
     String userIdJson =
@@ -92,6 +96,7 @@ class RecipeSubstitutionsFlowIT {
                     .content(
                         objectMapper.writeValueAsString(RecipeTestData.defaultCreateRequest())))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     JsonNode body = objectMapper.readTree(created.getResponse().getContentAsString());
     return new CreatedRecipe(
@@ -117,6 +122,7 @@ class RecipeSubstitutionsFlowIT {
             .andExpect(jsonPath("$.state").value("PROPOSED"))
             .andExpect(jsonPath("$.recipeId").value(r.recipeId().toString()))
             .andExpect(jsonPath("$.versionId").value(r.versionId().toString()))
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     JsonNode subJson = objectMapper.readTree(proposed.getResponse().getContentAsString());
     UUID subId = UUID.fromString(subJson.get("id").asText());
@@ -132,6 +138,7 @@ class RecipeSubstitutionsFlowIT {
                         objectMapper.writeValueAsString(RecipeTestData.acceptRequest(subVersion))))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.state").value("ACCEPTED"))
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     long acceptedVersion =
         objectMapper.readTree(accepted.getResponse().getContentAsString()).get("version").asLong();
@@ -141,7 +148,8 @@ class RecipeSubstitutionsFlowIT {
             get("/api/v1/recipes/" + r.recipeId() + "/substitutions/active").cookie(user.cookie()))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.length()").value(1))
-        .andExpect(jsonPath("$[0].state").value("ACCEPTED"));
+        .andExpect(jsonPath("$[0].state").value("ACCEPTED"))
+        .andExpect(openApi().isValid(openApiValidator));
 
     // list for version
     mvc.perform(
@@ -149,7 +157,8 @@ class RecipeSubstitutionsFlowIT {
                 .param("versionId", r.versionId().toString())
                 .cookie(user.cookie()))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.length()").value(1));
+        .andExpect(jsonPath("$.length()").value(1))
+        .andExpect(openApi().isValid(openApiValidator));
 
     // with-substitutions overlay read
     mvc.perform(
@@ -160,7 +169,8 @@ class RecipeSubstitutionsFlowIT {
                     + "/with-substitutions")
                 .cookie(user.cookie()))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.appliedSubstitutionIds.length()").value(1));
+        .andExpect(jsonPath("$.appliedSubstitutionIds.length()").value(1))
+        .andExpect(openApi().isValid(openApiValidator));
 
     // promote-to-version
     MvcResult promoted =
@@ -179,6 +189,7 @@ class RecipeSubstitutionsFlowIT {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.versionNumber").value(2))
             .andExpect(jsonPath("$.trigger").value("SUBSTITUTION_PROMOTION"))
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     UUID newVersionId =
         UUID.fromString(
@@ -211,6 +222,7 @@ class RecipeSubstitutionsFlowIT {
                         objectMapper.writeValueAsString(
                             RecipeTestData.defaultSubstitutionRequest(r.versionId()))))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     JsonNode subJson = objectMapper.readTree(proposed.getResponse().getContentAsString());
     UUID subId = UUID.fromString(subJson.get("id").asText());
@@ -224,7 +236,8 @@ class RecipeSubstitutionsFlowIT {
                     objectMapper.writeValueAsString(
                         RecipeTestData.rejectRequest(subVersion, "User changed mind."))))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.state").value("REJECTED"));
+        .andExpect(jsonPath("$.state").value("REJECTED"))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -254,7 +267,8 @@ class RecipeSubstitutionsFlowIT {
         .andExpect(
             jsonPath("$.type")
                 .value(
-                    "https://mealprep.example.com/problems/substitution-original-not-in-version"));
+                    "https://mealprep.example.com/problems/substitution-original-not-in-version"))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -271,6 +285,7 @@ class RecipeSubstitutionsFlowIT {
                         objectMapper.writeValueAsString(
                             RecipeTestData.defaultSubstitutionRequest(r.versionId()))))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     JsonNode subJson = objectMapper.readTree(proposed.getResponse().getContentAsString());
     UUID subId = UUID.fromString(subJson.get("id").asText());
@@ -290,7 +305,7 @@ class RecipeSubstitutionsFlowIT {
         .andExpect(status().isUnprocessableEntity())
         .andExpect(
             jsonPath("$.type")
-                .value(
-                    "https://mealprep.example.com/problems/substitution-promotion-precondition"));
+                .value("https://mealprep.example.com/problems/substitution-promotion-precondition"))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 }

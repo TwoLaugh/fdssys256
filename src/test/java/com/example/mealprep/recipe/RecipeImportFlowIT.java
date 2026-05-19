@@ -1,5 +1,6 @@
 package com.example.mealprep.recipe;
 
+import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -8,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
@@ -48,6 +50,16 @@ import org.springframework.test.web.servlet.MvcResult;
 class RecipeImportFlowIT {
 
   @Autowired private MockMvc mvc;
+  @Autowired private OpenApiInteractionValidator openApiValidator;
+
+  /**
+   * Response-only validator for the deliberately-malformed negative case below; see {@link
+   * com.example.mealprep.testsupport.OpenApiValidatorConfig#responseOnlyOpenApiValidator()}.
+   */
+  @Autowired
+  @org.springframework.beans.factory.annotation.Qualifier("responseOnlyOpenApiValidator")
+  private OpenApiInteractionValidator responseOnlyOpenApiValidator;
+
   @Autowired private ObjectMapper objectMapper;
   @Autowired private UserRepository userRepository;
   @Autowired private SessionRepository sessionRepository;
@@ -87,6 +99,7 @@ class RecipeImportFlowIT {
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(body)))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     Cookie cookie = result.getResponse().getCookie(authProperties.cookieName());
     String userIdJson =
@@ -104,7 +117,8 @@ class RecipeImportFlowIT {
                 .content(
                     objectMapper.writeValueAsString(
                         new ImportRecipeFromUrlRequest("https://example.com/r", null))))
-        .andExpect(status().isUnauthorized());
+        .andExpect(status().isUnauthorized())
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -126,6 +140,7 @@ class RecipeImportFlowIT {
             .andExpect(jsonPath("$.currentVersionBody.trigger").value("IMPORT"))
             .andExpect(jsonPath("$.branches.length()").value(1))
             .andExpect(jsonPath("$.branches[0].name").value("main"))
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
 
     UUID recipeId =
@@ -167,7 +182,8 @@ class RecipeImportFlowIT {
         .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
         .andExpect(
             jsonPath("$.type").value("https://mealprep.example.com/problems/recipe-import-failure"))
-        .andExpect(jsonPath("$.failureReason").value("no_extractor_matched"));
+        .andExpect(jsonPath("$.failureReason").value("no_extractor_matched"))
+        .andExpect(openApi().isValid(openApiValidator));
 
     Long count = jdbcTemplate.queryForObject("SELECT count(*) FROM recipe_recipes", Long.class);
     assertThat(count).isEqualTo(0L);
@@ -187,18 +203,23 @@ class RecipeImportFlowIT {
                     objectMapper.writeValueAsString(
                         new ImportRecipeFromUrlRequest("https://example.com/timeout", null))))
         .andExpect(status().isUnprocessableEntity())
-        .andExpect(jsonPath("$.failureReason").value("fetch_timeout"));
+        .andExpect(jsonPath("$.failureReason").value("fetch_timeout"))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
   void importFromUrl_blankUrl_returns400() throws Exception {
     AuthedUser user = registerUser();
+    // The blank url is intentionally contract-invalid (violates url.minLength) to exercise 400
+    // handling, so the request side can never satisfy openApi().isValid(). Validate the response
+    // contract only — the 400 ProblemDetail must still conform.
     mvc.perform(
             post("/api/v1/recipes/imports/url")
                 .cookie(user.cookie())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(new ImportRecipeFromUrlRequest("", null))))
-        .andExpect(status().isBadRequest());
+        .andExpect(status().isBadRequest())
+        .andExpect(openApi().isValid(responseOnlyOpenApiValidator));
   }
 
   // ---------------- GET /import-provenance ----------------
@@ -217,6 +238,7 @@ class RecipeImportFlowIT {
                         objectMapper.writeValueAsString(
                             new ImportRecipeFromUrlRequest("https://example.com/jsonld", null))))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     UUID recipeId =
         UUID.fromString(
@@ -228,7 +250,8 @@ class RecipeImportFlowIT {
         .andExpect(jsonPath("$.sourceType").value("URL"))
         .andExpect(jsonPath("$.sourceUrl").value("https://example.com/jsonld"))
         .andExpect(jsonPath("$.extractionMethod").value("json_ld"))
-        .andExpect(jsonPath("$.importedByUserId").value(user.userId().toString()));
+        .andExpect(jsonPath("$.importedByUserId").value(user.userId().toString()))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -239,7 +262,8 @@ class RecipeImportFlowIT {
                 .cookie(user.cookie()))
         .andExpect(status().isNotFound())
         .andExpect(
-            jsonPath("$.type").value("https://mealprep.example.com/problems/recipe-not-found"));
+            jsonPath("$.type").value("https://mealprep.example.com/problems/recipe-not-found"))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -256,6 +280,7 @@ class RecipeImportFlowIT {
                             com.example.mealprep.recipe.testdata.RecipeTestData
                                 .defaultCreateRequest())))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     UUID recipeId =
         UUID.fromString(
@@ -265,13 +290,15 @@ class RecipeImportFlowIT {
         .andExpect(status().isNotFound())
         .andExpect(
             jsonPath("$.type")
-                .value("https://mealprep.example.com/problems/recipe-import-not-found"));
+                .value("https://mealprep.example.com/problems/recipe-import-not-found"))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
   void getImportProvenance_returns401_whenAnonymous() throws Exception {
     mvc.perform(get("/api/v1/recipes/" + UUID.randomUUID() + "/import-provenance"))
-        .andExpect(status().isUnauthorized());
+        .andExpect(status().isUnauthorized())
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   // ---------------- helpers ----------------
