@@ -152,4 +152,44 @@ class ArchiveEligibilityScannerTest {
     assertThat(n).isEqualTo(0);
     verify(recipeRepository).findArchiveEligibleSystemRecipes(any(), eq(PageRequest.of(0, 1000)));
   }
+
+  @Test
+  void runScheduled_propagatesNonZeroCountFromRunOnce() {
+    // runScheduled returns runOnce()'s result verbatim; a non-zero return kills the
+    // "replaced int return with 0" mutant on runScheduled (L57).
+    List<UUID> ids = new ArrayList<>();
+    for (int i = 0; i < 4; i++) {
+      ids.add(UUID.randomUUID());
+    }
+    when(recipeRepository.findArchiveEligibleSystemRecipes(any(Instant.class), any(Pageable.class)))
+        .thenReturn(ids);
+    when(recipeRepository.markArchived(any(), any(Instant.class))).thenReturn(4);
+
+    assertThat(scanner.runScheduled()).isEqualTo(4);
+  }
+
+  @Test
+  void runOnce_exactMultipleOfBatch_doesNotRunAnEmptyTrailingBatch() {
+    // 200 ids = exactly 2 batches of 100. The loop guard `i < ids.size()` must stop at i=200; a
+    // `<=` boundary mutant (L78) would run a 3rd iteration with an empty subList(200,200).
+    List<UUID> ids = new ArrayList<>();
+    for (int i = 0; i < 200; i++) {
+      ids.add(UUID.randomUUID());
+    }
+    when(recipeRepository.findArchiveEligibleSystemRecipes(any(Instant.class), any(Pageable.class)))
+        .thenReturn(ids);
+    when(recipeRepository.markArchived(any(), any(Instant.class))).thenReturn(100);
+
+    int flagged = scanner.runOnce();
+
+    assertThat(flagged).isEqualTo(200);
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<UUID>> chunkCaptor = ArgumentCaptor.forClass(List.class);
+    verify(recipeRepository, times(2)).markArchived(chunkCaptor.capture(), any(Instant.class));
+    // Every persisted chunk must be a full, non-empty 100-id batch — no trailing empty chunk.
+    for (List<UUID> chunk : chunkCaptor.getAllValues()) {
+      assertThat(chunk).hasSize(100);
+    }
+    verify(events, times(200)).publishEvent(any(RecipeArchivedEvent.class));
+  }
 }
