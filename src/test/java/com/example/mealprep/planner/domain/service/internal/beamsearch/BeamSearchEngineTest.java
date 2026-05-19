@@ -226,6 +226,137 @@ class BeamSearchEngineTest {
     }
   }
 
+  // ---- mutation-killing additions -------------------------------------------------------------
+
+  /**
+   * A skeleton with three eaters → assignment servings == 3 (defaultServings returns {@code
+   * eaters().size()}). Kills the L162 PrimitiveReturns mutant ({@code return skel.eaters().size()}
+   * → {@code return 0}) and the L159 NegateConditionals (the non-empty eaters branch must be
+   * taken).
+   */
+  @Test
+  void servings_defaults_to_eater_count() {
+    UUID e1 = UUID.randomUUID();
+    UUID e2 = UUID.randomUUID();
+    UUID e3 = UUID.randomUUID();
+    MealSlotSkeleton slot =
+        new MealSlotSkeleton(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            WEEK_START,
+            SlotKind.DINNER,
+            "dinner",
+            60,
+            true,
+            new ArrayList<>(List.of(e1, e2, e3)));
+    RecipeDto r = PlanTestData.trivialRecipe(uuidOf(7), SlotKind.DINNER);
+    PlanCompositionContext ctx = ctxWith(List.of(slot), List.of(r));
+
+    BeamSearchOutcome outcome = engine.search(ctx, new BeamSearchConfig(2, 1, 50));
+
+    assertThat(outcome.candidates().get(0).assignments().get(0).servings()).isEqualTo(3);
+  }
+
+  /**
+   * A skeleton with NO eaters → assignment servings == 1 (defaultServings fallback). Kills the L160
+   * PrimitiveReturns mutant ({@code return 1} → {@code return 0}) and the L159 NegateConditionals
+   * (the empty-eaters branch must be taken).
+   */
+  @Test
+  void servings_defaults_to_one_when_no_eaters() {
+    MealSlotSkeleton slot =
+        new MealSlotSkeleton(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            WEEK_START,
+            SlotKind.DINNER,
+            "dinner",
+            60,
+            true,
+            new ArrayList<>());
+    RecipeDto r = PlanTestData.trivialRecipe(uuidOf(8), SlotKind.DINNER);
+    PlanCompositionContext ctx = ctxWith(List.of(slot), List.of(r));
+
+    BeamSearchOutcome outcome = engine.search(ctx, new BeamSearchConfig(2, 1, 50));
+
+    assertThat(outcome.candidates().get(0).assignments().get(0).servings()).isEqualTo(1);
+  }
+
+  /**
+   * A normal recipe with a version body → the produced assignment carries that recipe's
+   * currentVersionBody id as recipeVersionId (NOT null). Kills the L166 NegateConditionals on
+   * {@code currentVersionBody() == null} in toAssignment — negating it would null out the version
+   * id for a recipe that has one.
+   */
+  @Test
+  void assignment_carries_recipe_version_id() {
+    MealSlotSkeleton slot = PlanTestData.skeletonFor(WEEK_START, 0, SlotKind.DINNER, 60);
+    RecipeDto r = PlanTestData.trivialRecipe(uuidOf(9), SlotKind.DINNER);
+    PlanCompositionContext ctx = ctxWith(List.of(slot), List.of(r));
+
+    BeamSearchOutcome outcome = engine.search(ctx, new BeamSearchConfig(2, 1, 50));
+
+    SlotAssignment a = outcome.candidates().get(0).assignments().get(0);
+    assertThat(a.recipeVersionId()).isEqualTo(r.currentVersionBody().id());
+  }
+
+  /**
+   * Two slots, only slot-0 pinned: slot-1 must be filled from the pool, NOT with slot-0's pinned
+   * assignment. Kills the L133 BooleanTrueReturnVals mutant in the pinned-filter lambda ({@code
+   * a.slotId().equals(skel.slotId())} → {@code true}) — if every assignment matched, slot-1 would
+   * wrongly inherit slot-0's pinned recipe.
+   */
+  @Test
+  void pinned_filter_matches_only_its_own_slot() {
+    MealSlotSkeleton slot0 = PlanTestData.skeletonFor(WEEK_START, 0, SlotKind.DINNER, 60);
+    MealSlotSkeleton slot1 = PlanTestData.skeletonFor(WEEK_START, 1, SlotKind.DINNER, 60);
+    UUID pinnedRecipe = uuidOf(500);
+    UUID poolRecipe = uuidOf(600);
+    SlotAssignment pinned =
+        new SlotAssignment(
+            slot0.dayId(),
+            slot0.slotId(),
+            slot0.slotIndex(),
+            slot0.onDate(),
+            slot0.kind(),
+            pinnedRecipe,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            2,
+            true);
+
+    PlanCompositionContext ctx =
+        new PlanCompositionContext(
+            UUID.randomUUID(),
+            WEEK_START,
+            List.of(slot0, slot1),
+            Map.of(),
+            Map.of(),
+            null,
+            simpleProvisions(),
+            null,
+            new RecipePoolSnapshot(
+                List.of(PlanTestData.trivialRecipe(poolRecipe, SlotKind.DINNER)),
+                Instant.parse("2026-01-01T00:00:00Z")),
+            List.of(pinned),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            Map.of());
+
+    BeamSearchOutcome outcome = engine.search(ctx, new BeamSearchConfig(5, 1, 50));
+
+    CandidatePlan top = outcome.candidates().get(0);
+    assertThat(top.assignments()).hasSize(2);
+    Map<UUID, UUID> recipeBySlot = new HashMap<>();
+    for (SlotAssignment a : top.assignments()) {
+      recipeBySlot.put(a.slotId(), a.recipeId());
+    }
+    assertThat(recipeBySlot.get(slot0.slotId())).isEqualTo(pinnedRecipe);
+    assertThat(recipeBySlot.get(slot1.slotId())).isEqualTo(poolRecipe);
+  }
+
   // ---- helpers --------------------------------------------------------------------------------
 
   private static PlannerProperties newProps(Duration timeout) {

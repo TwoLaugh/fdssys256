@@ -14,6 +14,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -144,5 +145,73 @@ class PinningSetCalculatorTest {
     MealSlot s = slot(SlotState.PLANNED, null);
     // NUTRITION trigger + slot in the affected set, but well outside lock window => regenerable.
     assertThat(pinReason(calc, s, 24, ReoptTriggerKind.NUTRITION, Set.of(s.getId()))).isNull();
+  }
+
+  // ---- isPinned convenience-wrapper coverage (kills L122-124 mutants) -------------------------
+
+  @SuppressWarnings("unchecked")
+  private static boolean isPinned(
+      Object calc,
+      MealSlot slot,
+      Map<UUID, Long> epochBySlot,
+      int lockHours,
+      ReoptTriggerKind trigger,
+      Set<UUID> affected)
+      throws Exception {
+    Method m =
+        calc.getClass()
+            .getDeclaredMethod(
+                "isPinned",
+                MealSlot.class,
+                Map.class,
+                int.class,
+                ReoptTriggerKind.class,
+                Set.class);
+    m.setAccessible(true);
+    return (boolean) m.invoke(calc, slot, epochBySlot, lockHours, trigger, affected);
+  }
+
+  /**
+   * {@code isPinned} returns true exactly when {@code pinReason} is non-null. A COOKED slot whose
+   * date is present in the epoch map → pinned. Kills the L124 {@code != null} NegateConditionals /
+   * BooleanTrueReturnVals (a {@code == null} or constant-true would mis-report this slot).
+   */
+  @Test
+  void isPinned_true_for_cooked_slot_with_known_date() throws Exception {
+    Object calc = newCalc(wellBefore());
+    MealSlot s = slot(SlotState.COOKED, null);
+    assertThat(
+            isPinned(
+                calc, s, Map.of(s.getId(), SLOT_EPOCH_DAY), 24, ReoptTriggerKind.USER, Set.of()))
+        .isTrue();
+  }
+
+  /**
+   * A PLANNED slot well outside the lock window with its date known → NOT pinned. Combined with the
+   * test above this pins the exact {@code pinReason(...) != null} boolean, killing the L124
+   * BooleanTrueReturnVals mutant (constant true would wrongly report this regenerable slot pinned).
+   */
+  @Test
+  void isPinned_false_for_planned_slot_outside_lock_window() throws Exception {
+    Object calc = newCalc(wellBefore());
+    MealSlot s = slot(SlotState.PLANNED, null);
+    assertThat(
+            isPinned(
+                calc, s, Map.of(s.getId(), SLOT_EPOCH_DAY), 24, ReoptTriggerKind.USER, Set.of()))
+        .isFalse();
+  }
+
+  /**
+   * Slot id ABSENT from the epoch map, but the slot is EATEN so the state check pins it BEFORE the
+   * lock-window epoch arithmetic runs. This exercises the L123 {@code epochDay == null} sentinel
+   * branch without tripping the (intentionally extreme) {@code Long.MAX_VALUE / 86_400} epoch-day
+   * overflow in the lock-window path, and still asserts a true result. (The negated-guard mutant
+   * would dereference a null Long → NPE here instead of returning pinned.)
+   */
+  @Test
+  void isPinned_missing_slot_date_still_pins_eaten_slot() throws Exception {
+    Object calc = newCalc(wellBefore());
+    MealSlot s = slot(SlotState.EATEN, null);
+    assertThat(isPinned(calc, s, Map.of(), 24, ReoptTriggerKind.USER, Set.of())).isTrue();
   }
 }

@@ -39,6 +39,26 @@ class CostSubScoreTest {
         .isEqualByComparingTo(new BigDecimal("0.5"));
   }
 
+  /**
+   * Zero weekly budget must short-circuit to neutral 0.5 (the {@code weeklyTarget().compareTo(0) <=
+   * 0} guard). Kills the L70 ConditionalsBoundary mutant {@code <= 0} → {@code < 0}: with a zero
+   * target the mutated guard is false and the code divides estimatedCost by a zero budget, throwing
+   * ArithmeticException instead of returning 0.5.
+   */
+  @Test
+  void zero_budget_returns_neutral_not_divide_by_zero() {
+    UUID id = UUID.randomUUID();
+    RecipeDto recipe = PlanTestData.scoredRecipe(id, 20, "Thai", "tofu", "fry", List.of("rice"));
+    var bundle =
+        PlanTestData.provisionsBundle(PlanTestData.budget(BigDecimal.ZERO), Map.of(), List.of());
+    PlanCompositionContext ctx =
+        PlanTestData.scoringContext(List.of(), List.of(recipe), bundle, Map.of(), Map.of());
+    CandidatePlan plan =
+        PlanTestData.candidatePlan(
+            WEEK, List.of(PlanTestData.assignment(UUID.randomUUID(), id, WEEK, 0, 2)));
+    assertThat(calc.compute(plan, ctx)).isEqualByComparingTo(new BigDecimal("0.5"));
+  }
+
   @Test
   void no_supplier_prices_collapses_to_neutral() {
     UUID id = UUID.randomUUID();

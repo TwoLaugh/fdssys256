@@ -152,14 +152,25 @@ class PlanWriteServiceImplTest {
   void rejectPlan_generated_setsRejectedReasonAndAt_publishesRejected() {
     Plan plan = generatedPlan();
 
-    service.rejectPlan(plan.getId(), "not enough variety");
+    UUID returned = service.rejectPlan(plan.getId(), "not enough variety");
 
+    // Kills L159 NullReturnVals: the method must return the plan id, not null.
+    assertThat(returned).isEqualTo(plan.getId());
     assertThat(plan.getStatus()).isEqualTo(PlanStatus.REJECTED);
     assertThat(plan.getRejectedReason()).isEqualTo("not enough variety");
     assertThat(plan.getRejectedAt()).isEqualTo(NOW);
+    verify(planRepository).save(plan);
     ArgumentCaptor<PlanRejectedEvent> ev = ArgumentCaptor.forClass(PlanRejectedEvent.class);
     verify(eventPublisher).publishEvent(ev.capture());
     assertThat(ev.getValue().reason()).isEqualTo("not enough variety");
+    assertThat(ev.getValue().planId()).isEqualTo(plan.getId());
+    assertThat(ev.getValue().occurredAt()).isEqualTo(NOW);
+    // Kills L150 VoidMethodCall: logTransition must emit a REJECTED transition audit row.
+    ArgumentCaptor<DecisionLogEntry> log = ArgumentCaptor.forClass(DecisionLogEntry.class);
+    verify(decisionLogWriter).write(log.capture());
+    assertThat(log.getValue().kind()).isEqualTo(PlannerDecisionKind.PLAN_LIFECYCLE_TRANSITION);
+    assertThat(log.getValue().inputs().get("to").asText()).isEqualTo("REJECTED");
+    assertThat(log.getValue().inputs().get("from").asText()).isEqualTo("GENERATED");
   }
 
   @Test
@@ -192,12 +203,24 @@ class PlanWriteServiceImplTest {
     Plan plan = PlanTestData.newPlanGraph(UUID.randomUUID(), WEEK, 1, PlanStatus.ACTIVE, 1, 1);
     when(planRepository.findById(plan.getId())).thenReturn(Optional.of(plan));
 
-    service.abandonPlan(plan.getId(), "going on holiday");
+    UUID returned = service.abandonPlan(plan.getId(), "going on holiday");
 
+    // Kills L181 NullReturnVals: must return the plan id, not null.
+    assertThat(returned).isEqualTo(plan.getId());
     assertThat(plan.getStatus()).isEqualTo(PlanStatus.ABANDONED);
     assertThat(plan.getAbandonedReason()).isEqualTo("going on holiday");
     assertThat(plan.getAbandonedAt()).isEqualTo(NOW);
-    verify(eventPublisher).publishEvent(any(PlanAbandonedEvent.class));
+    verify(planRepository).save(plan);
+    ArgumentCaptor<PlanAbandonedEvent> ev = ArgumentCaptor.forClass(PlanAbandonedEvent.class);
+    verify(eventPublisher).publishEvent(ev.capture());
+    assertThat(ev.getValue().planId()).isEqualTo(plan.getId());
+    assertThat(ev.getValue().reason()).isEqualTo("going on holiday");
+    // Kills L172 VoidMethodCall: logTransition must emit an ABANDONED transition audit row.
+    ArgumentCaptor<DecisionLogEntry> log = ArgumentCaptor.forClass(DecisionLogEntry.class);
+    verify(decisionLogWriter).write(log.capture());
+    assertThat(log.getValue().kind()).isEqualTo(PlannerDecisionKind.PLAN_LIFECYCLE_TRANSITION);
+    assertThat(log.getValue().inputs().get("to").asText()).isEqualTo("ABANDONED");
+    assertThat(log.getValue().inputs().get("from").asText()).isEqualTo("ACTIVE");
   }
 
   @Test
@@ -228,6 +251,8 @@ class PlanWriteServiceImplTest {
             .findFirst()
             .orElseThrow();
     assertThat(copy.getStatus()).isEqualTo(PlanStatus.GENERATED);
+    // Kills L226 NullReturnVals: the returned id must be exactly the new copy's id.
+    assertThat(newId).isEqualTo(copy.getId());
     assertThat(copy.getGeneration()).isEqualTo(current.getGeneration() + 1);
     assertThat(copy.getReplacesPlanId()).isEqualTo(current.getId());
     // copyForward deep-copies the graph with fresh ids.
@@ -236,8 +261,18 @@ class PlanWriteServiceImplTest {
     assertThat(copy.getDays().get(0).getSlots().get(0).getScheduledRecipe().getRecipeId())
         .isEqualTo(current.getDays().get(0).getSlots().get(0).getScheduledRecipe().getRecipeId());
 
-    verify(eventPublisher).publishEvent(any(PlanSupersededEvent.class));
-    verify(eventPublisher).publishEvent(any(PlanGeneratedEvent.class));
+    ArgumentCaptor<PlanSupersededEvent> sup = ArgumentCaptor.forClass(PlanSupersededEvent.class);
+    verify(eventPublisher).publishEvent(sup.capture());
+    assertThat(sup.getValue().planId()).isEqualTo(current.getId());
+    assertThat(sup.getValue().replacedByPlanId()).isEqualTo(copy.getId());
+    ArgumentCaptor<PlanGeneratedEvent> gen = ArgumentCaptor.forClass(PlanGeneratedEvent.class);
+    verify(eventPublisher).publishEvent(gen.capture());
+    assertThat(gen.getValue().planId()).isEqualTo(copy.getId());
+    // Kills L202 VoidMethodCall: logTransition must emit a SUPERSEDED transition audit row.
+    ArgumentCaptor<DecisionLogEntry> log = ArgumentCaptor.forClass(DecisionLogEntry.class);
+    verify(decisionLogWriter).write(log.capture());
+    assertThat(log.getValue().kind()).isEqualTo(PlannerDecisionKind.PLAN_LIFECYCLE_TRANSITION);
+    assertThat(log.getValue().inputs().get("to").asText()).isEqualTo("SUPERSEDED");
   }
 
   @Test
@@ -353,6 +388,59 @@ class PlanWriteServiceImplTest {
     assertThat(sr.getServings()).isEqualTo(4);
     verify(eventPublisher).publishEvent(any(PlanSupersededEvent.class));
     verify(eventPublisher).publishEvent(any(PlanGeneratedEvent.class));
+    verify(suggestionRepository).save(sug);
+    // Kills L331/L338 VoidMethodCall: both the REOPT_SUGGESTION_ACCEPTED and the
+    // PLAN_LIFECYCLE_TRANSITION (SUPERSEDED) audit rows must be emitted.
+    ArgumentCaptor<DecisionLogEntry> log = ArgumentCaptor.forClass(DecisionLogEntry.class);
+    verify(decisionLogWriter, times(2)).write(log.capture());
+    assertThat(log.getAllValues())
+        .extracting(DecisionLogEntry::kind)
+        .containsExactlyInAnyOrder(
+            PlannerDecisionKind.REOPT_SUGGESTION_ACCEPTED,
+            PlannerDecisionKind.PLAN_LIFECYCLE_TRANSITION);
+  }
+
+  /**
+   * The existing copy slot already has a ScheduledRecipe, so the {@code else} (mutate-in-place)
+   * branch runs. A change carrying explicit version + branch ids must overwrite them. Kills the
+   * L306 / L309 NegateConditionals (the {@code newRecipeVersionId != null} / {@code
+   * newRecipeBranchId != null} guards) — negating either would skip the overwrite.
+   */
+  @Test
+  void acceptReoptSuggestion_changeWithVersionAndBranch_overwritesInPlace() {
+    Plan current = PlanTestData.newPlanGraph(UUID.randomUUID(), WEEK, 1, PlanStatus.ACTIVE, 1, 1);
+    MealSlot originalSlot = current.getDays().get(0).getSlots().get(0);
+    UUID newRecipeId = UUID.randomUUID();
+    UUID newVersionId = UUID.randomUUID();
+    UUID newBranchId = UUID.randomUUID();
+    ProposedSlotChange change =
+        new ProposedSlotChange(
+            originalSlot.getId(),
+            null,
+            newRecipeId,
+            newVersionId,
+            newBranchId,
+            2,
+            "explicit version + branch");
+    MealPrepPlanReoptSuggestion sug =
+        suggestion(current.getId(), ReoptSuggestionStatus.PENDING, List.of(change));
+    when(suggestionRepository.findById(sug.getId())).thenReturn(Optional.of(sug));
+    when(planRepository.findById(current.getId())).thenReturn(Optional.of(current));
+
+    service.acceptReoptSuggestion(current.getId(), sug.getId());
+
+    ArgumentCaptor<Plan> saved = ArgumentCaptor.forClass(Plan.class);
+    verify(planRepository, times(2)).save(saved.capture());
+    Plan copy =
+        saved.getAllValues().stream()
+            .filter(p -> p.getStatus() == PlanStatus.GENERATED)
+            .findFirst()
+            .orElseThrow();
+    ScheduledRecipe sr = copy.getDays().get(0).getSlots().get(0).getScheduledRecipe();
+    assertThat(sr.getRecipeId()).isEqualTo(newRecipeId);
+    assertThat(sr.getRecipeVersionId()).isEqualTo(newVersionId);
+    assertThat(sr.getRecipeBranchId()).isEqualTo(newBranchId);
+    assertThat(sr.getServings()).isEqualTo(2);
   }
 
   @Test
@@ -429,6 +517,80 @@ class PlanWriteServiceImplTest {
     assertThat(sr.getServings()).isEqualTo(2); // unchanged: newServings was 0
   }
 
+  /**
+   * Slot has NO ScheduledRecipe on the copy (cleared on the original before copy-forward), so the
+   * {@code sr == null} branch builds a fresh one. With newRecipeVersionId / newRecipeBranchId null,
+   * the L292-299 ternaries must fall back to newRecipeId. Covers the previously NO_COVERAGE
+   * new-ScheduledRecipe path and kills the L293/L297 ternary-condition mutants.
+   */
+  @Test
+  void acceptReoptSuggestion_slotWithoutScheduledRecipe_buildsNewOne_fallbackIds() {
+    Plan current = PlanTestData.newPlanGraph(UUID.randomUUID(), WEEK, 1, PlanStatus.ACTIVE, 1, 1);
+    MealSlot originalSlot = current.getDays().get(0).getSlots().get(0);
+    originalSlot.setScheduledRecipe(null); // copy slot will also have none
+    UUID newRecipeId = UUID.randomUUID();
+    ProposedSlotChange change =
+        new ProposedSlotChange(originalSlot.getId(), null, newRecipeId, null, null, 5, "fill slot");
+    MealPrepPlanReoptSuggestion sug =
+        suggestion(current.getId(), ReoptSuggestionStatus.PENDING, List.of(change));
+    when(suggestionRepository.findById(sug.getId())).thenReturn(Optional.of(sug));
+    when(planRepository.findById(current.getId())).thenReturn(Optional.of(current));
+
+    service.acceptReoptSuggestion(current.getId(), sug.getId());
+
+    ArgumentCaptor<Plan> saved = ArgumentCaptor.forClass(Plan.class);
+    verify(planRepository, times(2)).save(saved.capture());
+    Plan copy =
+        saved.getAllValues().stream()
+            .filter(p -> p.getStatus() == PlanStatus.GENERATED)
+            .findFirst()
+            .orElseThrow();
+    ScheduledRecipe sr = copy.getDays().get(0).getSlots().get(0).getScheduledRecipe();
+    assertThat(sr).isNotNull();
+    assertThat(sr.getRecipeId()).isEqualTo(newRecipeId);
+    // version / branch null in the change → fall back to the recipe id
+    assertThat(sr.getRecipeVersionId()).isEqualTo(newRecipeId);
+    assertThat(sr.getRecipeBranchId()).isEqualTo(newRecipeId);
+    assertThat(sr.getServings()).isEqualTo(5);
+  }
+
+  /**
+   * Same new-ScheduledRecipe branch but the change carries explicit version + branch ids, so the
+   * L292-299 ternaries must take the non-null arm. Kills the L293/L297 ternary mutants in the other
+   * direction and the L300 servings boundary ({@code newServings() > 0}).
+   */
+  @Test
+  void acceptReoptSuggestion_slotWithoutScheduledRecipe_usesExplicitIds() {
+    Plan current = PlanTestData.newPlanGraph(UUID.randomUUID(), WEEK, 1, PlanStatus.ACTIVE, 1, 1);
+    MealSlot originalSlot = current.getDays().get(0).getSlots().get(0);
+    originalSlot.setScheduledRecipe(null);
+    UUID newRecipeId = UUID.randomUUID();
+    UUID newVersionId = UUID.randomUUID();
+    UUID newBranchId = UUID.randomUUID();
+    ProposedSlotChange change =
+        new ProposedSlotChange(
+            originalSlot.getId(), null, newRecipeId, newVersionId, newBranchId, 3, "fill slot");
+    MealPrepPlanReoptSuggestion sug =
+        suggestion(current.getId(), ReoptSuggestionStatus.PENDING, List.of(change));
+    when(suggestionRepository.findById(sug.getId())).thenReturn(Optional.of(sug));
+    when(planRepository.findById(current.getId())).thenReturn(Optional.of(current));
+
+    service.acceptReoptSuggestion(current.getId(), sug.getId());
+
+    ArgumentCaptor<Plan> saved = ArgumentCaptor.forClass(Plan.class);
+    verify(planRepository, times(2)).save(saved.capture());
+    Plan copy =
+        saved.getAllValues().stream()
+            .filter(p -> p.getStatus() == PlanStatus.GENERATED)
+            .findFirst()
+            .orElseThrow();
+    ScheduledRecipe sr = copy.getDays().get(0).getSlots().get(0).getScheduledRecipe();
+    assertThat(sr.getRecipeId()).isEqualTo(newRecipeId);
+    assertThat(sr.getRecipeVersionId()).isEqualTo(newVersionId);
+    assertThat(sr.getRecipeBranchId()).isEqualTo(newBranchId);
+    assertThat(sr.getServings()).isEqualTo(3);
+  }
+
   // ---------- rejectReoptSuggestion ----------
 
   @Test
@@ -485,5 +647,22 @@ class PlanWriteServiceImplTest {
 
     assertThatThrownBy(() -> service.rejectReoptSuggestion(planId, sug.getId()))
         .isInstanceOf(ReoptSuggestionNotFoundException.class);
+  }
+
+  /**
+   * Unknown suggestion id → the {@code findById(...).orElseThrow(...)} lambda must throw {@link
+   * ReoptSuggestionNotFoundException}. Kills the L376 NullReturnVals mutant on the orElseThrow
+   * supplier (a null-returning supplier would yield a null suggestion → NPE rather than the
+   * contractual not-found exception).
+   */
+  @Test
+  void rejectReoptSuggestion_unknownSuggestion_throwsSuggestionNotFound() {
+    UUID sid = UUID.randomUUID();
+    when(suggestionRepository.findById(sid)).thenReturn(Optional.empty());
+
+    assertThatThrownBy(() -> service.rejectReoptSuggestion(UUID.randomUUID(), sid))
+        .isInstanceOf(ReoptSuggestionNotFoundException.class);
+    verify(suggestionRepository, never()).save(any());
+    verifyNoInteractions(decisionLogWriter);
   }
 }

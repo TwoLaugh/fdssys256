@@ -237,6 +237,10 @@ class MidWeekReoptCoordinatorTest {
         requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
 
     assertThat(result).isPresent();
+    // Kills L167 NegateConditionals (other arm): a USER trigger maps to "user".
+    assertThat(capturedEntries())
+        .filteredOn(e -> e.kind() == PlannerDecisionKind.MID_WEEK_REOPT_REQUEST)
+        .allMatch(e -> "user".equals(e.triggeredBy()));
   }
 
   @Test
@@ -409,11 +413,26 @@ class MidWeekReoptCoordinatorTest {
     assertThat(request.kind()).isEqualTo(PlannerDecisionKind.MID_WEEK_REOPT_REQUEST);
     assertThat(request.planId()).isEqualTo(plan.getId());
     assertThat(request.traceId()).isEqualTo(traceId);
+    // Kills L479 NullReturnVals (requestInputs -> null): the REQUEST row must carry the
+    // planId/trigger/triggerEventId correlation inputs, not a null node.
+    assertThat(request.inputs()).isNotNull();
+    assertThat(request.inputs().get("planId").asText()).isEqualTo(plan.getId().toString());
+    assertThat(request.inputs().get("trigger").asText()).isEqualTo("PROVISIONS");
+    assertThat(request.inputs().get("triggerEventId").asText())
+        .isEqualTo(triggerEventId.toString());
+    // Kills L167 NegateConditionals: a non-USER (PROVISIONS) trigger maps to "system".
+    assertThat(request.triggeredBy()).isEqualTo("system");
     assertThat(resultRow.kind()).isEqualTo(PlannerDecisionKind.MID_WEEK_REOPT_RESULT);
     assertThat(resultRow.parentDecisionId()).isEqualTo(requestDecisionId);
     assertThat(resultRow.outputs().get("suggestionId").asText())
         .isEqualTo(saved.getId().toString());
     assertThat(resultRow.outputs().get("skippedReason").isNull()).isTrue();
+    // Kills L492 NullReturnVals (resultDetailInputs -> null): the RESULT row's detail inputs must
+    // be present with the pin split + affected slots + summary.
+    assertThat(resultRow.inputs()).isNotNull();
+    assertThat(resultRow.inputs().get("unpinnedSlotCount").asInt()).isEqualTo(3);
+    assertThat(resultRow.inputs().get("pinnedSlotCount").asInt()).isZero();
+    assertThat(resultRow.inputs().get("summary").asText()).isNotBlank();
   }
 
   @Test
@@ -487,6 +506,106 @@ class MidWeekReoptCoordinatorTest {
     verify(suggestionRepository, never()).save(any());
     assertThat(lastResultRow().outputs().get("skippedReason").asText())
         .isEqualTo("no_material_change");
+  }
+
+  /**
+   * Two candidates: index 0 keeps the original recipes (no material change), index 1 swaps all.
+   * Stage-C picks index 1 → a suggestion IS produced. Kills the L464 PrimitiveReturns mutant
+   * ({@code return idx} → {@code return 0}): forcing index 0 would select the no-change candidate
+   * and yield an empty result.
+   */
+  @Test
+  void requestReopt_stageCPicksNonZeroIndex_selectsThatCandidate() throws Throwable {
+    Plan plan = generatedPlan();
+    UUID triggerEventId = UUID.randomUUID();
+    when(planRepository.findById(plan.getId())).thenReturn(Optional.of(plan));
+    when(suggestionRepository.findByPlanIdAndTriggerEventId(plan.getId(), triggerEventId))
+        .thenReturn(Optional.empty());
+    when(suggestionRepository.countByPlanIdAndStatusIn(eq(plan.getId()), any())).thenReturn(0L);
+    CandidatePlan keep = candidateKeepingAll(plan);
+    CandidatePlan swap = candidateSwappingAll(plan);
+    when(contextBuilder.buildForReopt(any(), anyList(), anyList(), any()))
+        .thenReturn(PlanTestData.minimalContext(List.of(), List.of()));
+    when(beamSearchEngine.search(any(), any()))
+        .thenReturn(new BeamSearchOutcome(List.of(keep, swap), false));
+    when(rollupBuilder.build(any(), any())).thenReturn(PlanTestData.emptyRollup());
+    when(stageCInvoker.pickOne(anyList(), anyList(), any(), any()))
+        .thenReturn(new ReoptStageCInvoker.Result(1, "second is better"));
+    stubWriter();
+
+    Optional<UUID> result =
+        requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
+
+    assertThat(result).isPresent();
+    ArgumentCaptor<MealPrepPlanReoptSuggestion> sCap =
+        ArgumentCaptor.forClass(MealPrepPlanReoptSuggestion.class);
+    verify(suggestionRepository).save(sCap.capture());
+    assertThat(sCap.getValue().getProposedAssignments().changes()).hasSize(3);
+  }
+
+  /**
+   * Stage-C returns an out-of-range index (== candidates.size()) → coordinator falls back to index
+   * 0 (the no-change candidate) → empty result. Kills the L457 ConditionalsBoundary / Negate
+   * mutants on {@code idx < 0 || idx >= candidates.size()}: a relaxed/negated guard would index out
+   * of bounds or accept the bad index.
+   */
+  @Test
+  void requestReopt_stageCOutOfRangeIndex_fallsBackToZero() throws Throwable {
+    Plan plan = generatedPlan();
+    UUID triggerEventId = UUID.randomUUID();
+    when(planRepository.findById(plan.getId())).thenReturn(Optional.of(plan));
+    when(suggestionRepository.findByPlanIdAndTriggerEventId(plan.getId(), triggerEventId))
+        .thenReturn(Optional.empty());
+    when(suggestionRepository.countByPlanIdAndStatusIn(eq(plan.getId()), any())).thenReturn(0L);
+    CandidatePlan keep = candidateKeepingAll(plan);
+    CandidatePlan swap = candidateSwappingAll(plan);
+    when(contextBuilder.buildForReopt(any(), anyList(), anyList(), any()))
+        .thenReturn(PlanTestData.minimalContext(List.of(), List.of()));
+    when(beamSearchEngine.search(any(), any()))
+        .thenReturn(new BeamSearchOutcome(List.of(keep, swap), false));
+    when(rollupBuilder.build(any(), any())).thenReturn(PlanTestData.emptyRollup());
+    when(stageCInvoker.pickOne(anyList(), anyList(), any(), any()))
+        .thenReturn(new ReoptStageCInvoker.Result(2, "out of range")); // size == 2
+    stubWriter();
+
+    Optional<UUID> result =
+        requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
+
+    // index 0 = keep-all → no material change → empty, no suggestion.
+    assertThat(result).isEmpty();
+    verify(suggestionRepository, never()).save(any());
+    assertThat(lastResultRow().outputs().get("skippedReason").asText())
+        .isEqualTo("no_material_change");
+  }
+
+  /**
+   * Negative Stage-C index → same index-0 fallback. Pairs with the out-of-range test to pin both
+   * arms of {@code idx < 0 || idx >= size}, killing the L457 NegateConditionals mutants.
+   */
+  @Test
+  void requestReopt_stageCNegativeIndex_fallsBackToZero() throws Throwable {
+    Plan plan = generatedPlan();
+    UUID triggerEventId = UUID.randomUUID();
+    when(planRepository.findById(plan.getId())).thenReturn(Optional.of(plan));
+    when(suggestionRepository.findByPlanIdAndTriggerEventId(plan.getId(), triggerEventId))
+        .thenReturn(Optional.empty());
+    when(suggestionRepository.countByPlanIdAndStatusIn(eq(plan.getId()), any())).thenReturn(0L);
+    CandidatePlan keep = candidateKeepingAll(plan);
+    CandidatePlan swap = candidateSwappingAll(plan);
+    when(contextBuilder.buildForReopt(any(), anyList(), anyList(), any()))
+        .thenReturn(PlanTestData.minimalContext(List.of(), List.of()));
+    when(beamSearchEngine.search(any(), any()))
+        .thenReturn(new BeamSearchOutcome(List.of(keep, swap), false));
+    when(rollupBuilder.build(any(), any())).thenReturn(PlanTestData.emptyRollup());
+    when(stageCInvoker.pickOne(anyList(), anyList(), any(), any()))
+        .thenReturn(new ReoptStageCInvoker.Result(-1, "negative"));
+    stubWriter();
+
+    Optional<UUID> result =
+        requestReopt(plan.getId(), ReoptTriggerKind.USER, triggerEventId, UUID.randomUUID());
+
+    assertThat(result).isEmpty();
+    verify(suggestionRepository, never()).save(any());
   }
 
   /** The last {@code MID_WEEK_REOPT_RESULT} entry the writer received. */

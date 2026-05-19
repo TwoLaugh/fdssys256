@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
+import com.example.mealprep.planner.config.PlannerProperties;
 import com.example.mealprep.planner.testdata.PlanTestData;
 import com.example.mealprep.provisions.api.dto.SupplierProductDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
@@ -71,5 +72,76 @@ class WeeklyCostConfidenceTest {
 
     // 1 priced + 1 unpriced over 2 ingredients → 0.5
     assertThat(calc.compute(plan, ctx)).isEqualByComparingTo(new BigDecimal("0.5"));
+  }
+
+  // ---- mutation-killing additions -------------------------------------------------------------
+
+  private static PlannerProperties propsWithCostThreshold(BigDecimal threshold) {
+    return new PlannerProperties(
+        java.time.DayOfWeek.MONDAY,
+        20,
+        5,
+        3,
+        50,
+        new BigDecimal("1.5"),
+        java.time.Duration.ofSeconds(30),
+        PlanTestData.uniformWeights(),
+        new PlannerProperties.ScoringTuning(
+            PlanTestData.defaultTuning().variety(),
+            PlanTestData.defaultTuning().provisions(),
+            new PlannerProperties.ScoringTuning.CostTuning(threshold)),
+        java.time.Duration.ofSeconds(20),
+        3,
+        5,
+        2,
+        PlanTestData.defaultMidWeek(),
+        PlanTestData.defaultMateriality());
+  }
+
+  /**
+   * With the confidence threshold set to exactly 1.0, a priced ingredient's proxy confidence (1.0)
+   * is NOT below the threshold ({@code 1.compareTo(1) == 0}, not {@code < 0}) → stays 1.0 → mean
+   * 1.0. Kills the L60 ConditionalsBoundary mutant {@code confidence < threshold} → {@code
+   * confidence <= threshold}: under {@code <=} the equal confidence would clamp to 0 → mean 0.0.
+   */
+  @Test
+  void confidence_equal_to_threshold_is_not_clamped() {
+    WeeklyCostConfidence thresholdOne =
+        new WeeklyCostConfidence(propsWithCostThreshold(BigDecimal.ONE));
+    UUID id = UUID.randomUUID();
+    RecipeDto recipe = PlanTestData.scoredRecipe(id, 20, "Thai", "tofu", "fry", List.of("rice"));
+    SupplierProductDto rice = PlanTestData.supplierProduct("rice", new BigDecimal("0.10"));
+    var bundle =
+        PlanTestData.provisionsBundle(
+            PlanTestData.budget(new BigDecimal("50")), Map.of("rice", rice), List.of());
+    PlanCompositionContext ctx =
+        PlanTestData.scoringContext(List.of(), List.of(recipe), bundle, Map.of(), Map.of());
+    CandidatePlan plan =
+        PlanTestData.candidatePlan(
+            WEEK, List.of(PlanTestData.assignment(UUID.randomUUID(), id, WEEK, 0, 2)));
+
+    assertThat(thresholdOne.compute(plan, ctx)).isEqualByComparingTo(BigDecimal.ONE);
+  }
+
+  /**
+   * Ingredients present but the recipe pool is empty (recipe unresolvable) → no ingredient is
+   * counted → zero. Exercises the indexRecipes empty-pool guard (L83/L84) for line coverage so the
+   * recipe-not-found path is no longer NO_COVERAGE.
+   */
+  @Test
+  void unresolvable_recipe_yields_zero() {
+    UUID id = UUID.randomUUID();
+    SupplierProductDto rice = PlanTestData.supplierProduct("rice", new BigDecimal("0.10"));
+    var bundle =
+        PlanTestData.provisionsBundle(
+            PlanTestData.budget(new BigDecimal("50")), Map.of("rice", rice), List.of());
+    // recipe id NOT in the (empty) pool
+    PlanCompositionContext ctx =
+        PlanTestData.scoringContext(List.of(), List.of(), bundle, Map.of(), Map.of());
+    CandidatePlan plan =
+        PlanTestData.candidatePlan(
+            WEEK, List.of(PlanTestData.assignment(UUID.randomUUID(), id, WEEK, 0, 2)));
+
+    assertThat(calc.compute(plan, ctx)).isEqualByComparingTo(BigDecimal.ZERO);
   }
 }
