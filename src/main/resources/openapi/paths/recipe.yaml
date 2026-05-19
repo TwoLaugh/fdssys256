@@ -180,7 +180,7 @@ recipeImports:
         description: Import failed (fetch error or extraction failure).
         content:
           application/problem+json:
-            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+            schema: { $ref: '../schemas/common.yaml#/RecipeImportFailure' }
 recipeImportProvenance:
   get:
     tags: [Recipes]
@@ -503,11 +503,7 @@ recipeSubstitutionLifecycle:
       required: true
       content:
         application/json:
-          schema:
-            oneOf:
-              - { $ref: '../schemas/recipe.yaml#/AcceptSubstitutionRequest' }
-              - { $ref: '../schemas/recipe.yaml#/RejectSubstitutionRequest' }
-              - { $ref: '../schemas/recipe.yaml#/PromoteSubstitutionRequest' }
+          schema: { $ref: '../schemas/recipe.yaml#/SubstitutionLifecycleRequest' }
     responses:
       '200':
         description: 'Substitution acted upon; accept and reject return the substitution, promote returns the new RecipeVersion.'

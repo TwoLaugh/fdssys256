@@ -502,6 +502,7 @@ components:
     RunArchiveScanResultDto: { $ref: 'schemas/recipe.yaml#/RunArchiveScanResultDto' }
     RecipeSubstitutionDto: { $ref: 'schemas/recipe.yaml#/RecipeSubstitutionDto' }
     RejectSubstitutionRequest: { $ref: 'schemas/recipe.yaml#/RejectSubstitutionRequest' }
+    SubstitutionLifecycleRequest: { $ref: 'schemas/recipe.yaml#/SubstitutionLifecycleRequest' }
     SubstitutedItemDto: { $ref: 'schemas/recipe.yaml#/SubstitutedItemDto' }
     SubstitutionItemRequest: { $ref: 'schemas/recipe.yaml#/SubstitutionItemRequest' }
     SubstitutionReason: { $ref: 'schemas/recipe.yaml#/SubstitutionReason' }
@@ -604,6 +605,7 @@ components:
     SweepExpiredPendingResponse: { $ref: 'schemas/adaptation.yaml#/SweepExpiredPendingResponse' }
     # common (cross-module)
     ProblemDetail: { $ref: 'schemas/common.yaml#/ProblemDetail' }
+    RecipeImportFailure: { $ref: 'schemas/common.yaml#/RecipeImportFailure' }
   responses:
     # Cross-module re-usable responses kept inline (these are tiny and rarely change).
     BadRequest:

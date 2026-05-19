@@ -6,6 +6,7 @@ import com.atlassian.oai.validator.report.ValidationReport;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 
 /**
  * Wires {@code swagger-request-validator} into MockMvc for contract testing.
@@ -53,6 +54,7 @@ public class OpenApiValidatorConfig {
    * auth-01} wires the filter chain, security can be tightened here.
    */
   @Bean
+  @Primary
   public OpenApiInteractionValidator openApiValidator() {
     var url = getClass().getClassLoader().getResource(specClasspath);
     if (url == null) {
@@ -62,6 +64,32 @@ public class OpenApiValidatorConfig {
         .withLevelResolver(
             LevelResolver.create()
                 .withLevel("validation.request.security.missing", ValidationReport.Level.IGNORE)
+                .build())
+        .build();
+  }
+
+  /**
+   * Variant that ignores all request-side findings ({@code validation.request.*}) while still
+   * enforcing the response contract.
+   *
+   * <p>Use this only for negative-path tests that deliberately send a malformed request to exercise
+   * the API's 4xx handling (e.g. a blank {@code url} to trigger 400). Such a request can never be
+   * contract-valid by construction, so asserting full {@code openApi().isValid()} against the
+   * default validator would always fail; but the <em>response</em> the server produces (the RFC
+   * 9457 ProblemDetail) still must conform, and that is what this validator continues to check.
+   * Prefer the {@code @Primary} {@link #openApiValidator()} for every happy-path and
+   * documented-error case.
+   */
+  @Bean
+  public OpenApiInteractionValidator responseOnlyOpenApiValidator() {
+    var url = getClass().getClassLoader().getResource(specClasspath);
+    if (url == null) {
+      throw new IllegalStateException("OpenAPI spec not found on classpath: " + specClasspath);
+    }
+    return OpenApiInteractionValidator.createFor(url.toString())
+        .withLevelResolver(
+            LevelResolver.create()
+                .withLevel("validation.request", ValidationReport.Level.IGNORE)
                 .build())
         .build();
   }

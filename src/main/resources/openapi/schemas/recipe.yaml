@@ -18,9 +18,18 @@ MealType:
   enum: [BREAKFAST, LUNCH, DINNER, SNACK]
 IngredientDto:
   type: object
-  required: [id, lineOrder, ingredientMappingKey, displayName, optional, needsReview]
+  required: [lineOrder, ingredientMappingKey, displayName, optional, needsReview]
   properties:
-    id: { type: string, format: uuid }
+    id:
+      type: string
+      format: uuid
+      nullable: true
+      description: >-
+        Persisted ingredient row id. Null only on the computed substitution
+        overlay (GET /recipes/{id}/versions/{vid}/with-substitutions), whose
+        ingredients are a derived projection of the base version and have no
+        persisted row (the base version is never mutated — see lld/recipe.md
+        Flow 5). Always present on every other read.
     lineOrder: { type: integer, minimum: 0 }
     ingredientMappingKey: { type: string, maxLength: 160 }
     displayName: { type: string, maxLength: 160 }
@@ -32,9 +41,18 @@ IngredientDto:
     mappingConfidence: { type: number, format: double, nullable: true }
 MethodStepDto:
   type: object
-  required: [id, stepNumber, instruction]
+  required: [stepNumber, instruction]
   properties:
-    id: { type: string, format: uuid }
+    id:
+      type: string
+      format: uuid
+      nullable: true
+      description: >-
+        Persisted method-step row id. Null only on the computed substitution
+        overlay (GET /recipes/{id}/versions/{vid}/with-substitutions), whose
+        steps are a derived projection of the base version and have no persisted
+        row (the base version is never mutated — see lld/recipe.md Flow 5).
+        Always present on every other read.
     stepNumber: { type: integer, minimum: 1 }
     instruction: { type: string }
     durationMinutes: { type: integer, nullable: true }
@@ -313,7 +331,7 @@ CreateRecipeRequest:
           items: { type: string, maxLength: 32 }
 ImportSource:
   type: string
-  enum: [manual, url, ai_generated, web_discovered]
+  enum: [MANUAL, URL, AI_GENERATED, WEB_DISCOVERED]
 ImportRecipeFromUrlRequest:
   type: object
   required: [url]
@@ -696,6 +714,28 @@ PromoteSubstitutionRequest:
   required: [expectedVersion, changeReason]
   properties:
     expectedVersion: { type: integer, format: int64, minimum: 0 }
+    changeReason: { type: string, minLength: 1, maxLength: 2000 }
+SubstitutionLifecycleRequest:
+  type: object
+  description: >-
+    Unified body for the discriminated lifecycle endpoint
+    POST /substitutions/{subId}/{action}. The action comes from the path
+    (accept | reject | promote-to-version), not the body shape, so the body
+    cannot be a oneOf of the per-action schemas: an accept body
+    ({expectedVersion}) is a structural subset of a reject body (reason is
+    optional), so oneOf can never resolve to exactly one branch. expectedVersion
+    is the optimistic-lock guard every action requires; reason is the optional
+    audit note consumed only by reject; changeReason is required by
+    promote-to-version and enforced server-side
+    (RecipeSubstitutionsController#validate), since OpenAPI cannot express
+    path-action-discriminated body requiredness on a single operation. The
+    per-action AcceptSubstitutionRequest / RejectSubstitutionRequest /
+    PromoteSubstitutionRequest schemas are retained for client codegen and
+    document each action's effective shape.
+  required: [expectedVersion]
+  properties:
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+    reason: { type: string, maxLength: 255, nullable: true }
     changeReason: { type: string, minLength: 1, maxLength: 2000 }
 RunArchiveScanResultDto:
   type: object

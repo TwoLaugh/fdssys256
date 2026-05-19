@@ -51,6 +51,15 @@ class RecipeImportFlowIT {
 
   @Autowired private MockMvc mvc;
   @Autowired private OpenApiInteractionValidator openApiValidator;
+
+  /**
+   * Response-only validator for the deliberately-malformed negative case below; see {@link
+   * com.example.mealprep.testsupport.OpenApiValidatorConfig#responseOnlyOpenApiValidator()}.
+   */
+  @Autowired
+  @org.springframework.beans.factory.annotation.Qualifier("responseOnlyOpenApiValidator")
+  private OpenApiInteractionValidator responseOnlyOpenApiValidator;
+
   @Autowired private ObjectMapper objectMapper;
   @Autowired private UserRepository userRepository;
   @Autowired private SessionRepository sessionRepository;
@@ -201,13 +210,16 @@ class RecipeImportFlowIT {
   @Test
   void importFromUrl_blankUrl_returns400() throws Exception {
     AuthedUser user = registerUser();
+    // The blank url is intentionally contract-invalid (violates url.minLength) to exercise 400
+    // handling, so the request side can never satisfy openApi().isValid(). Validate the response
+    // contract only — the 400 ProblemDetail must still conform.
     mvc.perform(
             post("/api/v1/recipes/imports/url")
                 .cookie(user.cookie())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(new ImportRecipeFromUrlRequest("", null))))
         .andExpect(status().isBadRequest())
-        .andExpect(openApi().isValid(openApiValidator));
+        .andExpect(openApi().isValid(responseOnlyOpenApiValidator));
   }
 
   // ---------------- GET /import-provenance ----------------

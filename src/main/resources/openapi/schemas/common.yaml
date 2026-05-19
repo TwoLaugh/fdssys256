@@ -32,3 +32,45 @@ ProblemDetail:
           field: { type: string }
           message: { type: string }
           rejectedValue: {}
+RecipeImportFailure:
+  type: object
+  description: >-
+    RFC 9457 ProblemDetail returned by POST /api/v1/recipes/imports/url when a
+    URL import fails (fetch leg or extraction leg). It is a self-contained
+    superset of ProblemDetail (not an allOf composition) because the contract
+    validator injects additionalProperties:false into every object schema and
+    evaluates each allOf branch independently, so an allOf of ProblemDetail +
+    the extension can never validate. Keep the shared members below in sync with
+    ProblemDetail; the only addition is the machine-readable failureReason
+    extension member documented in lld/recipe.md (Flow 2 failure modes).
+  required: [type, title, status, failureReason]
+  properties:
+    type:
+      type: string
+      format: uri
+      description: A URI identifying the problem type.
+      example: https://mealprep.example.com/problems/recipe-import-failure
+    title:
+      type: string
+      description: Short human-readable summary.
+      example: Recipe import failed
+    status:
+      type: integer
+      description: HTTP status code.
+      example: 422
+    detail:
+      type: string
+      description: Human-readable explanation specific to this occurrence.
+    instance:
+      type: string
+      format: uri
+      description: A URI identifying the specific occurrence.
+    failureReason:
+      type: string
+      maxLength: 64
+      description: >-
+        Stable token identifying why the import failed. Known values:
+        no_extractor_matched, fetch_timeout, fetch_io_error, oversize,
+        schema_mismatch, and the dynamic forms fetch_4xx_<status> /
+        fetch_5xx_<status> (e.g. fetch_4xx_404). Treat as an open
+        vocabulary; unknown tokens should degrade gracefully.
