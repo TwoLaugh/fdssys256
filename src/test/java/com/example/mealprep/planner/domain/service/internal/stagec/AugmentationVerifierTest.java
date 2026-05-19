@@ -161,6 +161,186 @@ class AugmentationVerifierTest {
     assertThat(passes).isTrue();
   }
 
+  // ---- mutation-killing additions -------------------------------------------------------------
+
+  /**
+   * IngredientSwap whose targetSlotId is NOT among the skeletons → {@code slot.isEmpty()}
+   * plan-level branch: the verifier unions every eater across all skeletons and runs ONE household
+   * check. A clash there fails the augmentation. Kills the L120 NegateConditionals (the {@code
+   * slotSkeletons() == null} guard), the L124 lambda (per-skeleton eater flat-map) and the L127
+   * NegateConditionals / L130 BooleanFalse (the household result is honoured).
+   */
+  @Test
+  void ingredientSwap_unknownSlot_planLevelHouseholdCheck_clashFails() {
+    UUID e1 = UUID.randomUUID();
+    UUID e2 = UUID.randomUUID();
+    MealSlotSkeleton s1 =
+        new MealSlotSkeleton(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            WEEK_START,
+            SlotKind.DINNER,
+            "dinner",
+            30,
+            true,
+            List.of(e1));
+    MealSlotSkeleton s2 =
+        new MealSlotSkeleton(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            1,
+            WEEK_START,
+            SlotKind.LUNCH,
+            "lunch",
+            30,
+            true,
+            List.of(e2));
+    PlanCompositionContext ctx = ctxWith(List.of(s1, s2), List.of());
+    when(filter.checkForHousehold(eq(List.of(e1, e2)), eq(List.of("shellfish"))))
+        .thenReturn(new FilterResult(false, List.of()));
+
+    boolean passes =
+        verifier.passes(
+            new IngredientSwapAugmentation(UUID.randomUUID(), "tofu", "shellfish", "swap"), ctx);
+
+    assertThat(passes).isFalse();
+  }
+
+  /**
+   * Unknown slot AND no eaters anywhere → {@code allEaters.isEmpty()} → never blocks on missing
+   * data, returns true. Kills the L128 BooleanFalseReturnVals mutant ({@code return true} → {@code
+   * return false}).
+   */
+  @Test
+  void ingredientSwap_unknownSlot_noEaters_passesVacuously() {
+    allowAll();
+    PlanCompositionContext ctx = ctxWith(List.of(), List.of());
+
+    boolean passes =
+        verifier.passes(new IngredientSwapAugmentation(UUID.randomUUID(), "a", "b", "swap"), ctx);
+
+    assertThat(passes).isTrue();
+  }
+
+  /**
+   * Per-person slot, single eater, the per-eater check PASSES → the loop completes and the method
+   * returns true. Kills the L135 (empty-eaters short-circuit must NOT be taken here) and the L146
+   * BooleanFalseReturnVals mutant ({@code return true} at the end of the per-eater loop).
+   */
+  @Test
+  void ingredientSwap_perPersonSlot_allEatersPass_returnsTrue() {
+    UUID eater = UUID.randomUUID();
+    MealSlotSkeleton perPerson =
+        new MealSlotSkeleton(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            WEEK_START,
+            SlotKind.LUNCH,
+            "lunch",
+            30,
+            false,
+            List.of(eater));
+    PlanCompositionContext ctx = ctxWith(List.of(perPerson), List.of());
+    when(filter.check(eq(eater), eq(List.of("quinoa"))))
+        .thenReturn(new FilterResult(true, List.of()));
+
+    boolean passes =
+        verifier.passes(
+            new IngredientSwapAugmentation(perPerson.slotId(), "rice", "quinoa", "swap"), ctx);
+
+    assertThat(passes).isTrue();
+  }
+
+  /**
+   * Recipe whose total time equals exactly the floor(budget × overshoot) limit (30 × 1.5 = 45) is
+   * NOT over budget (the check is {@code compareTo(limit) > 0}). Kills the L158
+   * ConditionalsBoundary mutant {@code > 0} → {@code >= 0}: at equality the mutated guard would
+   * wrongly reject.
+   */
+  @Test
+  void addSnack_totalTimeExactlyAtLimit_passes() {
+    UUID recipeId = UUID.randomUUID();
+    RecipeDto recipe =
+        PlanTestData.recipeFor(recipeId, SlotKind.SNACK, 45, List.of(), List.of("oats"));
+    MealSlotSkeleton slot = PlanTestData.skeletonFor(WEEK_START, 0, SlotKind.SNACK, 30);
+    PlanCompositionContext ctx = ctxWith(List.of(slot), List.of(recipe));
+    allowAll();
+
+    boolean passes =
+        verifier.passes(new AddSnackAugmentation(slot.slotId(), recipeId, 1, "snack"), ctx);
+
+    assertThat(passes).isTrue();
+  }
+
+  /**
+   * Two skeletons; the swap targets the SECOND one (per-person, distinct eater). The verifier must
+   * resolve THAT slot, not just the first. Kills the L175 BooleanTrueReturnVals mutant in the
+   * findSlot filter lambda ({@code slotId.equals(s.slotId())} → constant true would match the first
+   * skeleton and route through the wrong eater set).
+   */
+  @Test
+  void findSlot_matchesTheRequestedSlotNotJustTheFirst() {
+    UUID e1 = UUID.randomUUID();
+    UUID e2 = UUID.randomUUID();
+    MealSlotSkeleton first =
+        new MealSlotSkeleton(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            WEEK_START,
+            SlotKind.DINNER,
+            "dinner",
+            30,
+            false,
+            List.of(e1));
+    MealSlotSkeleton second =
+        new MealSlotSkeleton(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            1,
+            WEEK_START,
+            SlotKind.LUNCH,
+            "lunch",
+            30,
+            false,
+            List.of(e2));
+    PlanCompositionContext ctx = ctxWith(List.of(first, second), List.of());
+    // Only the SECOND slot's eater clashes; if findSlot wrongly returned the first, e1 would be
+    // checked and the swap would pass.
+    when(filter.check(eq(e1), anyList())).thenReturn(new FilterResult(true, List.of()));
+    when(filter.check(eq(e2), eq(List.of("nuts")))).thenReturn(new FilterResult(false, List.of()));
+
+    boolean passes =
+        verifier.passes(
+            new IngredientSwapAugmentation(second.slotId(), "seeds", "nuts", "swap"), ctx);
+
+    assertThat(passes).isFalse();
+  }
+
+  /**
+   * ADD_SNACK recipe with a blank-key ingredient alongside a real one: only the non-blank key must
+   * reach the constraint filter. Kills the L184 BooleanTrueReturnVals mutant in the ingredientKeys
+   * filter ({@code k != null && !k.isBlank()} → constant true would forward the blank key too).
+   */
+  @Test
+  void ingredientKeys_excludesBlankMappingKeys() {
+    UUID recipeId = UUID.randomUUID();
+    RecipeDto recipe =
+        PlanTestData.recipeFor(recipeId, SlotKind.SNACK, 10, List.of(), List.of("oats", "  "));
+    MealSlotSkeleton slot = PlanTestData.skeletonFor(WEEK_START, 0, SlotKind.SNACK, 30);
+    PlanCompositionContext ctx = ctxWith(List.of(slot), List.of(recipe));
+    // The verifier must call the household check with EXACTLY ["oats"] (blank filtered out).
+    when(filter.checkForHousehold(anyList(), eq(List.of("oats"))))
+        .thenReturn(new FilterResult(true, List.of()));
+
+    boolean passes =
+        verifier.passes(new AddSnackAugmentation(slot.slotId(), recipeId, 1, "snack"), ctx);
+
+    assertThat(passes).isTrue();
+  }
+
   @Test
   void ingredientSwap_perPersonSlot_usesCheckNotHousehold() {
     UUID eater = UUID.randomUUID();

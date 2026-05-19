@@ -78,6 +78,48 @@ class VarietySubScoreTest {
         .isEqualByComparingTo(BigDecimal.ZERO);
   }
 
+  /**
+   * All variety targets configured to 0 → every dimension hits the {@code target <= 0} guard and
+   * returns 1.0, so the mean is 1.0. Kills two L84/L85 mutants together:
+   *
+   * <ul>
+   *   <li>L84 ConditionalsBoundary {@code target <= 0} → {@code target < 0}: with target==0 the
+   *       mutated guard is false → divides distinct by a zero target → ArithmeticException.
+   *   <li>L85 NullReturnVals {@code return BigDecimal.ONE} → {@code return null}: a null dimension
+   *       score would NPE on the subsequent {@code .add(...)}.
+   * </ul>
+   */
+  @Test
+  void zero_targets_short_circuit_each_dimension_to_one() {
+    PlannerProperties props =
+        new PlannerProperties(
+            java.time.DayOfWeek.MONDAY,
+            20,
+            5,
+            3,
+            50,
+            new BigDecimal("1.5"),
+            java.time.Duration.ofSeconds(30),
+            PlanTestData.uniformWeights(),
+            new PlannerProperties.ScoringTuning(
+                new PlannerProperties.ScoringTuning.VarietyTargets(0, 0, 0, 0),
+                PlanTestData.defaultTuning().provisions(),
+                PlanTestData.defaultTuning().cost()),
+            java.time.Duration.ofSeconds(20),
+            3,
+            5,
+            2,
+            PlanTestData.defaultMidWeek(),
+            PlanTestData.defaultMateriality());
+    VarietySubScore tuned = new VarietySubScore(props);
+    UUID id = UUID.randomUUID();
+    RecipeDto recipe = PlanTestData.scoredRecipe(id, 20, "Thai", "tofu", "fry", List.of());
+    List<SlotAssignment> as = List.of(PlanTestData.assignment(UUID.randomUUID(), id, WEEK, 0, 2));
+    PlanCompositionContext ctx = PlanTestData.minimalContext(List.of(), List.of(recipe));
+    assertThat(tuned.compute(PlanTestData.candidatePlan(WEEK, as), ctx))
+        .isEqualByComparingTo(BigDecimal.ONE);
+  }
+
   @Test
   void tunable_target_override_changes_score() {
     // cuisine target lowered to 2; a plan with 2 distinct cuisines now scores 1.0 on that axis

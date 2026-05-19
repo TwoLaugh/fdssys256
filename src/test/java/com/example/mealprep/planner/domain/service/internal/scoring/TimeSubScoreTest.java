@@ -68,6 +68,45 @@ class TimeSubScoreTest {
     assertThat(calc.compute(plan, ctx)).isEqualByComparingTo(BigDecimal.ONE);
   }
 
+  /**
+   * Slot with budget 0 must score 1.0 (the {@code budget <= 0} guard). Kills the L66
+   * ConditionalsBoundary mutant {@code budget <= 0} → {@code budget < 0}: with budget==0 the
+   * mutated guard is false, the code divides the overshoot by a zero budget and throws
+   * ArithmeticException instead of returning 1.0.
+   */
+  @Test
+  void zero_budget_slot_scores_one_not_divide_by_zero() {
+    UUID recipeId = UUID.randomUUID();
+    MealSlotSkeleton skel = PlanTestData.skeletonFor(WEEK, 0, SlotKind.DINNER, 0);
+    RecipeDto recipe = PlanTestData.scoredRecipe(recipeId, 45, "Thai", "tofu", "wok", List.of());
+    PlanCompositionContext ctx = PlanTestData.minimalContext(List.of(skel), List.of(recipe));
+    CandidatePlan plan =
+        PlanTestData.candidatePlan(
+            WEEK, List.of(PlanTestData.assignment(skel.slotId(), recipeId, WEEK, 0, 2)));
+    assertThat(calc.compute(plan, ctx)).isEqualByComparingTo(BigDecimal.ONE);
+  }
+
+  /**
+   * One minute over budget yields a strictly-below-1 score (overshoot = 1/30). Anchors the {@code
+   * total <= budget} branch so a recipe one minute over is genuinely penalised, distinguishing the
+   * else-arm from the 1.0 fast-path.
+   */
+  @Test
+  void slot_one_minute_over_budget_is_penalised() {
+    UUID recipeId = UUID.randomUUID();
+    MealSlotSkeleton skel = PlanTestData.skeletonFor(WEEK, 0, SlotKind.DINNER, 30);
+    RecipeDto recipe = PlanTestData.scoredRecipe(recipeId, 31, "Thai", "tofu", "wok", List.of());
+    PlanCompositionContext ctx = PlanTestData.minimalContext(List.of(skel), List.of(recipe));
+    CandidatePlan plan =
+        PlanTestData.candidatePlan(
+            WEEK, List.of(PlanTestData.assignment(skel.slotId(), recipeId, WEEK, 0, 2)));
+    BigDecimal expected =
+        BigDecimal.ONE.subtract(
+            BigDecimal.valueOf(1)
+                .divide(BigDecimal.valueOf(30), 6, java.math.RoundingMode.HALF_UP));
+    assertThat(calc.compute(plan, ctx)).isEqualByComparingTo(expected);
+  }
+
   @Test
   void mean_over_two_slots() {
     UUID r1 = UUID.randomUUID();

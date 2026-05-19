@@ -90,4 +90,36 @@ class DailyCostAggregatorTest {
                 PlanTestData.minimalContext(List.of(), List.of())))
         .isEmpty();
   }
+
+  /** Null assignments → empty map (covers the L37/L38 null-plan guard line). */
+  @Test
+  void null_assignments_yields_empty_map() {
+    CandidatePlan plan = new CandidatePlan(UUID.randomUUID(), WEEK, null, null);
+    assertThat(agg.aggregateByDate(plan, PlanTestData.minimalContext(List.of(), List.of())))
+        .isEmpty();
+    assertThat(agg.totalCost(plan, PlanTestData.minimalContext(List.of(), List.of())))
+        .isEqualByComparingTo(BigDecimal.ZERO);
+  }
+
+  /**
+   * Priced ingredient but the recipe is absent from the pool → indexRecipes empty-pool path (L90),
+   * recipe unresolvable, day bucket present at zero cost.
+   */
+  @Test
+  void unresolvable_recipe_keeps_zero_cost_bucket() {
+    UUID id = UUID.randomUUID();
+    SupplierProductDto rice = PlanTestData.supplierProduct("rice", new BigDecimal("2.00"));
+    var bundle =
+        PlanTestData.provisionsBundle(
+            PlanTestData.budget(new BigDecimal("50")), Map.of("rice", rice), List.of());
+    PlanCompositionContext ctx =
+        PlanTestData.scoringContext(List.of(), List.of(), bundle, Map.of(), Map.of());
+    SlotAssignment a = PlanTestData.assignment(UUID.randomUUID(), id, WEEK, 0, 2);
+
+    Map<LocalDate, BigDecimal> result =
+        agg.aggregateByDate(PlanTestData.candidatePlan(WEEK, List.of(a)), ctx);
+
+    assertThat(result).containsOnlyKeys(WEEK);
+    assertThat(result.get(WEEK)).isEqualByComparingTo(BigDecimal.ZERO);
+  }
 }

@@ -208,6 +208,53 @@ class RollupBuilderTest {
         .contains("hard floor breach");
   }
 
+  /**
+   * The weekly protein/fat/carbs averages are computed via {@code average(...)}. Asserting they are
+   * a non-null zero (recipe nutrition not exposed → all daily macros 0 → 0/n = 0.0) kills the L136
+   * NullReturnVals mutant ({@code return ...divide(...)} → {@code return null}); a null average
+   * would NPE inside {@code isEqualByComparingTo}.
+   */
+  @Test
+  void weekly_macro_averages_are_nonnull_zero() {
+    when(floorGate.passes(any(), any())).thenReturn(true);
+    UUID id = UUID.randomUUID();
+    RecipeDto recipe = PlanTestData.scoredRecipe(id, 30, "Thai", "tofu", "fry", List.of("rice"));
+    CandidatePlan plan =
+        PlanTestData.candidatePlan(
+            WEEK,
+            List.of(
+                PlanTestData.assignment(UUID.randomUUID(), id, WEEK, 0, 2),
+                PlanTestData.assignment(UUID.randomUUID(), id, WEEK.plusDays(1), 0, 2)));
+    PlanCompositionContext ctx = PlanTestData.minimalContext(List.of(), List.of(recipe));
+
+    var weekly = builder(floorGate).build(plan, ctx).weekly();
+
+    assertThat(weekly.proteinAvgG()).isNotNull().isEqualByComparingTo(BigDecimal.ZERO);
+    assertThat(weekly.fatAvgG()).isNotNull().isEqualByComparingTo(BigDecimal.ZERO);
+    assertThat(weekly.carbsAvgG()).isNotNull().isEqualByComparingTo(BigDecimal.ZERO);
+  }
+
+  /**
+   * Recipe absent from the pool exercises the indexRecipes empty-result path (L229/L230) and the
+   * total-time / violations aggregation with an unresolvable recipe — covering those previously
+   * NO_COVERAGE return lines while still asserting the unfilled-slot contract.
+   */
+  @Test
+  void unresolvable_recipe_zero_time_and_unfilled_violation() {
+    when(floorGate.passes(any(), any())).thenReturn(true);
+    UUID missing = UUID.randomUUID();
+    CandidatePlan plan =
+        PlanTestData.candidatePlan(
+            WEEK, List.of(PlanTestData.assignment(UUID.randomUUID(), missing, WEEK, 0, 2)));
+    // empty recipe pool → indexRecipes returns an empty index
+    PlanCompositionContext ctx = PlanTestData.minimalContext(List.of(), List.of());
+
+    RollupSummaryDocument doc = builder(floorGate).build(plan, ctx);
+
+    assertThat(doc.daily().get(0).totalTimeMin()).isZero();
+    assertThat(doc.daily().get(0).violations()).anyMatch(v -> v.contains("unfilled"));
+  }
+
   @Test
   void deterministic_same_input_byte_identical_output() {
     when(floorGate.passes(any(), any())).thenReturn(true);

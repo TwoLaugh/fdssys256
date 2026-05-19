@@ -70,6 +70,25 @@ class BeamPrunerTest {
     assertThat(reversed.get(0).assignments().get(0).recipeId()).isEqualTo(lower);
   }
 
+  /**
+   * Two empty-assignment partial plans with equal scores → the tie-break comparator must invoke
+   * {@code lastRecipeId} on each, which falls back to {@code ZERO_UUID} for empty assignments.
+   * Kills the L36 NullReturnVals mutant ({@code return ZERO_UUID} → {@code return null}): a null
+   * tie-break key NPEs inside the comparator chain, so a clean two-element result proves it
+   * returned the sentinel.
+   */
+  @Test
+  void empty_partial_plans_tie_break_uses_zero_uuid_sentinel() {
+    PartialPlan a = new PartialPlan(WEEK_START, List.of(), BigDecimal.valueOf(0.5));
+    PartialPlan b = new PartialPlan(WEEK_START, List.of(), BigDecimal.valueOf(0.5));
+
+    List<PartialPlan> kept = pruner.retainTop(List.of(a, b), 2);
+
+    assertThat(kept).hasSize(2);
+    assertThat(kept.get(0).currentScore()).isEqualByComparingTo("0.5");
+    assertThat(kept.get(0).assignments()).isEmpty();
+  }
+
   private static PartialPlan plan(BigDecimal score, UUID lastRecipeId) {
     SlotAssignment a =
         new SlotAssignment(
