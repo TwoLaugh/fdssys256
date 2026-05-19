@@ -40,6 +40,24 @@ class ChangeDimensionResolverTest {
   }
 
   @Test
+  void feedback_low_taste_with_non_null_diff_still_resolves_to_salt_level() {
+    // dimensionFromTasteDiff L64: when response.refinedDiff() != null the method falls through
+    // the L60 guard to the final `return SALT_LEVEL`. NullReturnVals on L64 returns null;
+    // asserting SALT_LEVEL here (taste -1.0, diff present) kills that mutant. The L60
+    // conditional itself is an EQUIVALENT mutant — both arms return SALT_LEVEL — documented
+    // in the PR body, not gamed here.
+    AdaptationContext context =
+        baseContext(
+            new FeedbackJobRequest.RatingDeltaDto(BigDecimal.valueOf(-1.0), null, null, null));
+    AdaptationJob job = job(JobSource.FEEDBACK);
+    RecipeAdaptationResponse resp =
+        responseWithDiff(
+            new RecipeDiffDto(
+                UUID.randomUUID(), UUID.randomUUID(), List.of(), List.of(), List.of(), List.of()));
+    assertThat(resolver.resolve(job, context, resp)).isEqualTo(ChangeDimension.SALT_LEVEL);
+  }
+
+  @Test
   void feedback_low_effort_resolves_to_method_simplification() {
     AdaptationContext context =
         baseContext(
