@@ -175,4 +175,85 @@ class LoginThrottleServiceTest {
 
     assertThat(retry).isEqualTo(Duration.ofSeconds(1));
   }
+
+  // ---------------- exact ceiling + retryAfterForIp + window() ----------------
+
+  private LoginAttempt failedAttempt(Instant attemptedAt) {
+    return LoginAttempt.builder()
+        .id(UUID.randomUUID())
+        .usernameNormalised("alice")
+        .sourceIp("203.0.113.5")
+        .succeeded(false)
+        .failureReason(LoginFailureReason.BAD_PASSWORD)
+        .attemptedAt(attemptedAt)
+        .build();
+  }
+
+  /**
+   * Oldest attempt was 13m29.5s ago, so the release is 90.5s in the future → {@code toSeconds()}
+   * truncates to 90 and the fractional remainder forces the round-up branch to {@code 90 + 1 = 91}.
+   * A MULTI-second fractional remainder (not the 0.5s sub-second case) is essential: it makes the
+   * {@code seconds += 1} math mutant observable as 91 vs 89 WITHOUT the {@code if (seconds < 1)}
+   * floor on line 120 masking it (89 stays 89). Asserting the EXACT 91 (not a ±1 range like the
+   * legacy tests) is what kills the surviving line-118 MathMutator.
+   */
+  @Test
+  void retryAfterForUsername_multiSecondFractionalRemainder_ceilsExactlyUp() {
+    Instant oldest = now.minus(Duration.ofMinutes(15)).plusSeconds(90).plusMillis(500);
+    when(repo.findByUsernameNormalisedAndAttemptedAtAfterAndFailureReasonInOrderByAttemptedAtAsc(
+            eq("alice"), any(Instant.class), any(Collection.class)))
+        .thenReturn(List.of(failedAttempt(oldest)));
+
+    Duration retry = service().retryAfterForUsername("alice", now);
+
+    assertThat(retry).isEqualTo(Duration.ofSeconds(91));
+  }
+
+  /**
+   * Exactly-whole remaining duration (no fractional nanos) must NOT be incremented — pins the other
+   * side of the line-117 boundary so a {@code >=} mutant is caught. Oldest 10s short of the window
+   * → 10s remaining exactly.
+   */
+  @Test
+  void retryAfterForUsername_wholeSecondRemainder_isNotIncremented() {
+    Instant oldest = now.minus(Duration.ofMinutes(15)).plusSeconds(10);
+    when(repo.findByUsernameNormalisedAndAttemptedAtAfterAndFailureReasonInOrderByAttemptedAtAsc(
+            eq("alice"), any(Instant.class), any(Collection.class)))
+        .thenReturn(List.of(failedAttempt(oldest)));
+
+    Duration retry = service().retryAfterForUsername("alice", now);
+
+    assertThat(retry).isEqualTo(Duration.ofSeconds(10));
+  }
+
+  /**
+   * {@code retryAfterForIp} was entirely uncovered (line 96 null-return mutant survived). Drive it
+   * with one IP-scoped failed attempt and pin the exact ceiling.
+   */
+  @Test
+  void retryAfterForIp_returnsCeilingFromOldestIpAttempt() {
+    Instant oldest = now.minus(Duration.ofMinutes(15)).plusSeconds(120);
+    when(repo.findBySourceIpAndAttemptedAtAfterAndFailureReasonInOrderByAttemptedAtAsc(
+            eq("203.0.113.5"), any(Instant.class), any(Collection.class)))
+        .thenReturn(List.of(failedAttempt(oldest)));
+
+    Duration retry = service().retryAfterForIp("203.0.113.5", now);
+
+    assertThat(retry).isEqualTo(Duration.ofSeconds(120));
+  }
+
+  @Test
+  void retryAfterForIp_noAttempts_returnsOneSecondFloor() {
+    when(repo.findBySourceIpAndAttemptedAtAfterAndFailureReasonInOrderByAttemptedAtAsc(
+            eq("203.0.113.5"), any(Instant.class), any(Collection.class)))
+        .thenReturn(List.of());
+
+    assertThat(service().retryAfterForIp("203.0.113.5", now)).isEqualTo(Duration.ofSeconds(1));
+  }
+
+  /** {@code window()} accessor was uncovered (line 101 null-return mutant survived). */
+  @Test
+  void window_returnsConfiguredFifteenMinuteDefault() {
+    assertThat(service().window()).isEqualTo(Duration.ofMinutes(15));
+  }
 }
