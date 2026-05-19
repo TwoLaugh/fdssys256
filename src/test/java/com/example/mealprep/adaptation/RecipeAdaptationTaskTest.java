@@ -124,6 +124,17 @@ class RecipeAdaptationTaskTest {
     assertThat(task.traceId()).contains(traceId);
   }
 
+  @Test
+  void system_prompt_exposes_the_v1_placeholder_text() {
+    // RecipeAdaptationTask.systemPrompt L133: EmptyObjectReturnVals replaces the prompt with
+    // "". Assert non-blank + a stable substring of the actual prompt to kill that mutant.
+    RecipeAdaptationTask task = task(JobSource.IMPORT, ctx("IMPORT", null, null));
+    assertThat(task.systemPrompt())
+        .isNotBlank()
+        .contains("MealPrep's recipe-adaptation assistant")
+        .contains("RecipeAdaptationResponse tool schema");
+  }
+
   private static RecipeAdaptationTask task(JobSource source, AdaptationContext ctx) {
     return new RecipeAdaptationTask(
         job(source, UUID.randomUUID(), UUID.randomUUID()),

@@ -8,6 +8,11 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.mealprep.adaptation.domain.entity.AdaptationJob;
 import com.example.mealprep.adaptation.domain.enums.ApprovalPolicy;
 import com.example.mealprep.adaptation.domain.enums.JobPriority;
@@ -22,6 +27,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Pageable;
 
 /** Unit tests for {@link BatchJobOrchestrator} — defer-on-active-sync rule + per-run cap. */
@@ -136,6 +142,74 @@ class BatchJobOrchestratorTest {
     // The throwing job must not abort the loop: the second job is still processed.
     verify(svc, times(1)).processJob(first);
     verify(svc, times(1)).processJob(second);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Counter-increment mutants (PIT SURVIVED): runBatchSweep L56 `deferred++` and
+  // L61 `processed++` only feed the closing summary LOG.info. IncrementsMutator
+  // flips `++` to `--`, observable only via that log line — assert its exact
+  // formatted text so a flipped counter (e.g. "processed=-1") fails the test.
+  // ---------------------------------------------------------------------------
+
+  @Test
+  void summary_log_reports_processed_count_incremented_for_each_processed_job() {
+    AdaptationJob a = job(JobPriority.BATCH, JobStatus.PENDING);
+    AdaptationJob b = job(JobPriority.BATCH, JobStatus.PENDING);
+    AdaptationJobRepository repo = mock(AdaptationJobRepository.class);
+    when(repo.findNextPendingJobs(any(Pageable.class))).thenReturn(List.of(a, b));
+    when(repo.findActiveByRecipeId(any())).thenReturn(List.of());
+    AdaptationServiceImpl svc = mock(AdaptationServiceImpl.class);
+
+    ListAppender<ILoggingEvent> app = attach();
+    new BatchJobOrchestrator(repo, svc).runBatchSweep();
+    detach(app);
+
+    // `++` (original) -> processed=2; `--` (mutant) -> processed=-2.
+    assertThat(summaryLine(app)).contains("processed=2 deferred=0 cap=2");
+  }
+
+  @Test
+  void summary_log_reports_deferred_count_incremented_for_each_deferred_job() {
+    UUID recipeId = UUID.randomUUID();
+    AdaptationJob batchJob = job(JobPriority.BATCH, JobStatus.PENDING);
+    batchJob.setRecipeId(recipeId);
+    AdaptationJob syncJob = job(JobPriority.SYNC, JobStatus.RUNNING);
+    syncJob.setRecipeId(recipeId);
+    AdaptationJobRepository repo = mock(AdaptationJobRepository.class);
+    when(repo.findNextPendingJobs(any(Pageable.class))).thenReturn(List.of(batchJob));
+    when(repo.findActiveByRecipeId(recipeId)).thenReturn(List.of(batchJob, syncJob));
+    when(repo.findById(batchJob.getId())).thenReturn(java.util.Optional.of(batchJob));
+    AdaptationServiceImpl svc = mock(AdaptationServiceImpl.class);
+
+    ListAppender<ILoggingEvent> app = attach();
+    new BatchJobOrchestrator(repo, svc).runBatchSweep();
+    detach(app);
+
+    // `++` (original) -> deferred=1; `--` (mutant) -> deferred=-1.
+    assertThat(summaryLine(app)).contains("processed=0 deferred=1 cap=1");
+  }
+
+  private static ListAppender<ILoggingEvent> attach() {
+    LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
+    Logger log = ctx.getLogger(BatchJobOrchestrator.class);
+    log.setLevel(Level.INFO);
+    ListAppender<ILoggingEvent> app = new ListAppender<>();
+    app.start();
+    log.addAppender(app);
+    return app;
+  }
+
+  private static void detach(ListAppender<ILoggingEvent> app) {
+    LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
+    ctx.getLogger(BatchJobOrchestrator.class).detachAppender(app);
+  }
+
+  private static String summaryLine(ListAppender<ILoggingEvent> app) {
+    return app.list.stream()
+        .map(ILoggingEvent::getFormattedMessage)
+        .filter(m -> m.contains("BatchJobOrchestrator: processed="))
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("no summary log line emitted"));
   }
 
   private static AdaptationJob job(JobPriority priority, JobStatus status) {

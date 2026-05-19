@@ -90,6 +90,76 @@ class AdaptationServiceTriggerEntriesTest {
   }
 
   @Test
+  void enqueueImportJob_reuses_supplied_parent_trace_id() {
+    // L293: `parentTraceId == null ? randomUUID() : parentTraceId`. NegateConditionals would
+    // flip the ternary and DISCARD a supplied parent trace id (breaking trace continuity).
+    // Passing a non-null parentTraceId and asserting it is reused on the saved row kills it.
+    AdaptationJobRepository jobRepo = mock(AdaptationJobRepository.class);
+    when(jobRepo.saveAndFlush(any(AdaptationJob.class))).thenAnswer(inv -> inv.getArgument(0));
+    AdaptationServiceImpl svc = svc(jobRepo, mock(ApplicationEventPublisher.class));
+
+    UUID parentTrace = UUID.randomUUID();
+    svc.enqueueImportJob(
+        new ImportJobRequest(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            Catalogue.USER,
+            DataQuality.AI_GENERATED,
+            null,
+            parentTrace));
+
+    ArgumentCaptor<AdaptationJob> capt = ArgumentCaptor.forClass(AdaptationJob.class);
+    verify(jobRepo).saveAndFlush(capt.capture());
+    assertThat(capt.getValue().getTraceId()).isEqualTo(parentTrace);
+  }
+
+  @Test
+  void enqueueImportJob_with_null_parent_trace_generates_a_fresh_non_null_trace_id() {
+    // The other (null parentTraceId) ternary arm: a fresh UUID is generated, never null.
+    AdaptationJobRepository jobRepo = mock(AdaptationJobRepository.class);
+    when(jobRepo.saveAndFlush(any(AdaptationJob.class))).thenAnswer(inv -> inv.getArgument(0));
+    AdaptationServiceImpl svc = svc(jobRepo, mock(ApplicationEventPublisher.class));
+
+    svc.enqueueImportJob(
+        new ImportJobRequest(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            Catalogue.USER,
+            DataQuality.AI_GENERATED,
+            null,
+            null));
+
+    ArgumentCaptor<AdaptationJob> capt = ArgumentCaptor.forClass(AdaptationJob.class);
+    verify(jobRepo).saveAndFlush(capt.capture());
+    assertThat(capt.getValue().getTraceId()).isNotNull();
+  }
+
+  @Test
+  void enqueueImportJob_sets_a_non_null_empty_json_object_for_inputs() {
+    // L964 emptyInputs(): NullReturnVals replaces the empty objectNode with null. The
+    // inputs column is NOT NULL, so a null here is a real defect. Assert non-null + empty
+    // object to kill the mutant.
+    AdaptationJobRepository jobRepo = mock(AdaptationJobRepository.class);
+    when(jobRepo.saveAndFlush(any(AdaptationJob.class))).thenAnswer(inv -> inv.getArgument(0));
+    AdaptationServiceImpl svc = svc(jobRepo, mock(ApplicationEventPublisher.class));
+
+    svc.enqueueImportJob(
+        new ImportJobRequest(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            Catalogue.USER,
+            DataQuality.AI_GENERATED,
+            null,
+            null));
+
+    ArgumentCaptor<AdaptationJob> capt = ArgumentCaptor.forClass(AdaptationJob.class);
+    verify(jobRepo).saveAndFlush(capt.capture());
+    assertThat(capt.getValue().getInputs()).isNotNull();
+    assertThat(capt.getValue().getInputs().isObject()).isTrue();
+    assertThat(capt.getValue().getInputs()).isEmpty();
+  }
+
+  @Test
   void enqueueDataModelChangeJobs_inserts_N_batch_priority_jobs_no_event() {
     AdaptationJobRepository jobRepo = mock(AdaptationJobRepository.class);
     ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);

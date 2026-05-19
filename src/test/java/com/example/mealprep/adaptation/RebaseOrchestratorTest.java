@@ -11,9 +11,11 @@ import static org.mockito.Mockito.when;
 import com.example.mealprep.adaptation.config.AdaptationConfig;
 import com.example.mealprep.adaptation.domain.service.internal.RebaseOrchestrator;
 import com.example.mealprep.adaptation.exception.RebaseExhaustedException;
+import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.exception.RecipeVersionConflictException;
 import com.example.mealprep.recipe.spi.RecipeWriteApi;
+import com.example.mealprep.recipe.spi.SaveAdaptedBranchCommand;
 import com.example.mealprep.recipe.spi.SaveAdaptedVersionCommand;
 import java.math.BigDecimal;
 import java.util.List;
@@ -62,6 +64,67 @@ class RebaseOrchestratorTest {
     assertThatThrownBy(() -> orch.saveAdaptedVersionWithRebase(stubCommand(), c -> stubCommand()))
         .isInstanceOf(RebaseExhaustedException.class);
     verify(api, times(1)).saveAdaptedVersion(any());
+  }
+
+  // ---------------------------------------------------------------------------
+  // Branch path (PIT NO_COVERAGE L57-73): saveAdaptedBranchWithRebase was wholly
+  // untested. Same retry/exhaust contract as the version path.
+  // ---------------------------------------------------------------------------
+
+  @Test
+  void branch_retries_once_then_succeeds() {
+    RecipeWriteApi api = mock(RecipeWriteApi.class);
+    RebaseOrchestrator orch = new RebaseOrchestrator(api, configWith(3));
+    RecipeBranchDto out = mock(RecipeBranchDto.class);
+    when(api.saveAdaptedBranch(any()))
+        .thenThrow(new RecipeVersionConflictException("conflict"))
+        .thenReturn(out);
+
+    RecipeBranchDto result =
+        orch.saveAdaptedBranchWithRebase(stubBranchCommand(), c -> stubBranchCommand());
+
+    assertThat(result).isSameAs(out);
+    verify(api, times(2)).saveAdaptedBranch(any());
+  }
+
+  @Test
+  void branch_succeeds_first_try_without_rebase() {
+    RecipeWriteApi api = mock(RecipeWriteApi.class);
+    RebaseOrchestrator orch = new RebaseOrchestrator(api, configWith(3));
+    RecipeBranchDto out = mock(RecipeBranchDto.class);
+    when(api.saveAdaptedBranch(any())).thenReturn(out);
+
+    assertThat(orch.saveAdaptedBranchWithRebase(stubBranchCommand(), c -> stubBranchCommand()))
+        .isSameAs(out);
+    verify(api, times(1)).saveAdaptedBranch(any());
+  }
+
+  @Test
+  void branch_throws_exhausted_after_max_attempts() {
+    RecipeWriteApi api = mock(RecipeWriteApi.class);
+    RebaseOrchestrator orch = new RebaseOrchestrator(api, configWith(2));
+    when(api.saveAdaptedBranch(any())).thenThrow(new RecipeVersionConflictException("c"));
+
+    assertThatThrownBy(
+            () -> orch.saveAdaptedBranchWithRebase(stubBranchCommand(), c -> stubBranchCommand()))
+        .isInstanceOf(RebaseExhaustedException.class);
+    verify(api, times(2)).saveAdaptedBranch(any());
+  }
+
+  private static SaveAdaptedBranchCommand stubBranchCommand() {
+    return new SaveAdaptedBranchCommand(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "branch-name",
+        "label",
+        "reason",
+        List.of(),
+        List.of(),
+        null,
+        null,
+        null,
+        UUID.randomUUID());
   }
 
   private static SaveAdaptedVersionCommand stubCommand() {

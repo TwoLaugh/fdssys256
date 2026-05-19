@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.example.mealprep.adaptation.api.dto.PlannerHintRequest;
 import com.example.mealprep.adaptation.domain.enums.HintSeverity;
 import com.example.mealprep.adaptation.domain.enums.HintType;
+import com.example.mealprep.adaptation.validation.PlannerHintValidator;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.validation.Validation;
@@ -63,6 +64,34 @@ class PlannerHintValidatorTest {
     PlannerHintRequest req =
         request(HintType.NUTRITION_TRADEOFF, JsonNodeFactory.instance.objectNode());
     assertThat(validator.validate(req)).isEmpty();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Null-passthrough arms (PIT NO_COVERAGE, BooleanFalseReturnVals): L20
+  // `value == null -> true` and L26 `type == null || payload == null -> true`.
+  // The bean Validator never drives these (field-level @NotNull short-circuits),
+  // so call the ConstraintValidator directly. A `return false` mutant flips
+  // these passes to failures.
+  // ---------------------------------------------------------------------------
+
+  @Test
+  void null_request_value_is_valid_passthrough() {
+    PlannerHintValidator v = new PlannerHintValidator();
+    assertThat(v.isValid(null, null)).isTrue();
+  }
+
+  @Test
+  void null_hint_type_defers_to_field_level_notnull_and_passes_here() {
+    PlannerHintValidator v = new PlannerHintValidator();
+    PlannerHintRequest req = request(null, JsonNodeFactory.instance.objectNode());
+    assertThat(v.isValid(req, null)).isTrue();
+  }
+
+  @Test
+  void null_payload_defers_to_field_level_notnull_and_passes_here() {
+    PlannerHintValidator v = new PlannerHintValidator();
+    PlannerHintRequest req = request(HintType.PREP_LEAD_TIME, null);
+    assertThat(v.isValid(req, null)).isTrue();
   }
 
   private static PlannerHintRequest request(HintType type, ObjectNode payload) {
