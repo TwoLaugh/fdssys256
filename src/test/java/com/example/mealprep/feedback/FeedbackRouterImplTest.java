@@ -36,6 +36,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -309,6 +310,282 @@ class FeedbackRouterImplTest {
     verify(routingLogRepository, times(2)).save(logCaptor.capture());
     assertThat(logCaptor.getAllValues().get(1).getFailureKind())
         .isEqualTo(RoutingFailureKind.DESTINATION_BUSINESS);
+  }
+
+  // ---------------- routeOneForReplay ----------------
+
+  @Test
+  void routeOneForReplay_appliedDispatch_returnsAppliedNoEventNoReconcile() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = stubDispatcher(Destination.PREFERENCE, applied());
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    FeedbackRouterImpl.RouteReplayResult result = router.routeOneForReplay(feedbackId, s);
+
+    assertThat(result.status()).isEqualTo(RoutingStatus.APPLIED);
+    assertThat(result.failureKind()).isNull();
+    assertThat(result.newRoutingLogId()).isNotNull();
+    // Replay must NOT reconcile entry status nor publish the processed event.
+    verify(events, never()).publishEvent(any());
+    verify(entryRepository, never()).updateSubmissionStatusAndLastClassifiedAt(any(), any(), any());
+    // PENDING insert + terminal update.
+    verify(routingLogRepository, times(2)).save(any(RoutingLogEntry.class));
+  }
+
+  @Test
+  void routeOneForReplay_dispatcherThrowsBusinessException_returnsFailedWithKind() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PROVISIONS, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = Mockito.mock(DestinationDispatcher.class);
+    when(d.destination()).thenReturn(Destination.PROVISIONS);
+    when(d.dispatch(any(DispatchContext.class)))
+        .thenThrow(
+            new com.example.mealprep.provisions.exception.InventoryItemNotFoundException(
+                UUID.randomUUID()));
+    when(registry.resolve(Destination.PROVISIONS)).thenReturn(d);
+
+    FeedbackRouterImpl.RouteReplayResult result = router.routeOneForReplay(feedbackId, s);
+
+    assertThat(result.status()).isEqualTo(RoutingStatus.FAILED);
+    assertThat(result.failureKind()).isEqualTo(RoutingFailureKind.DESTINATION_BUSINESS);
+  }
+
+  @Test
+  void routeOneForReplay_catastrophicTxFailure_persistsDefensiveFailureLog_returnsUnknown() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    // First save (PENDING insert inside the routeOne tx) explodes → catastrophic catch.
+    when(routingLogRepository.save(any(RoutingLogEntry.class)))
+        .thenThrow(new DataAccessResourceFailureException("ds down"))
+        .thenAnswer(inv -> inv.getArgument(0, RoutingLogEntry.class));
+
+    FeedbackRouterImpl.RouteReplayResult result = router.routeOneForReplay(feedbackId, s);
+
+    assertThat(result.status()).isEqualTo(RoutingStatus.FAILED);
+    assertThat(result.failureKind()).isEqualTo(RoutingFailureKind.UNKNOWN);
+    // Defensive FAILED row written OUTSIDE the failed tx (second save).
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    RoutingLogEntry defensive = cap.getAllValues().get(1);
+    assertThat(defensive.getStatus()).isEqualTo(RoutingStatus.FAILED);
+    assertThat(defensive.getFailureKind()).isEqualTo(RoutingFailureKind.UNKNOWN);
+  }
+
+  @Test
+  void routeOneForReplay_unknownFeedbackId_throwsNotFound() {
+    UUID missing = UUID.randomUUID();
+    when(entryRepository.findById(missing)).thenReturn(Optional.empty());
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+
+    org.junit.jupiter.api.Assertions.assertThrows(
+        com.example.mealprep.feedback.exception.FeedbackEntryNotFoundException.class,
+        () -> router.routeOneForReplay(missing, s));
+  }
+
+  // ---------------- classifyException branch coverage ----------------
+
+  @Test
+  void constraintViolation_classifiedAsDestinationValidation() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = Mockito.mock(DestinationDispatcher.class);
+    when(d.destination()).thenReturn(Destination.PREFERENCE);
+    when(d.dispatch(any(DispatchContext.class)))
+        .thenThrow(new jakarta.validation.ConstraintViolationException("bad payload", Set.of()));
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    assertThat(cap.getAllValues().get(1).getFailureKind())
+        .isEqualTo(RoutingFailureKind.DESTINATION_VALIDATION);
+  }
+
+  @Test
+  void cannotAcquireLock_classifiedAsTransient() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = Mockito.mock(DestinationDispatcher.class);
+    when(d.destination()).thenReturn(Destination.PREFERENCE);
+    when(d.dispatch(any(DispatchContext.class)))
+        .thenThrow(new org.springframework.dao.CannotAcquireLockException("row locked"));
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    assertThat(cap.getAllValues().get(1).getFailureKind()).isEqualTo(RoutingFailureKind.TRANSIENT);
+  }
+
+  @Test
+  void queryTimeout_classifiedAsTransient() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = Mockito.mock(DestinationDispatcher.class);
+    when(d.destination()).thenReturn(Destination.PREFERENCE);
+    when(d.dispatch(any(DispatchContext.class)))
+        .thenThrow(new org.springframework.dao.QueryTimeoutException("statement timeout"));
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    assertThat(cap.getAllValues().get(1).getFailureKind()).isEqualTo(RoutingFailureKind.TRANSIENT);
+  }
+
+  @Test
+  void aiInvalidRequest_classifiedAsAiUnavailable() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.RECIPE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = Mockito.mock(DestinationDispatcher.class);
+    when(d.destination()).thenReturn(Destination.RECIPE);
+    when(d.dispatch(any(DispatchContext.class)))
+        .thenThrow(new com.example.mealprep.ai.exception.AiInvalidRequestException("bad prompt"));
+    when(registry.resolve(Destination.RECIPE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    assertThat(cap.getAllValues().get(1).getFailureKind())
+        .isEqualTo(RoutingFailureKind.AI_UNAVAILABLE);
+  }
+
+  @Test
+  void aiInvalidResponse_classifiedAsAiUnavailable() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.RECIPE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = Mockito.mock(DestinationDispatcher.class);
+    when(d.destination()).thenReturn(Destination.RECIPE);
+    when(d.dispatch(any(DispatchContext.class)))
+        .thenThrow(
+            new com.example.mealprep.ai.exception.AiInvalidResponseException("garbage json"));
+    when(registry.resolve(Destination.RECIPE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    assertThat(cap.getAllValues().get(1).getFailureKind())
+        .isEqualTo(RoutingFailureKind.AI_UNAVAILABLE);
+  }
+
+  @Test
+  void arbitraryRuntimeException_classifiedAsUnknown() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = Mockito.mock(DestinationDispatcher.class);
+    when(d.destination()).thenReturn(Destination.PREFERENCE);
+    when(d.dispatch(any(DispatchContext.class)))
+        .thenThrow(new IllegalArgumentException("totally unexpected"));
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    RoutingLogEntry terminal = cap.getAllValues().get(1);
+    assertThat(terminal.getStatus()).isEqualTo(RoutingStatus.FAILED);
+    assertThat(terminal.getFailureKind()).isEqualTo(RoutingFailureKind.UNKNOWN);
+  }
+
+  // ---------------- catastrophic routeAll + reconcile edges ----------------
+
+  @Test
+  void catastrophicRouteOneFailure_persistsDefensiveFailedLog_thenReconcilesFailed() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    // First save (PENDING insert) blows the routeOne tx; defensive log save (second) succeeds.
+    when(routingLogRepository.save(any(RoutingLogEntry.class)))
+        .thenThrow(new DataAccessResourceFailureException("ds down"))
+        .thenAnswer(inv -> inv.getArgument(0, RoutingLogEntry.class));
+
+    router.routeAll(feedbackId, List.of(s));
+
+    assertThat(entry.getSubmissionStatus()).isEqualTo(SubmissionStatus.FAILED);
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    RoutingLogEntry defensive = cap.getAllValues().get(1);
+    assertThat(defensive.getStatus()).isEqualTo(RoutingStatus.FAILED);
+    assertThat(defensive.getFailureKind()).isEqualTo(RoutingFailureKind.UNKNOWN);
+    assertThat(defensive.getRoutedAt()).isNotNull();
+    assertThat(defensive.getCompletedAt()).isNotNull();
+    // Event still published despite the catastrophic dispatch.
+    verify(events).publishEvent(any(FeedbackProcessedEvent.class));
+  }
+
+  @Test
+  void doubleFault_defensiveLogAlsoFails_isSwallowed_reconcileStillRuns() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    // Every save throws → routeOne tx fails AND the defensive persistFailureLog double-faults.
+    when(routingLogRepository.save(any(RoutingLogEntry.class)))
+        .thenThrow(new DataAccessResourceFailureException("ds down"));
+
+    router.routeAll(feedbackId, List.of(s));
+
+    // Double-fault is logged and swallowed; reconcile still flips status to FAILED + publishes.
+    assertThat(entry.getSubmissionStatus()).isEqualTo(SubmissionStatus.FAILED);
+    verify(events).publishEvent(any(FeedbackProcessedEvent.class));
+  }
+
+  @Test
+  void reconcile_rowsZero_throwsFeedbackEntryNotFound() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = stubDispatcher(Destination.PREFERENCE, applied());
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+    // The reconcile UPDATE matches zero rows (entry vanished mid-flight).
+    when(entryRepository.updateSubmissionStatusAndLastClassifiedAt(
+            org.mockito.ArgumentMatchers.eq(feedbackId),
+            any(SubmissionStatus.class),
+            any(Instant.class)))
+        .thenReturn(0);
+
+    org.junit.jupiter.api.Assertions.assertThrows(
+        com.example.mealprep.feedback.exception.FeedbackEntryNotFoundException.class,
+        () -> router.routeAll(feedbackId, List.of(s)));
+    verify(events, never()).publishEvent(any());
+  }
+
+  @Test
+  void nullClassifications_isNoop() {
+    router.routeAll(feedbackId, null);
+    verify(events, never()).publishEvent(any());
+    verify(routingLogRepository, never()).save(any(RoutingLogEntry.class));
+  }
+
+  @Test
+  void nullUiContext_isToleratedAndDispatchStillRuns() {
+    entry.setUiContext(null);
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = stubDispatcher(Destination.PREFERENCE, applied());
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    assertThat(entry.getSubmissionStatus()).isEqualTo(SubmissionStatus.ROUTED);
+    ArgumentCaptor<DispatchContext> ctx = ArgumentCaptor.forClass(DispatchContext.class);
+    verify(d).dispatch(ctx.capture());
+    assertThat(ctx.getValue().uiContext()).isNull();
+  }
+
+  @Test
+  void unknownFeedbackId_routeAll_throwsNotFound() {
+    UUID missing = UUID.randomUUID();
+    when(entryRepository.findById(missing)).thenReturn(Optional.empty());
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+
+    org.junit.jupiter.api.Assertions.assertThrows(
+        com.example.mealprep.feedback.exception.FeedbackEntryNotFoundException.class,
+        () -> router.routeAll(missing, List.of(s)));
   }
 
   // ---------------- helpers ----------------
