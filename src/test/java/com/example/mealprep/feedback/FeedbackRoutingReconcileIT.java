@@ -93,6 +93,9 @@ class FeedbackRoutingReconcileIT {
 
   @AfterEach
   void cleanup() {
+    // Children before parents: feedback_misclassification_corrections FK-references
+    // feedback_routing_log (original_routing_id) — delete it first.
+    jdbcTemplate.update("DELETE FROM feedback_misclassification_corrections");
     jdbcTemplate.update("DELETE FROM feedback_clarification_queries");
     jdbcTemplate.update("DELETE FROM feedback_routing_log");
     jdbcTemplate.update("DELETE FROM feedback_entries");
