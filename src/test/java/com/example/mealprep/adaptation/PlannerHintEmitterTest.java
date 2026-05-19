@@ -77,6 +77,30 @@ class PlannerHintEmitterTest {
   }
 
   @Test
+  void emit_with_no_priors_invalidated_still_persists_and_publishes() {
+    // invalidated == 0 path (the false side of `invalidated > 0`): the row is still
+    // saved and the event still published — only the info log is skipped.
+    UUID recipeId = UUID.randomUUID();
+    UUID versionId = UUID.randomUUID();
+    when(repo.invalidateForRecipeTypeOnOtherVersions(any(), any(), any(), any(Instant.class)))
+        .thenReturn(0);
+
+    PlannerHintRecord saved = emitter.emit(req(recipeId, versionId, null), null);
+
+    assertThat(saved.getRecipeId()).isEqualTo(recipeId);
+    verify(repo).save(any(PlannerHintRecord.class));
+    verify(events).publishEvent(any(PlannerHintEmittedEvent.class));
+  }
+
+  @Test
+  void invalidate_hints_for_old_version_returns_zero_when_no_rows_touched() {
+    UUID old = UUID.randomUUID();
+    when(repo.invalidateForOldVersion(eq(old), any(Instant.class))).thenReturn(0);
+    assertThat(emitter.invalidateHintsForOldVersion(old)).isZero();
+    verify(repo).invalidateForOldVersion(eq(old), any(Instant.class));
+  }
+
+  @Test
   void invalidate_hints_for_old_version_delegates_to_repo() {
     UUID old = UUID.randomUUID();
     when(repo.invalidateForOldVersion(eq(old), any(Instant.class))).thenReturn(3);

@@ -114,6 +114,24 @@ class FingerprintRefresherTest {
   }
 
   @Test
+  void null_normalised_body_hashes_as_empty_string() {
+    // sha256(input == null ? "" : input): a null body must hash to the SHA-256 of the
+    // empty string. A negated guard would NPE on input.getBytes(); a removed guard would
+    // produce a different digest. Pin the exact well-known empty-string SHA-256.
+    UUID recipeId = UUID.randomUUID();
+    UUID branchId = UUID.randomUUID();
+    when(repo.findByBodyHash(any())).thenReturn(Optional.empty());
+    when(repo.findByRecipeIdAndBranchId(recipeId, branchId)).thenReturn(Optional.empty());
+
+    AdaptationFingerprint out =
+        refresher.refreshOnBranch(
+            recipeId, branchId, UUID.randomUUID(), fingerprintJson(), null, UUID.randomUUID());
+
+    assertThat(out.getBodyHash())
+        .isEqualTo("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  }
+
+  @Test
   void maps_fingerprint_json_to_typed_dto() {
     CharacterFingerprintDto dto = refresher.mapToCharacterFingerprintDto(fingerprintJson());
     assertThat(dto.cuisineAnchor()).isEqualTo("italian");

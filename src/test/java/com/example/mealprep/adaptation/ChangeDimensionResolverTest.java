@@ -14,6 +14,10 @@ import com.example.mealprep.adaptation.domain.enums.JobPriority;
 import com.example.mealprep.adaptation.domain.enums.JobSource;
 import com.example.mealprep.adaptation.domain.enums.JobStatus;
 import com.example.mealprep.adaptation.domain.service.internal.ChangeDimensionResolver;
+import com.example.mealprep.recipe.api.dto.ChangeAction;
+import com.example.mealprep.recipe.api.dto.IngredientChangeDto;
+import com.example.mealprep.recipe.api.dto.MethodChangeDto;
+import com.example.mealprep.recipe.api.dto.RecipeDiffDto;
 import com.example.mealprep.recipe.domain.entity.Catalogue;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.math.BigDecimal;
@@ -59,6 +63,118 @@ class ChangeDimensionResolverTest {
     AdaptationContext context = baseContext(null);
     AdaptationJob job = job(JobSource.IMPORT);
     assertThat(resolver.resolve(job, context, response())).isEqualTo(ChangeDimension.GENERAL);
+  }
+
+  @Test
+  void feedback_taste_exactly_neg_half_does_not_trigger_taste_branch() {
+    // compareTo(NEG_HALF) < 0 is STRICT: -0.5 is NOT < -0.5, so the taste branch is skipped.
+    // With no diff this falls through to GENERAL. A ConditionalsBoundary mutant (<= instead
+    // of <) would wrongly return SALT_LEVEL here.
+    AdaptationContext context =
+        baseContext(
+            new FeedbackJobRequest.RatingDeltaDto(BigDecimal.valueOf(-0.5), null, null, null));
+    AdaptationJob job = job(JobSource.FEEDBACK);
+    assertThat(resolver.resolve(job, context, response())).isEqualTo(ChangeDimension.GENERAL);
+  }
+
+  @Test
+  void feedback_effort_exactly_neg_half_does_not_trigger_effort_branch() {
+    AdaptationContext context =
+        baseContext(
+            new FeedbackJobRequest.RatingDeltaDto(null, BigDecimal.valueOf(-0.5), null, null));
+    AdaptationJob job = job(JobSource.FEEDBACK);
+    assertThat(resolver.resolve(job, context, response())).isEqualTo(ChangeDimension.GENERAL);
+  }
+
+  @Test
+  void feedback_portion_exactly_neg_half_does_not_trigger_portion_branch() {
+    AdaptationContext context =
+        baseContext(
+            new FeedbackJobRequest.RatingDeltaDto(null, null, BigDecimal.valueOf(-0.5), null));
+    AdaptationJob job = job(JobSource.FEEDBACK);
+    assertThat(resolver.resolve(job, context, response())).isEqualTo(ChangeDimension.GENERAL);
+  }
+
+  @Test
+  void feedback_source_but_null_rating_delta_falls_through_to_diff() {
+    // job.source == FEEDBACK but context.ratingDelta() == null -> skip the feedback block,
+    // inspect the diff. Ingredient changes present -> PROTEIN.
+    AdaptationContext context = baseContext(null);
+    AdaptationJob job = job(JobSource.FEEDBACK);
+    RecipeAdaptationResponse resp =
+        responseWithDiff(
+            new RecipeDiffDto(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                List.of(new IngredientChangeDto(ChangeAction.MODIFIED, null, null, "amount")),
+                List.of(),
+                List.of(),
+                List.of()));
+    assertThat(resolver.resolve(job, context, resp)).isEqualTo(ChangeDimension.PROTEIN);
+  }
+
+  @Test
+  void diff_with_ingredient_changes_resolves_to_protein() {
+    AdaptationContext context = baseContext(null);
+    AdaptationJob job = job(JobSource.IMPORT);
+    RecipeAdaptationResponse resp =
+        responseWithDiff(
+            new RecipeDiffDto(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                List.of(new IngredientChangeDto(ChangeAction.ADDED, null, null, "tofu")),
+                List.of(),
+                List.of(),
+                List.of()));
+    assertThat(resolver.resolve(job, context, resp)).isEqualTo(ChangeDimension.PROTEIN);
+  }
+
+  @Test
+  void diff_with_only_method_changes_resolves_to_method_simplification() {
+    AdaptationContext context = baseContext(null);
+    AdaptationJob job = job(JobSource.IMPORT);
+    RecipeAdaptationResponse resp =
+        responseWithDiff(
+            new RecipeDiffDto(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                List.of(),
+                List.of(new MethodChangeDto(ChangeAction.MODIFIED, 2, "fry", "bake")),
+                List.of(),
+                List.of()));
+    assertThat(resolver.resolve(job, context, resp))
+        .isEqualTo(ChangeDimension.METHOD_SIMPLIFICATION);
+  }
+
+  @Test
+  void diff_present_but_empty_change_lists_falls_back_to_general() {
+    AdaptationContext context = baseContext(null);
+    AdaptationJob job = job(JobSource.IMPORT);
+    RecipeAdaptationResponse resp =
+        responseWithDiff(
+            new RecipeDiffDto(
+                UUID.randomUUID(), UUID.randomUUID(), List.of(), List.of(), List.of(), List.of()));
+    assertThat(resolver.resolve(job, context, resp)).isEqualTo(ChangeDimension.GENERAL);
+  }
+
+  @Test
+  void null_response_falls_back_to_general() {
+    AdaptationContext context = baseContext(null);
+    AdaptationJob job = job(JobSource.IMPORT);
+    assertThat(resolver.resolve(job, context, null)).isEqualTo(ChangeDimension.GENERAL);
+  }
+
+  private static RecipeAdaptationResponse responseWithDiff(RecipeDiffDto diff) {
+    return new RecipeAdaptationResponse(
+        0,
+        AdaptationClassification.VERSION,
+        "ok",
+        "",
+        BigDecimal.valueOf(0.8),
+        BigDecimal.valueOf(0.8),
+        diff,
+        null,
+        List.of());
   }
 
   private static AdaptationContext baseContext(FeedbackJobRequest.RatingDeltaDto rd) {

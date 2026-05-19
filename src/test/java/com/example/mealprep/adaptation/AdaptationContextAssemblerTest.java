@@ -106,6 +106,130 @@ class AdaptationContextAssemblerTest {
     assertThat(ctx.hardConstraintsHash()).isEqualTo("hc:none");
   }
 
+  @Test
+  void assemble_loads_fingerprint_when_branch_present_and_copies_candidates() {
+    AdaptationJob job = job(JobSource.IMPORT);
+    UUID branchId = UUID.randomUUID();
+    var version = version(List.of(ing("beef")));
+    RecipeDto recipe =
+        new RecipeDto(
+            job.getRecipeId(),
+            job.getUserId(),
+            com.example.mealprep.recipe.domain.entity.Catalogue.USER,
+            "R",
+            "d",
+            1,
+            branchId,
+            com.example.mealprep.recipe.domain.entity.DataQuality.AI_GENERATED,
+            com.example.mealprep.recipe.domain.entity.NutritionStatus.PENDING,
+            null,
+            null,
+            null,
+            null,
+            0L,
+            Instant.now(),
+            Instant.now(),
+            version,
+            List.of());
+    var fp =
+        new com.example.mealprep.recipe.api.dto.CharacterFingerprintDto(
+            List.of("beef"),
+            List.of(),
+            List.of(),
+            List.of(),
+            com.example.mealprep.recipe.domain.entity.Complexity.MODERATE,
+            "italian");
+    when(recipeQuery.getById(job.getRecipeId())).thenReturn(Optional.of(recipe));
+    when(recipeQuery.getFingerprint(job.getRecipeId(), branchId)).thenReturn(Optional.of(fp));
+    when(prefQuery.getHardConstraints(job.getUserId())).thenReturn(Optional.empty());
+    when(knowledge.lookupForRecipe(any(), anyList()))
+        .thenReturn(new NutritionalKnowledgeBundleDto(List.of(), List.of(), List.of(), List.of()));
+
+    // null triggerInputs -> all trigger-specific fields null (kills L90-93 ternary mutants);
+    // null candidates -> List.of() (kills the L85 ternary).
+    AdaptationContext ctx = assembler.assemble(job, null, null);
+
+    assertThat(ctx.fingerprint()).isSameAs(fp);
+    assertThat(ctx.currentVersion()).isSameAs(version);
+    assertThat(ctx.candidates()).isEmpty();
+    assertThat(ctx.feedbackText()).isNull();
+    assertThat(ctx.ratingDelta()).isNull();
+    assertThat(ctx.directive()).isNull();
+    assertThat(ctx.dataModelChange()).isNull();
+  }
+
+  @Test
+  void assemble_skips_fingerprint_when_branch_id_null() {
+    AdaptationJob job = job(JobSource.IMPORT);
+    RecipeDto recipe =
+        new RecipeDto(
+            job.getRecipeId(),
+            job.getUserId(),
+            com.example.mealprep.recipe.domain.entity.Catalogue.USER,
+            "R",
+            "d",
+            1,
+            null, // currentBranchId null -> fingerprint lookup skipped
+            com.example.mealprep.recipe.domain.entity.DataQuality.AI_GENERATED,
+            com.example.mealprep.recipe.domain.entity.NutritionStatus.PENDING,
+            null,
+            null,
+            null,
+            null,
+            0L,
+            Instant.now(),
+            Instant.now(),
+            version(List.of(ing("beef"))),
+            List.of());
+    when(recipeQuery.getById(job.getRecipeId())).thenReturn(Optional.of(recipe));
+    when(prefQuery.getHardConstraints(job.getUserId())).thenReturn(Optional.empty());
+    when(knowledge.lookupForRecipe(any(), anyList()))
+        .thenReturn(new NutritionalKnowledgeBundleDto(List.of(), List.of(), List.of(), List.of()));
+
+    AdaptationContext ctx =
+        assembler.assemble(job, List.of(), new TriggerInputs.ImportTriggerInputs(null));
+
+    assertThat(ctx.fingerprint()).isNull();
+    org.mockito.Mockito.verify(recipeQuery, org.mockito.Mockito.never())
+        .getFingerprint(any(), any());
+  }
+
+  private static com.example.mealprep.recipe.api.dto.IngredientDto ing(String mappingKey) {
+    return new com.example.mealprep.recipe.api.dto.IngredientDto(
+        UUID.randomUUID(),
+        0,
+        mappingKey,
+        "display",
+        java.math.BigDecimal.valueOf(100),
+        "g",
+        "diced",
+        false,
+        false,
+        java.math.BigDecimal.valueOf(0.9));
+  }
+
+  private static com.example.mealprep.recipe.api.dto.RecipeVersionDto version(
+      List<com.example.mealprep.recipe.api.dto.IngredientDto> ingredients) {
+    return new com.example.mealprep.recipe.api.dto.RecipeVersionDto(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        1,
+        null,
+        com.example.mealprep.recipe.domain.entity.VersionTrigger.IMPORT,
+        "initial",
+        "pending",
+        Instant.now(),
+        "user:" + UUID.randomUUID(),
+        null,
+        ingredients,
+        List.of(),
+        new com.example.mealprep.recipe.api.dto.RecipeMetadataDto(
+            2, 10, 20, 30, List.of("pot"), 3, 4, true, "italian", List.of("d")),
+        new com.example.mealprep.recipe.api.dto.RecipeTagsDto(
+            "beef", "stovetop", null, List.of(), List.of()),
+        null);
+  }
+
   private void stubEmptyDeps(AdaptationJob job) {
     RecipeDto recipe =
         new RecipeDto(

@@ -49,6 +49,55 @@ class CharacterPreservationGateTest {
         .isInstanceOf(AdaptationCharacterBreakException.class);
   }
 
+  @Test
+  void score_exactly_at_threshold_passes_cleanly() {
+    // score.compareTo(0.6) >= 0 boundary: 0.60 is NOT a break (>= is inclusive).
+    // A `> 0` mutant would reject the exactly-0.6 case.
+    RecipeAdaptationResponse r =
+        response(new BigDecimal("0.60"), AdaptationClassification.VERSION, BigDecimal.valueOf(0.9));
+    assertThat(gate.evaluateAndForceBranch(r)).isFalse();
+  }
+
+  @Test
+  void branch_with_coherence_exactly_at_min_continues() {
+    // confidence.compareTo(0.7) >= 0 boundary, below-character BRANCH path: exactly 0.7
+    // must take the escape hatch. A `> 0` mutant would reject here.
+    RecipeAdaptationResponse r =
+        response(new BigDecimal("0.55"), AdaptationClassification.BRANCH, new BigDecimal("0.70"));
+    assertThat(gate.evaluateAndForceBranch(r)).isTrue();
+  }
+
+  @Test
+  void null_response_throws_character_break() {
+    assertThatThrownBy(() -> gate.evaluateAndForceBranch(null))
+        .isInstanceOf(AdaptationCharacterBreakException.class);
+  }
+
+  @Test
+  void null_character_score_throws_character_break() {
+    RecipeAdaptationResponse r =
+        new RecipeAdaptationResponse(
+            0,
+            AdaptationClassification.VERSION,
+            "ok",
+            "",
+            BigDecimal.valueOf(0.9),
+            null,
+            null,
+            null,
+            List.of());
+    assertThatThrownBy(() -> gate.evaluateAndForceBranch(r))
+        .isInstanceOf(AdaptationCharacterBreakException.class);
+  }
+
+  @Test
+  void below_threshold_branch_with_null_confidence_rejects() {
+    RecipeAdaptationResponse r =
+        response(new BigDecimal("0.55"), AdaptationClassification.BRANCH, null);
+    assertThatThrownBy(() -> gate.evaluateAndForceBranch(r))
+        .isInstanceOf(AdaptationCharacterBreakException.class);
+  }
+
   private static RecipeAdaptationResponse response(
       BigDecimal characterScore, AdaptationClassification cls, BigDecimal confidence) {
     return new RecipeAdaptationResponse(
