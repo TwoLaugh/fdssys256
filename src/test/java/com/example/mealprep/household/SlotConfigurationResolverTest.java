@@ -115,4 +115,77 @@ class SlotConfigurationResolverTest {
     assertThat(result.slots().get(1).slotKey()).isEqualTo("late-snack");
     assertThat(result.slots().get(1).kind()).isEqualTo(SlotKind.snack);
   }
+
+  /**
+   * Custom slot with NULL headcount + NULL timeBudgetMin and {@code shared=false}. Exercises the
+   * three ternary expressions on resolver lines 73-75 for the custom-slot branch (previously only
+   * the slotDefault branch covered them): null headcount → DEFAULT_HEADCOUNT (1), null timeBudget →
+   * DEFAULT_TIME_BUDGET_MIN (30), and {@code shared ? null : copyOf(eaters)} → the eater list. Each
+   * assertion pins one ternary outcome so the substituted/negated mutants are killed.
+   */
+  @Test
+  void resolve_customSlotWithNullDefaultsAndPerPerson_appliesFallbacksAndEaterList() {
+    UUID userA = UUID.randomUUID();
+    UUID userB = UUID.randomUUID();
+    HouseholdMember memberA =
+        HouseholdTestData.member().withUserId(userA).withRole(HouseholdRole.primary).build();
+    HouseholdMember memberB =
+        HouseholdTestData.member().withUserId(userB).withRole(HouseholdRole.member).build();
+    Household household =
+        HouseholdTestData.household().withMember(memberA).withMember(memberB).build();
+
+    CustomSlotDefinition custom =
+        new CustomSlotDefinition("brunch", "Brunch", SlotKind.lunch, false, null, null);
+    HouseholdSettingsDocument doc =
+        new HouseholdSettingsDocument(
+            new LinkedHashMap<>(), List.of(custom), null, new HouseholdSchedulingPreferences());
+    HouseholdSettings settings =
+        HouseholdSettings.builder()
+            .id(UUID.randomUUID())
+            .householdId(household.getId())
+            .document(doc)
+            .build();
+
+    SlotConfigurationDto result = resolver.resolve(household, settings);
+
+    assertThat(result.slots()).hasSize(1);
+    SlotConfigEntryDto brunch = result.slots().get(0);
+    assertThat(brunch.slotKey()).isEqualTo("brunch");
+    assertThat(brunch.headcount()).isEqualTo(1); // null -> DEFAULT_HEADCOUNT
+    assertThat(brunch.timeBudgetMin()).isEqualTo(30); // null -> DEFAULT_TIME_BUDGET_MIN
+    assertThat(brunch.shared()).isFalse();
+    assertThat(brunch.eaterUserIdsIfPerPerson()).containsExactlyInAnyOrder(userA, userB);
+  }
+
+  /**
+   * Custom slot with {@code shared=true} but explicit headcount/timeBudget — pins the OTHER side of
+   * the line-73/74 ternaries (non-null branch is kept) and the line-75 {@code shared ? null} true
+   * branch, so a mutant that flips the condition is caught from both directions.
+   */
+  @Test
+  void resolve_customSlotSharedWithExplicitValues_keepsValuesAndNullEaterList() {
+    UUID userA = UUID.randomUUID();
+    HouseholdMember memberA =
+        HouseholdTestData.member().withUserId(userA).withRole(HouseholdRole.primary).build();
+    Household household = HouseholdTestData.household().withMember(memberA).build();
+
+    CustomSlotDefinition custom =
+        new CustomSlotDefinition("supper", "Supper", SlotKind.dinner, true, 4, 90);
+    HouseholdSettingsDocument doc =
+        new HouseholdSettingsDocument(
+            new LinkedHashMap<>(), List.of(custom), null, new HouseholdSchedulingPreferences());
+    HouseholdSettings settings =
+        HouseholdSettings.builder()
+            .id(UUID.randomUUID())
+            .householdId(household.getId())
+            .document(doc)
+            .build();
+
+    SlotConfigEntryDto supper = resolver.resolve(household, settings).slots().get(0);
+
+    assertThat(supper.headcount()).isEqualTo(4);
+    assertThat(supper.timeBudgetMin()).isEqualTo(90);
+    assertThat(supper.shared()).isTrue();
+    assertThat(supper.eaterUserIdsIfPerPerson()).isNull();
+  }
 }

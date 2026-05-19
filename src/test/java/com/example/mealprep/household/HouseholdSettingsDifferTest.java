@@ -141,4 +141,69 @@ class HouseholdSettingsDifferTest {
             "slotDefaults.dinner.headcount",
             "slotDefaults.dinner.timeBudgetMin");
   }
+
+  /**
+   * A brand-new {@code slotDefaults} entry (kind {@code custom}, absent in prev) exercises the
+   * {@code prev == null ? null : prev.shared()} ternary on differ line 139 — the null branch must
+   * be taken so {@code prevShared} is null while {@code nowShared} is true, producing a {@code
+   * .shared} change row whose previous JSON is null and new JSON is true. A mutant that replaces
+   * the ternary with {@code prev.shared()} would NPE; one that returns the wrong constant would
+   * mis-record the previous value. All three nested fields (shared/headcount/timeBudget) differ
+   * from null, so 3 rows are expected.
+   */
+  @Test
+  void diff_whenSlotDefaultAdded_recordsSharedWithNullPreviousValue() {
+    HouseholdSettingsDocument prev = HouseholdTestData.defaultDocument();
+    Map<SlotKind, SlotDefault> nextSlots = new LinkedHashMap<>(prev.slotDefaults());
+    nextSlots.put(SlotKind.custom, new SlotDefault(true, 2, 45));
+    HouseholdSettingsDocument next =
+        new HouseholdSettingsDocument(
+            nextSlots, prev.customSlots(), prev.defaultHeadcount(), prev.scheduling());
+    Set<String> changed = new LinkedHashSet<>();
+
+    List<HouseholdSettingsAuditLog> rows =
+        differ.diff(settingsId, actorUserId, prev, next, changed);
+
+    assertThat(changed)
+        .containsExactly(
+            "slotDefaults.custom.shared",
+            "slotDefaults.custom.headcount",
+            "slotDefaults.custom.timeBudgetMin");
+    HouseholdSettingsAuditLog sharedRow =
+        rows.stream()
+            .filter(r -> r.getFieldPath().equals("slotDefaults.custom.shared"))
+            .findFirst()
+            .orElseThrow();
+    assertThat(sharedRow.getPreviousValueJson().isNull()).isTrue();
+    assertThat(sharedRow.getNewValueJson().asBoolean()).isTrue();
+  }
+
+  /**
+   * Removing an existing {@code slotDefaults} entry exercises the {@code now == null ? null :
+   * now.shared()} ternary on differ line 140 — {@code nowShared} must be null while {@code
+   * prevShared} is true, producing a {@code .shared} change row whose new JSON is null and previous
+   * JSON is true. Kills the line-140 ternary substitution/NPE mutants.
+   */
+  @Test
+  void diff_whenSlotDefaultRemoved_recordsSharedWithNullNewValue() {
+    HouseholdSettingsDocument prev = HouseholdTestData.defaultDocument();
+    Map<SlotKind, SlotDefault> nextSlots = new LinkedHashMap<>(prev.slotDefaults());
+    nextSlots.remove(SlotKind.snack);
+    HouseholdSettingsDocument next =
+        new HouseholdSettingsDocument(
+            nextSlots, prev.customSlots(), prev.defaultHeadcount(), prev.scheduling());
+    Set<String> changed = new LinkedHashSet<>();
+
+    List<HouseholdSettingsAuditLog> rows =
+        differ.diff(settingsId, actorUserId, prev, next, changed);
+
+    assertThat(changed).contains("slotDefaults.snack.shared");
+    HouseholdSettingsAuditLog sharedRow =
+        rows.stream()
+            .filter(r -> r.getFieldPath().equals("slotDefaults.snack.shared"))
+            .findFirst()
+            .orElseThrow();
+    assertThat(sharedRow.getNewValueJson().isNull()).isTrue();
+    assertThat(sharedRow.getPreviousValueJson().asBoolean()).isTrue();
+  }
 }

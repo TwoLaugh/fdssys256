@@ -530,4 +530,105 @@ class HouseholdInvitesServiceTest {
     assertThatThrownBy(() -> service().revokeInvite(inviteId, actorId))
         .isInstanceOf(HouseholdInviteAlreadyAcceptedException.class);
   }
+
+  // ---------------- getInviteByCode (previously zero coverage) ----------------
+
+  @Test
+  void getInviteByCode_nullCode_returnsEmpty_andDoesNotHitRepository() {
+    assertThat(service().getInviteByCode(null)).isEmpty();
+    verify(householdInviteRepository, never()).findByInviteCode(any());
+  }
+
+  @Test
+  void getInviteByCode_blankCode_returnsEmpty_andDoesNotHitRepository() {
+    assertThat(service().getInviteByCode("   ")).isEmpty();
+    verify(householdInviteRepository, never()).findByInviteCode(any());
+  }
+
+  @Test
+  void getInviteByCode_unknownCode_returnsEmpty() {
+    when(householdInviteRepository.findByInviteCode("NOPE000000000000"))
+        .thenReturn(Optional.empty());
+
+    assertThat(service().getInviteByCode("NOPE000000000000")).isEmpty();
+  }
+
+  @Test
+  void getInviteByCode_knownCode_returnsDtoWithCodeUnredacted() {
+    UUID householdId = UUID.randomUUID();
+    HouseholdInvite invite =
+        HouseholdTestData.invite()
+            .withHouseholdId(householdId)
+            .withInviteCode("VISIBLECODE12345")
+            .withExpiresAt(fixedNow.plus(7, ChronoUnit.DAYS))
+            .build();
+    when(householdInviteRepository.findByInviteCode("VISIBLECODE12345"))
+        .thenReturn(Optional.of(invite));
+
+    Optional<HouseholdInviteDto> result = service().getInviteByCode("VISIBLECODE12345");
+
+    assertThat(result).isPresent();
+    // toDtoWithCode keeps the code visible (this is the lookup-by-code path, not the redacted
+    // list).
+    assertThat(result.get().inviteCode()).isEqualTo("VISIBLECODE12345");
+    assertThat(result.get().householdId()).isEqualTo(householdId);
+    assertThat(result.get().status()).isEqualTo(InviteStatus.PENDING);
+  }
+
+  // ---------------- persistInviteWithCollisionRetry (retry branch) ----------------
+
+  @Test
+  void createInvite_retriesOnInviteCodeCollision_thenSucceeds() {
+    UUID actorId = UUID.randomUUID();
+    UUID householdId = UUID.randomUUID();
+    Household household = HouseholdTestData.household().withId(householdId).build();
+    HouseholdMember primary =
+        HouseholdTestData.member().withUserId(actorId).withRole(HouseholdRole.primary).build();
+    primary.setHousehold(household);
+    when(householdMemberRepository.findByUserId(actorId)).thenReturn(Optional.of(primary));
+    // First saveAndFlush collides on the UNIQUE(invite_code) constraint; the second succeeds.
+    when(householdInviteRepository.saveAndFlush(any(HouseholdInvite.class)))
+        .thenThrow(new DataIntegrityViolationException("duplicate key uq_household_invite_code"))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    Instant expiresAt = fixedNow.plus(7, ChronoUnit.DAYS);
+    HouseholdInviteDto created =
+        service()
+            .createInvite(
+                householdId,
+                actorId,
+                new CreateInviteRequest(null, HouseholdRole.member, expiresAt));
+
+    assertThat(created).isNotNull();
+    assertThat(created.inviteCode()).isNotNull().hasSize(16);
+    // Exactly two attempts: the collided one + the successful retry with a fresh code.
+    verify(householdInviteRepository, times(2)).saveAndFlush(any(HouseholdInvite.class));
+  }
+
+  @Test
+  void createInvite_propagatesCollisionAfterRetryBudgetExhausted() {
+    UUID actorId = UUID.randomUUID();
+    UUID householdId = UUID.randomUUID();
+    Household household = HouseholdTestData.household().withId(householdId).build();
+    HouseholdMember primary =
+        HouseholdTestData.member().withUserId(actorId).withRole(HouseholdRole.primary).build();
+    primary.setHousehold(household);
+    when(householdMemberRepository.findByUserId(actorId)).thenReturn(Optional.of(primary));
+    // Every attempt collides — beyond the retry budget the exception must propagate.
+    when(householdInviteRepository.saveAndFlush(any(HouseholdInvite.class)))
+        .thenThrow(new DataIntegrityViolationException("persistent collision"));
+
+    Instant expiresAt = fixedNow.plus(7, ChronoUnit.DAYS);
+    assertThatThrownBy(
+            () ->
+                service()
+                    .createInvite(
+                        householdId,
+                        actorId,
+                        new CreateInviteRequest(null, HouseholdRole.member, expiresAt)))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("persistent collision");
+    // INVITE_CODE_COLLISION_RETRIES = 3 → loop runs attempts 0..3 inclusive = 4 saveAndFlush calls.
+    verify(householdInviteRepository, times(4)).saveAndFlush(any(HouseholdInvite.class));
+  }
 }
