@@ -319,7 +319,14 @@ ImportRecipeFromUrlRequest:
   required: [url]
   properties:
     url: { type: string, format: uri, minLength: 1, maxLength: 2048 }
-    catalogue: { $ref: '#/Catalogue' }
+    catalogue:
+      type: string
+      enum: [USER, SYSTEM]
+      nullable: true
+      description: >-
+        Optional. May be omitted or sent as null. Imported recipes are always
+        created in the caller's USER catalogue regardless of this value
+        (server-assigned); the field is retained for forward compatibility.
 RecipeImportDto:
   type: object
   required: [id, recipeId, sourceType, importedAt, importedByUserId]
