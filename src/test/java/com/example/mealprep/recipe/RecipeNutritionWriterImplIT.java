@@ -1,10 +1,12 @@
 package com.example.mealprep.recipe;
 
+import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
@@ -13,6 +15,7 @@ import com.example.mealprep.auth.testdata.AuthTestData;
 import com.example.mealprep.nutrition.spi.RecipeNutritionWriter;
 import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
 import com.example.mealprep.recipe.testdata.RecipeTestData;
+import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -50,11 +53,12 @@ import org.springframework.test.web.servlet.MvcResult;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestContainersConfig.class)
+@Import({TestContainersConfig.class, OpenApiValidatorConfig.class})
 @ActiveProfiles("test")
 class RecipeNutritionWriterImplIT {
 
   @Autowired private MockMvc mvc;
+  @Autowired private OpenApiInteractionValidator openApiValidator;
   @Autowired private ObjectMapper objectMapper;
   @Autowired private UserRepository userRepository;
   @Autowired private SessionRepository sessionRepository;
@@ -103,7 +107,8 @@ class RecipeNutritionWriterImplIT {
                 .cookie(user.cookie())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(editReq)))
-        .andExpect(status().isOk());
+        .andExpect(status().isOk())
+        .andExpect(openApi().isValid(openApiValidator));
 
     // The nutrition listener runs AFTER_COMMIT and is synchronous within the same thread for
     // SpringBootTest (no async executor configured). The recipe's nutrition listener calls
@@ -133,6 +138,7 @@ class RecipeNutritionWriterImplIT {
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(body)))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     Cookie cookie = result.getResponse().getCookie(authProperties.cookieName());
     String userIdJson =
@@ -149,6 +155,7 @@ class RecipeNutritionWriterImplIT {
                     .content(
                         objectMapper.writeValueAsString(RecipeTestData.defaultCreateRequest())))
             .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
     JsonNode tree = objectMapper.readTree(created.getResponse().getContentAsString());
     return UUID.fromString(tree.get("id").asText());

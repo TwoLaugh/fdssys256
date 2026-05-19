@@ -1,10 +1,12 @@
 package com.example.mealprep.auth;
 
+import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.example.mealprep.auth.api.dto.LoginRequest;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.config.AuthProperties;
@@ -13,6 +15,7 @@ import com.example.mealprep.auth.domain.repository.LoginAttemptRepository;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.testdata.AuthTestData;
+import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.hamcrest.Matchers;
@@ -33,11 +36,12 @@ import org.springframework.test.web.servlet.MockMvc;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestContainersConfig.class)
+@Import({TestContainersConfig.class, OpenApiValidatorConfig.class})
 @ActiveProfiles("test")
 class ThrottlingAndLockoutIT {
 
   @Autowired private MockMvc mvc;
+  @Autowired private OpenApiInteractionValidator openApiValidator;
   @Autowired private ObjectMapper objectMapper;
   @Autowired private UserRepository userRepository;
   @Autowired private SessionRepository sessionRepository;
@@ -58,17 +62,20 @@ class ThrottlingAndLockoutIT {
             post("/api/v1/auth/register")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(body)))
-        .andExpect(status().isCreated());
+        .andExpect(status().isCreated())
+        .andExpect(openApi().isValid(openApiValidator));
     return username;
   }
 
   private void postLogin(String username, String password, int expectedStatus) throws Exception {
     LoginRequest body = AuthTestData.loginRequest(username, password);
+    // 200/401/423 are all documented for POST /api/v1/auth/login (problem+json for 4xx).
     mvc.perform(
             post("/api/v1/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(body)))
-        .andExpect(status().is(expectedStatus));
+        .andExpect(status().is(expectedStatus))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   // ---------------- per-username throttle ----------------
@@ -91,7 +98,8 @@ class ThrottlingAndLockoutIT {
                 .content(objectMapper.writeValueAsString(body)))
         .andExpect(status().isTooManyRequests())
         .andExpect(header().exists("Retry-After"))
-        .andExpect(header().string("Retry-After", Matchers.matchesPattern("\\d+")));
+        .andExpect(header().string("Retry-After", Matchers.matchesPattern("\\d+")))
+        .andExpect(openApi().isValid(openApiValidator));
 
     // Throttle response is itself audited as THROTTLED.
     assertThat(loginAttemptRepository.findAll())
@@ -117,7 +125,8 @@ class ThrottlingAndLockoutIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(body)))
         .andExpect(status().isTooManyRequests())
-        .andExpect(header().exists("Retry-After"));
+        .andExpect(header().exists("Retry-After"))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   // ---------------- lockout ----------------
@@ -138,7 +147,8 @@ class ThrottlingAndLockoutIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(body)))
         .andExpect(status().isLocked())
-        .andExpect(header().exists("Retry-After"));
+        .andExpect(header().exists("Retry-After"))
+        .andExpect(openApi().isValid(openApiValidator));
 
     // failedLoginCount + lockedUntil persisted on the user row.
     var user = userRepository.findByUsernameNormalised(username.toLowerCase()).orElseThrow();
