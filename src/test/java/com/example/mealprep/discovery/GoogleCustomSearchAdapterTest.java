@@ -197,4 +197,104 @@ class GoogleCustomSearchAdapterTest {
         .isInstanceOf(ExtractionFailedException.class)
         .hasMessageContaining("fetch failed");
   }
+
+  // ===================== buildQueryString branch kills =====================
+
+  @Test
+  void search_constraintsWithCuisinesAndDietaryFlags_buildsCorrectQueryString() throws Exception {
+    // kills NegateConditionalsMutator survivors at GoogleCustomSearchAdapter.java:157, 158, 159
+    // (the null + non-null + non-empty checks on requiredCuisines) AND lines 163 + 168
+    // (dietaryFlags
+    // loop + final trim). We capture the params and assert the exact `q` parameter.
+    when(quotaTracker.todaysCount()).thenReturn(0);
+    org.mockito.ArgumentCaptor<java.util.Map<String, String>> paramsCap =
+        org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+    when(httpFetcher.getJson(any(), any(), any(), paramsCap.capture(), any()))
+        .thenReturn(MAPPER.readTree("{\"items\":[]}"));
+
+    adapter.search(query());
+
+    String q = paramsCap.getValue().get("q");
+    // "Thai recipe vegetarian" — cuisines, then "recipe", then dietary flags. The query() helper
+    // sets cuisines=["Thai"], dietaryFlags=["vegetarian"].
+    assertThat(q).isEqualTo("Thai recipe vegetarian");
+  }
+
+  @Test
+  void search_constraintsWithNullCuisinesAndDietaryFlags_queryIsJustRecipe() throws Exception {
+    // kills NegateConditionalsMutator at lines 157 and 163 (null guards). With null lists the
+    // query is simply "recipe".
+    when(quotaTracker.todaysCount()).thenReturn(0);
+    org.mockito.ArgumentCaptor<java.util.Map<String, String>> paramsCap =
+        org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+    when(httpFetcher.getJson(any(), any(), any(), paramsCap.capture(), any()))
+        .thenReturn(MAPPER.readTree("{\"items\":[]}"));
+
+    DiscoveryConstraints c = new DiscoveryConstraints(1, null, null, null, null, null, null, 3);
+    adapter.search(new DiscoveryQuery(c, 5, "UA"));
+
+    assertThat(paramsCap.getValue().get("q")).isEqualTo("recipe");
+  }
+
+  @Test
+  void search_constraintsWithEmptyCuisinesList_queryIsJustRecipe() throws Exception {
+    // kills NegateConditionalsMutator at line 159 (`!requiredCuisines().isEmpty()`). Empty list
+    // skips the cuisines prefix.
+    when(quotaTracker.todaysCount()).thenReturn(0);
+    org.mockito.ArgumentCaptor<java.util.Map<String, String>> paramsCap =
+        org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+    when(httpFetcher.getJson(any(), any(), any(), paramsCap.capture(), any()))
+        .thenReturn(MAPPER.readTree("{\"items\":[]}"));
+
+    DiscoveryConstraints c =
+        new DiscoveryConstraints(1, List.of(), null, null, null, null, null, 3);
+    adapter.search(new DiscoveryQuery(c, 5, "UA"));
+
+    assertThat(paramsCap.getValue().get("q")).isEqualTo("recipe");
+  }
+
+  @Test
+  void search_constraintsWithNullConstraints_queryIsJustRecipe() throws Exception {
+    // kills NegateConditionalsMutator at lines 157 + 163 (the outer null guards). A null
+    // DiscoveryConstraints object yields "recipe".
+    when(quotaTracker.todaysCount()).thenReturn(0);
+    org.mockito.ArgumentCaptor<java.util.Map<String, String>> paramsCap =
+        org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+    when(httpFetcher.getJson(any(), any(), any(), paramsCap.capture(), any()))
+        .thenReturn(MAPPER.readTree("{\"items\":[]}"));
+
+    adapter.search(new DiscoveryQuery(null, 5, "UA"));
+
+    assertThat(paramsCap.getValue().get("q")).isEqualTo("recipe");
+  }
+
+  // ===================== parseCandidates: cap on items =====================
+
+  @Test
+  void search_responseHasMoreItemsThanNumCap_resultIsCapped() throws Exception {
+    // kills ConditionalsBoundaryMutator at parseCandidates line 133 (`out.size() >= num`). With
+    // a num cap smaller than the items count the result is truncated.
+    when(quotaTracker.todaysCount()).thenReturn(0);
+    String json =
+        "{\"items\":[{\"link\":\"https://x/1\",\"title\":\"1\"},{\"link\":\"https://x/2\",\"title\":\"2\"},"
+            + "{\"link\":\"https://x/3\",\"title\":\"3\"}]}";
+    when(httpFetcher.getJson(any(), any(), any(), any(), any())).thenReturn(MAPPER.readTree(json));
+
+    // Use a small maxResults to drive num=min(resultsPerQuery=10, max(1, 1))=1.
+    DiscoveryConstraints c = new DiscoveryConstraints(1, null, null, null, null, null, null, 1);
+    List<DiscoveryCandidate> result = adapter.search(new DiscoveryQuery(c, 1, "UA"));
+
+    assertThat(result).hasSize(1);
+    assertThat(result.get(0).candidateUrl()).isEqualTo("https://x/1");
+  }
+
+  @Test
+  void search_responseMissingItemsKey_returnsEmptyList() throws Exception {
+    // kills NegateConditionalsMutator at parseCandidates line 127 (`!response.has("items")`).
+    when(quotaTracker.todaysCount()).thenReturn(0);
+    when(httpFetcher.getJson(any(), any(), any(), any(), any()))
+        .thenReturn(MAPPER.readTree("{\"otherKey\":1}"));
+
+    assertThat(adapter.search(query())).isEmpty();
+  }
 }

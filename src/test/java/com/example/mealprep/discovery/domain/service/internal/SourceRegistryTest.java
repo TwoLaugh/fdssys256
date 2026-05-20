@@ -124,6 +124,85 @@ class SourceRegistryTest {
   }
 
   @Test
+  void isCircuitOpenFalseAtExactCooldownBoundary() {
+    // kills ConditionalsBoundaryMutator at SourceRegistry.java:98 (the `.compareTo(COOLDOWN) < 0`
+    // check). Exactly 1h elapsed yields compareTo == 0 → branch is false → circuit is closed.
+    // Mutation `<=` would treat the boundary as open and break this assertion.
+    StubSource a = new StubSource("src_a");
+    DiscoverySource row = DiscoveryTestData.sampleSource("src_a");
+    row.setFailureStreak(5);
+    row.setLastFailureAt(NOW.minus(Duration.ofHours(1)));
+    DiscoverySourceRepository repo = Mockito.mock(DiscoverySourceRepository.class);
+    when(repo.findBySourceKey("src_a")).thenReturn(Optional.of(row));
+    SourceRegistry registry = new SourceRegistry(List.of(a), repo, fixedClock);
+    registry.index();
+
+    assertThat(registry.isCircuitOpen(a, NOW)).isFalse();
+  }
+
+  @Test
+  void isCircuitOpenFalseWhenLastFailureAtIsNull() {
+    // kills the NegateConditionalsMutator on `row.getLastFailureAt() != null` lambda branch.
+    StubSource a = new StubSource("src_a");
+    DiscoverySource row = DiscoveryTestData.sampleSource("src_a");
+    row.setFailureStreak(5);
+    row.setLastFailureAt(null);
+    DiscoverySourceRepository repo = Mockito.mock(DiscoverySourceRepository.class);
+    when(repo.findBySourceKey("src_a")).thenReturn(Optional.of(row));
+    SourceRegistry registry = new SourceRegistry(List.of(a), repo, fixedClock);
+    registry.index();
+
+    assertThat(registry.isCircuitOpen(a, NOW)).isFalse();
+  }
+
+  @Test
+  void resolveEnabledByRowKey_beanPresent_returnedNotNullFromHelper() {
+    // kills NegateConditionalsMutator at SourceRegistry.java:130 (bean == null check inside
+    // beanForRowOrWarn). With a bean registered, the helper must return it; the public
+    // resolveEnabled() path filters out null returns, so a non-empty list proves bean != null
+    // branch was taken (mutation `bean != null` → if-block log fires + still returns the bean,
+    // but mutation `bean == null → false` would let null reach the caller and the list would
+    // contain a null entry, failing the containsExactly).
+    StubSource a = new StubSource("src_a");
+    DiscoverySource row = DiscoveryTestData.sampleSource("src_a");
+    DiscoverySourceRepository repo = Mockito.mock(DiscoverySourceRepository.class);
+    when(repo.findByEnabledTrue()).thenReturn(List.of(row));
+    SourceRegistry registry = new SourceRegistry(List.of(a), repo, fixedClock);
+    registry.index();
+
+    assertThat(registry.resolveEnabled()).containsExactly(a);
+  }
+
+  @Test
+  void recordFailureIncrementsFromZero() {
+    // Reinforce MathMutator coverage on recordFailure(): failureStreak 0 → 1 (the increment is
+    // a subtle survivor in some passes).
+    StubSource a = new StubSource("src_a");
+    DiscoverySource row = DiscoveryTestData.sampleSource("src_a");
+    row.setFailureStreak(0);
+    DiscoverySourceRepository repo = Mockito.mock(DiscoverySourceRepository.class);
+    when(repo.findBySourceKey("src_a")).thenReturn(Optional.of(row));
+    SourceRegistry registry = new SourceRegistry(List.of(a), repo, fixedClock);
+    registry.index();
+
+    registry.recordFailure("src_a");
+
+    assertThat(row.getFailureStreak()).isEqualTo(1);
+  }
+
+  @Test
+  void recordFailureOnMissingRowIsNoop() {
+    DiscoverySourceRepository repo = Mockito.mock(DiscoverySourceRepository.class);
+    when(repo.findBySourceKey(any())).thenReturn(Optional.empty());
+    SourceRegistry registry = new SourceRegistry(List.of(), repo, fixedClock);
+    registry.index();
+
+    registry.recordFailure("missing");
+
+    verify(repo, never()).save(any());
+  }
+
+  @Test
   void recordSuccessResetsFailureStreakAndStampsTimestamp() {
     StubSource a = new StubSource("src_a");
     DiscoverySource row = DiscoveryTestData.sampleSource("src_a");
