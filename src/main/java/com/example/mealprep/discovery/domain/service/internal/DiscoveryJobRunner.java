@@ -711,22 +711,38 @@ public class DiscoveryJobRunner {
               ? "no source produced an ingest"
               : "all sources failed: " + String.join(",", sourcesFailed);
     }
-    finalise(jobId, terminal, errorSummary, sourcesSucceeded, sourcesFailed, job);
-    publishJobCompleted(jobId, userId, traceId);
+    if (finalise(jobId, terminal, errorSummary, sourcesSucceeded, sourcesFailed, job)) {
+      publishJobCompleted(jobId, userId, traceId);
+    }
   }
 
-  private void finalise(
+  /**
+   * Wraps {@link DiscoveryJobTransitions#finaliseTo} with the runner-side side effects (sync-waiter
+   * completion + log). Returns {@code true} when the transition actually happened — i.e. the job
+   * was non-terminal and the row was written. Returns {@code false} when the terminal-state guard
+   * short-circuited (the job was already in a terminal state from an earlier finalise on this run,
+   * e.g. the {@code fetchPhase} cancellation branch). Callers MUST skip downstream effects (event
+   * publish) on a {@code false} return to avoid double-firing.
+   */
+  private boolean finalise(
       UUID jobId,
       DiscoveryJobStatus terminal,
       String errorSummary,
       List<String> sourcesSucceeded,
       List<String> sourcesFailed,
       DiscoveryJob job) {
-    transitions.finaliseTo(jobId, terminal, errorSummary, sourcesSucceeded, sourcesFailed);
+    Optional<DiscoveryJob> result =
+        transitions.finaliseTo(jobId, terminal, errorSummary, sourcesSucceeded, sourcesFailed);
+    if (result.isEmpty()) {
+      // Terminal-state guard tripped — an earlier path already finalised this job. Do NOT
+      // complete the sync waiter or log a second "finalised" line — both have already happened.
+      return false;
+    }
     // Unblock any sync caller (01f). AFTER the DB write, BEFORE the completed-event publish (the
     // publish happens in finaliseTerminal right after this returns) per ticket invariant 11.
     completeSyncWaiter(jobId, terminal);
     log.info("discovery job {} finalised {} ({})", jobId, terminal, errorSummary);
+    return true;
   }
 
   private void finaliseCrashed(UUID jobId, Throwable cause) {
@@ -735,12 +751,18 @@ public class DiscoveryJobRunner {
       if (job == null) {
         return;
       }
-      transitions.finaliseTo(
-          jobId,
-          DiscoveryJobStatus.FAILED,
-          "runner crashed: " + cause.getClass().getSimpleName() + ": " + cause.getMessage(),
-          job.getSourcesSucceeded(),
-          job.getSourcesFailed());
+      Optional<DiscoveryJob> result =
+          transitions.finaliseTo(
+              jobId,
+              DiscoveryJobStatus.FAILED,
+              "runner crashed: " + cause.getClass().getSimpleName() + ": " + cause.getMessage(),
+              job.getSourcesSucceeded(),
+              job.getSourcesFailed());
+      if (result.isEmpty()) {
+        // Terminal-state guard tripped — the job was already finalised (e.g. cancellation
+        // fast-path ran, then a downstream throw triggered the outer catch). Don't double-fire.
+        return;
+      }
       completeSyncWaiter(jobId, DiscoveryJobStatus.FAILED);
       publishJobCompleted(jobId, job.getUserId(), job.getTraceId());
     } catch (RuntimeException secondary) {
