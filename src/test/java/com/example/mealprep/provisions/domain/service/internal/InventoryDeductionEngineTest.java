@@ -195,6 +195,48 @@ class InventoryDeductionEngineTest {
   }
 
   @Test
+  void deduct_rowWithZeroQuantity_isSkipped_notMarkedExhausted() {
+    // Boundary: `rowQty.signum() <= 0` must skip zero-qty rows. If mutated to `< 0`, the engine
+    // would process the zero row — bumping it to EXHAUSTED, persisting, recording an adjustment,
+    // and adding it to deductedItemIds — even though no quantity was actually deducted.
+    UUID userId = UUID.randomUUID();
+    String key = "cheese:cheddar";
+
+    InventoryItem zeroQty =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .quantity(new BigDecimal("0.000"))
+            .unit("g")
+            .ingredientMappingKey(key)
+            .expiryDate(LocalDate.parse("2026-05-15"))
+            .itemStatus(ItemLifecycleStatus.ACTIVE)
+            .build();
+    InventoryItem nonZero =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .quantity(new BigDecimal("200.000"))
+            .unit("g")
+            .ingredientMappingKey(key)
+            .expiryDate(LocalDate.parse("2026-06-01"))
+            .itemStatus(ItemLifecycleStatus.ACTIVE)
+            .build();
+
+    when(inventoryItemRepository.findActiveByMappingKeyOrderByExpiryAsc(userId, key))
+        .thenReturn(List.of(zeroQty, nonZero));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    InventoryDeductionEngine.DeductionOutcome o =
+        newEngine().deduct(userId, key, new BigDecimal("50.000"), "g", UUID.randomUUID());
+
+    // Only the non-zero row should appear in the outcome — the zero row was skipped entirely.
+    assertThat(o.deductedItemIds()).containsExactly(nonZero.getId());
+    assertThat(o.exhaustedItemIds()).isEmpty();
+    assertThat(zeroQty.getItemStatus()).isEqualTo(ItemLifecycleStatus.ACTIVE);
+    assertThat(nonZero.getQuantity()).isEqualByComparingTo("150.000");
+    // saveAndFlush must have been called exactly once — for the non-zero row.
+    verify(inventoryItemRepository, times(1)).saveAndFlush(any(InventoryItem.class));
+  }
+
+  @Test
   void deduct_satisfiedByFirstRow_secondUntouched() {
     UUID userId = UUID.randomUUID();
     String key = "cheese:cheddar";

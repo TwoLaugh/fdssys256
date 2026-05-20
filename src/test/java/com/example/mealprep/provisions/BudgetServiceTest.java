@@ -278,6 +278,44 @@ class BudgetServiceTest {
   }
 
   @Test
+  void upsertBudget_updatePath_setsEveryFieldOnExistingRow() {
+    // Kill the VoidMethodCall mutants for setWeeklyTarget / setToleranceOver / setPriceSensitivity
+    // / setEnabled on the existing budget row in upsertBudget (L721-724). The existing
+    // updatePath_versionMatch_updatesAndPublishesEvent doesn't change toleranceOver/enabled so
+    // those VoidMethodCall mutants survived. We change EVERY mutable field and read it back from
+    // the in-place mutated entity.
+    UUID userId = UUID.randomUUID();
+    Budget existing =
+        ProvisionsTestData.budget(userId)
+            .weeklyTarget(new BigDecimal("60.00"))
+            .currency("GBP")
+            .toleranceOver(new BigDecimal("1.00"))
+            .priceSensitivity(PriceSensitivity.low)
+            .enabled(false)
+            .version(0L)
+            .build();
+    when(budgetRepository.findByUserId(userId)).thenReturn(Optional.of(existing));
+    when(budgetRepository.saveAndFlush(any(Budget.class)))
+        .thenAnswer(inv -> inv.getArgument(0, Budget.class));
+
+    UpdateBudgetRequest request =
+        ProvisionsTestData.updateBudgetRequest(
+            new BigDecimal("90.00"),
+            "GBP",
+            new BigDecimal("7.50"),
+            PriceSensitivity.high,
+            true,
+            0L);
+
+    service().upsertBudget(userId, request);
+
+    assertThat(existing.getWeeklyTarget()).isEqualByComparingTo("90.00");
+    assertThat(existing.getToleranceOver()).isEqualByComparingTo("7.50");
+    assertThat(existing.getPriceSensitivity()).isEqualTo(PriceSensitivity.high);
+    assertThat(existing.isEnabled()).isTrue();
+  }
+
+  @Test
   void upsertBudget_updatePath_enabledFlagToggled_publishesEvent() {
     UUID userId = UUID.randomUUID();
     Budget existing = ProvisionsTestData.budget(userId).enabled(true).version(0L).build();

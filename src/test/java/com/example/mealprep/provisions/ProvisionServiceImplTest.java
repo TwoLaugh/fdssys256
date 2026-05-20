@@ -187,6 +187,10 @@ class ProvisionServiceImplTest {
     assertThat(audit.getActorUserId()).isEqualTo(userId);
     assertThat(audit.getFieldChanged()).isEqualTo("created");
     assertThat(audit.getOccurredAt()).isEqualTo(Instant.parse("2026-05-09T10:00:00Z"));
+    // toSnapshotJson result must populate the new-value column on the audit row — kills the
+    // NullReturnVals mutant on toSnapshotJson at L1326.
+    assertThat(audit.getNewValueJson()).isNotNull();
+    assertThat(audit.getNewValueJson().isNull()).isFalse();
 
     ArgumentCaptor<InventoryItemUpsertedEvent> eventCaptor =
         ArgumentCaptor.forClass(InventoryItemUpsertedEvent.class);
@@ -197,6 +201,9 @@ class ProvisionServiceImplTest {
     assertThat(event.actor()).isEqualTo(AuditActor.USER);
     assertThat(event.scopeKind()).isEqualTo("inventory-item");
     assertThat(event.scopeId()).isEqualTo(saved.getId());
+    // currentTraceId() must return a non-null UUID — kills the NullReturnVals mutant on
+    // currentTraceId at L1338 (fallback UUID.randomUUID() branch when MDC is empty).
+    assertThat(event.traceId()).isNotNull();
 
     assertThat(result.id()).isEqualTo(saved.getId());
     assertThat(result.name()).isEqualTo("Cheddar");
@@ -580,6 +587,385 @@ class ProvisionServiceImplTest {
 
     assertThatThrownBy(() -> service().softDeleteInventoryItem(itemId, userId))
         .isInstanceOf(InventoryItemNotFoundException.class);
+  }
+
+  @Test
+  void markSpoiled_returnsDtoReflectingSpoiledStatus_notNull() {
+    // Kill the NullReturnVals mutant on the final mapper.toDto(saved) in markSpoiled.
+    UUID userId = UUID.randomUUID();
+    InventoryItem item = ProvisionsTestData.quantityTrackedItem(userId).build();
+    item.setVersion(0L);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    InventoryItemDto result = service().markSpoiled(item.getId(), userId);
+
+    assertThat(result).isNotNull();
+    assertThat(result.itemStatus()).isEqualTo(ItemLifecycleStatus.SPOILED);
+    assertThat(result.id()).isEqualTo(item.getId());
+  }
+
+  @Test
+  void markSpoiled_whenAlreadySpoiled_returnsDtoNotNull() {
+    // Kill NullReturnVals on the idempotent early-return mapper.toDto(item).
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .itemStatus(ItemLifecycleStatus.SPOILED)
+            .build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    InventoryItemDto result = service().markSpoiled(item.getId(), userId);
+
+    assertThat(result).isNotNull();
+    assertThat(result.itemStatus()).isEqualTo(ItemLifecycleStatus.SPOILED);
+  }
+
+  @Test
+  void markExhausted_returnsDtoReflectingExhaustedStatus_notNull() {
+    // Kill NullReturnVals on the final return mapper.toDto(saved) in markExhausted.
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .isStaple(true)
+            .ingredientMappingKey("cheese:cheddar")
+            .build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    InventoryItemDto result = service().markExhausted(item.getId(), userId);
+
+    assertThat(result).isNotNull();
+    assertThat(result.itemStatus()).isEqualTo(ItemLifecycleStatus.EXHAUSTED);
+    // Also kills the VoidMethodCall on `item.setItemStatus(EXHAUSTED)`.
+    assertThat(item.getItemStatus()).isEqualTo(ItemLifecycleStatus.EXHAUSTED);
+  }
+
+  @Test
+  void markExhausted_whenAlreadyExhausted_returnsDtoNotNull() {
+    // Kill NullReturnVals on the idempotent early-return.
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .itemStatus(ItemLifecycleStatus.EXHAUSTED)
+            .build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    InventoryItemDto result = service().markExhausted(item.getId(), userId);
+
+    assertThat(result).isNotNull();
+    assertThat(result.itemStatus()).isEqualTo(ItemLifecycleStatus.EXHAUSTED);
+  }
+
+  @Test
+  void updateInventoryItem_whenNoOp_returnsDtoNotNull() {
+    // Kill NullReturnVals on the no-op early-return `return mapper.toDto(item)`.
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .expiryDate(java.time.LocalDate.parse("2026-06-01"))
+            .ingredientMappingKey("cheese:cheddar")
+            .build();
+    item.setVersion(0);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    InventoryItemDto result =
+        service()
+            .updateInventoryItem(
+                item.getId(), userId, ProvisionsTestData.updateQuantityTrackedRequest(0L));
+
+    assertThat(result).isNotNull();
+    assertThat(result.id()).isEqualTo(item.getId());
+  }
+
+  @Test
+  void updateInventoryItem_whenChanged_returnsDtoNotNull() {
+    // Kill NullReturnVals on the post-save `return mapper.toDto(saved)`.
+    UUID userId = UUID.randomUUID();
+    InventoryItem item = ProvisionsTestData.quantityTrackedItem(userId).build();
+    item.setVersion(0);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    UpdateInventoryItemRequest request =
+        new UpdateInventoryItemRequest(
+            "Mature Cheddar",
+            "dairy",
+            StorageLocation.FRIDGE,
+            TrackingMode.QUANTITY,
+            new BigDecimal("250.000"),
+            "g",
+            new BigDecimal("3.49"),
+            null,
+            false,
+            null,
+            null,
+            null,
+            ItemSource.MANUAL_ADD,
+            null,
+            ItemLifecycleStatus.ACTIVE,
+            null,
+            0L);
+
+    InventoryItemDto result = service().updateInventoryItem(item.getId(), userId, request);
+
+    assertThat(result).isNotNull();
+    assertThat(result.name()).isEqualTo("Mature Cheddar");
+  }
+
+  @Test
+  void updateInventoryItem_changesTrackingMode_andStatus_andItemStatus() {
+    // Kill the VoidMethodCall mutants on setTrackingMode (L488), setStatus (L492), setItemStatus
+    // (L499) — earlier tests didn't toggle any of these.
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .trackingMode(TrackingMode.QUANTITY)
+            .status(null)
+            .itemStatus(ItemLifecycleStatus.ACTIVE)
+            .storageLocation(StorageLocation.SPICE_RACK)
+            .build();
+    item.setVersion(0);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    UpdateInventoryItemRequest request =
+        new UpdateInventoryItemRequest(
+            "Salt",
+            "spice",
+            StorageLocation.SPICE_RACK,
+            TrackingMode.STATUS,
+            null,
+            null,
+            null,
+            StapleStatus.STOCKED,
+            true,
+            null,
+            null,
+            null,
+            ItemSource.MANUAL_ADD,
+            null,
+            ItemLifecycleStatus.SPOILED,
+            null,
+            0L);
+
+    service().updateInventoryItem(item.getId(), userId, request);
+
+    ArgumentCaptor<InventoryItem> captor = ArgumentCaptor.forClass(InventoryItem.class);
+    verify(inventoryItemRepository).saveAndFlush(captor.capture());
+    InventoryItem saved = captor.getValue();
+    assertThat(saved.getTrackingMode()).isEqualTo(TrackingMode.STATUS);
+    assertThat(saved.getStatus()).isEqualTo(StapleStatus.STOCKED);
+    assertThat(saved.getItemStatus()).isEqualTo(ItemLifecycleStatus.SPOILED);
+  }
+
+  @Test
+  void updateInventoryItem_freezerExtension_setsAllFields_clearsThemWhenNull() {
+    // Kill VoidMethodCall on the applyFreezerExtension call site (L500) and the 9 setters inside
+    // it (L1287-1298). Two scenarios — populate then clear — observed on the captured entity.
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.freezerItem(userId)
+            .frozenAt(java.time.LocalDate.parse("2026-04-01"))
+            .maxFreezeWeeks(12)
+            .defrostMethod(com.example.mealprep.provisions.domain.entity.DefrostMethod.MICROWAVE)
+            .defrostLeadTimeHours(2)
+            .build();
+    item.setVersion(0);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    // Scenario 1 — replace extension with a different one. Every setter on the populated path
+    // must run; an un-mutated setter would leave the old values in place.
+    UUID recipeId = UUID.randomUUID();
+    com.example.mealprep.provisions.api.dto.FreezerExtensionDto newExt =
+        new com.example.mealprep.provisions.api.dto.FreezerExtensionDto(
+            java.time.LocalDate.parse("2026-04-10"),
+            8,
+            com.example.mealprep.provisions.domain.entity.DefrostMethod.OVERNIGHT_FRIDGE,
+            6,
+            recipeId);
+    UpdateInventoryItemRequest replace =
+        new UpdateInventoryItemRequest(
+            "Frozen Peas",
+            "vegetable",
+            StorageLocation.FREEZER,
+            TrackingMode.QUANTITY,
+            new BigDecimal("500.000"),
+            "g",
+            null,
+            null,
+            false,
+            null,
+            null,
+            null,
+            ItemSource.TESCO_ORDER,
+            null,
+            ItemLifecycleStatus.ACTIVE,
+            newExt,
+            0L);
+
+    service().updateInventoryItem(item.getId(), userId, replace);
+
+    assertThat(item.getFrozenAt()).isEqualTo(java.time.LocalDate.parse("2026-04-10"));
+    assertThat(item.getMaxFreezeWeeks()).isEqualTo(8);
+    assertThat(item.getDefrostMethod())
+        .isEqualTo(com.example.mealprep.provisions.domain.entity.DefrostMethod.OVERNIGHT_FRIDGE);
+    assertThat(item.getDefrostLeadTimeHours()).isEqualTo(6);
+    assertThat(item.getSourceRecipeId()).isEqualTo(recipeId);
+  }
+
+  @Test
+  void updateInventoryItem_freezerExtension_clearsAllFields_whenNullDto() {
+    // Kill VoidMethodCall mutants on the null-DTO branch of applyFreezerExtension (L1287-1291).
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.freezerItem(userId)
+            .frozenAt(java.time.LocalDate.parse("2026-04-01"))
+            .maxFreezeWeeks(12)
+            .defrostMethod(com.example.mealprep.provisions.domain.entity.DefrostMethod.MICROWAVE)
+            .defrostLeadTimeHours(2)
+            .sourceRecipeId(UUID.randomUUID())
+            .build();
+    item.setVersion(0);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    UpdateInventoryItemRequest clearAll =
+        new UpdateInventoryItemRequest(
+            "Frozen Peas",
+            "vegetable",
+            StorageLocation.CUPBOARD, // moved out of freezer
+            TrackingMode.QUANTITY,
+            new BigDecimal("500.000"),
+            "g",
+            null,
+            null,
+            false,
+            null,
+            null,
+            null,
+            ItemSource.TESCO_ORDER,
+            null,
+            ItemLifecycleStatus.ACTIVE,
+            null, // freezerExtension cleared
+            0L);
+
+    service().updateInventoryItem(item.getId(), userId, clearAll);
+
+    assertThat(item.getFrozenAt()).isNull();
+    assertThat(item.getMaxFreezeWeeks()).isNull();
+    assertThat(item.getDefrostMethod()).isNull();
+    assertThat(item.getDefrostLeadTimeHours()).isNull();
+    assertThat(item.getSourceRecipeId()).isNull();
+  }
+
+  @Test
+  void updateInventoryItem_replacesEveryFieldOnTheEntity() {
+    // Kill the VoidMethodCall mutants on each item.setXxx(...) in updateInventoryItem (L485-499)
+    // by changing EVERY field and asserting against the captured entity.
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .name("Original Name")
+            .category("dairy")
+            .quantity(new BigDecimal("100.000"))
+            .unit("g")
+            .costPaid(new BigDecimal("1.00"))
+            .isStaple(false)
+            .expiryDate(null)
+            .ingredientMappingKey("cheese:cheddar")
+            .notes(null)
+            .sourceRef(null)
+            .itemStatus(ItemLifecycleStatus.ACTIVE)
+            .build();
+    item.setVersion(0);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    UpdateInventoryItemRequest request =
+        new UpdateInventoryItemRequest(
+            "Mature Cheddar",
+            "dairy-aged",
+            StorageLocation.CUPBOARD,
+            TrackingMode.QUANTITY,
+            new BigDecimal("250.000"),
+            "kg",
+            new BigDecimal("4.99"),
+            null,
+            true,
+            java.time.LocalDate.parse("2026-06-15"),
+            "cheese:cheddar-mature",
+            "stored at the front",
+            ItemSource.OTHER_SHOP,
+            "ord-9",
+            ItemLifecycleStatus.ACTIVE,
+            null,
+            0L);
+
+    service().updateInventoryItem(item.getId(), userId, request);
+
+    ArgumentCaptor<InventoryItem> captor = ArgumentCaptor.forClass(InventoryItem.class);
+    verify(inventoryItemRepository).saveAndFlush(captor.capture());
+    InventoryItem saved = captor.getValue();
+    // Every setter must have run — if any VoidMethodCall mutant suppresses it, the field is
+    // observably unchanged.
+    assertThat(saved.getName()).isEqualTo("Mature Cheddar");
+    assertThat(saved.getCategory()).isEqualTo("dairy-aged");
+    assertThat(saved.getStorageLocation()).isEqualTo(StorageLocation.CUPBOARD);
+    assertThat(saved.getTrackingMode()).isEqualTo(TrackingMode.QUANTITY);
+    assertThat(saved.getQuantity()).isEqualByComparingTo("250.000");
+    assertThat(saved.getUnit()).isEqualTo("kg");
+    assertThat(saved.getCostPaid()).isEqualByComparingTo("4.99");
+    assertThat(saved.isStaple()).isTrue();
+    assertThat(saved.getExpiryDate()).isEqualTo(java.time.LocalDate.parse("2026-06-15"));
+    assertThat(saved.getIngredientMappingKey()).isEqualTo("cheese:cheddar-mature");
+    assertThat(saved.getNotes()).isEqualTo("stored at the front");
+    assertThat(saved.getSource()).isEqualTo(ItemSource.OTHER_SHOP);
+    assertThat(saved.getSourceRef()).isEqualTo("ord-9");
+    assertThat(saved.getItemStatus()).isEqualTo(ItemLifecycleStatus.ACTIVE);
+  }
+
+  @Test
+  void upsertEquipment_updatePath_setsDetailsOnExistingRow() {
+    // Kill the VoidMethodCall mutant at L543: existing.setDetails(request.details()).
+    // The existing upsertEquipment_whenPresentAndVersionMatches_updates test only asserts on
+    // available; assert on details too.
+    UUID userId = UUID.randomUUID();
+    Equipment existing =
+        ProvisionsTestData.equipment(userId, "oven")
+            .available(true)
+            .details("old details")
+            .version(0L)
+            .build();
+    when(equipmentRepository.findByUserIdAndName(userId, "oven")).thenReturn(Optional.of(existing));
+    when(equipmentRepository.saveAndFlush(any(Equipment.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    service()
+        .upsertEquipment(
+            userId, "oven", ProvisionsTestData.upsertEquipmentRequest(false, "new details", 0L));
+
+    // Field on the existing entity must have been mutated by the setter.
+    assertThat(existing.getDetails()).isEqualTo("new details");
+    assertThat(existing.isAvailable()).isFalse();
   }
 
   @Test

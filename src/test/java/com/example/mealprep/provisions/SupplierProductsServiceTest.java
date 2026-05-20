@@ -141,6 +141,64 @@ class SupplierProductsServiceTest {
   }
 
   @Test
+  void upsert_updatePath_setsEveryFieldOnExistingRow_preservesSubstitutionHistory() {
+    // Kill the VoidMethodCall mutants for setName/setPrice/setPricePerUnit/setUnit/setPackSizeG/
+    // setPackSizeUnit/setCategory/setClubcardPrice/setLastChecked/setIngredientMappingKey on
+    // ProvisionServiceImpl.upsertSupplierProduct (L885-894). Each setter is verified against the
+    // captured-and-mutated entity, while substitutionHistory must remain untouched.
+    SubstitutionRecord existingHist =
+        new SubstitutionRecord(LocalDate.parse("2026-04-01"), "tesco:99", true, null);
+    SupplierProduct existing =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:1")
+            .name("Old Name")
+            .price(new BigDecimal("0.10"))
+            .pricePerUnit(new BigDecimal("0.5000"))
+            .unit("kg")
+            .packSizeG(100)
+            .packSizeUnit("pcs")
+            .category("old-category")
+            .clubcardPrice(null)
+            .lastChecked(LocalDate.parse("2026-01-01"))
+            .ingredientMappingKey("old-key")
+            .substitutionHistory(new java.util.ArrayList<>(List.of(existingHist)))
+            .build();
+    when(supplierProductRepository.findBySupplierAndProductId("tesco", "tesco:1"))
+        .thenReturn(Optional.of(existing));
+    when(supplierProductRepository.saveAndFlush(any(SupplierProduct.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    service()
+        .upsertSupplierProduct(
+            new com.example.mealprep.provisions.api.dto.UpsertSupplierProductRequest(
+                "tesco:1",
+                "tesco",
+                "New Name",
+                new BigDecimal("0.99"),
+                new BigDecimal("2.5000"),
+                "g",
+                250,
+                "g",
+                "new-category",
+                new BigDecimal("0.85"),
+                LocalDate.parse("2026-05-10"),
+                "new-key"));
+
+    // Every setter must have run — assert on the in-place mutated entity.
+    assertThat(existing.getName()).isEqualTo("New Name");
+    assertThat(existing.getPrice()).isEqualByComparingTo("0.99");
+    assertThat(existing.getPricePerUnit()).isEqualByComparingTo("2.5000");
+    assertThat(existing.getUnit()).isEqualTo("g");
+    assertThat(existing.getPackSizeG()).isEqualTo(250);
+    assertThat(existing.getPackSizeUnit()).isEqualTo("g");
+    assertThat(existing.getCategory()).isEqualTo("new-category");
+    assertThat(existing.getClubcardPrice()).isEqualByComparingTo("0.85");
+    assertThat(existing.getLastChecked()).isEqualTo(LocalDate.parse("2026-05-10"));
+    assertThat(existing.getIngredientMappingKey()).isEqualTo("new-key");
+    // substitutionHistory deliberately preserved across upserts.
+    assertThat(existing.getSubstitutionHistory()).containsExactly(existingHist);
+  }
+
+  @Test
   void upsert_updatePath_returnsCreatedFalse_andPreservesHistory() {
     SupplierProduct existing =
         ProvisionsTestData.supplierProduct("tesco", "tesco:1")
@@ -224,6 +282,35 @@ class SupplierProductsServiceTest {
   void getByMappingKeysBatch_emptyInput_returnsEmptyMap_andSkipsRepository() {
     assertThat(service().getSupplierProductsByMappingKeys(List.of())).isEmpty();
     verifyNoInteractions(supplierProductRepository);
+  }
+
+  @Test
+  void getByMappingKeysBatch_strictTie_keepsIncumbent_killsBoundaryMutant() {
+    // Kill the L786 ConditionalsBoundaryMutator (`< 0` flipped to `<= 0`). When two rows have
+    // exactly equal pricePerUnit AND equal lastChecked, the comparator returns 0; the original
+    // code keeps the FIRST (incumbent), the mutated code REPLACES with the second. We pin order
+    // by passing a List, and the repo mock returns rows in that order.
+    LocalDate sameDay = LocalDate.parse("2026-05-01");
+    BigDecimal samePrice = new BigDecimal("1.2500");
+    SupplierProduct first =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:first")
+            .ingredientMappingKey("onion")
+            .pricePerUnit(samePrice)
+            .lastChecked(sameDay)
+            .build();
+    SupplierProduct second =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:second")
+            .ingredientMappingKey("onion")
+            .pricePerUnit(samePrice)
+            .lastChecked(sameDay)
+            .build();
+    when(supplierProductRepository.findAllByIngredientMappingKeyIn(any()))
+        .thenReturn(List.of(first, second));
+
+    Map<String, SupplierProductDto> result =
+        service().getSupplierProductsByMappingKeys(List.of("onion"));
+
+    assertThat(result.get("onion").productId()).isEqualTo("tesco:first");
   }
 
   @Test
