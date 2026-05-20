@@ -369,6 +369,7 @@ class PendingChangeLifecycleTest {
         null,
         null,
         null,
+        null,
         null);
   }
 

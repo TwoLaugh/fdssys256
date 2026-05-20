@@ -43,6 +43,7 @@ import com.example.mealprep.adaptation.domain.repository.NutritionalKnowledgeRep
 import com.example.mealprep.adaptation.domain.repository.PendingChangeRepository;
 import com.example.mealprep.adaptation.domain.repository.PlannerHintRecordRepository;
 import com.example.mealprep.adaptation.domain.service.internal.AdaptationLlmInvoker;
+import com.example.mealprep.adaptation.domain.service.internal.AdaptationLockAcquirer;
 import com.example.mealprep.adaptation.domain.service.internal.AdaptationTraceWriter;
 import com.example.mealprep.adaptation.domain.service.internal.CandidateGenerator;
 import com.example.mealprep.adaptation.domain.service.internal.ChangeDimensionResolver;
@@ -63,7 +64,6 @@ import com.example.mealprep.adaptation.exception.AdaptationCharacterBreakExcepti
 import com.example.mealprep.adaptation.exception.AdaptationException;
 import com.example.mealprep.adaptation.exception.AdaptationJobNotFoundException;
 import com.example.mealprep.adaptation.exception.AdaptationJobNotRetryableException;
-import com.example.mealprep.adaptation.exception.LockTimeoutException;
 import com.example.mealprep.adaptation.exception.PendingChangeExpiredException;
 import com.example.mealprep.adaptation.exception.PendingChangeNotFoundException;
 import com.example.mealprep.adaptation.exception.PendingChangeNotPendingException;
@@ -72,7 +72,6 @@ import com.example.mealprep.adaptation.exception.RebaseExhaustedException;
 import com.example.mealprep.core.audit.api.dto.DecisionLogScale;
 import com.example.mealprep.core.audit.api.dto.DecisionLogWriteRequest;
 import com.example.mealprep.core.audit.domain.service.DecisionLogService;
-import com.example.mealprep.core.lock.LockKey;
 import com.example.mealprep.core.lock.LockService;
 import com.example.mealprep.recipe.api.dto.CharacterFingerprintDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
@@ -88,9 +87,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -147,7 +144,13 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   private final PendingChangeStore pendingChangeStore;
   private final ChangeDimensionResolver dimensionResolver;
   private final AdaptationTraceWriter traceWriter;
+
+  // Kept on the constructor surface for backwards-compatible wiring (skeleton + smoke tests pass
+  // a mock). The lock acquire path is now owned by {@link AdaptationLockAcquirer}, which Spring
+  // wires its own lockService into; this field is no longer dereferenced here.
+  @SuppressWarnings("unused")
   private final LockService lockService;
+
   private final DecisionLogService decisionLogService;
   private final ApplicationEventPublisher events;
 
@@ -168,13 +171,12 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   private final AdaptationTraceMapper traceMapper;
   private final PlannerHintMapper plannerHintMapper;
 
-  // Self-proxy: processJob() is intentionally non-transactional (long AI calls run outside any
-  // tx). It calls acquireLockOrFailJob() which is @Transactional(REQUIRED) so the MANDATORY
-  // advisory-lock acquire has a tx. A plain this.acquireLockOrFailJob() is a Spring
-  // self-invocation — the proxy is bypassed, no tx is created, and lockService.tryAcquire()
-  // (MANDATORY) throws IllegalTransactionStateException. Routing the call through the injected
-  // proxy makes the @Transactional boundary apply. @Lazy breaks the constructor cycle.
-  @Autowired @Lazy private AdaptationServiceImpl self;
+  // Step-1 advisory-lock acquire lives on a dedicated bean so the call from processJob()
+  // (intentionally non-transactional) crosses a bean boundary, the proxy fires, and the
+  // @Transactional(REQUIRED) advice on acquireLockOrFailJob applies by construction. Nullable
+  // in the older skeleton ctors (those wirings stub lockService to always-succeed so the
+  // lock-acquire path is never exercised).
+  private final AdaptationLockAcquirer lockAcquirer;
 
   /** Skeleton constructor — retained for backwards-compatibility with 01b unit tests. */
   public AdaptationServiceImpl(
@@ -191,6 +193,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         fingerprintRepository,
         plannerHintRepository,
         nutritionalKnowledgeRepository,
+        null,
         null,
         null,
         null,
@@ -245,7 +248,8 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
       FingerprintRefresher fingerprintRefresher,
       AdaptationJobMapper jobMapper,
       AdaptationTraceMapper traceMapper,
-      PlannerHintMapper plannerHintMapper) {
+      PlannerHintMapper plannerHintMapper,
+      AdaptationLockAcquirer lockAcquirer) {
     this.jobRepository = jobRepository;
     this.pendingChangeRepository = pendingChangeRepository;
     this.traceRepository = traceRepository;
@@ -272,6 +276,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
     this.jobMapper = jobMapper;
     this.traceMapper = traceMapper;
     this.plannerHintMapper = plannerHintMapper;
+    this.lockAcquirer = lockAcquirer;
   }
 
   // ---------------------------------------------------------------------------
@@ -595,11 +600,10 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         job.getSource());
     long startMillis = System.currentTimeMillis();
     try {
-      // Step 1 — Acquire advisory lock. Via self-proxy so the @Transactional(REQUIRED) boundary
-      // applies (processJob itself is non-transactional; a direct this.call would bypass it and
-      // the MANDATORY lock would throw). Hand-constructed unit tests (skeleton ctor, no Spring)
-      // leave `self` null + mock lockService, so MANDATORY isn't enforced — fall back to `this`.
-      ((self != null) ? self : this).acquireLockOrFailJob(job);
+      // Step 1 — Acquire advisory lock via the dedicated bean. The cross-bean call hits the
+      // Spring proxy, so @Transactional(REQUIRED) on AdaptationLockAcquirer#acquireLockOrFailJob
+      // fires by construction — processJob itself stays non-transactional.
+      lockAcquirer.acquireLockOrFailJob(job);
 
       // Step 2 — Load context via the 01e assembler (falls back to the 01c placeholder when the
       // assembler bean is absent, e.g. older skeleton-constructor unit wirings).
@@ -773,34 +777,6 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
-
-  /**
-   * Step 1 wrapper. {@code REQUIRED, noRollbackFor = LockTimeoutException.class} so the IMPORT /
-   * DATA_MODEL_CHANGE failure-excerpt write commits even when we throw on lock failure (LLD line
-   * 880).
-   */
-  @Transactional(propagation = Propagation.REQUIRED, noRollbackFor = LockTimeoutException.class)
-  protected void acquireLockOrFailJob(AdaptationJob job) {
-    boolean ok = lockService.tryAcquire(LockKey.forRecipe(job.getRecipeId()));
-    if (ok) {
-      return;
-    }
-    switch (job.getSource()) {
-      case IMPORT -> {
-        transitionJobStatus(
-            job.getId(), JobStatus.PENDING, JobFailureReason.UNKNOWN, "lock-deferred");
-        throw new LockTimeoutException("lock-deferred:IMPORT");
-      }
-      case DATA_MODEL_CHANGE -> {
-        transitionJobStatus(
-            job.getId(), JobStatus.PENDING, JobFailureReason.UNKNOWN, "lock-deferred-batch");
-        throw new LockTimeoutException("lock-deferred-batch:DATA_MODEL_CHANGE");
-      }
-      case FEEDBACK, PLAN_TIME ->
-          throw new LockTimeoutException("lock-acquire-failed:" + job.getSource());
-      default -> throw new LockTimeoutException("lock-acquire-failed");
-    }
-  }
 
   /**
    * 01e context load. Delegates to {@link AdaptationContextAssembler} (real peer-module reads) when
