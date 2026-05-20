@@ -353,30 +353,22 @@ class IntakeLifecycleFlowIT {
   }
 
   /**
-   * KNOWN PRODUCTION BUG (documented, not fixed — out of scope for this test-only PR).
-   *
-   * <p>{@code GET /api/v1/nutrition/intake/{date}/audit-log} is non-functional: it returns HTTP 500
-   * (problem type {@code internal-error}) instead of the paginated audit log. Root cause: {@link
-   * com.example.mealprep.nutrition.domain.repository.IntakeAuditRepository#findByIntakeDayIdOrderByOccurredAtDesc}
-   * declares a {@code Page} return, but {@code IntakeAuditLog} has no scalar {@code intakeDayId}
-   * property — only a {@code @ManyToOne(fetch = LAZY) IntakeDay intakeDay} association
-   * ({@code @JoinColumn intake_day_id}). Spring Data must auto-derive a <em>count query</em> for
-   * the {@code Page} return; deriving it from the {@code IntakeDayId} association traversal
-   * combined with the explicit {@code OrderByOccurredAtDesc} clause fails at query-construction
-   * time, surfacing as {@code org.springframework.dao.InvalidDataAccessApiUsageException} (no SQL
-   * is ever emitted). The slot writes (CONFIRM/SKIP) themselves succeed and persist correctly —
-   * only the audit-log read is broken. No existing test exercised this endpoint, so the defect was
-   * latent.
-   *
-   * <p>This test pins the current (buggy) observable behaviour so the regression is captured and a
-   * future prod fix flips it to the asserted-correct expectations noted inline.
+   * Regression-pin for the fixed audit-log endpoint. Previously {@code GET
+   * /api/v1/nutrition/intake/{date}/audit-log} returned HTTP 500 because {@link
+   * com.example.mealprep.nutrition.domain.repository.IntakeAuditRepository}'s derived query named
+   * the property as {@code intakeDayId} when {@code IntakeAuditLog} has no scalar field of that
+   * name — only a {@code @ManyToOne IntakeDay intakeDay} association. Spring Data's auto-derived
+   * count query for the {@code Page} return failed at construction time. Fix: rename the method to
+   * the underscore-separated property path {@code findByIntakeDay_IdOrderByOccurredAtDesc} so the
+   * association traversal is unambiguous; both the main query and the count query derive cleanly.
+   * This test now asserts the correct behaviour (3-element page, ordered most-recent first).
    */
   @Test
-  void auditLog_returns500_knownProdBug_repositoryCountQueryDerivationFails() throws Exception {
+  void auditLog_returns200_withOrderedPage_perPrefilledDay() throws Exception {
     AuthedUser user = registerUser();
     seedPrefilledDay(user.userId());
 
-    // Slot writes succeed and persist (proves the 500 below is isolated to the audit-log read).
+    // Slot writes append audit rows: PREFILL (1) + CONFIRM (1) + SKIP (1) = 3.
     mvc.perform(
             post("/api/v1/nutrition/intake/" + DAY + "/slots/BREAKFAST/confirm")
                 .cookie(user.cookie()))
@@ -388,21 +380,14 @@ class IntakeLifecycleFlowIT {
             "SELECT count(*) FROM nutrition_intake_audit", Long.class); // PREFILL + CONFIRM + SKIP
     assertThat(auditRows).isEqualTo(3L);
 
-    // BUG: should be 200 with a 3-element page; current prod behaviour is 500 internal-error.
-    // Once the repository is fixed, replace the block below with:
-    //   .andExpect(status().isOk())
-    //   .andExpect(jsonPath("$.content.length()").value(3))
-    //   .andExpect(jsonPath("$.totalElements").value(3))
     mvc.perform(
             get("/api/v1/nutrition/intake/" + DAY + "/audit-log")
                 .cookie(user.cookie())
                 .param("page", "0")
                 .param("size", "20"))
-        .andExpect(status().isInternalServerError())
-        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
-        .andExpect(jsonPath("$.status").value(500))
-        .andExpect(
-            jsonPath("$.type").value("https://mealprep.example.com/problems/internal-error"));
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.content.length()").value(3))
+        .andExpect(jsonPath("$.totalElements").value(3));
   }
 
   @Test

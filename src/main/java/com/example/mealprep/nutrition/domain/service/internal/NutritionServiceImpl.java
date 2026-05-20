@@ -929,7 +929,7 @@ public class NutritionServiceImpl
       return Page.empty(pageable);
     }
     return intakeAuditRepository
-        .findByIntakeDayIdOrderByOccurredAtDesc(day.get().getId(), pageable)
+        .findByIntakeDay_IdOrderByOccurredAtDesc(day.get().getId(), pageable)
         .map(intakeMapper::toAuditEntryDto);
   }
 
