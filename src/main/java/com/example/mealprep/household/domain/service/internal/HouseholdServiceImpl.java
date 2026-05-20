@@ -881,16 +881,15 @@ public class HouseholdServiceImpl
   }
 
   /**
-   * Resolve the soft-preferences reader at call time. Returns the first available bean; if none is
-   * registered (defence-in-depth), returns an inline noop. Routine call path uses the configured
-   * Noop or preference-01c's real impl.
+   * Resolve the soft-preferences reader at call time. Always returns the bean exposed by the Spring
+   * context: {@code NoopSoftPreferencesReaderConfiguration} is a non-conditional
+   * {@code @Configuration} whose
+   * {@code @Bean @ConditionalOnMissingBean(SoftPreferencesReader.class)} binds the noop whenever
+   * preference-01c's real implementation isn't yet registered, so the provider is guaranteed to
+   * yield a non-null reader in any prod or test configuration.
    */
   private SoftPreferencesReader resolveSoftPreferencesReader() {
-    SoftPreferencesReader reader = softPreferencesReaderProvider.getIfAvailable();
-    if (reader != null) {
-      return reader;
-    }
-    return userIds -> List.of();
+    return softPreferencesReaderProvider.getObject();
   }
 
   // ---------------- helpers ----------------
@@ -1006,8 +1005,13 @@ public class HouseholdServiceImpl
     if (fromMdc != null && !fromMdc.isBlank()) {
       try {
         return UUID.fromString(fromMdc);
-      } catch (IllegalArgumentException ignored) {
-        // MDC value isn't a UUID — fall through to randomUUID.
+      } catch (IllegalArgumentException e) {
+        // MDC value isn't a UUID — fall through to randomUUID. Log at DEBUG so ops triage
+        // has a breadcrumb when a malformed traceId appears in the pipeline.
+        log.debug(
+            "currentTraceId discarding malformed MDC traceId={} reason={}",
+            fromMdc,
+            e.getMessage());
       }
     }
     return UUID.randomUUID();

@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.core.io.support.ResourcePatternResolver;
 
 /**
  * Supplemental tests for {@link PromptTemplateLoader} that target Pitest survivors not killed by
@@ -125,7 +127,132 @@ class PromptTemplateLoaderExtraTest {
     assertThat(r2).isEqualTo("broken.md").isNotBlank();
   }
 
+  /**
+   * Kills {@code resolveResources:135} VoidMethodCall on {@code List::sort} via the new test-seam
+   * constructor — stub the {@link ResourcePatternResolver} to return resources in deliberately
+   * reverse-lexicographic order (which the production {@code PathMatchingResourcePatternResolver}
+   * would never produce on either Windows NTFS or Linux ext4). Without the sort, the loader would
+   * insert in resolver-emitted order; with the sort, it must insert alphabetically.
+   *
+   * <p>Previously documented as an equivalent mutant in #108 because the production resolver was
+   * inline-constructed and no test could substitute an unsorted-emitting resolver.
+   */
+  @Test
+  void resolveResources_sortsResolverEmittedResources_killsListSortVoidCall() {
+    Resource zeta = wiringResource("zeta.md", "loader/zeta");
+    Resource mu = wiringResource("mu.md", "loader/mu");
+    Resource alpha = wiringResource("alpha.md", "loader/alpha");
+    // Resolver emits reverse-lex order — only a real sort can produce alphabetical insertion.
+    ResourcePatternResolver stubResolver = stubResolverReturning(zeta, mu, alpha);
+
+    StubRepo repo = new StubRepo();
+    NoopPub pub = new NoopPub();
+    PromptTemplateLoader loader =
+        new PromptTemplateLoader(
+            repo, pub, java.time.Clock.systemUTC(), "classpath:irrelevant/", stubResolver);
+    int inserted = loader.loadAll();
+    assertThat(inserted).isEqualTo(3);
+    assertThat(repo.savedNames).containsExactly("loader/alpha", "loader/mu", "loader/zeta");
+  }
+
+  /**
+   * Kills {@code lambda$resolveResources$0:135} EmptyObjectReturnVals — the {@code
+   * Optional.ofNullable(r.getFilename()).orElse("")} fallback in the sort comparator. Production
+   * {@code PathMatchingResourcePatternResolver} never returns a null filename for {@code file:} or
+   * {@code classpath:} URIs, so this branch was previously unreachable. With the test-seam resolver
+   * we feed a null-named resource alongside a real-named one and assert the loader doesn't NPE and
+   * still saves both (the null-named one sorts first because {@code ""} precedes any non-empty
+   * filename).
+   *
+   * <p>Previously documented as equivalent in #108 for the same reason as the sort mutant.
+   */
+  @Test
+  void resolveResources_nullFilenameResource_sortsAsEmptyString_killsLambdaEmptyReturnVals() {
+    Resource named = wiringResource("z-named.md", "loader/named");
+    Resource nullNamed =
+        new ByteArrayResource(wiring("loader/nullname").getBytes(StandardCharsets.UTF_8)) {
+          @Override
+          public String getFilename() {
+            return null;
+          }
+
+          @Override
+          public String getDescription() {
+            return "synthetic-null-filename";
+          }
+        };
+    // Resolver emits named first so the null-named one would not lead unless the sort comparator
+    // actually evaluates and treats null as "" (empty string sorts before "z-named.md").
+    ResourcePatternResolver stubResolver = stubResolverReturning(named, nullNamed);
+
+    StubRepo repo = new StubRepo();
+    NoopPub pub = new NoopPub();
+    PromptTemplateLoader loader =
+        new PromptTemplateLoader(
+            repo, pub, java.time.Clock.systemUTC(), "classpath:irrelevant/", stubResolver);
+    int inserted = loader.loadAll();
+    // Both must be inserted (no NPE on the null filename), and the null-named resource sorts
+    // first because Optional.ofNullable(null).orElse("") < "z-named.md".
+    assertThat(inserted).isEqualTo(2);
+    assertThat(repo.savedNames).containsExactly("loader/nullname", "loader/named");
+  }
+
+  /**
+   * Kills {@code resolveResources} IOException catch path — the {@code log.warn} + empty-list
+   * return when the resolver throws. Stub a resolver that throws {@link IOException}; the loader
+   * must swallow it and return zero inserted (no NPE, no propagation).
+   */
+  @Test
+  void resolveResources_resolverThrowsIoException_returnsEmptyListAndLogsWarn() {
+    ResourcePatternResolver throwingResolver =
+        new PathMatchingResourcePatternResolver() {
+          @Override
+          public Resource[] getResources(String locationPattern) throws IOException {
+            throw new IOException("simulated enumeration failure");
+          }
+        };
+    StubRepo repo = new StubRepo();
+    NoopPub pub = new NoopPub();
+    PromptTemplateLoader loader =
+        new PromptTemplateLoader(
+            repo, pub, java.time.Clock.systemUTC(), "classpath:irrelevant/", throwingResolver);
+    int inserted = loader.loadAll();
+    assertThat(inserted).isEqualTo(0);
+    assertThat(repo.savedNames).isEmpty();
+  }
+
   // ---------- helpers ----------
+
+  /**
+   * Build a {@link ResourcePatternResolver} that returns the given resources for any {@code
+   * getResources(pattern)} call. Backed by {@link PathMatchingResourcePatternResolver} because
+   * {@link ResourcePatternResolver} isn't a functional interface (it extends {@code ResourceLoader}
+   * and inherits multiple abstract methods).
+   */
+  private static ResourcePatternResolver stubResolverReturning(Resource... resources) {
+    return new PathMatchingResourcePatternResolver() {
+      @Override
+      public Resource[] getResources(String locationPattern) {
+        return resources;
+      }
+    };
+  }
+
+  /** Build a {@link Resource} backed by a well-formed wiring markdown body. */
+  private static Resource wiringResource(String filename, String aiTaskName) {
+    byte[] payload = wiring(aiTaskName).getBytes(StandardCharsets.UTF_8);
+    return new ByteArrayResource(payload) {
+      @Override
+      public String getFilename() {
+        return filename;
+      }
+
+      @Override
+      public String getDescription() {
+        return "synthetic:" + filename;
+      }
+    };
+  }
 
   private static String wiring(String name) {
     return """

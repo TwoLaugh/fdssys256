@@ -23,6 +23,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.io.Resource;
@@ -76,17 +77,37 @@ public class PromptTemplateLoader {
 
   private final String sourcePath;
 
+  // @Autowired marks this as the constructor Spring should use for prod wiring. Without it Spring
+  // sees two constructors, neither annotated, and tries to fall back to a no-arg ctor — which
+  // doesn't exist — producing NoSuchMethodException at context-load time. The 5-arg overload below
+  // is a test-seam (no @Autowired so Spring ignores it).
+  @Autowired
   public PromptTemplateLoader(
       PromptTemplateRepository repository,
       ApplicationEventPublisher eventPublisher,
       Clock clock,
       @Value("${mealprep.ai.prompt-templates-source-path:" + DEFAULT_SOURCE_PATH + "}")
           String sourcePath) {
+    this(repository, eventPublisher, clock, sourcePath, new PathMatchingResourcePatternResolver());
+  }
+
+  /**
+   * Test-seam constructor: lets unit tests substitute a stub {@link ResourcePatternResolver} so the
+   * {@code resolveResources} sort + null-filename branches are reachable from pure-unit tests
+   * (previously a documented-equivalent mutant in #108 because the production resolver never emits
+   * unsorted or null-named resources for {@code file:} / {@code classpath:} URIs).
+   */
+  public PromptTemplateLoader(
+      PromptTemplateRepository repository,
+      ApplicationEventPublisher eventPublisher,
+      Clock clock,
+      String sourcePath,
+      ResourcePatternResolver resourceResolver) {
     this.repository = repository;
     this.eventPublisher = eventPublisher;
     this.clock = clock;
     this.sourcePath = sourcePath;
-    this.resourceResolver = new PathMatchingResourcePatternResolver();
+    this.resourceResolver = resourceResolver;
   }
 
   @PostConstruct
