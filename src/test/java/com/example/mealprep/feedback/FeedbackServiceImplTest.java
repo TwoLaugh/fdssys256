@@ -1020,6 +1020,38 @@ class FeedbackServiceImplTest {
     assertThat(queryService().getClarificationQuery(userId, queryId)).isEmpty();
   }
 
+  /**
+   * Mutation-kill: EmptyObjectReturnVals SURVIVED on getClarificationQuery when the repo returns a
+   * present Optional — without an assertion on the present case the mutation that replaces with
+   * Optional.empty survives.
+   */
+  @Test
+  void getClarificationQuery_present_returnsMappedDto() {
+    UUID userId = UUID.randomUUID();
+    UUID queryId = UUID.randomUUID();
+    FeedbackEntry parent = FeedbackTestData.feedbackEntry(userId, "x");
+    com.example.mealprep.feedback.domain.entity.ClarificationQuery query =
+        FeedbackTestData.clarificationQuery(parent);
+    query.setId(queryId);
+    com.example.mealprep.feedback.api.dto.ClarificationQueryDto dto =
+        new com.example.mealprep.feedback.api.dto.ClarificationQueryDto(
+            queryId,
+            parent.getId(),
+            "q",
+            List.of(),
+            com.example.mealprep.feedback.domain.entity.ClarificationStatus.PENDING,
+            Instant.parse("2026-05-20T00:00:00Z"),
+            Instant.parse("2026-05-12T00:00:00Z"));
+    when(clarificationQueryRepository.findByIdAndFeedbackEntryUserId(queryId, userId))
+        .thenReturn(Optional.of(query));
+    when(clarificationQueryMapper.toDto(query)).thenReturn(dto);
+
+    Optional<com.example.mealprep.feedback.api.dto.ClarificationQueryDto> result =
+        queryService().getClarificationQuery(userId, queryId);
+    assertThat(result).isPresent();
+    assertThat(result.get()).isSameAs(dto);
+  }
+
   // ---------------- listCorrections (01f) ----------------
 
   @Test

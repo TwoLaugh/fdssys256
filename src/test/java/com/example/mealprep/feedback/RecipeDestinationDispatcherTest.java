@@ -51,6 +51,17 @@ class RecipeDestinationDispatcherTest {
     assertThat(result.actionTaken()).isEqualTo("adapted");
   }
 
+  /**
+   * Mutation-kill: NullReturnValsMutator on destination() — the registry depends on this returning
+   * Destination.RECIPE; mutated to null would surface as a duplicate/missing-dispatcher error
+   * downstream but the unit test must read it directly.
+   */
+  @Test
+  void destination_returnsRecipeEnum() {
+    DestinationDispatcher dispatcher = dispatcher(mock(RecipeFeedbackHandler.class));
+    assertThat(dispatcher.destination()).isEqualTo(Destination.RECIPE);
+  }
+
   @Test
   void payloadMissing_fallsBackToUiContextRecipeId() {
     UUID uiRecipe = UUID.randomUUID();

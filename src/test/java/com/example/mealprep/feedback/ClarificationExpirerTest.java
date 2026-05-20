@@ -87,4 +87,28 @@ class ClarificationExpirerTest {
     verify(clarificationRepo, never()).save(any());
     verify(entryRepo, never()).updateSubmissionStatus(any(), any());
   }
+
+  /**
+   * Mutation-kill: NegateConditionals SURVIVED on the {@code if (rows == 0)} guard at L52. When the
+   * native UPDATE returns 0 rows (parent entry vanished concurrently), the method must commit the
+   * EXPIRED state quietly — not throw. We construct that exact race and assert the clarification
+   * ends up EXPIRED + saved, and no exception escapes.
+   */
+  @Test
+  void expireOne_parentEntryVanished_returnsZeroRows_stillCommitsExpiredState() {
+    FeedbackEntry parent = FeedbackTestData.feedbackEntry(UUID.randomUUID(), "x");
+    ClarificationQuery q = FeedbackTestData.clarificationQuery(parent);
+    when(clarificationRepo.findById(q.getId())).thenReturn(Optional.of(q));
+    // Parent gone — native UPDATE returns 0 rows.
+    when(entryRepo.updateSubmissionStatus(eq(parent.getId()), any(SubmissionStatus.class)))
+        .thenReturn(0);
+
+    // Must NOT throw — the early return at L55 (post-mutation negation would loop back to throw).
+    expirer.expireOne(q.getId());
+
+    // The clarification row was still flipped + saved in the same tx.
+    assertThat(q.getStatus()).isEqualTo(ClarificationStatus.EXPIRED);
+    verify(clarificationRepo).save(q);
+    verify(entryRepo).updateSubmissionStatus(parent.getId(), SubmissionStatus.FAILED);
+  }
 }

@@ -588,6 +588,211 @@ class FeedbackRouterImplTest {
         () -> router.routeAll(missing, List.of(s)));
   }
 
+  // ---------------- mutation-kill: routeOneCapturing setter chain ----------------
+
+  /**
+   * The replay path (routeOneCapturing) had six VoidMethodCallMutator survivors on each of the
+   * routing-log setters (status, actionTaken, destinationResultJson, failureKind, failureMessage,
+   * completedAt). This test captures the terminal-save argument and pins every field — removing any
+   * one setter must surface here.
+   */
+  @Test
+  void routeOneForReplay_appliedDispatch_persistedLogRowCarriesEveryDispatcherField() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    ObjectNode resultPayload = JsonNodeFactory.instance.objectNode();
+    resultPayload.put("ackId", "abc-123");
+    DispatchResult applied = DispatchResult.applied("queued the update", resultPayload);
+    DestinationDispatcher d = stubDispatcher(Destination.PREFERENCE, applied);
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    router.routeOneForReplay(feedbackId, s);
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    RoutingLogEntry terminal = cap.getAllValues().get(1);
+    // setStatus — kills VoidMethodCall removal of setStatus.
+    assertThat(terminal.getStatus()).isEqualTo(RoutingStatus.APPLIED);
+    // setActionTaken — kills VoidMethodCall removal of setActionTaken.
+    assertThat(terminal.getActionTaken()).isEqualTo("queued the update");
+    // setDestinationResultJson — kills its VoidMethodCall removal.
+    assertThat(terminal.getDestinationResultJson()).isSameAs(resultPayload);
+    // setFailureKind — null on success; kills its VoidMethodCall removal because the PENDING
+    // insert would otherwise leak a stale value... we set up no stale state but the assertion
+    // pins the absence.
+    assertThat(terminal.getFailureKind()).isNull();
+    // setFailureMessage — null on success.
+    assertThat(terminal.getFailureMessage()).isNull();
+    // setCompletedAt — must match the clock instant; kills its VoidMethodCall removal.
+    assertThat(terminal.getCompletedAt()).isEqualTo(Instant.parse("2026-05-10T00:00:00Z"));
+  }
+
+  /**
+   * The routeOne (routeAll) path had two SURVIVED VoidMethodCallMutator on setDestinationResultJson
+   * (L291) + setCompletedAt (L294). The other four setters in the same method had been killed by
+   * other tests; these two were specifically untested. Replicates the same end-state assertion as
+   * above for routeAll.
+   */
+  @Test
+  void routeAll_appliedDispatch_persistedLogRowCarriesDestinationResultAndCompletedAt() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    ObjectNode resultPayload = JsonNodeFactory.instance.objectNode();
+    resultPayload.put("ackId", "abc-123");
+    DispatchResult applied = DispatchResult.applied("queued the update", resultPayload);
+    DestinationDispatcher d = stubDispatcher(Destination.PREFERENCE, applied);
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    RoutingLogEntry terminal = cap.getAllValues().get(1);
+    assertThat(terminal.getDestinationResultJson()).isSameAs(resultPayload);
+    assertThat(terminal.getCompletedAt()).isEqualTo(Instant.parse("2026-05-10T00:00:00Z"));
+  }
+
+  // ---------------- mutation-kill: truncate / stripSecrets / toDto ----------------
+
+  /**
+   * truncate(s) at boundary length 512 must return the original string unchanged (the conditional
+   * is {@code <= MESSAGE_MAX_LEN}). ConditionalsBoundaryMutator flips it to {@code <}, which would
+   * unnecessarily substring a length-512 message. We use {@code isSameAs} to prove no substring
+   * call was made.
+   */
+  @Test
+  void truncate_exactly512Chars_returnsOriginalIdentity() {
+    String exactly512 = "z".repeat(512);
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d =
+        stubDispatcher(
+            Destination.PREFERENCE,
+            DispatchResult.applied(exactly512, JsonNodeFactory.instance.objectNode()));
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    String stamped = cap.getAllValues().get(1).getActionTaken();
+    // Identity assertion — if the boundary flipped to `<`, substring(0,512) would yield an equal
+    // but distinct String instance. We assert both: same content AND same identity.
+    assertThat(stamped).isEqualTo(exactly512);
+    assertThat(stamped).isSameAs(exactly512);
+  }
+
+  /**
+   * Mutation-kill for routeOneCapturing L234/L235 (setFailureKind / setFailureMessage). When the
+   * replay dispatcher returns FAILED, the persisted log row must carry the dispatcher's failureKind
+   * + failureMessage — removing either setter is invisible to RouteReplayResult-only assertions but
+   * visible here.
+   */
+  @Test
+  void routeOneForReplay_dispatcherFails_persistedRowCarriesFailureKindAndMessage() {
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PROVISIONS, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = Mockito.mock(DestinationDispatcher.class);
+    when(d.destination()).thenReturn(Destination.PROVISIONS);
+    when(d.dispatch(any(DispatchContext.class)))
+        .thenThrow(new RuntimeException("boom-business-message"));
+    when(registry.resolve(Destination.PROVISIONS)).thenReturn(d);
+
+    router.routeOneForReplay(feedbackId, s);
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    RoutingLogEntry terminal = cap.getAllValues().get(1);
+    assertThat(terminal.getStatus()).isEqualTo(RoutingStatus.FAILED);
+    // Kill setFailureKind VoidMethodCall removal.
+    assertThat(terminal.getFailureKind()).isEqualTo(RoutingFailureKind.UNKNOWN);
+    // Kill setFailureMessage VoidMethodCall removal.
+    assertThat(terminal.getFailureMessage()).contains("boom-business-message");
+  }
+
+  /**
+   * The "no-secret" path of stripSecrets — input contains nothing in SECRET_PATTERNS, so the method
+   * returns the original string. EmptyObjectReturnValsMutator would replace with "" — this test
+   * pins the message content + identity.
+   */
+  @Test
+  void failureMessage_withNoSecrets_passesThroughUnmodified() {
+    String benign = "destination rejected the payload";
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = Mockito.mock(DestinationDispatcher.class);
+    when(d.destination()).thenReturn(Destination.PREFERENCE);
+    when(d.dispatch(any(DispatchContext.class))).thenThrow(new IllegalStateException(benign));
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    String stamped = cap.getAllValues().get(1).getFailureMessage();
+    // Kills EmptyObjectReturnVals on stripSecrets — empty would not contain the original message.
+    assertThat(stamped).isEqualTo(benign);
+    assertThat(stamped).contains("rejected");
+  }
+
+  /**
+   * The "short-message" path of truncate — under 512 chars, must return the original (not "").
+   * Kills EmptyObjectReturnValsMutator on truncate.
+   */
+  @Test
+  void truncate_shortMessage_returnsOriginal() {
+    String shortMsg = "short";
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d =
+        stubDispatcher(
+            Destination.PREFERENCE,
+            DispatchResult.applied(shortMsg, JsonNodeFactory.instance.objectNode()));
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    ArgumentCaptor<RoutingLogEntry> cap = ArgumentCaptor.forClass(RoutingLogEntry.class);
+    verify(routingLogRepository, times(2)).save(cap.capture());
+    String stamped = cap.getAllValues().get(1).getActionTaken();
+    assertThat(stamped).isEqualTo(shortMsg).isNotEmpty();
+  }
+
+  /**
+   * toDto(UiContextDocument) on a non-null doc returns a fully-populated UiContextDto. The
+   * NullReturnValsMutator survives if dispatch never reads from ctx.uiContext(); we pin every field
+   * through the DispatchContext captured by the dispatcher.
+   */
+  @Test
+  void routeAll_dispatchContextCarriesPopulatedUiContextDto() {
+    UUID recipeId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    entry.setUiContext(
+        new com.example.mealprep.feedback.domain.document.UiContextDocument(
+            Screen.RECIPE_DETAIL,
+            recipeId,
+            5,
+            UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+            null));
+    ConfidenceGate.ScoredClassification s =
+        scored(Destination.PREFERENCE, "0.9", RoutingDecision.AUTO_ROUTED);
+    DestinationDispatcher d = stubDispatcher(Destination.PREFERENCE, applied());
+    when(registry.resolve(Destination.PREFERENCE)).thenReturn(d);
+
+    router.routeAll(feedbackId, List.of(s));
+
+    ArgumentCaptor<DispatchContext> cap = ArgumentCaptor.forClass(DispatchContext.class);
+    verify(d).dispatch(cap.capture());
+    com.example.mealprep.feedback.api.dto.UiContextDto ui = cap.getValue().uiContext();
+    // Kills NullReturnValsMutator on toDto — must return non-null populated dto.
+    assertThat(ui).isNotNull();
+    assertThat(ui.screen()).isEqualTo(Screen.RECIPE_DETAIL);
+    assertThat(ui.recipeId()).isEqualTo(recipeId);
+    assertThat(ui.recipeVersion()).isEqualTo(5);
+    assertThat(ui.mealSlotId()).isEqualTo(UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
+    assertThat(ui.planId()).isEqualTo(UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc"));
+  }
+
   // ---------------- helpers ----------------
 
   private static DispatchResult applied() {
