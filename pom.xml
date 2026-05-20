@@ -420,8 +420,11 @@
                         </goals>
                         <configuration>
                             <dataFile>${project.build.directory}/jacoco-merged.exec</dataFile>
-                            <!-- Gate enabled: 80% line / 70% branch on the merged (unit+IT) exec.
-                                 Last measured 90.7% line / 74.6% branch — comfortable headroom. -->
+                            <!-- Gate enabled: 88% line / 74% branch on the merged (unit+IT) exec.
+                                 Last measured 93.4% line (17,691/18,951) / 79.5% branch (4,747/5,968)
+                                 from the post-12-module-mutation-campaign CI run on main (52d094b,
+                                 GH Actions run 26191394397) — ~5pp headroom so a single PR slipping a
+                                 point won't redden main. -->
                             <haltOnFailure>true</haltOnFailure>
                             <rules>
                                 <rule>
@@ -430,12 +433,12 @@
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.80</minimum>
+                                            <minimum>0.88</minimum>
                                         </limit>
                                         <limit>
                                             <counter>BRANCH</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.70</minimum>
+                                            <minimum>0.74</minimum>
                                         </limit>
                                     </limits>
                                     <excludes>
@@ -480,11 +483,11 @@
                     </outputFormats>
                     <timestampedReports>false</timestampedReports>
                     <reportsDirectory>${project.build.directory}/pit-reports</reportsDirectory>
-                    <!-- Gate enabled: 60% project-wide mutation coverage. Last measured 66% killed
-                         (4,799/7,795) with 90% test-strength — 6pp headroom so a single PR slipping
-                         a point won't redden main. Raise to 65% / 70% in follow-ups as the
-                         remaining-module mutation campaign closes the gap. -->
-                    <mutationThreshold>60</mutationThreshold>
+                    <!-- Gate enabled: 73% project-wide mutation coverage. Last measured 78% killed
+                         (5,960/7,661) with 95% test-strength from the post-12-module-mutation-campaign
+                         CI run on main (52d094b, GH Actions run 26191394397) — ~5pp headroom so a
+                         single PR slipping a point won't redden main. -->
+                    <mutationThreshold>73</mutationThreshold>
                     <failWhenNoMutations>false</failWhenNoMutations>
                 </configuration>
             </plugin>
