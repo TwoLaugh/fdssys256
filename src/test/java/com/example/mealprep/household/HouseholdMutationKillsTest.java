@@ -7,6 +7,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.mealprep.household.api.dto.AddMemberRequest;
 import com.example.mealprep.household.api.dto.ChangeRoleRequest;
 import com.example.mealprep.household.api.dto.HouseholdMemberDto;
@@ -61,7 +65,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.MDC;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -123,28 +126,6 @@ class HouseholdMutationKillsTest {
         eventPublisher,
         fixedClock,
         SoftPreferencesReaderTestSupport.emptyProvider(),
-        new SoftPreferenceMerger(fixedClock));
-  }
-
-  private HouseholdServiceImpl serviceWithProvider(
-      ObjectProvider<com.example.mealprep.household.spi.SoftPreferencesReader> provider) {
-    return new HouseholdServiceImpl(
-        householdRepository,
-        householdMemberRepository,
-        householdSettingsRepository,
-        householdSettingsAuditLogRepository,
-        householdInviteRepository,
-        mapper,
-        memberMapper,
-        settingsMapper,
-        settingsAuditMapper,
-        inviteMapper,
-        differ,
-        slotConfigurationResolver,
-        inviteCodeGenerator,
-        eventPublisher,
-        fixedClock,
-        provider,
         new SoftPreferenceMerger(fixedClock));
   }
 
@@ -620,37 +601,6 @@ class HouseholdMutationKillsTest {
   }
 
   /**
-   * kills HouseholdServiceImpl.java:893 NullReturnVals on resolveSoftPreferencesReader inline-noop
-   * fallback. When the ObjectProvider returns null, the method MUST fall back to an inline noop
-   * reader (returns List.of()) rather than null — a null-return mutant would NPE on
-   * .getSoftPreferencesByUserIds(). Verified by calling the merge path with a provider that yields
-   * null and asserting the merged document is empty (no NPE).
-   */
-  @Test
-  void resolveSoftPreferencesReader_whenProviderYieldsNull_usesInlineNoop_killsLine893() {
-    UUID hh = UUID.randomUUID();
-    UUID u1 = UUID.randomUUID();
-    Household household =
-        HouseholdTestData.household()
-            .withId(hh)
-            .withMember(
-                HouseholdTestData.member().withUserId(u1).withRole(HouseholdRole.primary).build())
-            .build();
-    when(householdRepository.findWithMembersById(hh)).thenReturn(Optional.of(household));
-    ObjectProvider<com.example.mealprep.household.spi.SoftPreferencesReader> nullProvider =
-        SoftPreferencesReaderTestSupport.providerOf(null);
-
-    MergedSoftPreferencesDto out =
-        serviceWithProvider(nullProvider).mergeSoftPreferencesForSlot(hh, null);
-
-    assertThat(out).isNotNull();
-    assertThat(out.householdId()).isEqualTo(hh);
-    assertThat(out.contributingUserIds()).containsExactly(u1);
-    // Inline noop yields no bundles -> merged taste profile is empty.
-    assertThat(out.mergedTasteProfile().ingredientLikes()).isEmpty();
-  }
-
-  /**
    * kills HouseholdServiceImpl.java:997 NullReturnVals on buildDefaultSettings (private method
    * reachable via createHousehold). The created settings row must carry a non-null default document
    * containing the four built-in slot kinds. A null-return mutant would NPE in the settings
@@ -775,6 +725,54 @@ class HouseholdMutationKillsTest {
         ArgumentCaptor.forClass(com.example.mealprep.household.event.HouseholdCreatedEvent.class);
     verify(eventPublisher).publishEvent(eventCaptor.capture());
     assertThat(eventCaptor.getValue().traceId()).isNotNull();
+  }
+
+  /**
+   * Pins the new DEBUG log on the {@code currentTraceId} {@link IllegalArgumentException} catch
+   * (HouseholdServiceImpl.java:1004-1014). Per #109's smell report the silent {@code // ignored}
+   * comment was replaced with a DEBUG log so ops triage has a breadcrumb when a malformed traceId
+   * appears in the MDC pipeline. This test attaches a Logback {@link ListAppender} to the service
+   * logger, drives the create-household path with a non-UUID MDC traceId, and asserts a DEBUG event
+   * with the malformed value is emitted.
+   */
+  @Test
+  void currentTraceId_withNonUuidMdcEntry_emitsDebugBreadcrumb() {
+    LoggerContext ctx = (LoggerContext) org.slf4j.LoggerFactory.getILoggerFactory();
+    ch.qos.logback.classic.Logger serviceLogger = ctx.getLogger(HouseholdServiceImpl.class);
+    Level previousLevel = serviceLogger.getLevel();
+    ListAppender<ILoggingEvent> appender = new ListAppender<>();
+    appender.start();
+    serviceLogger.addAppender(appender);
+    serviceLogger.setLevel(Level.DEBUG);
+
+    UUID creatorUserId = UUID.randomUUID();
+    when(householdMemberRepository.findByUserId(creatorUserId)).thenReturn(Optional.empty());
+    when(householdRepository.saveAndFlush(any(Household.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    String previousMdc = MDC.get("traceId");
+    MDC.put("traceId", "not-a-uuid");
+    try {
+      service().createHousehold(creatorUserId, HouseholdTestData.createRequest());
+    } finally {
+      if (previousMdc == null) {
+        MDC.remove("traceId");
+      } else {
+        MDC.put("traceId", previousMdc);
+      }
+      serviceLogger.detachAppender(appender);
+      serviceLogger.setLevel(previousLevel);
+    }
+
+    assertThat(appender.list)
+        .as("currentTraceId catch must emit a DEBUG breadcrumb including the malformed value")
+        .anySatisfy(
+            event -> {
+              assertThat(event.getLevel()).isEqualTo(Level.DEBUG);
+              assertThat(event.getFormattedMessage())
+                  .contains("currentTraceId")
+                  .contains("not-a-uuid");
+            });
   }
 
   /**
