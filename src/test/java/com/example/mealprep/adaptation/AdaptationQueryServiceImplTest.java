@@ -75,7 +75,8 @@ class AdaptationQueryServiceImplTest {
         null,
         jobMapper,
         traceMapper,
-        hintMapper);
+        hintMapper,
+        null);
   }
 
   private static AdaptationJob job(UUID id) {

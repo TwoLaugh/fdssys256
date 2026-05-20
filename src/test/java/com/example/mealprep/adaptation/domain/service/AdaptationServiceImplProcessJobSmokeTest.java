@@ -23,6 +23,7 @@ import com.example.mealprep.adaptation.domain.repository.NutritionalKnowledgeRep
 import com.example.mealprep.adaptation.domain.repository.PendingChangeRepository;
 import com.example.mealprep.adaptation.domain.repository.PlannerHintRecordRepository;
 import com.example.mealprep.adaptation.domain.service.internal.AdaptationLlmInvoker;
+import com.example.mealprep.adaptation.domain.service.internal.AdaptationLockAcquirer;
 import com.example.mealprep.adaptation.domain.service.internal.AdaptationTraceWriter;
 import com.example.mealprep.adaptation.domain.service.internal.CandidateGenerator;
 import com.example.mealprep.adaptation.domain.service.internal.ChangeDimensionResolver;
@@ -182,6 +183,11 @@ class AdaptationServiceImplProcessJobSmokeTest {
               });
       when(llmInvoker.invoke(any(AdaptationJob.class), any(AdaptationContext.class)))
           .thenReturn(response);
+      // Real AdaptationLockAcquirer wired with the mocked lockService + jobRepository — the
+      // lock-acquire path now lives on this bean, and Spring's proxy is what makes its
+      // @Transactional advice fire in production. In this hand-constructed test wiring there is
+      // no proxy, but the lockService mock doesn't enforce MANDATORY, so the body runs as-is.
+      AdaptationLockAcquirer lockAcquirer = new AdaptationLockAcquirer(lockService, jobRepository);
       this.service =
           new AdaptationServiceImpl(
               jobRepository,
@@ -209,7 +215,8 @@ class AdaptationServiceImplProcessJobSmokeTest {
               null,
               null,
               null,
-              null);
+              null,
+              lockAcquirer);
     }
   }
 }
