@@ -558,6 +558,10 @@ class DiscoveryRunnerMutationKillsTest {
         .when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
         .thenAnswer(inv -> inv.getArgument(0));
     when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+    // Real DiscoveryJobTransitions.finaliseTo returns Optional.of(job) on a successful
+    // (non-terminal) transition. Runner gates downstream publish on this — must stub.
+    when(transitions.finaliseTo(eq(jobId), any(), any(), anyList(), anyList()))
+        .thenReturn(Optional.of(job));
 
     runner.run(startedEvent(jobId));
 
@@ -739,6 +743,9 @@ class DiscoveryRunnerMutationKillsTest {
         .when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
         .thenAnswer(inv -> inv.getArgument(0));
     when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+    // Stub the populated transition so the runner's publish path actually runs.
+    when(transitions.finaliseTo(eq(jobId), any(), any(), anyList(), anyList()))
+        .thenReturn(Optional.of(job));
 
     runner.run(startedEvent(jobId));
 
@@ -779,6 +786,10 @@ class DiscoveryRunnerMutationKillsTest {
     job.setId(jobId);
     when(transitions.claim(jobId)).thenThrow(new IllegalStateException("kaboom"));
     when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+    // finaliseCrashed gates completeSyncWaiter + publishJobCompleted on the Optional return —
+    // stub a populated return to exercise the post-transition side effects.
+    when(transitions.finaliseTo(eq(jobId), any(), any(), anyList(), anyList()))
+        .thenReturn(Optional.of(job));
 
     // Sync-waiter pre-registered — the crashed path must complete it.
     CompletableFuture<DiscoveryJobStatus> waiter = new CompletableFuture<>();
@@ -1118,6 +1129,10 @@ class DiscoveryRunnerMutationKillsTest {
     job.setConstraintsJson(com.fasterxml.jackson.databind.node.NullNode.getInstance());
     when(transitions.claim(jobId)).thenReturn(Optional.of(job));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+    // Runner's finalise() now gates completeSyncWaiter on the Optional return — must stub
+    // transitions.finaliseTo to return a populated Optional so the waiter completion path runs.
+    when(transitions.finaliseTo(eq(jobId), any(), any(), anyList(), anyList()))
+        .thenReturn(Optional.of(job));
 
     CompletableFuture<DiscoveryJobStatus> waiter = new CompletableFuture<>();
     runner.registerSyncWaiter(jobId, waiter);

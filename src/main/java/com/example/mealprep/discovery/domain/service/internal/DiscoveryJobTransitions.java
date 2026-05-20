@@ -147,6 +147,15 @@ class DiscoveryJobTransitions {
    * Terminal transition. Sets {@code status}, {@code completedAt}, {@code errorSummary}, {@code
    * sourcesSucceeded}, {@code sourcesFailed} in one tx. Returns the saved job so the caller can
    * publish the {@code DiscoveryJobCompletedEvent} with the latest snapshot.
+   *
+   * <p><strong>Terminal-state guard.</strong> If the job is already in a terminal status ({@link
+   * DiscoveryJobStatus#SUCCEEDED}, {@link DiscoveryJobStatus#FAILED}, {@link
+   * DiscoveryJobStatus#PARTIAL}) this call is a no-op that returns {@link Optional#empty()}. This
+   * prevents a second finalise (e.g. cancellation fast-path inside {@code fetchPhase} followed by
+   * the unconditional {@code finaliseTerminal} on its way out) from overwriting the first call's
+   * {@code errorSummary} and {@code completedAt}. Callers should treat an empty return as "no
+   * transition occurred — do not double-publish the completion event" (mirrors the orphan-sweep
+   * convention).
    */
   @Transactional
   Optional<DiscoveryJob> finaliseTo(
@@ -157,14 +166,29 @@ class DiscoveryJobTransitions {
       List<String> failed) {
     return jobRepository
         .findById(jobId)
-        .map(
+        .flatMap(
             job -> {
+              if (isTerminal(job.getStatus())) {
+                log.info(
+                    "discovery job {} already terminal (status={}); skipping finaliseTo({}, {})",
+                    jobId,
+                    job.getStatus(),
+                    terminal,
+                    errorSummary);
+                return Optional.<DiscoveryJob>empty();
+              }
               job.setStatus(terminal);
               job.setCompletedAt(Instant.now());
               job.setErrorSummary(errorSummary);
               job.setSourcesSucceeded(succeeded);
               job.setSourcesFailed(failed);
-              return jobRepository.saveAndFlush(job);
+              return Optional.of(jobRepository.saveAndFlush(job));
             });
+  }
+
+  private static boolean isTerminal(DiscoveryJobStatus status) {
+    return status == DiscoveryJobStatus.SUCCEEDED
+        || status == DiscoveryJobStatus.FAILED
+        || status == DiscoveryJobStatus.PARTIAL;
   }
 }

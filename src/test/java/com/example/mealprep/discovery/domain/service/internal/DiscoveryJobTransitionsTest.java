@@ -286,4 +286,125 @@ class DiscoveryJobTransitionsTest {
     assertThat(result).isEmpty();
     verify(jobRepository, never()).saveAndFlush(any());
   }
+
+  // ---------- finaliseTo: terminal-state guard ----------
+
+  @Test
+  void finaliseTo_alreadyTerminalFailed_isNoop_doesNotOverwriteErrorSummary() {
+    // Bug-fix pin: a second finaliseTo call on an already-terminal job MUST be a no-op. The
+    // production bug was DiscoveryJobRunner.fetchPhase's cancellation branch finalising with
+    // "cancelled by user", then executeJob falling through to finaliseTerminal which called
+    // finaliseTo a SECOND time with "no source produced an ingest" — overwriting the audit-trail
+    // errorSummary and completedAt. The guard returns Optional.empty() and the runner-side gates
+    // its downstream effects (completeSyncWaiter, publishJobCompleted, log) on that signal.
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
+    job.setId(jobId);
+    job.setStatus(DiscoveryJobStatus.FAILED);
+    job.setErrorSummary("cancelled by user");
+    Instant originalCompletedAt = Instant.parse("2026-05-01T10:00:00Z");
+    job.setCompletedAt(originalCompletedAt);
+    job.setSourcesSucceeded(List.of());
+    job.setSourcesFailed(List.of("src_a"));
+    when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+    Optional<DiscoveryJob> result =
+        transitions.finaliseTo(
+            jobId,
+            DiscoveryJobStatus.FAILED,
+            "no source produced an ingest", // would be the overwrite
+            List.of(),
+            List.of("src_a"));
+
+    // Guard signal — caller treats Optional.empty as "no transition" and skips downstream
+    // effects (completion event publish, sync waiter, log).
+    assertThat(result).isEmpty();
+    // No write at all — original errorSummary + completedAt are preserved.
+    verify(jobRepository, never()).saveAndFlush(any());
+    assertThat(job.getErrorSummary()).isEqualTo("cancelled by user");
+    assertThat(job.getCompletedAt()).isEqualTo(originalCompletedAt);
+    assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.FAILED);
+  }
+
+  @Test
+  void finaliseTo_alreadyTerminalSucceeded_isNoop() {
+    // Pins SUCCEEDED is treated as terminal — defends against a stale callback re-finalising
+    // a successful job into FAILED.
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
+    job.setId(jobId);
+    job.setStatus(DiscoveryJobStatus.SUCCEEDED);
+    job.setErrorSummary(null);
+    when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+    Optional<DiscoveryJob> result =
+        transitions.finaliseTo(
+            jobId, DiscoveryJobStatus.FAILED, "stale crash", List.of(), List.of());
+
+    assertThat(result).isEmpty();
+    verify(jobRepository, never()).saveAndFlush(any());
+    assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.SUCCEEDED);
+    assertThat(job.getErrorSummary()).isNull();
+  }
+
+  @Test
+  void finaliseTo_alreadyTerminalPartial_isNoop() {
+    // Pins PARTIAL is treated as terminal too — completes the terminal-set enumeration.
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
+    job.setId(jobId);
+    job.setStatus(DiscoveryJobStatus.PARTIAL);
+    job.setErrorSummary("partial: failed sources=src_b");
+    when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+    Optional<DiscoveryJob> result =
+        transitions.finaliseTo(
+            jobId, DiscoveryJobStatus.FAILED, "would-overwrite", List.of(), List.of("src_a"));
+
+    assertThat(result).isEmpty();
+    verify(jobRepository, never()).saveAndFlush(any());
+    assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.PARTIAL);
+    assertThat(job.getErrorSummary()).isEqualTo("partial: failed sources=src_b");
+  }
+
+  @Test
+  void finaliseTo_runningJob_transitions_returnsPopulatedOptional() {
+    // Pins the guard does NOT trip for RUNNING (the normal happy path) — boundary check vs
+    // the terminal-set membership.
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
+    job.setId(jobId);
+    job.setStatus(DiscoveryJobStatus.RUNNING);
+    when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+    when(jobRepository.saveAndFlush(job)).thenReturn(job);
+
+    Optional<DiscoveryJob> result =
+        transitions.finaliseTo(
+            jobId, DiscoveryJobStatus.FAILED, "cancelled by user", List.of(), List.of("src_a"));
+
+    assertThat(result).isPresent();
+    assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.FAILED);
+    assertThat(job.getErrorSummary()).isEqualTo("cancelled by user");
+    verify(jobRepository, times(1)).saveAndFlush(job);
+  }
+
+  @Test
+  void finaliseTo_queuedJob_transitions_returnsPopulatedOptional() {
+    // Pins QUEUED is NOT terminal either — should rarely happen in practice but defends the
+    // invariant that only the three terminal states short-circuit.
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
+    job.setId(jobId);
+    job.setStatus(DiscoveryJobStatus.QUEUED);
+    when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+    when(jobRepository.saveAndFlush(job)).thenReturn(job);
+
+    Optional<DiscoveryJob> result =
+        transitions.finaliseTo(
+            jobId, DiscoveryJobStatus.FAILED, "queued-then-killed", List.of(), List.of());
+
+    assertThat(result).isPresent();
+    assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.FAILED);
+    verify(jobRepository, times(1)).saveAndFlush(job);
+  }
 }

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -367,6 +368,16 @@ class DiscoveryJobRunnerTest {
 
   @Test
   void run_cancellationFlagSet_finalisesFailedCancelled() {
+    // Bug fix verification: prior to the terminal-state guard in DiscoveryJobTransitions.finaliseTo
+    // (+ the Optional-return gating in DiscoveryJobRunner.finalise/finaliseCrashed), a cancelled
+    // job was finalised TWICE — once with "cancelled by user" from the fetchPhase fast-path, then
+    // a second time with "no source produced an ingest" from finaliseTerminal — overwriting the
+    // audit-trail errorSummary and firing two DiscoveryJobCompletedEvents. The old test passed
+    // only because verify(...).finaliseTo(eq("cancelled by user")) silently ignored the second
+    // wrong-arg call (Mockito default times(1) matches against arg-equality, not total mock
+    // invocations). The fix lives in DiscoveryJobTransitions.finaliseTo (terminal-state guard
+    // returning Optional.empty()) and DiscoveryJobRunner.finalise (gates completeSyncWaiter +
+    // publishJobCompleted on the Optional being non-empty).
     UUID jobId = UUID.randomUUID();
     DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
     job.setId(jobId);
@@ -387,11 +398,22 @@ class DiscoveryJobRunnerTest {
         .thenAnswer(inv -> inv.getArgument(0));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
+    // Stub the transitions mock to mirror the real terminal-state guard contract: the FIRST
+    // call (cancellation) actually transitions the job and returns a populated Optional; any
+    // SUBSEQUENT call (e.g. from finaliseTerminal falling through executeJob) returns empty,
+    // signalling "no transition occurred". The real DiscoveryJobTransitions.finaliseTo does
+    // exactly this (covered by DiscoveryJobTransitionsTest#finaliseTo_alreadyTerminal_isNoop).
+    when(transitions.finaliseTo(eq(jobId), any(), any(), anyList(), anyList()))
+        .thenReturn(Optional.of(job)) // cancellation call: real transition
+        .thenReturn(Optional.empty()); // any subsequent call: guard trips, no-op
+
     // Pre-set the cancellation flag before run() is invoked.
     runner.requestCancellation(jobId);
     runner.run(startedEvent(jobId));
 
     verify(source, never()).fetchRecipe(any());
+
+    // The cancellation fast-path's finaliseTo MUST have been invoked with "cancelled by user".
     verify(transitions)
         .finaliseTo(
             eq(jobId),
@@ -399,6 +421,19 @@ class DiscoveryJobRunnerTest {
             eq("cancelled by user"),
             anyList(),
             anyList());
+
+    // The runner-side gating means the completion event fires EXACTLY ONCE — from the
+    // cancellation branch. The second pass through finaliseTerminal must be a no-op publish
+    // because the terminal-state guard returned Optional.empty(). This is the killing assertion
+    // for the double-publish bug.
+    verify(eventPublisher, times(1)).publishEvent(any(DiscoveryJobCompletedEvent.class));
+
+    // The runner-side correctness gate: even with the cancellation branch having returned
+    // out of fetchPhase, the post-fetchPhase finaliseTerminal call sees an empty Optional from
+    // the (now-guarded) transitions.finaliseTo and does NOT publish a second completion event.
+    // The errorSummary preservation is pinned in DiscoveryJobTransitionsTest where the real
+    // guard runs against a populated job — here at the runner boundary, we pin the
+    // "exactly-once event publish" half of the bug.
   }
 
   // -------- helpers --------
