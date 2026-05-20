@@ -71,6 +71,51 @@ class DiscoveryConstraintsValidatorTest {
   }
 
   @Test
+  void isValid_zeroMaxTotalTimeMins_returnsTrue() {
+    // kills ConditionalsBoundaryMutator at DiscoveryConstraintsValidator.java:48 (`< 0`). Exactly
+    // zero is allowed; negative is not. Mutation `<= 0` would reject zero too.
+    DiscoveryConstraints c = new DiscoveryConstraints(1, null, null, 0, null, null, null, null);
+    assertThat(validator.isValid(c, mockContext)).isTrue();
+  }
+
+  @Test
+  void isValid_disablesDefaultConstraintViolation() {
+    // kills VoidMethodCallMutator at DiscoveryConstraintsValidator.java:27. The validator must
+    // disable the default violation BEFORE emitting per-field ones — otherwise the client sees
+    // an extra default + the field violations.
+    ConstraintValidatorContext ctx = stubContext();
+    DiscoveryConstraints c = new DiscoveryConstraints(1, null, null, null, null, null, null, null);
+    validator.isValid(c, ctx);
+
+    Mockito.verify(ctx, Mockito.times(1)).disableDefaultConstraintViolation();
+  }
+
+  @Test
+  void isValid_emptyStringMappingKey_returnsFalse() {
+    // Covers the `k.isEmpty()` arm of the OR chain — an empty key fails.
+    DiscoveryConstraints c =
+        new DiscoveryConstraints(1, null, null, null, List.of(""), null, null, null);
+    assertThat(validator.isValid(c, mockContext)).isFalse();
+  }
+
+  @Test
+  void isValid_nullMealTypeEntry_returnsFalse() {
+    // Covers the null-check arm on requiredMealTypes loop body.
+    DiscoveryConstraints c =
+        new DiscoveryConstraints(
+            1, null, java.util.Arrays.asList((String) null), null, null, null, null, null);
+    assertThat(validator.isValid(c, mockContext)).isFalse();
+  }
+
+  @Test
+  void isValid_nullMappingKeyEntry_returnsFalse() {
+    DiscoveryConstraints c =
+        new DiscoveryConstraints(
+            1, null, null, null, java.util.Arrays.asList((String) null), null, null, null);
+    assertThat(validator.isValid(c, mockContext)).isFalse();
+  }
+
+  @Test
   void isValid_jakartaWiresAnnotation_throughValidatorFactory() {
     // Confirms the @Constraint(validatedBy = ...) wiring is intact end-to-end via Jakarta — a
     // separate smoke from the direct-instance assertions above.

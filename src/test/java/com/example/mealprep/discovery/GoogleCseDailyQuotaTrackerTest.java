@@ -95,6 +95,37 @@ class GoogleCseDailyQuotaTrackerTest {
   }
 
   @Test
+  void recordCall_stampsUpdatedAt() throws Exception {
+    // kills VoidMethodCallMutator at GoogleCseDailyQuotaTracker.java:85 (setUpdatedAt).
+    Map<LocalDate, DiscoveryGoogleCseUsage> store = new HashMap<>();
+    wireInMemoryStore(store);
+    Instant now = Instant.parse("2026-05-17T09:00:00Z");
+    GoogleCseDailyQuotaTracker t = tracker(Clock.fixed(now, ZoneOffset.UTC));
+
+    t.recordCall();
+
+    assertThat(store.get(LocalDate.parse("2026-05-17")).getUpdatedAt()).isEqualTo(now);
+  }
+
+  @Test
+  void todaysCount_invokesRollOverFirst() throws Exception {
+    // kills VoidMethodCallMutator at GoogleCseDailyQuotaTracker.java:56 (rollOverIfNeeded inside
+    // todaysCount). Across a day boundary the read must reset to 0.
+    Map<LocalDate, DiscoveryGoogleCseUsage> store = new HashMap<>();
+    wireInMemoryStore(store);
+    AdvancingClock clock = new AdvancingClock(Instant.parse("2026-05-17T23:59:00Z"));
+    GoogleCseDailyQuotaTracker t = tracker(clock);
+    t.recordCall();
+    t.recordCall();
+    assertThat(t.todaysCount()).isEqualTo(2);
+
+    clock.advance(Duration.ofMinutes(2)); // crosses midnight
+
+    // Without rollOverIfNeeded inside todaysCount the count would stay 2.
+    assertThat(t.todaysCount()).isZero();
+  }
+
+  @Test
   void recordCall_afterUtcMidnight_rollsOverToNewDay() throws Exception {
     Map<LocalDate, DiscoveryGoogleCseUsage> store = new HashMap<>();
     wireInMemoryStore(store);
