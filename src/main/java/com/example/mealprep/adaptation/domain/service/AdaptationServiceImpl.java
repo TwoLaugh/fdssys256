@@ -72,7 +72,6 @@ import com.example.mealprep.adaptation.exception.RebaseExhaustedException;
 import com.example.mealprep.core.audit.api.dto.DecisionLogScale;
 import com.example.mealprep.core.audit.api.dto.DecisionLogWriteRequest;
 import com.example.mealprep.core.audit.domain.service.DecisionLogService;
-import com.example.mealprep.core.lock.LockService;
 import com.example.mealprep.recipe.api.dto.CharacterFingerprintDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.domain.entity.Catalogue;
@@ -145,12 +144,6 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   private final ChangeDimensionResolver dimensionResolver;
   private final AdaptationTraceWriter traceWriter;
 
-  // Kept on the constructor surface for backwards-compatible wiring (skeleton + smoke tests pass
-  // a mock). The lock acquire path is now owned by {@link AdaptationLockAcquirer}, which Spring
-  // wires its own lockService into; this field is no longer dereferenced here.
-  @SuppressWarnings("unused")
-  private final LockService lockService;
-
   private final DecisionLogService decisionLogService;
   private final ApplicationEventPublisher events;
 
@@ -174,8 +167,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   // Step-1 advisory-lock acquire lives on a dedicated bean so the call from processJob()
   // (intentionally non-transactional) crosses a bean boundary, the proxy fires, and the
   // @Transactional(REQUIRED) advice on acquireLockOrFailJob applies by construction. Nullable
-  // in the older skeleton ctors (those wirings stub lockService to always-succeed so the
-  // lock-acquire path is never exercised).
+  // in the older skeleton ctors — those wirings never exercise the lock-acquire path.
   private final AdaptationLockAcquirer lockAcquirer;
 
   /** Skeleton constructor — retained for backwards-compatibility with 01b unit tests. */
@@ -193,7 +185,6 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         fingerprintRepository,
         plannerHintRepository,
         nutritionalKnowledgeRepository,
-        null,
         null,
         null,
         null,
@@ -237,7 +228,6 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
       PendingChangeStore pendingChangeStore,
       ChangeDimensionResolver dimensionResolver,
       AdaptationTraceWriter traceWriter,
-      LockService lockService,
       DecisionLogService decisionLogService,
       ApplicationEventPublisher events,
       RecipeWriteApi recipeWriteApi,
@@ -264,7 +254,6 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
     this.pendingChangeStore = pendingChangeStore;
     this.dimensionResolver = dimensionResolver;
     this.traceWriter = traceWriter;
-    this.lockService = lockService;
     this.decisionLogService = decisionLogService;
     this.events = events;
     this.recipeWriteApi = recipeWriteApi;

@@ -204,7 +204,6 @@ class AdaptationServiceImplProcessJobSmokeTest {
               pendingChangeStore,
               dimensionResolver,
               traceWriter,
-              lockService,
               decisionLogService,
               events,
               null,

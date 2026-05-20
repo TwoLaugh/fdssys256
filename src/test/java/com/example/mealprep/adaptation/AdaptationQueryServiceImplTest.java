@@ -65,7 +65,6 @@ class AdaptationQueryServiceImplTest {
         null,
         null,
         null,
-        null,
         Mockito.mock(ApplicationEventPublisher.class),
         null,
         null,

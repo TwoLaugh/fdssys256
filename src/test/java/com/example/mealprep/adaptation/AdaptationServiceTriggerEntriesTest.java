@@ -205,7 +205,6 @@ class AdaptationServiceTriggerEntriesTest {
         null,
         null,
         null,
-        null,
         events,
         mock(RecipeWriteApi.class),
         mock(PendingChangeMapper.class),

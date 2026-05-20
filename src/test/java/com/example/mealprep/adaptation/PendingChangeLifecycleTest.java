@@ -359,7 +359,6 @@ class PendingChangeLifecycleTest {
         null,
         null,
         null,
-        null,
         events,
         writeApi,
         mapper,
