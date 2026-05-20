@@ -23,6 +23,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.io.Resource;
@@ -76,6 +77,11 @@ public class PromptTemplateLoader {
 
   private final String sourcePath;
 
+  // @Autowired marks this as the constructor Spring should use for prod wiring. Without it Spring
+  // sees two constructors, neither annotated, and tries to fall back to a no-arg ctor — which
+  // doesn't exist — producing NoSuchMethodException at context-load time. The 5-arg overload below
+  // is a test-seam (no @Autowired so Spring ignores it).
+  @Autowired
   public PromptTemplateLoader(
       PromptTemplateRepository repository,
       ApplicationEventPublisher eventPublisher,
