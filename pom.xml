@@ -470,6 +470,7 @@
                     <excludedClasses>
                         <param>com.example.mealprep.MealPrepApplication</param>
                         <param>com.example.mealprep.config.*</param>
+                        <param>com.example.mealprep.*.config.*</param>
                         <param>com.example.mealprep.*MapperImpl</param>
                         <param>com.example.mealprep.*Noop*</param>
                     </excludedClasses>
