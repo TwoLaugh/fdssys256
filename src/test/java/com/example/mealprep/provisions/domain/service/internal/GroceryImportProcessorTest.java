@@ -38,6 +38,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -316,6 +317,253 @@ class GroceryImportProcessorTest {
     GroceryImportResultDto result = newProcessor().process(userId, cmd, AuditActor.GROCERY_IMPORT);
     assertThat(result.addedItems()).hasSize(1);
     assertThat(result.addedItems().get(0).storageLocation()).isEqualTo(StorageLocation.FREEZER);
+  }
+
+  @Test
+  void process_inferLocation_nullCategoryDefaultsToCupboard() {
+    // Kill the null-return mutant on inferLocation L221 (category == null branch).
+    UUID userId = UUID.randomUUID();
+    GroceryOrderLine nullCategoryLine =
+        new GroceryOrderLine(
+            "tesco:mystery",
+            "Mystery Item",
+            "mystery:item",
+            new BigDecimal("200.000"),
+            "g",
+            new BigDecimal("1.00"),
+            null,
+            null);
+    GroceryOrderImportCommand cmd =
+        ProvisionsTestData.groceryOrderImportCommand("tesco", "ord-nc", List.of(nullCategoryLine));
+
+    when(supplierProductRepository.findBySupplierAndProductId(anyString(), anyString()))
+        .thenReturn(Optional.empty());
+    stubSupplierSaveAndFlushPassthrough();
+    when(expiryInference.inferExpiry(any(), any(), any(LocalDate.class)))
+        .thenReturn(Optional.empty());
+    when(inventoryItemRepository.findOneActiveByUserIdAndMappingKeyAndStorageLocationAndExpiryDate(
+            eq(userId), eq("mystery:item"), eq(StorageLocation.CUPBOARD), eq(null)))
+        .thenReturn(Optional.empty());
+    stubInventorySaveAndFlushPassthrough();
+
+    GroceryImportResultDto result = newProcessor().process(userId, cmd, AuditActor.GROCERY_IMPORT);
+
+    // Row was created in CUPBOARD (not FREEZER/FRIDGE) and its category fell back to
+    // "uncategorised" — killing both inferLocation null-return AND createNewInventoryRow's
+    // `line.category() != null ? line.category() : "uncategorised"` ternary.
+    assertThat(result.addedItems()).hasSize(1);
+    assertThat(result.addedItems().get(0).storageLocation()).isEqualTo(StorageLocation.CUPBOARD);
+    assertThat(result.addedItems().get(0).category()).isEqualTo("uncategorised");
+  }
+
+  @Test
+  void process_explicitTraceId_isPropagatedToBatcher() {
+    // Kill the `command.traceId() != null ? command.traceId() : UUID.randomUUID()` ternary —
+    // an explicit traceId must reach the batcher.recordItemAddedFromGrocery call, not a
+    // freshly-generated one.
+    UUID userId = UUID.randomUUID();
+    UUID explicitTrace = UUID.randomUUID();
+    GroceryOrderImportCommand cmd =
+        new GroceryOrderImportCommand(
+            "tesco",
+            "ord-trace",
+            LocalDate.parse("2026-05-10"),
+            List.of(ProvisionsTestData.groceryOrderLine()),
+            null,
+            explicitTrace);
+
+    when(supplierProductRepository.findBySupplierAndProductId(anyString(), anyString()))
+        .thenReturn(Optional.empty());
+    stubSupplierSaveAndFlushPassthrough();
+    when(expiryInference.inferExpiry(any(), any(), any(LocalDate.class)))
+        .thenReturn(Optional.empty());
+    stubInventorySaveAndFlushPassthrough();
+
+    newProcessor().process(userId, cmd, AuditActor.GROCERY_IMPORT);
+
+    verify(eventBatcher)
+        .recordItemAddedFromGrocery(
+            eq(userId), any(UUID.class), eq("tesco"), eq("ord-trace"), eq(explicitTrace));
+  }
+
+  @Test
+  void process_nullTraceId_generatesNonNullTrace_propagatedToBatcher() {
+    // Kill the second branch of the same ternary — null traceId must produce a non-null
+    // generated trace at the batcher call (not null).
+    UUID userId = UUID.randomUUID();
+    GroceryOrderImportCommand cmd = ProvisionsTestData.groceryOrderImportCommand("tesco", "ord-nt");
+
+    when(supplierProductRepository.findBySupplierAndProductId(anyString(), anyString()))
+        .thenReturn(Optional.empty());
+    stubSupplierSaveAndFlushPassthrough();
+    when(expiryInference.inferExpiry(any(), any(), any(LocalDate.class)))
+        .thenReturn(Optional.empty());
+    stubInventorySaveAndFlushPassthrough();
+
+    newProcessor().process(userId, cmd, AuditActor.GROCERY_IMPORT);
+
+    ArgumentCaptor<UUID> traceCaptor = ArgumentCaptor.forClass(UUID.class);
+    verify(eventBatcher)
+        .recordItemAddedFromGrocery(
+            eq(userId), any(UUID.class), eq("tesco"), eq("ord-nt"), traceCaptor.capture());
+    assertThat(traceCaptor.getValue()).isNotNull();
+  }
+
+  @Test
+  void process_mergeBranch_callsRecordItemAddedFromGrocery() {
+    // Kill the VoidMethodCall mutant on L144 (recordItemAddedFromGrocery in the merge branch).
+    UUID userId = UUID.randomUUID();
+    UUID trace = UUID.randomUUID();
+    InventoryItem existing =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .quantity(new BigDecimal("100.000"))
+            .unit("g")
+            .ingredientMappingKey("cheese:cheddar")
+            .storageLocation(StorageLocation.FRIDGE)
+            .build();
+    GroceryOrderImportCommand cmd =
+        new GroceryOrderImportCommand(
+            "tesco",
+            "ord-merge-trace",
+            LocalDate.parse("2026-05-10"),
+            List.of(ProvisionsTestData.groceryOrderLine()),
+            null,
+            trace);
+
+    when(supplierProductRepository.findBySupplierAndProductId(anyString(), anyString()))
+        .thenReturn(Optional.empty());
+    stubSupplierSaveAndFlushPassthrough();
+    when(expiryInference.inferExpiry(anyString(), anyString(), any(LocalDate.class)))
+        .thenReturn(Optional.empty());
+    when(inventoryItemRepository.findOneActiveByUserIdAndMappingKeyAndStorageLocationAndExpiryDate(
+            eq(userId), eq("cheese:cheddar"), eq(StorageLocation.FRIDGE), eq(null)))
+        .thenReturn(Optional.of(existing));
+    stubInventorySaveAndFlushPassthrough();
+
+    newProcessor().process(userId, cmd, AuditActor.GROCERY_IMPORT);
+
+    // Merge branch must have called recordItemAddedFromGrocery exactly once with the merged item's
+    // id and the explicit trace — kills the VoidMethodCall mutant on the merge path.
+    verify(eventBatcher, times(1))
+        .recordItemAddedFromGrocery(
+            eq(userId), eq(existing.getId()), eq("tesco"), eq("ord-merge-trace"), eq(trace));
+  }
+
+  @Test
+  void upsertSupplierProduct_updatePath_setsAllFields_returnsNonNullDto() {
+    // Kill the NO_COVERAGE VoidMethodCall mutants L189-196 (setName, setPrice, setUnit, etc.)
+    // and the L216 NullReturnVals — the update branch must run AND return a non-null DTO.
+    UUID userId = UUID.randomUUID();
+    SupplierProduct cached =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:cheddar-250g")
+            .name("Cheddar 250g (old)")
+            .price(new BigDecimal("1.00"))
+            .unit("kg")
+            .packSizeG(99)
+            .category("misc")
+            .lastChecked(LocalDate.parse("2026-01-01"))
+            .ingredientMappingKey("old-key")
+            .build();
+
+    GroceryOrderImportCommand cmd = ProvisionsTestData.groceryOrderImportCommand("tesco", "ord-up");
+
+    when(supplierProductRepository.findBySupplierAndProductId("tesco", "tesco:cheddar-250g"))
+        .thenReturn(Optional.of(cached));
+    stubSupplierSaveAndFlushPassthrough();
+    when(expiryInference.inferExpiry(any(), any(), any(LocalDate.class)))
+        .thenReturn(Optional.empty());
+    stubInventorySaveAndFlushPassthrough();
+
+    GroceryImportResultDto result = newProcessor().process(userId, cmd, AuditActor.GROCERY_IMPORT);
+
+    // Each setter must have been invoked — assert on the in-place mutated supplier product.
+    assertThat(cached.getName()).isEqualTo("Cheddar 250g");
+    assertThat(cached.getPrice()).isEqualByComparingTo("3.49");
+    assertThat(cached.getUnit()).isEqualTo("g");
+    assertThat(cached.getPackSizeG()).isEqualTo(250);
+    assertThat(cached.getCategory()).isEqualTo("dairy");
+    assertThat(cached.getLastChecked()).isEqualTo(LocalDate.parse("2026-05-10"));
+    assertThat(cached.getIngredientMappingKey()).isEqualTo("cheese:cheddar");
+    // The returned DTO list must contain a non-null entry — kills the null-return mutant.
+    assertThat(result.updatedSupplierProducts()).hasSize(1);
+    assertThat(result.updatedSupplierProducts().get(0)).isNotNull();
+    assertThat(result.updatedSupplierProducts().get(0).productId()).isEqualTo("tesco:cheddar-250g");
+  }
+
+  @Test
+  void upsertSupplierProduct_updatePath_nullMappingKey_preservesExistingKey() {
+    // Kill the NegateConditionalsMutator at L195: `if (line.ingredientMappingKey() != null)`.
+    // When the imported line carries null mapping key, the existing supplier-product's mapping key
+    // must be preserved (not overwritten with null). If the conditional is flipped the update
+    // would null out the existing key.
+    UUID userId = UUID.randomUUID();
+    SupplierProduct cached =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:cheddar-250g")
+            .ingredientMappingKey("cheese:cheddar")
+            .build();
+
+    GroceryOrderLine lineNullKey =
+        new GroceryOrderLine(
+            "tesco:cheddar-250g",
+            "Cheddar 250g",
+            null, // ingredientMappingKey null on import
+            new BigDecimal("250.000"),
+            "g",
+            new BigDecimal("3.49"),
+            "dairy",
+            250);
+    GroceryOrderImportCommand cmd =
+        ProvisionsTestData.groceryOrderImportCommand("tesco", "ord-nk", List.of(lineNullKey));
+
+    when(supplierProductRepository.findBySupplierAndProductId("tesco", "tesco:cheddar-250g"))
+        .thenReturn(Optional.of(cached));
+    stubSupplierSaveAndFlushPassthrough();
+    when(expiryInference.inferExpiry(any(), any(), any(LocalDate.class)))
+        .thenReturn(Optional.empty());
+    stubInventorySaveAndFlushPassthrough();
+
+    newProcessor().process(userId, cmd, AuditActor.GROCERY_IMPORT);
+
+    // Existing key must NOT have been overwritten by null.
+    assertThat(cached.getIngredientMappingKey()).isEqualTo("cheese:cheddar");
+  }
+
+  @Test
+  void substitutionTargetingCachedProduct_withNullHistory_doesNotCrash_appendsRecord() {
+    // Kill the NegateConditionalsMutator at L283: `getSubstitutionHistory() == null`.
+    // If flipped, the code would try to use the null history directly and NPE.
+    UUID userId = UUID.randomUUID();
+    SupplierProduct cached =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:ordered-sku")
+            .substitutionHistory(null) // explicitly null
+            .build();
+    GroceryOrderSubstitution sub =
+        ProvisionsTestData.groceryOrderSubstitution(
+            "tesco:ordered-sku", "tesco:substituted-sku", "out of stock");
+    GroceryOrderImportCommand cmd =
+        new GroceryOrderImportCommand(
+            "tesco",
+            "ord-null-hist",
+            LocalDate.parse("2026-05-10"),
+            List.of(ProvisionsTestData.groceryOrderLine()),
+            List.of(sub),
+            null);
+
+    when(supplierProductRepository.findBySupplierAndProductId("tesco", "tesco:cheddar-250g"))
+        .thenReturn(Optional.empty());
+    when(supplierProductRepository.findBySupplierAndProductId("tesco", "tesco:ordered-sku"))
+        .thenReturn(Optional.of(cached));
+    stubSupplierSaveAndFlushPassthrough();
+    when(expiryInference.inferExpiry(any(), any(), any(LocalDate.class)))
+        .thenReturn(Optional.empty());
+    stubInventorySaveAndFlushPassthrough();
+
+    GroceryImportResultDto result = newProcessor().process(userId, cmd, AuditActor.GROCERY_IMPORT);
+
+    assertThat(result.warnings()).isEmpty();
+    assertThat(cached.getSubstitutionHistory()).hasSize(1);
+    assertThat(cached.getSubstitutionHistory().get(0).substitutedWithProductId())
+        .isEqualTo("tesco:substituted-sku");
   }
 
   @Test

@@ -3,12 +3,19 @@ package com.example.mealprep.provisions;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
+import com.example.mealprep.provisions.api.dto.LogWasteRequest;
+import com.example.mealprep.provisions.api.dto.WasteListQuery;
+import com.example.mealprep.provisions.api.dto.WasteReason;
 import com.example.mealprep.provisions.domain.entity.StorageLocation;
 import com.example.mealprep.provisions.domain.entity.TrackingMode;
 import com.example.mealprep.provisions.validation.StorageLocationValidatable;
 import com.example.mealprep.provisions.validation.ValidQuantityValidator;
 import com.example.mealprep.provisions.validation.ValidStorageLocationValidator;
+import com.example.mealprep.provisions.validation.WasteDateRangeValidator;
+import com.example.mealprep.provisions.validation.WasteQuantityValidator;
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -40,6 +47,8 @@ class ProvisionsConstraintValidatorTest {
 
   private final ValidStorageLocationValidator storage = new ValidStorageLocationValidator();
   private final ValidQuantityValidator quantity = new ValidQuantityValidator();
+  private final WasteQuantityValidator wasteQuantity = new WasteQuantityValidator();
+  private final WasteDateRangeValidator wasteDateRange = new WasteDateRangeValidator();
 
   // ---------------- @ValidStorageLocation ----------------
 
@@ -169,5 +178,121 @@ class ProvisionsConstraintValidatorTest {
   @Test
   void quantity_typicalPositive_isValid() {
     assertThat(quantity.isValid(new BigDecimal("250.5"), null)).isTrue();
+  }
+
+  // ---------------- @ValidWasteQuantity (direct invocation) ----------------
+  // Direct calls so Pitest sees the boolean-return mutants on the early returns.
+
+  @Test
+  void wasteQuantity_nullValue_isValid_notDoubleReported() {
+    assertThat(wasteQuantity.isValid(null, null)).isTrue();
+  }
+
+  @Test
+  void wasteQuantity_quantityNullUnitNull_isValid() {
+    LogWasteRequest req =
+        new LogWasteRequest(
+            null,
+            "celery",
+            null,
+            null,
+            WasteReason.EXPIRED,
+            null,
+            LocalDate.parse("2026-05-08"),
+            null);
+    assertThat(wasteQuantity.isValid(req, null)).isTrue();
+  }
+
+  @Test
+  void wasteQuantity_quantityPresentUnitNull_fails() {
+    LogWasteRequest req =
+        new LogWasteRequest(
+            UUID.randomUUID(),
+            "cheese",
+            new BigDecimal("100.000"),
+            null,
+            WasteReason.EXPIRED,
+            null,
+            LocalDate.parse("2026-05-08"),
+            null);
+    assertThat(wasteQuantity.isValid(req, null)).isFalse();
+  }
+
+  @Test
+  void wasteQuantity_quantityPresentUnitBlank_fails() {
+    LogWasteRequest req =
+        new LogWasteRequest(
+            UUID.randomUUID(),
+            "cheese",
+            new BigDecimal("100.000"),
+            "   ",
+            WasteReason.EXPIRED,
+            null,
+            LocalDate.parse("2026-05-08"),
+            null);
+    assertThat(wasteQuantity.isValid(req, null)).isFalse();
+  }
+
+  @Test
+  void wasteQuantity_quantityPresentUnitPresent_isValid() {
+    LogWasteRequest req =
+        new LogWasteRequest(
+            UUID.randomUUID(),
+            "cheese",
+            new BigDecimal("100.000"),
+            "g",
+            WasteReason.EXPIRED,
+            null,
+            LocalDate.parse("2026-05-08"),
+            null);
+    assertThat(wasteQuantity.isValid(req, null)).isTrue();
+  }
+
+  // ---------------- @ValidWasteDateRange (direct invocation) ----------------
+
+  @Test
+  void wasteDateRange_nullValue_isValid_notDoubleReported() {
+    assertThat(wasteDateRange.isValid(null, null)).isTrue();
+  }
+
+  @Test
+  void wasteDateRange_nullFrom_isValid_notDoubleReported() {
+    assertThat(
+            wasteDateRange.isValid(new WasteListQuery(null, LocalDate.parse("2026-05-01")), null))
+        .isTrue();
+  }
+
+  @Test
+  void wasteDateRange_nullTo_isValid_notDoubleReported() {
+    assertThat(
+            wasteDateRange.isValid(new WasteListQuery(LocalDate.parse("2026-05-01"), null), null))
+        .isTrue();
+  }
+
+  @Test
+  void wasteDateRange_fromBeforeTo_isValid() {
+    assertThat(
+            wasteDateRange.isValid(
+                new WasteListQuery(LocalDate.parse("2026-04-01"), LocalDate.parse("2026-05-01")),
+                null))
+        .isTrue();
+  }
+
+  @Test
+  void wasteDateRange_fromEqualsTo_isValid_boundary() {
+    assertThat(
+            wasteDateRange.isValid(
+                new WasteListQuery(LocalDate.parse("2026-04-01"), LocalDate.parse("2026-04-01")),
+                null))
+        .isTrue();
+  }
+
+  @Test
+  void wasteDateRange_fromAfterTo_fails_boundary() {
+    assertThat(
+            wasteDateRange.isValid(
+                new WasteListQuery(LocalDate.parse("2026-05-02"), LocalDate.parse("2026-05-01")),
+                null))
+        .isFalse();
   }
 }

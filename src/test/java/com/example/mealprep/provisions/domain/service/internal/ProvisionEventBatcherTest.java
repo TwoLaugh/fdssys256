@@ -291,6 +291,74 @@ class ProvisionEventBatcherTest {
   }
 
   @Test
+  void recordItemAddedFromGrocery_nullTrace_generatesTraceId_inTx() {
+    // Kill the `traceId == null ? randomUUID() : traceId` ternary in recordItemAddedFromGrocery
+    // — if negated, a non-null random trace becomes null and assertNotNull would fail.
+    beginTx();
+    UUID user = UUID.randomUUID();
+    batcher.recordItemAddedFromGrocery(user, UUID.randomUUID(), "Tesco", "order-trace", null);
+    commitTx();
+
+    assertThat(publisher.events).hasSize(1);
+    ItemAddedFromGroceryEvent e = (ItemAddedFromGroceryEvent) publisher.events.get(0);
+    assertThat(e.traceId()).isNotNull();
+  }
+
+  @Test
+  void recordItemAddedFromGrocery_explicitTrace_isUsed_inTx() {
+    // Kill the `traceId == null ?` ternary by the second branch — explicit trace must round-trip.
+    beginTx();
+    UUID user = UUID.randomUUID();
+    UUID trace = UUID.randomUUID();
+    batcher.recordItemAddedFromGrocery(user, UUID.randomUUID(), "Tesco", "order-trace", trace);
+    commitTx();
+
+    ItemAddedFromGroceryEvent e = (ItemAddedFromGroceryEvent) publisher.events.get(0);
+    assertThat(e.traceId()).isEqualTo(trace);
+  }
+
+  @Test
+  void recordRanOut_nullTrace_generatesTraceId_inTx() {
+    // Kill the `traceId == null ? randomUUID() : traceId` ternary in recordRanOut.
+    beginTx();
+    UUID user = UUID.randomUUID();
+    batcher.recordRanOut(user, UUID.randomUUID(), "eggs", false, null);
+    commitTx();
+
+    assertThat(publisher.events).hasSize(1);
+    ItemRanOutEvent e = (ItemRanOutEvent) publisher.events.get(0);
+    assertThat(e.traceId()).isNotNull();
+  }
+
+  @Test
+  void recordRanOut_explicitTrace_isUsed_inTx() {
+    beginTx();
+    UUID user = UUID.randomUUID();
+    UUID trace = UUID.randomUUID();
+    batcher.recordRanOut(user, UUID.randomUUID(), "eggs", false, trace);
+    commitTx();
+
+    ItemRanOutEvent e = (ItemRanOutEvent) publisher.events.get(0);
+    assertThat(e.traceId()).isEqualTo(trace);
+  }
+
+  @Test
+  void recordItemAddedFromGrocery_outsideTx_nullTrace_generatesTraceId() {
+    // Direct-publish mode counterpart for the recordItemAddedFromGrocery null-trace lambda.
+    batcher.recordItemAddedFromGrocery(
+        UUID.randomUUID(), UUID.randomUUID(), "Tesco", "ref-x", null);
+    ItemAddedFromGroceryEvent e = (ItemAddedFromGroceryEvent) publisher.events.get(0);
+    assertThat(e.traceId()).isNotNull();
+  }
+
+  @Test
+  void recordRanOut_outsideTx_nullTrace_generatesTraceId() {
+    batcher.recordRanOut(UUID.randomUUID(), UUID.randomUUID(), "milk", false, null);
+    ItemRanOutEvent e = (ItemRanOutEvent) publisher.events.get(0);
+    assertThat(e.traceId()).isNotNull();
+  }
+
+  @Test
   void mixedEventKinds_inOneTx_eachFlushedOnceOnCommit() {
     beginTx();
     UUID user = UUID.randomUUID();

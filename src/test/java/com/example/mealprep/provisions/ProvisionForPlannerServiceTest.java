@@ -300,6 +300,116 @@ class ProvisionForPlannerServiceTest {
     assertThat(bundle.supplierPricesByMappingKey().get("onion").name()).isEqualTo("NEWER");
   }
 
+  @Test
+  void supplierProduct_candidateOlder_keepsIncumbent_killsIsMoreRecentTrueReturn() {
+    // Kill the L381 BooleanTrueReturnVals mutant on isMoreRecent. With ordering [newer, older],
+    // the second iteration tries to replace incumbent (newer) with candidate (older); isMoreRecent
+    // must return false. If the mutant always returns true, the older wins.
+    UUID userId = UUID.randomUUID();
+    InventoryItem onion =
+        ProvisionsTestData.quantityTrackedItem(userId).ingredientMappingKey("onion").build();
+    when(inventoryItemRepository.findAllByUserIdAndItemStatus(userId, ItemLifecycleStatus.ACTIVE))
+        .thenReturn(List.of(onion));
+    when(inventoryItemRepository.findAllByUserIdAndIsStapleTrueAndStatusIn(
+            eq(userId), any(Collection.class)))
+        .thenReturn(List.of());
+    when(equipmentRepository.findAllByUserIdAndAvailableTrue(userId)).thenReturn(List.of());
+    when(budgetRepository.findByUserId(userId)).thenReturn(Optional.empty());
+    when(householdQueryService.getByUserId(userId)).thenReturn(Optional.empty());
+
+    SupplierProduct newer =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:2")
+            .ingredientMappingKey("onion")
+            .lastChecked(LocalDate.parse("2026-05-01"))
+            .name("NEWER")
+            .build();
+    SupplierProduct older =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:1")
+            .ingredientMappingKey("onion")
+            .lastChecked(LocalDate.parse("2026-04-01"))
+            .name("OLDER")
+            .build();
+    when(supplierProductRepository.findAllByIngredientMappingKeyIn(any()))
+        .thenReturn(List.of(newer, older));
+
+    ProvisionForPlannerBundleDto bundle = service().getBundle(userId);
+
+    assertThat(bundle.supplierPricesByMappingKey().get("onion").name()).isEqualTo("NEWER");
+  }
+
+  @Test
+  void supplierProduct_candidateNullLastChecked_keepsIncumbent_killsIsMoreRecentNullBranch() {
+    // Kill the L378 NegateConditional / L376 BooleanTrueReturnVals on isMoreRecent — when
+    // candidate.lastChecked is null, isMoreRecent must return false (keep incumbent).
+    UUID userId = UUID.randomUUID();
+    InventoryItem onion =
+        ProvisionsTestData.quantityTrackedItem(userId).ingredientMappingKey("onion").build();
+    when(inventoryItemRepository.findAllByUserIdAndItemStatus(userId, ItemLifecycleStatus.ACTIVE))
+        .thenReturn(List.of(onion));
+    when(inventoryItemRepository.findAllByUserIdAndIsStapleTrueAndStatusIn(
+            eq(userId), any(Collection.class)))
+        .thenReturn(List.of());
+    when(equipmentRepository.findAllByUserIdAndAvailableTrue(userId)).thenReturn(List.of());
+    when(budgetRepository.findByUserId(userId)).thenReturn(Optional.empty());
+    when(householdQueryService.getByUserId(userId)).thenReturn(Optional.empty());
+
+    SupplierProduct dated =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:dated")
+            .ingredientMappingKey("onion")
+            .lastChecked(LocalDate.parse("2026-05-01"))
+            .name("DATED")
+            .build();
+    SupplierProduct nullDated =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:nulldated")
+            .ingredientMappingKey("onion")
+            .lastChecked(null)
+            .name("NULL_DATED")
+            .build();
+    when(supplierProductRepository.findAllByIngredientMappingKeyIn(any()))
+        .thenReturn(List.of(dated, nullDated));
+
+    ProvisionForPlannerBundleDto bundle = service().getBundle(userId);
+
+    assertThat(bundle.supplierPricesByMappingKey().get("onion").name()).isEqualTo("DATED");
+  }
+
+  @Test
+  void
+      supplierProduct_incumbentNullLastChecked_replacedByDated_killsIsMoreRecentReturnTrueBranch() {
+    // Kill the L380 BooleanTrueReturnVals / L378 negate-branch on isMoreRecent — when incumbent has
+    // null lastChecked AND candidate has a date, isMoreRecent must return true (replace).
+    UUID userId = UUID.randomUUID();
+    InventoryItem onion =
+        ProvisionsTestData.quantityTrackedItem(userId).ingredientMappingKey("onion").build();
+    when(inventoryItemRepository.findAllByUserIdAndItemStatus(userId, ItemLifecycleStatus.ACTIVE))
+        .thenReturn(List.of(onion));
+    when(inventoryItemRepository.findAllByUserIdAndIsStapleTrueAndStatusIn(
+            eq(userId), any(Collection.class)))
+        .thenReturn(List.of());
+    when(equipmentRepository.findAllByUserIdAndAvailableTrue(userId)).thenReturn(List.of());
+    when(budgetRepository.findByUserId(userId)).thenReturn(Optional.empty());
+    when(householdQueryService.getByUserId(userId)).thenReturn(Optional.empty());
+
+    SupplierProduct nullDated =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:nulldated")
+            .ingredientMappingKey("onion")
+            .lastChecked(null)
+            .name("NULL_DATED")
+            .build();
+    SupplierProduct dated =
+        ProvisionsTestData.supplierProduct("tesco", "tesco:dated")
+            .ingredientMappingKey("onion")
+            .lastChecked(LocalDate.parse("2026-05-01"))
+            .name("DATED")
+            .build();
+    when(supplierProductRepository.findAllByIngredientMappingKeyIn(any()))
+        .thenReturn(List.of(nullDated, dated));
+
+    ProvisionForPlannerBundleDto bundle = service().getBundle(userId);
+
+    assertThat(bundle.supplierPricesByMappingKey().get("onion").name()).isEqualTo("DATED");
+  }
+
   // ---------------- inRampUpWindow ----------------
 
   @Test
@@ -318,6 +428,84 @@ class ProvisionForPlannerServiceTest {
             0);
     HouseholdDto household =
         new HouseholdDto(UUID.randomUUID(), "Casa", userId, List.of(member), joined, 0);
+    when(inventoryItemRepository.findAllByUserIdAndItemStatus(userId, ItemLifecycleStatus.ACTIVE))
+        .thenReturn(List.of());
+    when(inventoryItemRepository.findAllByUserIdAndIsStapleTrueAndStatusIn(
+            eq(userId), any(Collection.class)))
+        .thenReturn(List.of());
+    when(equipmentRepository.findAllByUserIdAndAvailableTrue(userId)).thenReturn(List.of());
+    when(budgetRepository.findByUserId(userId)).thenReturn(Optional.empty());
+    when(householdQueryService.getByUserId(userId)).thenReturn(Optional.of(household));
+
+    assertThat(service().getBundle(userId).staleness().inRampUpWindow()).isTrue();
+  }
+
+  @Test
+  void inRampUpWindow_boundary_exactly56Days_isFalse() {
+    // Kill the L408 ConditionalsBoundaryMutator (`< 56` flipped to `<= 56`). At exactly 56 days,
+    // the original returns false; the mutant would return true.
+    UUID userId = UUID.randomUUID();
+    // 56 days * 24 * 3600 seconds — exactly the boundary. Duration.toDays() == 56.
+    Instant joined = now.minusSeconds(56L * 24L * 3600L);
+    HouseholdMemberDto member =
+        new HouseholdMemberDto(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            userId,
+            HouseholdRole.primary,
+            "alice",
+            0,
+            joined,
+            0);
+    HouseholdDto household =
+        new HouseholdDto(UUID.randomUUID(), "Casa", userId, List.of(member), joined, 0);
+    when(inventoryItemRepository.findAllByUserIdAndItemStatus(userId, ItemLifecycleStatus.ACTIVE))
+        .thenReturn(List.of());
+    when(inventoryItemRepository.findAllByUserIdAndIsStapleTrueAndStatusIn(
+            eq(userId), any(Collection.class)))
+        .thenReturn(List.of());
+    when(equipmentRepository.findAllByUserIdAndAvailableTrue(userId)).thenReturn(List.of());
+    when(budgetRepository.findByUserId(userId)).thenReturn(Optional.empty());
+    when(householdQueryService.getByUserId(userId)).thenReturn(Optional.of(household));
+
+    assertThat(service().getBundle(userId).staleness().inRampUpWindow()).isFalse();
+  }
+
+  @Test
+  void inRampUpWindow_filtersMembers_byCallerUserId_notEveryMember() {
+    // Kill the L400 BooleanTrueReturnVals on the filter lambda `m -> userId.equals(m.userId())`.
+    // The household has TWO members; the OTHER member is very old (>56 days joined). The caller's
+    // membership is fresh (<56 days). If the filter is mutated to `return true`, the older
+    // membership wins (findFirst returns it) and rampUp resolves to false. Original picks the
+    // matching one (fresh) → rampUp = true.
+    UUID userId = UUID.randomUUID();
+    UUID otherUserId = UUID.randomUUID();
+    Instant otherJoined = now.minusSeconds(200L * 24L * 3600L); // 200d ago
+    Instant userJoined = now.minusSeconds(3L * 24L * 3600L); // 3d ago
+    HouseholdMemberDto older =
+        new HouseholdMemberDto(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            otherUserId,
+            HouseholdRole.member,
+            "older-bob",
+            0,
+            otherJoined,
+            0);
+    HouseholdMemberDto caller =
+        new HouseholdMemberDto(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            userId,
+            HouseholdRole.primary,
+            "alice",
+            0,
+            userJoined,
+            0);
+    // Order matters — older first, so findFirst with `always-true` picks the wrong one.
+    HouseholdDto household =
+        new HouseholdDto(UUID.randomUUID(), "Casa", userId, List.of(older, caller), otherJoined, 0);
+
     when(inventoryItemRepository.findAllByUserIdAndItemStatus(userId, ItemLifecycleStatus.ACTIVE))
         .thenReturn(List.of());
     when(inventoryItemRepository.findAllByUserIdAndIsStapleTrueAndStatusIn(
