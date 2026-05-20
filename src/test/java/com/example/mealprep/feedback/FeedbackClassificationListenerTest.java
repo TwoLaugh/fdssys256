@@ -2,6 +2,7 @@ package com.example.mealprep.feedback;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -276,6 +277,170 @@ class FeedbackClassificationListenerTest {
     listener.classifyEntry(feedbackId, userId, traceId);
 
     assertThat(entry.getClassificationAttempts()).isEqualTo(1);
+  }
+
+  // ---------------- mutation-kill: onFeedbackSubmitted entry point + buildContext branches
+  // ----------------
+
+  /**
+   * NO_COVERAGE on the listener's {@code @TransactionalEventListener} entry point. We invoke
+   * onFeedbackSubmitted directly (Spring's async/tx-event machinery is out of scope for the unit
+   * test) and assert classify() was reached via the captured router hand-off.
+   */
+  @Test
+  void onFeedbackSubmitted_routesViaClassifyEntry() {
+    when(classifier.classify(any(FeedbackClassificationContext.class)))
+        .thenReturn(result(output(Destination.RECIPE, "0.95")));
+
+    listener.onFeedbackSubmitted(
+        new com.example.mealprep.feedback.event.FeedbackSubmittedEvent(
+            feedbackId, userId, Screen.RECIPE_DETAIL, traceId, clock.instant()));
+
+    // Kills VoidMethodCallMutator removal of classifyEntry call inside onFeedbackSubmitted.
+    verify(classifier).classify(any(FeedbackClassificationContext.class));
+    verify(router).routeAll(eq(feedbackId), any());
+  }
+
+  /**
+   * The toDto(UiContextDocument) helper inside the listener has a NullReturnVals SURVIVED on the
+   * non-null branch — assertions used to be on dto != null but the mutation that always returns
+   * null would still pass since the AiService stub never reads from the dto. We capture the built
+   * FeedbackClassificationContext and pin every UiContextDto field.
+   */
+  @Test
+  void buildContext_nonNullUiContext_populatesEveryField() {
+    UUID recipeId = UUID.fromString("dddddddd-dddd-dddd-dddd-dddddddddddd");
+    UUID mealSlotId = UUID.fromString("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
+    UUID planId = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
+    entry.setUiContext(
+        new UiContextDocument(Screen.PLAN_MEAL_DETAIL, recipeId, 9, mealSlotId, planId, null));
+    when(clarificationRepository.findFirstByFeedbackEntryIdAndStatusOrderByAnsweredAtDesc(
+            eq(feedbackId), eq(ClarificationStatus.ANSWERED)))
+        .thenReturn(Optional.empty());
+    when(classifier.classify(any(FeedbackClassificationContext.class)))
+        .thenReturn(result(output(Destination.RECIPE, "0.95")));
+
+    listener.classifyEntry(feedbackId, userId, traceId);
+
+    ArgumentCaptor<FeedbackClassificationContext> ctxCap =
+        ArgumentCaptor.forClass(FeedbackClassificationContext.class);
+    verify(classifier).classify(ctxCap.capture());
+    com.example.mealprep.feedback.api.dto.UiContextDto ui = ctxCap.getValue().uiContext();
+    // Kills NullReturnValsMutator on the listener's toDto(UiContextDocument).
+    assertThat(ui).isNotNull();
+    assertThat(ui.screen()).isEqualTo(Screen.PLAN_MEAL_DETAIL);
+    assertThat(ui.recipeId()).isEqualTo(recipeId);
+    assertThat(ui.recipeVersion()).isEqualTo(9);
+    assertThat(ui.mealSlotId()).isEqualTo(mealSlotId);
+    assertThat(ui.planId()).isEqualTo(planId);
+  }
+
+  /**
+   * buildContext.toDto(null) path — the listener tolerates a null UiContextDocument and yields a
+   * null UiContextDto downstream. Kills NegateConditionals on the null check (L195).
+   */
+  @Test
+  void buildContext_nullUiContext_yieldsNullDtoAndStillRuns() {
+    entry.setUiContext(null);
+    when(clarificationRepository.findFirstByFeedbackEntryIdAndStatusOrderByAnsweredAtDesc(
+            eq(feedbackId), eq(ClarificationStatus.ANSWERED)))
+        .thenReturn(Optional.empty());
+    when(classifier.classify(any(FeedbackClassificationContext.class)))
+        .thenReturn(result(output(Destination.RECIPE, "0.95")));
+
+    listener.classifyEntry(feedbackId, userId, traceId);
+
+    ArgumentCaptor<FeedbackClassificationContext> ctxCap =
+        ArgumentCaptor.forClass(FeedbackClassificationContext.class);
+    verify(classifier).classify(ctxCap.capture());
+    assertThat(ctxCap.getValue().uiContext()).isNull();
+  }
+
+  /**
+   * Re-classification path: an answered clarification's free-text + selected destination flow into
+   * the classifier context's Optional fields. The two NO_COVERAGE filter lambdas at L181/L183 are
+   * the {@code t != null && !t.isBlank()} / {@code d != null} predicates — exercising them with
+   * present-and-non-blank values kills the BooleanTrueReturnVals + NegateConditionals mutations.
+   */
+  @Test
+  void buildContext_withAnsweredClarification_populatesClarificationHints() {
+    ClarificationQuery answered =
+        com.example.mealprep.feedback.testdata.FeedbackTestData.answeredClarificationQuery(
+            entry, Destination.RECIPE, "the user meant recipe");
+    when(clarificationRepository.findFirstByFeedbackEntryIdAndStatusOrderByAnsweredAtDesc(
+            eq(feedbackId), eq(ClarificationStatus.ANSWERED)))
+        .thenReturn(Optional.of(answered));
+    when(classifier.classify(any(FeedbackClassificationContext.class)))
+        .thenReturn(result(output(Destination.RECIPE, "0.95")));
+
+    listener.classifyEntry(feedbackId, userId, traceId);
+
+    ArgumentCaptor<FeedbackClassificationContext> ctxCap =
+        ArgumentCaptor.forClass(FeedbackClassificationContext.class);
+    verify(classifier).classify(ctxCap.capture());
+    FeedbackClassificationContext ctx = ctxCap.getValue();
+    assertThat(ctx.userClarificationText()).contains("the user meant recipe");
+    assertThat(ctx.userSelectedHint()).contains(Destination.RECIPE);
+  }
+
+  /**
+   * Blank clarification text + null destination must be filtered to empty Optionals — covers the
+   * filter-rejected branch of L181/L183 lambdas.
+   */
+  @Test
+  void buildContext_withBlankClarificationText_yieldsEmptyOptional() {
+    ClarificationQuery answered =
+        com.example.mealprep.feedback.testdata.FeedbackTestData.answeredClarificationQuery(
+            entry, null, "   ");
+    when(clarificationRepository.findFirstByFeedbackEntryIdAndStatusOrderByAnsweredAtDesc(
+            eq(feedbackId), eq(ClarificationStatus.ANSWERED)))
+        .thenReturn(Optional.of(answered));
+    when(classifier.classify(any(FeedbackClassificationContext.class)))
+        .thenReturn(result(output(Destination.RECIPE, "0.95")));
+
+    listener.classifyEntry(feedbackId, userId, traceId);
+
+    ArgumentCaptor<FeedbackClassificationContext> ctxCap =
+        ArgumentCaptor.forClass(FeedbackClassificationContext.class);
+    verify(classifier).classify(ctxCap.capture());
+    FeedbackClassificationContext ctx = ctxCap.getValue();
+    assertThat(ctx.userClarificationText()).isEmpty();
+    assertThat(ctx.userSelectedHint()).isEmpty();
+  }
+
+  /**
+   * buildOptionNode content assertion — the SURVIVED NullReturnValsMutator on this private helper
+   * means existing tests only check the size of the JSON array. Now we read each option's three
+   * fields (destination, snippet, classifierJustification) and pin them against the input
+   * classification.
+   */
+  @Test
+  void clarification_options_carryDestinationSnippetAndJustification() {
+    when(classifier.classify(any(FeedbackClassificationContext.class)))
+        .thenReturn(
+            result(
+                output(Destination.RECIPE, "0.95"), // not queued (>=0.5)
+                output(Destination.PREFERENCE, "0.30"),
+                output(Destination.NUTRITION, "0.20")));
+
+    listener.classifyEntry(feedbackId, userId, traceId);
+
+    ArgumentCaptor<ClarificationQuery> queryCaptor =
+        ArgumentCaptor.forClass(ClarificationQuery.class);
+    verify(clarificationRepository, times(1)).save(queryCaptor.capture());
+    com.fasterxml.jackson.databind.JsonNode options =
+        queryCaptor.getValue().getClassifierOptionsJson();
+    assertThat(options.isArray()).isTrue();
+    assertThat(options.size()).isEqualTo(2);
+    com.fasterxml.jackson.databind.JsonNode first = options.get(0);
+    // Kill the NullReturnValsMutator on buildOptionNode — null would surface as a NPE on .get().
+    assertThat(first.get("destination").asText()).isEqualTo("PREFERENCE");
+    assertThat(first.get("snippet").asText()).isEqualTo("snippet PREFERENCE");
+    assertThat(first.get("classifierJustification").asText()).isEqualTo("confidence 0.30");
+    com.fasterxml.jackson.databind.JsonNode second = options.get(1);
+    assertThat(second.get("destination").asText()).isEqualTo("NUTRITION");
+    assertThat(second.get("snippet").asText()).isEqualTo("snippet NUTRITION");
+    assertThat(second.get("classifierJustification").asText()).isEqualTo("confidence 0.20");
   }
 
   // ---------------- helpers ----------------
