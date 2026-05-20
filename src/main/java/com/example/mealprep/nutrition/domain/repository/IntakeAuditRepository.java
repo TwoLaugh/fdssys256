@@ -12,5 +12,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
  */
 public interface IntakeAuditRepository extends JpaRepository<IntakeAuditLog, UUID> {
 
-  Page<IntakeAuditLog> findByIntakeDayIdOrderByOccurredAtDesc(UUID intakeDayId, Pageable pageable);
+  // Underscore-separated property path so Spring Data unambiguously traverses the IntakeDay
+  // association (the entity has no scalar intakeDayId field — only @ManyToOne IntakeDay). Without
+  // the underscore the auto-derived count query for the Page return fails at construction with
+  // InvalidDataAccessApiUsageException and the endpoint 500s.
+  Page<IntakeAuditLog> findByIntakeDay_IdOrderByOccurredAtDesc(UUID intakeDayId, Pageable pageable);
 }
