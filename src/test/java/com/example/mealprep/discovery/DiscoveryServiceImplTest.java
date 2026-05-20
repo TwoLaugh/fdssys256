@@ -24,6 +24,7 @@ import com.example.mealprep.discovery.domain.repository.DiscoveryJobRepository;
 import com.example.mealprep.discovery.domain.repository.DiscoveryScrapeLogRepository;
 import com.example.mealprep.discovery.domain.repository.DiscoverySourceRepository;
 import com.example.mealprep.discovery.domain.service.internal.DiscoveryJobRunner;
+import com.example.mealprep.discovery.domain.service.internal.DiscoveryJobStarter;
 import com.example.mealprep.discovery.domain.service.internal.DiscoveryServiceImpl;
 import com.example.mealprep.discovery.event.DiscoveryJobStartedEvent;
 import com.example.mealprep.discovery.exception.DiscoveryConstraintInvalidException;
@@ -64,6 +65,9 @@ class DiscoveryServiceImplTest {
 
   @BeforeEach
   void setUp() {
+    DiscoveryJobStarter jobStarter =
+        new DiscoveryJobStarter(
+            jobRepository, sourceRepository, jobMapper, eventPublisher, new ObjectMapper());
     service =
         new DiscoveryServiceImpl(
             jobRepository,
@@ -72,15 +76,14 @@ class DiscoveryServiceImplTest {
             jobMapper,
             sourceMapper,
             scrapeLogMapper,
-            eventPublisher,
-            new ObjectMapper(),
             runner,
             new com.example.mealprep.discovery.config.DiscoveryProperties(
                 java.time.Duration.ofMinutes(10),
                 30,
                 java.time.Duration.ofSeconds(60),
                 java.time.Duration.ofHours(1),
-                java.time.Duration.ofHours(6)));
+                java.time.Duration.ofHours(6)),
+            jobStarter);
   }
 
   // ---------- startJob ----------

@@ -62,6 +62,9 @@ class DiscoveryRunJobSyncTest {
 
   @BeforeEach
   void setUp() {
+    DiscoveryJobStarter jobStarter =
+        new DiscoveryJobStarter(
+            jobRepository, sourceRepository, jobMapper, eventPublisher, new ObjectMapper());
     service =
         new DiscoveryServiceImpl(
             jobRepository,
@@ -70,11 +73,10 @@ class DiscoveryRunJobSyncTest {
             jobMapper,
             sourceMapper,
             scrapeLogMapper,
-            eventPublisher,
-            new ObjectMapper(),
             runner,
             new DiscoveryProperties(
-                Duration.ofMinutes(10), 30, SYNC_CAP, Duration.ofHours(1), Duration.ofHours(6)));
+                Duration.ofMinutes(10), 30, SYNC_CAP, Duration.ofHours(1), Duration.ofHours(6)),
+            jobStarter);
   }
 
   private StartDiscoveryJobRequest coldStartReq() {

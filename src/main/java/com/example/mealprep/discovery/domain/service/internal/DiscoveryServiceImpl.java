@@ -18,23 +18,18 @@ import com.example.mealprep.discovery.domain.repository.DiscoveryScrapeLogReposi
 import com.example.mealprep.discovery.domain.repository.DiscoverySourceRepository;
 import com.example.mealprep.discovery.domain.service.DiscoveryQueryService;
 import com.example.mealprep.discovery.domain.service.DiscoveryService;
-import com.example.mealprep.discovery.event.DiscoveryJobStartedEvent;
 import com.example.mealprep.discovery.exception.DiscoveryConstraintInvalidException;
 import com.example.mealprep.discovery.exception.DiscoveryJobAlreadyTerminalException;
 import com.example.mealprep.discovery.exception.DiscoveryJobNotFoundException;
 import com.example.mealprep.discovery.exception.DiscoverySourceNotFoundException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumSet;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -43,9 +38,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -58,15 +50,16 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>01b scope (ticket invariants 1-23):
  *
  * <ul>
- *   <li>{@code startJob} persists the QUEUED job and publishes {@code DiscoveryJobStartedEvent}
- *       AFTER_COMMIT for the (01d) runner.
+ *   <li>{@code startJob} delegates persistence + AFTER_COMMIT publication to {@link
+ *       DiscoveryJobStarter}.
  *   <li>{@code cancelJob} flips {@code QUEUED → FAILED}; terminal states + the temporary RUNNING
  *       branch throw {@link DiscoveryJobAlreadyTerminalException}.
  *   <li>Query methods cover the user/admin read surface; scrape-log fetch pre-checks the job
  *       exists.
  *   <li>{@code enableSource} / {@code disableSource} flip the {@code enabled} flag; {@code
- *       runOrphanSweep} is a placeholder returning {@code 0} until 01d.
- *   <li>{@code runJobSync} throws {@link UnsupportedOperationException} — ships with 01f.
+ *       runOrphanSweep} delegates to the runner.
+ *   <li>{@code runJobSync} drives the synchronous COLD_START flow via {@link DiscoveryJobStarter}
+ *       and the runner's sync waiter.
  * </ul>
  */
 @Service
@@ -84,23 +77,13 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
   private final DiscoveryJobMapper jobMapper;
   private final DiscoverySourceMapper sourceMapper;
   private final DiscoveryScrapeLogMapper scrapeLogMapper;
-  private final ApplicationEventPublisher eventPublisher;
-  private final ObjectMapper objectMapper;
   private final DiscoveryJobRunner runner;
   private final DiscoveryProperties properties;
-
-  // Self-proxy: runJobSync (non-transactional, blocks on the sync waiter) calls startJob, which is
-  // @Transactional and publishes DiscoveryJobStartedEvent AFTER_COMMIT. A plain this.startJob() is
-  // a Spring self-invocation — the proxy is bypassed, startJob runs tx-less, the AFTER_COMMIT
-  // event is silently dropped, the runner never processes the job, and runJobSync times out
-  // returning a QUEUED DTO (round-5 self-invocation + round-3 AFTER_COMMIT-drop, compounded).
-  // Route the call through the injected proxy so startJob's tx boundary applies; @Lazy breaks
-  // the constructor cycle. Hand-constructed unit tests leave `self` null -> fall back to `this`.
-  @Autowired @Lazy private DiscoveryServiceImpl self;
+  private final DiscoveryJobStarter jobStarter;
 
   // runJobSync's final re-read must reflect the runner's cross-thread terminal UPDATE. The runner
-  // commits RUNNING/FAILED on its own thread+EM; this request thread loaded the QUEUED row in
-  // startJobWithId. Production runs spring.jpa.open-in-view=false (fresh EM per repo call → fresh
+  // commits RUNNING/FAILED on its own thread+EM; this request thread loaded the QUEUED row via the
+  // starter. Production runs spring.jpa.open-in-view=false (fresh EM per repo call → fresh
   // read), but the test classpath's application.properties shadows main and does NOT mirror that
   // key, so OSIV is ON under @SpringBootTest: one EM is bound to the request thread for the whole
   // request, its L1 still holds the stale QUEUED entity, and findById returns it instead of
@@ -117,88 +100,25 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
       DiscoveryJobMapper jobMapper,
       DiscoverySourceMapper sourceMapper,
       DiscoveryScrapeLogMapper scrapeLogMapper,
-      ApplicationEventPublisher eventPublisher,
-      ObjectMapper objectMapper,
       DiscoveryJobRunner runner,
-      DiscoveryProperties properties) {
+      DiscoveryProperties properties,
+      DiscoveryJobStarter jobStarter) {
     this.jobRepository = jobRepository;
     this.sourceRepository = sourceRepository;
     this.scrapeLogRepository = scrapeLogRepository;
     this.jobMapper = jobMapper;
     this.sourceMapper = sourceMapper;
     this.scrapeLogMapper = scrapeLogMapper;
-    this.eventPublisher = eventPublisher;
-    this.objectMapper = objectMapper;
     this.runner = runner;
     this.properties = properties;
+    this.jobStarter = jobStarter;
   }
 
   // ===== DiscoveryService — update path =====
 
   @Override
-  @Transactional
   public DiscoveryJobDto startJob(UUID userId, StartDiscoveryJobRequest request) {
-    return startJobWithId(userId, request, UUID.randomUUID());
-  }
-
-  /**
-   * Body of {@link #startJob} parameterised by a caller-supplied job id. {@code runJobSync} needs
-   * the id BEFORE the {@code DiscoveryJobStartedEvent} is published so it can register the sync
-   * waiter ahead of the {@code @Async} AFTER_COMMIT runner — otherwise the runner can finalise the
-   * job and call {@code completeSyncWaiter} before the waiter exists (slow CI / fast-failing
-   * source), the waiter never completes, the caller times out, and the re-read catches the job
-   * pre-claim as {@code QUEUED} (round-6 retro: register-before-publish, not register-after).
-   *
-   * <p>Public (not on the interface) so the self-proxy's {@code @Transactional} advice applies —
-   * Spring only weaves tx advice on public methods.
-   */
-  @Transactional
-  public DiscoveryJobDto startJobWithId(UUID userId, StartDiscoveryJobRequest request, UUID jobId) {
-    List<DiscoverySource> resolved = resolveSources(request.sourceKeys());
-    if (resolved.isEmpty()) {
-      throw new DiscoveryConstraintInvalidException(
-          "zero enabled sources match the requested subset");
-    }
-
-    UUID traceId = request.traceId() != null ? request.traceId() : UUID.randomUUID();
-    List<String> sourceKeys = new ArrayList<>(resolved.size());
-    for (DiscoverySource s : resolved) {
-      sourceKeys.add(s.getSourceKey());
-    }
-
-    DiscoveryJob job =
-        DiscoveryJob.builder()
-            .id(jobId)
-            .userId(userId)
-            .trigger(request.trigger())
-            .requestedCount(request.requestedCount())
-            .constraintsJson(objectMapper.valueToTree(request.constraints()))
-            .sourcesRequested(sourceKeys)
-            .status(DiscoveryJobStatus.QUEUED)
-            .queuedAt(Instant.now())
-            .candidatesSeen(0)
-            .candidatesAfterFilter(0)
-            .recipesIngested(0)
-            .recipesSkippedDuplicate(0)
-            .sourcesSucceeded(new ArrayList<>())
-            .sourcesFailed(new ArrayList<>())
-            .traceId(traceId)
-            .build();
-    // saveAndFlush: the response DTO carries optimisticVersion / queuedAt freshly bumped by
-    // Hibernate, and `save()` doesn't flush — would surface stale state.
-    DiscoveryJob saved = jobRepository.saveAndFlush(job);
-
-    eventPublisher.publishEvent(
-        new DiscoveryJobStartedEvent(
-            saved.getId(),
-            userId,
-            saved.getTrigger(),
-            saved.getRequestedCount(),
-            List.copyOf(saved.getSourcesRequested()),
-            saved.getTraceId(),
-            Instant.now()));
-
-    return jobMapper.toDto(saved);
+    return jobStarter.startJobWithId(userId, request, UUID.randomUUID());
   }
 
   @Override
@@ -215,22 +135,19 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
     Duration effective =
         timeout.compareTo(properties.syncTimeout()) > 0 ? properties.syncTimeout() : timeout;
 
-    // Pre-generate the job id and register the sync waiter BEFORE startJob publishes
-    // DiscoveryJobStartedEvent. Ordering is load-bearing: startJob is @Transactional and publishes
-    // AFTER_COMMIT; the runner's listener is @Async + AFTER_COMMIT. If we registered the waiter
-    // after startJob returned (post-commit), a fast/failing source on slow CI lets the runner
-    // finalise the job and call completeSyncWaiter before the waiter exists — the waiter never
-    // completes, runJobSync times out, and the re-read catches the job pre-claim as QUEUED
-    // (observed: sync_fastColdStart got "QUEUED", sync_allSourcesDown got 200 not 502).
-    // Registering first closes the race entirely. MUST still route startJobWithId through the
-    // self-proxy — a direct this.startJobWithId() is a Spring self-invocation that bypasses the
-    // @Transactional proxy, so it would run tx-less and the AFTER_COMMIT event would be dropped.
+    // Pre-generate the job id and register the sync waiter BEFORE startJobWithId publishes
+    // DiscoveryJobStartedEvent. Ordering is load-bearing: startJobWithId is @Transactional and
+    // publishes AFTER_COMMIT; the runner's listener is @Async + AFTER_COMMIT. If we registered the
+    // waiter after startJobWithId returned (post-commit), a fast/failing source on slow CI lets
+    // the runner finalise the job and call completeSyncWaiter before the waiter exists — the
+    // waiter never completes, runJobSync times out, and the re-read catches the job pre-claim as
+    // QUEUED. Registering first closes the race entirely.
     UUID jobId = UUID.randomUUID();
     CompletableFuture<DiscoveryJobStatus> waiter = new CompletableFuture<>();
     runner.registerSyncWaiter(jobId, waiter);
 
     try {
-      ((self != null) ? self : this).startJobWithId(userId, request, jobId);
+      jobStarter.startJobWithId(userId, request, jobId);
       DiscoveryJobStatus terminal = waiter.get(effective.toMillis(), TimeUnit.MILLISECONDS);
       log.debug("runJobSync jobId={} completed terminal={}", jobId, terminal);
     } catch (TimeoutException te) {
@@ -370,38 +287,5 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
   @Transactional(readOnly = true)
   public Optional<DiscoverySourceDto> getSource(String sourceKey) {
     return sourceRepository.findBySourceKey(sourceKey).map(sourceMapper::toDto);
-  }
-
-  // ===== helpers =====
-
-  private List<DiscoverySource> resolveSources(List<String> requestedKeys) {
-    if (requestedKeys == null) {
-      return sourceRepository.findByEnabledTrue();
-    }
-    if (requestedKeys.isEmpty()) {
-      // Caller explicitly sent an empty array — treat as "match nothing" to fail fast at the
-      // zero-source guard in startJob.
-      return Collections.emptyList();
-    }
-    List<DiscoverySource> found = sourceRepository.findBySourceKeyIn(requestedKeys);
-    Map<String, DiscoverySource> byKey = new HashMap<>();
-    for (DiscoverySource s : found) {
-      byKey.put(s.getSourceKey(), s);
-    }
-    List<String> errors = new ArrayList<>();
-    List<DiscoverySource> resolved = new ArrayList<>();
-    for (String requested : requestedKeys) {
-      DiscoverySource match = byKey.get(requested);
-      if (match == null || !match.isEnabled()) {
-        errors.add(requested);
-      } else {
-        resolved.add(match);
-      }
-    }
-    if (!errors.isEmpty()) {
-      throw new DiscoveryConstraintInvalidException(
-          "unknown or disabled source keys: " + String.join(", ", errors), errors);
-    }
-    return resolved;
   }
 }
