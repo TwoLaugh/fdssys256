@@ -119,8 +119,7 @@ class DiscoveryRunnerPhasesIT {
     // fails the recipe → branch FK; null out the current_* pointers first to break the
     // cycle, then proceed in standard dependency order.
     jdbcTemplate.update(
-        "UPDATE recipe_recipes SET current_branch_id = NULL, current_version_id = NULL "
-            + "WHERE catalogue = 'SYSTEM'");
+        "UPDATE recipe_recipes SET current_branch_id = NULL WHERE catalogue = 'SYSTEM'");
     jdbcTemplate.update("DELETE FROM recipe_imports");
     jdbcTemplate.update("DELETE FROM recipe_method_steps");
     jdbcTemplate.update("DELETE FROM recipe_ingredients");
