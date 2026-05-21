@@ -36,8 +36,14 @@ jobs:
       - name: Spotless check (google-java-format)
         run: ./mvnw --batch-mode --no-transfer-progress spotless:check
 
-      - name: OpenAPI lint
+      - name: OpenAPI lint (swagger-cli structural validation)
         run: npx -y @apidevtools/swagger-cli@4.0.4 validate src/main/resources/openapi/openapi.yaml
+
+      - name: OpenAPI lint (redocly recommended ruleset)
+        # Strengthened gate added by tickets/infra/01c. Severity-warning items are advisory;
+        # severity-error items fail the build. See design/audits/2026-05-21-openapi-reconciliation.md
+        # for the audit context and the list of known warnings flagged as follow-ups.
+        run: npx -y @redocly/cli@latest lint src/main/resources/openapi/openapi.yaml --extends recommended
 
       - name: Coverage summary (JaCoCo)
         if: always()

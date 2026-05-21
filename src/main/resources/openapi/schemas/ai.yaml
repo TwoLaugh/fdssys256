@@ -58,11 +58,15 @@ PromptTemplateDto:
     systemPrompt: { type: string }
     userPromptTemplate: { type: string }
     outputSchema:
+      type: object
+      additionalProperties: true
       nullable: true
-      description: JSON Schema for the structured response; null for free-text outputs.
+      description: JSON Schema for the structured response; null for free-text outputs. JsonNode passthrough.
     tools:
+      type: object
+      additionalProperties: true
       nullable: true
-      description: Anthropic tool-use definitions; null when no tools are bound.
+      description: Anthropic tool-use definitions; null when no tools are bound. JsonNode passthrough.
     notes: { type: string, nullable: true }
     sourceFile: { type: string }
     sourceHash: { type: string, minLength: 64, maxLength: 64 }
