@@ -10,12 +10,9 @@ import com.example.mealprep.recipe.exception.RecipeBranchPointInvalidException;
 import com.example.mealprep.recipe.exception.RecipeCatalogueViolationException;
 import com.example.mealprep.recipe.exception.RecipeDiffCrossBranchException;
 import com.example.mealprep.recipe.exception.RecipeDiffNotComputedException;
-<<<<<<< HEAD
-import com.example.mealprep.recipe.exception.RecipeImportFailedException;
-=======
 import com.example.mealprep.recipe.exception.RecipeImageNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeImageStorageException;
->>>>>>> 1e68afb (feat(recipe): add image storage with multipart upload)
+import com.example.mealprep.recipe.exception.RecipeImportFailedException;
 import com.example.mealprep.recipe.exception.RecipeImportFailureException;
 import com.example.mealprep.recipe.exception.RecipeImportNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
