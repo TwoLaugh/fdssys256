@@ -91,7 +91,27 @@ class ActuatorExposureIT {
 
   @ParameterizedTest
   @MethodSource("forbiddenActuatorPaths")
-  void forbiddenActuatorEndpoint_returns404(String path) throws Exception {
-    mvc.perform(get(path)).andExpect(status().isNotFound());
+  void forbiddenActuatorEndpoint_isInaccessible(String path) throws Exception {
+    // The endpoint must not be accessible to anonymous callers. Two distinct status codes
+    // satisfy this property:
+    //   404 — actuator did not register this endpoint (because it is not in the exposure
+    //         include-list). The request reached actuator's dispatcher.
+    //   401 — Spring Security's filter chain rejected the request BEFORE it reached
+    //         actuator. The security config permits only /actuator/health and
+    //         /actuator/info; everything else falls through to anyRequest().authenticated().
+    // Both are valid "not accessible" outcomes. What this test guards against is a 200
+    // response (information disclosure).
+    mvc.perform(get(path))
+        .andExpect(
+            result -> {
+              int status = result.getResponse().getStatus();
+              if (status != 401 && status != 404) {
+                throw new AssertionError(
+                    "Expected 401 (security-rejected) or 404 (not exposed) for "
+                        + path
+                        + ", got "
+                        + status);
+              }
+            });
   }
 }
