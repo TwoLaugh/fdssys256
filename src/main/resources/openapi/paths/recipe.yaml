@@ -700,3 +700,90 @@ recipeAdminRunArchiveScan:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeImage:
+  post:
+    tags: [Recipes]
+    operationId: uploadRecipeImage
+    summary: 'Upload a recipe image (multipart). 5MB cap; MIME allow-list (JPEG, PNG, WebP); owner-only.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file]
+            properties:
+              file:
+                type: string
+                format: binary
+                description: 'Image bytes; MIME validated by magic-byte probe (Tika), browser-supplied type is a hint only.'
+    responses:
+      '200':
+        description: 'Image stored; response carries the public URL the frontend should use.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeImageDto' }
+      '400':
+        description: 'File missing or empty.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Caller does not own the recipe (or recipe is SYSTEM-catalogue).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Recipe not found or soft-deleted.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '413':
+        description: 'Upload exceeds the configured maximum size.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '415':
+        description: 'MIME type not in allow-list (image/jpeg, image/png, image/webp).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  get:
+    tags: [Recipes]
+    operationId: getRecipeImage
+    summary: 'Stream the recipe image. Anonymous-accessible.'
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Image bytes; Content-Type matches the stored MIME; Cache-Control: public, max-age=86400, immutable.'
+        headers:
+          Cache-Control:
+            schema: { type: string }
+            description: 'public, max-age=86400, immutable'
+        content:
+          image/jpeg:
+            schema: { type: string, format: binary }
+          image/png:
+            schema: { type: string, format: binary }
+          image/webp:
+            schema: { type: string, format: binary }
+      '404':
+        description: 'No image stored for this recipe, or the recipe itself is missing / soft-deleted.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

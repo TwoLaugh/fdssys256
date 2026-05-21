@@ -12,6 +12,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -85,6 +86,12 @@ public class AuthSecurityConfig {
                         "/swagger-ui/**",
                         "/swagger-ui.html",
                         "/error")
+                    .permitAll()
+                    // recipe-02a: GET /api/v1/recipes/{recipeId}/image is anonymous-readable
+                    // (recipe images are public assets given anyone-can-read on recipes; the URL
+                    // is unguessable but not secret). Only the GET verb is open — POST (upload)
+                    // remains authenticated.
+                    .requestMatchers(HttpMethod.GET, "/api/v1/recipes/*/image")
                     .permitAll()
                     .anyRequest()
                     .authenticated())

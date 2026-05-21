@@ -126,6 +126,7 @@ class AdaptationContextAssemblerTest {
             null,
             null,
             null,
+            null,
             0L,
             Instant.now(),
             Instant.now(),
@@ -172,6 +173,7 @@ class AdaptationContextAssemblerTest {
             null, // currentBranchId null -> fingerprint lookup skipped
             com.example.mealprep.recipe.domain.entity.DataQuality.AI_GENERATED,
             com.example.mealprep.recipe.domain.entity.NutritionStatus.PENDING,
+            null,
             null,
             null,
             null,
@@ -242,6 +244,7 @@ class AdaptationContextAssemblerTest {
             UUID.randomUUID(),
             com.example.mealprep.recipe.domain.entity.DataQuality.AI_GENERATED,
             com.example.mealprep.recipe.domain.entity.NutritionStatus.PENDING,
+            null,
             null,
             null,
             null,

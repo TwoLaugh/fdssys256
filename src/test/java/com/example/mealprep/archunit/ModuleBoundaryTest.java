@@ -31,7 +31,16 @@ class ModuleBoundaryTest {
       noClasses()
           .that()
           .resideOutsideOfPackages(
-              "..api..", "..config..", "com.example.mealprep.ai.domain.service.internal..")
+              "..api..",
+              "..config..",
+              "com.example.mealprep.ai.domain.service.internal..",
+              // recipe-02a: the RecipeImageStore SPI (and its v1 local-FS implementation +
+              // image-write service) deliberately exposes Spring's MultipartFile / MediaType /
+              // Resource — these are the natural lingua franca for storage SPIs and an
+              // application-specific re-wrapping buys nothing. Conventional carve-out, same
+              // pattern as the ai.domain.service.internal exception above.
+              "com.example.mealprep.recipe.spi..",
+              "com.example.mealprep.recipe.domain.service.internal..")
           .should()
           .dependOnClassesThat()
           .resideInAnyPackage(
@@ -115,4 +124,25 @@ class ModuleBoundaryTest {
       }
     };
   }
+
+  /**
+   * Recipe-02a: the {@code RecipeImageStore} SPI lives in {@code recipe.spi..} and is public to the
+   * recipe module; its {@code LocalFilesystemImageStore} v1 implementation lives in {@code
+   * recipe.spi.internal..} and must not leak outside that sub-package. Cross-module callers go
+   * through {@code RecipeQueryService.getById(...).imageUrl()} (read) or the HTTP serve endpoint
+   * (read) — never the store directly.
+   */
+  @ArchTest
+  static final ArchRule localFilesystemImageStoreIsInternalOnly =
+      noClasses()
+          .that()
+          .resideOutsideOfPackage("com.example.mealprep.recipe.spi.internal..")
+          .should()
+          .dependOnClassesThat()
+          .haveFullyQualifiedName(
+              "com.example.mealprep.recipe.spi.internal.LocalFilesystemImageStore")
+          .as(
+              "LocalFilesystemImageStore is an internal implementation of RecipeImageStore;"
+                  + " callers inject the RecipeImageStore SPI, not the v1 concrete class.")
+          .allowEmptyShould(true);
 }

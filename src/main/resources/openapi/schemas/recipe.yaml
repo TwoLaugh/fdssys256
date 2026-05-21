@@ -179,6 +179,11 @@ RecipeDto:
     lastUsedInPlanAt: { type: string, format: date-time, nullable: true }
     archivedAt: { type: string, format: date-time, nullable: true }
     deletedAt: { type: string, format: date-time, nullable: true }
+    imageUrl:
+      type: string
+      format: uri-reference
+      nullable: true
+      description: 'Server-relative URL of the recipe hero image, or null if no image uploaded. See POST/GET /api/v1/recipes/{recipeId}/image (recipe-02a).'
     optimisticVersion: { type: integer, format: int64 }
     createdAt: { type: string, format: date-time }
     updatedAt: { type: string, format: date-time }
@@ -745,3 +750,17 @@ RunArchiveScanResultDto:
       type: integer
       minimum: 0
       description: 'Count of system-catalogue rows newly transitioned to archived_at != null this run.'
+RecipeImageDto:
+  type: object
+  description: 'Response body for the recipe-image upload endpoint (recipe-02a).'
+  required: [imageUrl, sizeBytes, contentType]
+  properties:
+    imageUrl:
+      type: string
+      format: uri-reference
+      description: 'Server-relative URL for the serve endpoint; frontend uses this directly in <img src=...>.'
+      example: '/api/v1/recipes/00000000-0000-0000-0000-000000000000/image'
+    sizeBytes: { type: integer, format: int64, minimum: 0 }
+    contentType:
+      type: string
+      enum: [image/jpeg, image/png, image/webp]

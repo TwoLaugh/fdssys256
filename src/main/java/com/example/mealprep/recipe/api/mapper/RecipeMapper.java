@@ -36,11 +36,25 @@ public class RecipeMapper {
         entity.getLastUsedInPlanAt(),
         entity.getArchivedAt(),
         entity.getDeletedAt(),
+        toPublicImageUrl(entity.getId(), entity.getImageUrl()),
         entity.getOptimisticVersion(),
         entity.getCreatedAt(),
         entity.getUpdatedAt(),
         currentVersionBody,
         branches != null ? branches : Collections.emptyList());
+  }
+
+  /**
+   * Map the stored relative storage key to the public {@code GET /api/v1/recipes/{recipeId}/image}
+   * URL the frontend can stick straight into an {@code <img src=...>}. Returns {@code null} when no
+   * image has been uploaded — the stored key is module-internal and never leaked outside the recipe
+   * package.
+   */
+  private static String toPublicImageUrl(java.util.UUID recipeId, String storedKey) {
+    if (storedKey == null || storedKey.isBlank() || recipeId == null) {
+      return null;
+    }
+    return "/api/v1/recipes/" + recipeId + "/image";
   }
 
   /**

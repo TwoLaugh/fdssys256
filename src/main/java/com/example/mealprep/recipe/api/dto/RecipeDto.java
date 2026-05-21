@@ -14,6 +14,10 @@ import java.util.UUID;
  * <p>The {@code branches} field landed in recipe-01b alongside {@code GET
  * /api/v1/recipes/{recipeId}/branches}; in 01a/01b every recipe has exactly one auto-created 'main'
  * branch — recipe-01d will introduce user-facing branch creation.
+ *
+ * <p>The {@code imageUrl} field landed in recipe-02a: when non-null it points at the {@code GET
+ * /api/v1/recipes/{recipeId}/image} serve endpoint (frontend uses it directly as an {@code <img
+ * src=...>}). Null for recipes with no image.
  */
 public record RecipeDto(
     UUID id,
@@ -29,6 +33,7 @@ public record RecipeDto(
     Instant lastUsedInPlanAt,
     Instant archivedAt,
     Instant deletedAt,
+    String imageUrl,
     long optimisticVersion,
     Instant createdAt,
     Instant updatedAt,
