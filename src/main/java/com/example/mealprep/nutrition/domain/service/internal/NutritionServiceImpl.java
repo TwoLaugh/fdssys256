@@ -23,6 +23,8 @@ import com.example.mealprep.nutrition.api.dto.IngredientNutritionDto;
 import com.example.mealprep.nutrition.api.dto.IntakeAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.IntakeEntryDto;
+import com.example.mealprep.nutrition.api.dto.IntakeListFilter;
+import com.example.mealprep.nutrition.api.dto.IntakeSlotSearchResultDto;
 import com.example.mealprep.nutrition.api.dto.JournalAction;
 import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
@@ -931,6 +933,41 @@ public class NutritionServiceImpl
     return intakeAuditRepository
         .findByIntakeDay_IdOrderByOccurredAtDesc(day.get().getId(), pageable)
         .map(intakeMapper::toAuditEntryDto);
+  }
+
+  /**
+   * C-B-048 intake-history search. Tenant scoping is enforced inside the JPQL ({@code
+   * intakeDay.userId = :userId}); the {@code IntakeListFilter} components are short-circuited per
+   * the {@code :param IS NULL OR ...} idiom in {@link IntakeDayRepository#searchSlots}.
+   *
+   * <p>The flat {@link IntakeSlotSearchResultDto} projection avoids serialising the full
+   * planned/actual macro payload — search results are typically rendered as a row list, and the UI
+   * can fetch a single slot's detail via the existing day endpoint when the user clicks through.
+   */
+  @Override
+  @Transactional(readOnly = true)
+  public Page<IntakeSlotSearchResultDto> searchIntakeSlots(
+      UUID userId, IntakeListFilter filter, Pageable pageable) {
+    IntakeListFilter safe = filter == null ? new IntakeListFilter(null, null, null) : filter;
+    boolean hasQuery = safe.hasQuery();
+    return intakeDayRepository
+        .searchSlots(
+            userId,
+            safe.plannedRecipeId(),
+            safe.mealSlot(),
+            hasQuery ? safe.q() : "",
+            hasQuery,
+            pageable)
+        .map(
+            slot ->
+                new IntakeSlotSearchResultDto(
+                    slot.getId(),
+                    slot.getIntakeDay().getId(),
+                    slot.getIntakeDay().getOnDate(),
+                    slot.getMealSlot(),
+                    slot.getActualStatus(),
+                    slot.getPlannedRecipeId(),
+                    slot.getOverrideFreeText()));
   }
 
   // =================================================================================

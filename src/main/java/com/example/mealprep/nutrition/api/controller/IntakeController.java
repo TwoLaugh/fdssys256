@@ -1,9 +1,12 @@
 package com.example.mealprep.nutrition.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.nutrition.api.dto.IntakeAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.IntakeEntryDto;
+import com.example.mealprep.nutrition.api.dto.IntakeListFilter;
+import com.example.mealprep.nutrition.api.dto.IntakeSlotSearchResultDto;
 import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
 import com.example.mealprep.nutrition.api.dto.OverrideIntakeRequest;
 import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
@@ -16,15 +19,18 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -47,7 +53,10 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 @RequestMapping("/api/v1/nutrition/intake")
 @Tag(name = "Nutrition")
+@Validated
 public class IntakeController {
+
+  private static final int Q_MAX_LENGTH = 200;
 
   private final NutritionQueryService queryService;
   private final NutritionUpdateService updateService;
@@ -74,6 +83,7 @@ public class IntakeController {
 
   @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "List intake days in [from, to] (max 35 days).")
+  @BoundedCollection("bounded by date range; service enforces max 35-day window")
   public List<IntakeDayDto> getRange(
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
@@ -167,6 +177,35 @@ public class IntakeController {
     UUID userId = requireCurrentUserId();
     Pageable pageable = PageRequest.of(page, size);
     return queryService.getIntakeAuditLog(userId, date, pageable);
+  }
+
+  /**
+   * C-B-048 intake-history search. Three optional filters (all AND-composed): {@code recipeId}
+   * (exact match on planned recipe), {@code mealSlot} (exact match), {@code q} (case-insensitive
+   * substring match on the override free-text). Empty {@code q} treated as no filter.
+   *
+   * <p>Pagination via {@code page} / {@code size} (default 20, hard cap 100). Sort defaults to
+   * {@code onDate DESC, id ASC} (stable cross-page ordering — the id tiebreaker is enforced even
+   * when the caller omits it). The sort surface is fixed; arbitrary {@code ?sort=} from clients is
+   * ignored.
+   */
+  @GetMapping(path = "/search", produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Paginated search across the caller's intake slots, filtered by optional"
+              + " recipeId / mealSlot / q. Default sort: onDate DESC, id ASC.")
+  public Page<IntakeSlotSearchResultDto> search(
+      @RequestParam(required = false) UUID recipeId,
+      @RequestParam(required = false) MealSlot mealSlot,
+      @RequestParam(required = false) @Size(max = Q_MAX_LENGTH) String q,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    UUID userId = requireCurrentUserId();
+    Pageable pageable =
+        PageRequest.of(
+            page, size, Sort.by(Sort.Order.desc("intakeDay.onDate"), Sort.Order.asc("id")));
+    IntakeListFilter filter = new IntakeListFilter(recipeId, mealSlot, q);
+    return queryService.searchIntakeSlots(userId, filter, pageable);
   }
 
   private UUID requireCurrentUserId() {

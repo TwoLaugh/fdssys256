@@ -10,6 +10,7 @@ import com.example.mealprep.adaptation.domain.service.AdaptationQueryService;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
 import com.example.mealprep.adaptation.exception.PendingChangeNotFoundException;
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.core.api.markers.BoundedCollection;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -67,6 +68,7 @@ public class PendingChangesController {
 
   @GetMapping(path = "/pending-changes", produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "Top-3 ranked pending changes for the authenticated user.")
+  @BoundedCollection("explicit top-3 cap per ranking algorithm")
   public List<PendingChangeListItemDto> listForUser() {
     UUID userId = requireCurrentUserId();
     return queryService.listPendingForUser(userId);

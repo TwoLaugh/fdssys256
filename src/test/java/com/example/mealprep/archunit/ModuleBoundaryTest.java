@@ -1,13 +1,20 @@
 package com.example.mealprep.archunit;
 
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
 
+import com.example.mealprep.core.api.markers.BoundedCollection;
+import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
+import java.util.Collection;
+import java.util.List;
 import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.GetMapping;
 
 /**
  * Cross-module / cross-cutting architectural rules. Per-module repository-isolation rules live in
@@ -73,4 +80,39 @@ class ModuleBoundaryTest {
               "CORS lives in `core.config` (DevCorsConfiguration); no controller method may"
                   + " annotate with @CrossOrigin.")
           .allowEmptyShould(true);
+
+  /**
+   * New controller endpoints returning a raw {@code List<*Dto>} / {@code Collection<*Dto>} from a
+   * {@code @GetMapping} must be annotated {@code @BoundedCollection} with a justification, or
+   * paginated as {@code Page<>}. Catches drift where a new "list everything" endpoint slips in
+   * without considering pagination.
+   *
+   * <p>Per ticket {@code infra/01b-list-endpoint-pagination-audit}.
+   */
+  @ArchTest
+  static final ArchRule listReturningGetMappingsMustBeAnnotatedBoundedCollection =
+      methods()
+          .that()
+          .areAnnotatedWith(GetMapping.class)
+          .and()
+          .haveRawReturnType(returnsRawListOfDto())
+          .should()
+          .beAnnotatedWith(BoundedCollection.class)
+          .as(
+              "Controller @GetMapping methods returning List<*Dto> / Collection<*Dto> must be"
+                  + " annotated @BoundedCollection (justifying why the collection is bounded by"
+                  + " domain semantics). Otherwise use Page<*Dto> + Pageable.")
+          .allowEmptyShould(true);
+
+  private static DescribedPredicate<JavaClass> returnsRawListOfDto() {
+    return new DescribedPredicate<>("a raw List/Collection (assignable to java.util.Collection)") {
+      @Override
+      public boolean test(JavaClass returnType) {
+        if (returnType == null) {
+          return false;
+        }
+        return returnType.isAssignableTo(Collection.class) || returnType.isAssignableTo(List.class);
+      }
+    };
+  }
 }

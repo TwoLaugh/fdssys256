@@ -1,6 +1,7 @@
 package com.example.mealprep.recipe.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.recipe.api.dto.AcceptSubstitutionRequest;
 import com.example.mealprep.recipe.api.dto.CreateSubstitutionRequest;
 import com.example.mealprep.recipe.api.dto.PromoteSubstitutionRequest;
@@ -65,6 +66,7 @@ public class RecipeSubstitutionsController {
 
   @GetMapping(path = "/substitutions/active", produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "List all ACCEPTED substitutions for the recipe.")
+  @BoundedCollection("bounded by recipe; substitutions per recipe are typically < 20")
   public List<RecipeSubstitutionDto> listActive(@PathVariable UUID recipeId) {
     requireCurrentUserId();
     return queryService.getActiveSubstitutions(recipeId);
@@ -72,6 +74,7 @@ public class RecipeSubstitutionsController {
 
   @GetMapping(path = "/substitutions", produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "List substitutions for a specific version (state filter: ACCEPTED).")
+  @BoundedCollection("bounded by version; substitutions per version are typically < 20")
   public List<RecipeSubstitutionDto> listForVersion(
       @PathVariable UUID recipeId, @RequestParam("versionId") UUID versionId) {
     requireCurrentUserId();

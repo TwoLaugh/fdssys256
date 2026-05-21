@@ -1,6 +1,7 @@
 package com.example.mealprep.household.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.household.api.dto.AcceptInviteRequest;
 import com.example.mealprep.household.api.dto.CreateInviteRequest;
 import com.example.mealprep.household.api.dto.HouseholdInviteDto;
@@ -63,6 +64,7 @@ public class HouseholdInvitesController {
       path = "/api/v1/households/current/invites",
       produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "List the calling user's household's pending invites (codes redacted).")
+  @BoundedCollection("bounded by household pending-invite count; typically < 10")
   public List<HouseholdInviteDto> listPending() {
     UUID callerUserId = requireCurrentUserId();
     UUID householdId = resolveCurrentHouseholdId(callerUserId);

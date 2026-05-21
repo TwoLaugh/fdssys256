@@ -135,6 +135,8 @@ paths:
     $ref: 'paths/nutrition.yaml#/intakeSnackById'
   /api/v1/nutrition/intake/{date}/audit-log:
     $ref: 'paths/nutrition.yaml#/intakeAuditLog'
+  /api/v1/nutrition/intake/search:
+    $ref: 'paths/nutrition.yaml#/intakeSearch'
   /api/v1/nutrition/journal/{date}:
     $ref: 'paths/nutrition.yaml#/nutritionJournalDay'
   /api/v1/nutrition/journal/{date}/entries/{entryId}:
