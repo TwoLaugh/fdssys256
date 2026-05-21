@@ -763,6 +763,9 @@ recipeImage:
     tags: [Recipes]
     operationId: getRecipeImage
     summary: 'Stream the recipe image. Anonymous-accessible.'
+    # Anonymous-permitted per AuthSecurityConfig (matches ticket §14).
+    # Declared explicitly to satisfy Redocly's security-defined rule.
+    security: []
     parameters:
       - in: path
         name: recipeId
