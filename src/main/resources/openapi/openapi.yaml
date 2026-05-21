@@ -202,6 +202,8 @@ paths:
     $ref: 'paths/recipe.yaml#/recipeUnarchive'
   /api/v1/recipes/admin/run-archive-scan:
     $ref: 'paths/recipe.yaml#/recipeAdminRunArchiveScan'
+  /api/v1/recipes/{recipeId}/image:
+    $ref: 'paths/recipe.yaml#/recipeImage'
   # ===== planner =====
   /api/v1/plans:
     $ref: 'paths/planner.yaml#/plansRange'
@@ -511,6 +513,7 @@ components:
     MethodOverlayLineRequest: { $ref: 'schemas/recipe.yaml#/MethodOverlayLineRequest' }
     PromoteSubstitutionRequest: { $ref: 'schemas/recipe.yaml#/PromoteSubstitutionRequest' }
     RunArchiveScanResultDto: { $ref: 'schemas/recipe.yaml#/RunArchiveScanResultDto' }
+    RecipeImageDto: { $ref: 'schemas/recipe.yaml#/RecipeImageDto' }
     RecipeSubstitutionDto: { $ref: 'schemas/recipe.yaml#/RecipeSubstitutionDto' }
     RejectSubstitutionRequest: { $ref: 'schemas/recipe.yaml#/RejectSubstitutionRequest' }
     SubstitutionLifecycleRequest: { $ref: 'schemas/recipe.yaml#/SubstitutionLifecycleRequest' }

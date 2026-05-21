@@ -147,6 +147,15 @@
             <version>1.17.2</version>
         </dependency>
 
+        <!-- Apache Tika — magic-byte MIME probe used by RecipeImageController (recipe-02a)
+             to validate uploaded image bytes against the browser-supplied content-type. The
+             Tika probe is authoritative; the browser-supplied MIME is a hint only. -->
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-core</artifactId>
+            <version>2.9.2</version>
+        </dependency>
+
         <!-- Resilience4j — used by nutrition-01d's USDA + OFF clients for @Retry + @RateLimiter. -->
         <dependency>
             <groupId>io.github.resilience4j</groupId>

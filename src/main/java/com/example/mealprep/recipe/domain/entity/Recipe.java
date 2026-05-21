@@ -80,6 +80,14 @@ public class Recipe {
   @Column(name = "deleted_at")
   private Instant deletedAt;
 
+  /**
+   * Relative storage key for the recipe's hero image (e.g. {@code recipes/ab/<uuid>-<hash>.jpg}).
+   * Resolved against {@code mealprep.recipe.image-storage.base-dir} at serve time. Null when no
+   * image has been uploaded. Added in recipe-02a.
+   */
+  @Column(name = "image_url", length = 512)
+  private String imageUrl;
+
   @Version
   @Column(name = "optimistic_version", nullable = false)
   private long optimisticVersion;

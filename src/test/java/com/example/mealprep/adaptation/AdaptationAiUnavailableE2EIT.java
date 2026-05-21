@@ -164,6 +164,7 @@ class AdaptationAiUnavailableE2EIT {
         null,
         null,
         null,
+        null,
         0L,
         Instant.now(),
         Instant.now(),
