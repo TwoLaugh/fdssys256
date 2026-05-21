@@ -36,6 +36,9 @@ import com.example.mealprep.preference.api.dto.FilterResult;
 import com.example.mealprep.preference.api.dto.Violation;
 import com.example.mealprep.preference.domain.entity.ViolationKind;
 import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
+import com.example.mealprep.recipe.spi.ImportedRecipeData;
+import com.example.mealprep.recipe.spi.ImportedRecipeResult;
+import com.example.mealprep.recipe.spi.RecipeWriteApi;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -58,10 +61,9 @@ import org.springframework.context.ApplicationEventPublisher;
  * the branching/decisions via Mockito stubs. The Testcontainers-backed flow lives in {@code
  * DiscoveryRunnerIT}.
  *
- * <p>SKELETON-MODE NOTE: this 01d ships without the {@code RecipeWriteApi.saveImportedRecipe} SPI
- * (that lands in {@code recipe-01l}). The persist step currently writes an {@code
- * EXTRACTION_FAILED} row with {@code error_class = "saveImportedRecipeNotYetImplemented"}; tests
- * assert that shape rather than the eventual SUCCESS shape.
+ * <p>discovery-01g landed the real {@code RecipeWriteApi.saveImportedRecipe} SPI: the persist step
+ * now writes a {@code SUCCESS} scrape row + bumps {@code recipes_ingested} on the happy path. The
+ * SPI is mocked here; an end-to-end Testcontainers IT lives in {@code DiscoveryRunnerPhasesIT}.
  */
 @ExtendWith(MockitoExtension.class)
 class DiscoveryJobRunnerTest {
@@ -75,6 +77,7 @@ class DiscoveryJobRunnerTest {
   @Mock private HardConstraintFilterService hardConstraintFilter;
   @Mock private DiscoveryJobTransitions transitions;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private RecipeWriteApi recipeWriteApi;
 
   private DiscoveryJobRunner runner;
 
@@ -88,7 +91,8 @@ class DiscoveryJobRunnerTest {
             30,
             Duration.ofSeconds(60),
             Duration.ofHours(1),
-            Duration.ofHours(6));
+            Duration.ofHours(6),
+            null);
     runner =
         new DiscoveryJobRunner(
             jobRepository,
@@ -102,7 +106,15 @@ class DiscoveryJobRunnerTest {
             transitions,
             eventPublisher,
             properties,
-            new ObjectMapper());
+            new ObjectMapper(),
+            recipeWriteApi);
+    // discovery-01g: default-stub the SPI to a "newly created" result so the happy-path branch
+    // emits a SUCCESS scrape row. Individual tests override with .thenReturn / .thenThrow as
+    // needed.
+    lenient()
+        .when(recipeWriteApi.saveImportedRecipe(any(ImportedRecipeData.class)))
+        .thenAnswer(
+            inv -> new ImportedRecipeResult(UUID.randomUUID(), UUID.randomUUID(), true, null));
   }
 
   // -------- claim --------
@@ -119,10 +131,10 @@ class DiscoveryJobRunnerTest {
     verify(eventPublisher, never()).publishEvent(any(DiscoveryJobCompletedEvent.class));
   }
 
-  // -------- happy-ish path: skeleton mode persist writes EXTRACTION_FAILED --------
+  // -------- happy path (discovery-01g): SPI persists → SUCCESS row, ingested bumped --------
 
   @Test
-  void run_oneSourceOneCandidate_skeletonModeWritesExtractionFailedRow_jobFailed() {
+  void run_oneSourceOneCandidate_realSpi_writesSuccessRow_jobSucceeds() {
     UUID jobId = UUID.randomUUID();
     DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
     job.setId(jobId);
@@ -150,17 +162,11 @@ class DiscoveryJobRunnerTest {
 
     ArgumentCaptor<DiscoveryScrapeLog> rows = ArgumentCaptor.forClass(DiscoveryScrapeLog.class);
     verify(transitions, atLeastOnce()).writeScrapeRow(rows.capture());
-    boolean sawSkeletonRow =
+    boolean sawSuccessRow =
         rows.getAllValues().stream()
-            .anyMatch(
-                r ->
-                    r.getStatus() == ScrapeOutcome.EXTRACTION_FAILED
-                        && "saveImportedRecipeNotYetImplemented".equals(r.getErrorClass()));
-    assertThat(sawSkeletonRow).as("skeleton-mode EXTRACTION_FAILED row written").isTrue();
-
-    // No sourcesSucceeded in skeleton mode → terminal FAILED.
-    verify(transitions)
-        .finaliseTo(eq(jobId), eq(DiscoveryJobStatus.FAILED), anyString(), anyList(), anyList());
+            .anyMatch(r -> r.getStatus() == ScrapeOutcome.SUCCESS && r.getRecipeId() != null);
+    assertThat(sawSuccessRow).as("SUCCESS scrape row written with recipe id").isTrue();
+    verify(transitions, atLeastOnce()).incrementIngested(jobId);
   }
 
   // -------- hard-constraint safety net --------

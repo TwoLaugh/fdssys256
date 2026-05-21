@@ -11,6 +11,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 import lombok.AccessLevel;
@@ -69,4 +70,31 @@ public class RecipeImport {
 
   @Column(name = "imported_by_user_id", nullable = false)
   private UUID importedByUserId;
+
+  /**
+   * SHA-256 fingerprint of the parsed recipe content used by the discovery dedup probe. NULL for
+   * 01b URL imports (which never wrote the field); discovery-01g writes this for every
+   * WEB_DISCOVERED row and the (partial) UNIQUE index on this column anchors the dedup contract.
+   */
+  @Column(name = "content_fingerprint", length = 64)
+  private String contentFingerprint;
+
+  /**
+   * Discovery source key (e.g. {@code "bbcgoodfood-sitemap"}) — discovery-fed rows only. NULL for
+   * 01b URL imports.
+   */
+  @Column(name = "source_key", length = 64)
+  private String sourceKey;
+
+  /** Resolved canonical URL of the imported page — discovery-fed rows only. */
+  @Column(name = "canonical_url", length = 2048)
+  private String canonicalUrl;
+
+  /** Extractor confidence (0.000-1.000) reported by the discovery pipeline. */
+  @Column(name = "extraction_confidence", precision = 4, scale = 3)
+  private BigDecimal extractionConfidence;
+
+  /** Discovery job id (soft FK — discovery_jobs table is in a different module). */
+  @Column(name = "job_id")
+  private UUID jobId;
 }

@@ -62,6 +62,7 @@ class DiscoveryRunnerCancellationTest {
   @Mock private HardConstraintFilterService hardConstraintFilter;
   @Mock private DiscoveryJobTransitions transitions;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private com.example.mealprep.recipe.spi.RecipeWriteApi recipeWriteApi;
 
   private DiscoveryJobRunner runner;
 
@@ -73,7 +74,8 @@ class DiscoveryRunnerCancellationTest {
             30,
             Duration.ofSeconds(60),
             Duration.ofHours(1),
-            Duration.ofHours(6));
+            Duration.ofHours(6),
+            null);
     runner =
         new DiscoveryJobRunner(
             jobRepository,
@@ -87,7 +89,8 @@ class DiscoveryRunnerCancellationTest {
             transitions,
             eventPublisher,
             properties,
-            new ObjectMapper());
+            new ObjectMapper(),
+            recipeWriteApi);
   }
 
   @Test

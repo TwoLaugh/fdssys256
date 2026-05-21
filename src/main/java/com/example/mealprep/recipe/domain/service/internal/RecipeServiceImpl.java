@@ -70,6 +70,7 @@ import com.example.mealprep.recipe.exception.RecipeBranchPointInvalidException;
 import com.example.mealprep.recipe.exception.RecipeCatalogueViolationException;
 import com.example.mealprep.recipe.exception.RecipeDiffCrossBranchException;
 import com.example.mealprep.recipe.exception.RecipeDiffNotComputedException;
+import com.example.mealprep.recipe.exception.RecipeImportFailedException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeSubstitutionNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeVersionConflictException;
@@ -78,6 +79,8 @@ import com.example.mealprep.recipe.exception.SubstitutionOriginalNotInVersionExc
 import com.example.mealprep.recipe.exception.SubstitutionPromotionPreconditionException;
 import com.example.mealprep.recipe.exception.SubstitutionRecordPreconditionException;
 import com.example.mealprep.recipe.exception.SubstitutionTerminalStateException;
+import com.example.mealprep.recipe.spi.ImportedRecipeData;
+import com.example.mealprep.recipe.spi.ImportedRecipeResult;
 import com.example.mealprep.recipe.spi.RecipeSubstitutionRecorder;
 import com.example.mealprep.recipe.spi.RecipeWriteApi;
 import com.example.mealprep.recipe.spi.SaveAdaptedBranchCommand;
@@ -136,6 +139,14 @@ public class RecipeServiceImpl
   private static final String MDC_TRACE_ID = "traceId";
   private static final String MAIN_BRANCH_NAME = "main";
   private static final String EMBEDDING_STATUS_PENDING = "pending";
+
+  /**
+   * Sentinel user id for SYSTEM-catalogue rows created by the discovery pipeline. The {@code
+   * recipe_recipes.user_id} column is NOT NULL but a {@code catalogue=SYSTEM} recipe has no owning
+   * user; the nil UUID is the agreed sentinel (Origin tracking treats this as {@code
+   * SYSTEM_DISCOVERY}).
+   */
+  private static final UUID SYSTEM_DISCOVERY_USER_ID = new UUID(0L, 0L);
 
   private final RecipeRepository recipeRepository;
   private final RecipeBranchRepository branchRepository;
@@ -788,6 +799,309 @@ public class RecipeServiceImpl
     RecipeVersionDto versionDto = versionMapper.toDto(savedVersion);
     List<RecipeBranchDto> branches = List.of(branchMapper.toDto(branch));
     return recipeMapper.toDto(savedRecipe, versionDto, branches);
+  }
+
+  // ---------------- Discovery import (discovery-01g) ----------------
+
+  /**
+   * Persist a recipe scraped by the discovery pipeline. Per ticket discovery-01g:
+   *
+   * <ol>
+   *   <li>Dedup probe on {@code recipe_imports.content_fingerprint} — match → return existing.
+   *   <li>Create {@code Recipe} with {@code catalogue=SYSTEM, data_quality=WEB_DISCOVERED}.
+   *   <li>Create the 'main' branch (currentVersion=1, divergence=0).
+   *   <li>Create {@code RecipeVersion v1} with {@code trigger=IMPORT} carrying the discovery trace.
+   *   <li>Persist ingredients + method + metadata + tags.
+   *   <li>Insert the {@code recipe_imports} row capturing source/job/fingerprint provenance.
+   *   <li>Publish {@code RecipeCreatedEvent} + {@code RecipeVersionCreatedEvent}.
+   * </ol>
+   */
+  @Override
+  @Transactional
+  public ImportedRecipeResult saveImportedRecipe(ImportedRecipeData data) {
+    if (data == null) {
+      throw new RecipeImportFailedException("ImportedRecipeData must not be null");
+    }
+    if (data.contentFingerprint() == null || data.contentFingerprint().isBlank()) {
+      throw new RecipeImportFailedException("contentFingerprint is required");
+    }
+    if (data.name() == null || data.name().isBlank()) {
+      throw new RecipeImportFailedException("name is required");
+    }
+
+    // Step 1: dedup probe.
+    Optional<RecipeImport> existing =
+        importRepository.findByContentFingerprint(data.contentFingerprint());
+    if (existing.isPresent()) {
+      RecipeImport row = existing.get();
+      UUID existingRecipeId = row.getRecipeId();
+      UUID existingVersionId =
+          recipeRepository
+              .findByIdAndDeletedAtIsNull(existingRecipeId)
+              .flatMap(
+                  r ->
+                      r.getCurrentBranchId() == null
+                          ? Optional.<RecipeVersion>empty()
+                          : versionRepository.findFirstByRecipeIdAndBranchIdAndVersionNumber(
+                              r.getId(), r.getCurrentBranchId(), r.getCurrentVersion()))
+              .map(RecipeVersion::getId)
+              .orElse(null);
+      log.info(
+          "discovery import dedup hit fingerprint={} existingRecipeId={} jobId={}",
+          data.contentFingerprint(),
+          existingRecipeId,
+          data.jobId());
+      return new ImportedRecipeResult(
+          existingRecipeId,
+          existingVersionId,
+          false,
+          "fingerprint-match-with-recipe-" + existingRecipeId);
+    }
+
+    try {
+      return persistImportedRecipe(data);
+    } catch (RecipeImportFailedException ex) {
+      throw ex;
+    } catch (RuntimeException ex) {
+      throw new RecipeImportFailedException(
+          "Failed to persist imported recipe: " + ex.getMessage(), ex);
+    }
+  }
+
+  private ImportedRecipeResult persistImportedRecipe(ImportedRecipeData data) {
+    Instant now = Instant.now(clock);
+    UUID recipeId = UUID.randomUUID();
+    UUID branchId = UUID.randomUUID();
+    UUID versionId = UUID.randomUUID();
+    UUID jobId = data.jobId();
+    UUID traceId = data.traceId();
+    String createdByActor = "system-discovery:" + jobId;
+
+    // Step 2: recipe root.
+    Recipe recipe =
+        Recipe.builder()
+            .id(recipeId)
+            .userId(SYSTEM_DISCOVERY_USER_ID)
+            .catalogue(Catalogue.SYSTEM)
+            .name(data.name())
+            .description(data.description())
+            .currentVersion(1)
+            .currentBranchId(null)
+            .dataQuality(DataQuality.WEB_DISCOVERED)
+            .nutritionStatus(NutritionStatus.PENDING)
+            .build();
+    recipe = recipeRepository.save(recipe);
+
+    // Step 3: main branch.
+    RecipeBranch branch =
+        RecipeBranch.builder()
+            .id(branchId)
+            .recipe(recipe)
+            .parentBranchId(null)
+            .branchPointVersionId(null)
+            .name(MAIN_BRANCH_NAME)
+            .label(null)
+            .reason(null)
+            .currentVersion(1)
+            .divergenceScore(new BigDecimal("0.000"))
+            .createdByActor(createdByActor)
+            .adapterTraceId(jobId)
+            .build();
+    branch = branchRepository.save(branch);
+    recipe.setCurrentBranchId(branch.getId());
+
+    // Step 4: v1 version.
+    RecipeVersion version =
+        RecipeVersion.builder()
+            .id(versionId)
+            .recipe(recipe)
+            .branch(branch)
+            .versionNumber(1)
+            .parentVersionId(null)
+            .changeDiff(JsonNodeFactory.instance.objectNode())
+            .changeReason(null)
+            .trigger(VersionTrigger.IMPORT)
+            .characterFingerprint(null)
+            .nutritionPerServing(null)
+            .embeddingStatus(EMBEDDING_STATUS_PENDING)
+            .createdByActor(createdByActor)
+            .adapterTraceId(traceId)
+            .ingredients(new ArrayList<>())
+            .methodSteps(new ArrayList<>())
+            .build();
+
+    // Step 5: children.
+    populateImportedIngredients(version, data.ingredients());
+    populateImportedMethodSteps(version, data.method());
+    version.setMetadata(buildImportedMetadata(version, data.metadata()));
+    version.setTags(buildImportedTags(version, data.tags()));
+
+    RecipeVersion savedVersion = versionRepository.saveAndFlush(version);
+    Recipe savedRecipe = recipeRepository.saveAndFlush(recipe);
+
+    // Step 6: provenance row.
+    RecipeImport provenance =
+        RecipeImport.builder()
+            .id(UUID.randomUUID())
+            .recipeId(savedRecipe.getId())
+            .sourceType(ImportSource.WEB_DISCOVERED)
+            .sourceUrl(data.canonicalUrl())
+            .sourcePayload(null)
+            .extractionMethod(data.extractionMethod())
+            .duplicateOfRecipeId(null)
+            .importedAt(now)
+            .importedByUserId(SYSTEM_DISCOVERY_USER_ID)
+            .contentFingerprint(data.contentFingerprint())
+            .sourceKey(data.sourceKey())
+            .canonicalUrl(data.canonicalUrl())
+            .extractionConfidence(data.extractionConfidence())
+            .jobId(jobId)
+            .build();
+    importRepository.save(provenance);
+
+    // Step 7: events.
+    eventPublisher.publishEvent(
+        new RecipeCreatedEvent(savedRecipe.getId(), savedRecipe.getCatalogue(), traceId, now));
+    eventPublisher.publishEvent(
+        new RecipeVersionCreatedEvent(
+            savedVersion.getId(),
+            savedRecipe.getId(),
+            branch.getId(),
+            savedVersion.getVersionNumber(),
+            traceId,
+            now));
+
+    log.info(
+        "discovery import persisted recipeId={} versionId={} sourceKey={} jobId={} fingerprint={}",
+        savedRecipe.getId(),
+        savedVersion.getId(),
+        data.sourceKey(),
+        jobId,
+        data.contentFingerprint());
+
+    return new ImportedRecipeResult(savedRecipe.getId(), savedVersion.getId(), true, null);
+  }
+
+  private static void populateImportedIngredients(
+      RecipeVersion version, List<ImportedRecipeData.ImportedIngredient> ingredients) {
+    if (ingredients == null) {
+      return;
+    }
+    for (ImportedRecipeData.ImportedIngredient i : ingredients) {
+      RecipeIngredient ingredient =
+          RecipeIngredient.builder()
+              .id(UUID.randomUUID())
+              .version(version)
+              .lineOrder(i.lineOrder())
+              .ingredientMappingKey(null)
+              .displayName(i.displayName())
+              .quantity(i.quantity())
+              .unit(i.unit())
+              .preparation(i.preparation())
+              .optional(i.optional())
+              .needsReview(false)
+              .mappingConfidence(null)
+              .build();
+      version.getIngredients().add(ingredient);
+    }
+  }
+
+  private static void populateImportedMethodSteps(
+      RecipeVersion version, List<ImportedRecipeData.ImportedMethodStep> steps) {
+    if (steps == null) {
+      return;
+    }
+    for (ImportedRecipeData.ImportedMethodStep s : steps) {
+      RecipeMethodStep step =
+          RecipeMethodStep.builder()
+              .id(UUID.randomUUID())
+              .version(version)
+              .stepNumber(s.stepNumber())
+              .instruction(s.instruction())
+              .durationMinutes(s.durationMinutes())
+              .build();
+      version.getMethodSteps().add(step);
+    }
+  }
+
+  private static RecipeMetadata buildImportedMetadata(
+      RecipeVersion version, ImportedRecipeData.ImportedRecipeMetadata metadata) {
+    if (metadata == null) {
+      return RecipeMetadata.builder()
+          .id(UUID.randomUUID())
+          .version(version)
+          .servings(0)
+          .prepTimeMins(0)
+          .cookTimeMins(0)
+          .totalTimeMins(0)
+          .equipmentRequired(new ArrayList<>())
+          .fridgeDays(null)
+          .freezerWeeks(null)
+          .packable(false)
+          .cuisine(null)
+          .mealTypes(new ArrayList<>())
+          .build();
+    }
+    return RecipeMetadata.builder()
+        .id(UUID.randomUUID())
+        .version(version)
+        .servings(metadata.servings() != null ? metadata.servings() : 0)
+        .prepTimeMins(metadata.prepTimeMins() != null ? metadata.prepTimeMins() : 0)
+        .cookTimeMins(metadata.cookTimeMins() != null ? metadata.cookTimeMins() : 0)
+        .totalTimeMins(metadata.totalTimeMins() != null ? metadata.totalTimeMins() : 0)
+        .equipmentRequired(
+            metadata.equipmentRequired() != null
+                ? new ArrayList<>(metadata.equipmentRequired())
+                : new ArrayList<>())
+        .fridgeDays(metadata.fridgeDays())
+        .freezerWeeks(metadata.freezerWeeks())
+        .packable(metadata.packable() != null && metadata.packable())
+        .cuisine(metadata.cuisine())
+        .mealTypes(
+            metadata.mealTypes() != null
+                ? new ArrayList<>(metadata.mealTypes())
+                : new ArrayList<>())
+        .build();
+  }
+
+  private static RecipeTags buildImportedTags(
+      RecipeVersion version, ImportedRecipeData.ImportedRecipeTags tags) {
+    if (tags == null) {
+      return RecipeTags.builder()
+          .id(UUID.randomUUID())
+          .version(version)
+          .protein(null)
+          .cookingMethod(null)
+          .complexity(null)
+          .flavourProfile(new ArrayList<>())
+          .dietaryFlags(new ArrayList<>())
+          .build();
+    }
+    return RecipeTags.builder()
+        .id(UUID.randomUUID())
+        .version(version)
+        .protein(tags.protein())
+        .cookingMethod(tags.cookingMethod())
+        .complexity(parseComplexityOrNull(tags.complexity()))
+        .flavourProfile(
+            tags.flavourProfile() != null
+                ? new ArrayList<>(tags.flavourProfile())
+                : new ArrayList<>())
+        .dietaryFlags(
+            tags.dietaryFlags() != null ? new ArrayList<>(tags.dietaryFlags()) : new ArrayList<>())
+        .build();
+  }
+
+  private static com.example.mealprep.recipe.domain.entity.Complexity parseComplexityOrNull(
+      String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return com.example.mealprep.recipe.domain.entity.Complexity.valueOf(raw.trim().toUpperCase());
+    } catch (IllegalArgumentException ex) {
+      return null;
+    }
   }
 
   // ---------------- Helpers ----------------

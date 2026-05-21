@@ -54,7 +54,8 @@ class ReferenceCuratedSourceTest {
           30,
           Duration.ofSeconds(60),
           Duration.ofHours(1),
-          Duration.ofHours(6));
+          Duration.ofHours(6),
+          null);
 
   @BeforeEach
   void setUp() throws Exception {

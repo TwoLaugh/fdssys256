@@ -9,6 +9,7 @@ import com.example.mealprep.recipe.exception.RecipeBranchPointInvalidException;
 import com.example.mealprep.recipe.exception.RecipeCatalogueViolationException;
 import com.example.mealprep.recipe.exception.RecipeDiffCrossBranchException;
 import com.example.mealprep.recipe.exception.RecipeDiffNotComputedException;
+import com.example.mealprep.recipe.exception.RecipeImportFailedException;
 import com.example.mealprep.recipe.exception.RecipeImportFailureException;
 import com.example.mealprep.recipe.exception.RecipeImportNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
@@ -66,6 +67,21 @@ public class RecipeExceptionHandler {
             req.getRequestURI());
     pd.setProperty("failureReason", ex.failureReason());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeImportFailedException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeImportFailed(
+      RecipeImportFailedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            ex.getMessage(),
+            "recipe-import-failed",
+            "Imported recipe could not be persisted",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

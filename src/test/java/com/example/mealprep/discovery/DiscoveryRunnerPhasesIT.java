@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.example.mealprep.ai.spi.TaskType;
+import com.example.mealprep.ai.testing.TestAiService;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
@@ -25,6 +27,7 @@ import com.example.mealprep.discovery.domain.entity.ScrapeSkipReason;
 import com.example.mealprep.discovery.domain.repository.DiscoveryJobRepository;
 import com.example.mealprep.discovery.domain.repository.DiscoveryScrapeLogRepository;
 import com.example.mealprep.discovery.domain.repository.DiscoverySourceRepository;
+import com.example.mealprep.discovery.domain.service.internal.CandidateFilterResult;
 import com.example.mealprep.discovery.exception.ExtractionFailedException;
 import com.example.mealprep.discovery.testdata.DiscoveryTestData;
 import com.example.mealprep.testsupport.TestContainersConfig;
@@ -38,6 +41,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -86,6 +90,17 @@ class DiscoveryRunnerPhasesIT {
   @Autowired private DiscoverySourceRepository sourceRepository;
   @Autowired private DiscoveryJobRepository jobRepository;
   @Autowired private DiscoveryScrapeLogRepository scrapeLogRepository;
+  @Autowired private TestAiService testAiService;
+
+  @BeforeEach
+  void seedAiCannedResponse() {
+    // discovery-01g: the AI candidate filter dispatches one cheap-tier task per candidate.
+    // Register a default "accept high-confidence" response so the phase tests' deterministic
+    // candidates pass the filter and exercise downstream fetch / persist branches.
+    testAiService.register(
+        TaskType.DISCOVERY_FILTERING,
+        new CandidateFilterResult(true, new BigDecimal("0.90"), "looks like a recipe"));
+  }
 
   @AfterEach
   void cleanup() {
@@ -96,8 +111,26 @@ class DiscoveryRunnerPhasesIT {
     jdbcTemplate.update("DELETE FROM discovery_scrape_log");
     jdbcTemplate.update("DELETE FROM discovery_jobs");
     jdbcTemplate.update("DELETE FROM discovery_sources");
+    // discovery-01g writes WEB_DISCOVERED rows into the recipe module's tables. Sweep them too so
+    // a subsequent test's dedup probe (on content_fingerprint) doesn't collapse to an orphan row.
+    //
+    // Cyclic-FK note: recipe_recipes.current_branch_id → recipe_branches.id, AND
+    // recipe_branches.recipe_id → recipe_recipes.id. Naïve "delete branches then recipes"
+    // fails the recipe → branch FK; null out the current_* pointers first to break the
+    // cycle, then proceed in standard dependency order.
+    jdbcTemplate.update(
+        "UPDATE recipe_recipes SET current_branch_id = NULL WHERE catalogue = 'SYSTEM'");
+    jdbcTemplate.update("DELETE FROM recipe_imports");
+    jdbcTemplate.update("DELETE FROM recipe_method_steps");
+    jdbcTemplate.update("DELETE FROM recipe_ingredients");
+    jdbcTemplate.update("DELETE FROM recipe_metadata");
+    jdbcTemplate.update("DELETE FROM recipe_tags");
+    jdbcTemplate.update("DELETE FROM recipe_versions");
+    jdbcTemplate.update("DELETE FROM recipe_branches");
+    jdbcTemplate.update("DELETE FROM recipe_recipes WHERE catalogue = 'SYSTEM'");
     sessionRepository.deleteAll();
     userRepository.deleteAll();
+    testAiService.clear();
   }
 
   private record AuthedUser(UUID userId, Cookie cookie) {}
@@ -172,10 +205,11 @@ class DiscoveryRunnerPhasesIT {
     return scrapeLogRepository.findByJobId(jobId);
   }
 
-  // ---- skeleton-mode persist: EXTRACTION_FAILED row with the gap error class ----
+  // ---- discovery-01g: end-to-end success — saveImportedRecipe persists, SUCCESS row, counters
+  // ----
 
   @Test
-  void happyCandidate_skeletonModePersist_writesExtractionFailedRow_recordsCounters()
+  void happyCandidate_realSpi_writesSuccessRow_incrementsIngested_recordsCounters()
       throws Exception {
     AuthedUser user = registerUser();
     seedSource("phase_ok");
@@ -184,19 +218,21 @@ class DiscoveryRunnerPhasesIT {
 
     List<DiscoveryScrapeLog> rows = rowsFor(job.getId());
     assertThat(rows).isNotEmpty();
-    DiscoveryScrapeLog skeleton =
-        rows.stream()
-            .filter(r -> "saveImportedRecipeNotYetImplemented".equals(r.getErrorClass()))
-            .findFirst()
-            .orElseThrow();
-    assertThat(skeleton.getStatus()).isEqualTo(ScrapeOutcome.EXTRACTION_FAILED);
-    assertThat(skeleton.getContentFingerprint()).isNotBlank();
-    // recordCandidatesSeen / recordCandidatesAfterFilter ran against the real DB.
+    DiscoveryScrapeLog success =
+        rows.stream().filter(r -> r.getStatus() == ScrapeOutcome.SUCCESS).findFirst().orElseThrow();
+    assertThat(success.getRecipeId()).isNotNull();
+    assertThat(success.getContentFingerprint()).isNotBlank();
     assertThat(job.getCandidatesSeen()).isGreaterThanOrEqualTo(1);
     assertThat(job.getCandidatesAfterFilter()).isGreaterThanOrEqualTo(1);
-    // Skeleton mode credits no ingest → terminal FAILED, search succeeded so no failed sources.
-    assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.FAILED);
-    assertThat(job.getRecipesIngested()).isZero();
+    assertThat(job.getRecipesIngested()).isGreaterThanOrEqualTo(1);
+    // catalogue=SYSTEM with WEB_DISCOVERED quality landed.
+    Integer count =
+        jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM recipe_recipes WHERE id = ? AND catalogue = 'SYSTEM' AND"
+                + " data_quality = 'WEB_DISCOVERED'",
+            Integer.class,
+            success.getRecipeId());
+    assertThat(count).isEqualTo(1);
   }
 
   // ---- fetch phase: source.fetchRecipe throws ExtractionFailedException ----

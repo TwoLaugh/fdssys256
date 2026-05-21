@@ -46,7 +46,8 @@ class RobotsTxtGateIT {
             30,
             Duration.ofSeconds(60),
             Duration.ofHours(1),
-            Duration.ofHours(6));
+            Duration.ofHours(6),
+            null);
     SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
     factory.setConnectTimeout(2_000);
     factory.setReadTimeout(2_000);
@@ -133,7 +134,8 @@ class RobotsTxtGateIT {
             30,
             Duration.ofSeconds(60),
             Duration.ofMinutes(1),
-            Duration.ofHours(6));
+            Duration.ofHours(6),
+            null);
     InHouseRobotsTxtGate gate = gateWithClock(shortTtl, clock);
 
     gate.check(URI.create("http://" + host + "/r/1"), "MealPrepAI/1.0");

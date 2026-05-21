@@ -34,23 +34,25 @@ class RecipeBoundaryTest {
 
   /**
    * Per LLD line 824 — the {@code RecipeWriteApi} SPI is internal to the recipe module + the
-   * Adaptation Pipeline module. The adaptation pipeline ships in wave 3 (adaptation-pipeline-01c
-   * onwards) and consumes {@code RecipeWriteApi.saveAdaptedVersion} / {@code saveAdaptedBranch}
-   * from its {@code RebaseOrchestrator}. All other modules must go through {@code
-   * RecipeQueryService} / {@code RecipeUpdateService}.
+   * Adaptation Pipeline module + the discovery pipeline (discovery-01g, single consumer of {@code
+   * saveImportedRecipe}). All other modules must go through {@code RecipeQueryService} / {@code
+   * RecipeUpdateService}.
    */
   @ArchTest
   static final ArchRule recipeWriteApiNotImportedByOtherModules =
       noClasses()
           .that()
           .resideOutsideOfPackages(
-              "com.example.mealprep.recipe..", "com.example.mealprep.adaptation..", "..test..")
+              "com.example.mealprep.recipe..",
+              "com.example.mealprep.adaptation..",
+              "com.example.mealprep.discovery..",
+              "..test..")
           .should()
           .dependOnClassesThat()
           .resideInAPackage("com.example.mealprep.recipe.spi..")
           .as(
               "the RecipeWriteApi SPI (and its commands) is consumed only by the recipe"
-                  + " module + the Adaptation Pipeline; other modules must go through"
-                  + " RecipeQueryService / RecipeUpdateService.")
+                  + " module + the Adaptation Pipeline + the Discovery pipeline; other modules"
+                  + " must go through RecipeQueryService / RecipeUpdateService.")
           .allowEmptyShould(true);
 }
