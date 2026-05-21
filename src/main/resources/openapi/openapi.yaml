@@ -4,6 +4,7 @@ info:
   description: |
     Backend API for the MealPrep AI personal meal-planning system.
     See the architectural docs in `design/` and the LLDs in `lld/`.
+    CORS for `http://localhost:5173` is active under the `dev` Spring profile only; production requires same-origin requests.
   version: 0.1.0
   contact:
     name: MealPrep AI
