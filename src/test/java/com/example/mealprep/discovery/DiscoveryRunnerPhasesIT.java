@@ -113,6 +113,14 @@ class DiscoveryRunnerPhasesIT {
     jdbcTemplate.update("DELETE FROM discovery_sources");
     // discovery-01g writes WEB_DISCOVERED rows into the recipe module's tables. Sweep them too so
     // a subsequent test's dedup probe (on content_fingerprint) doesn't collapse to an orphan row.
+    //
+    // Cyclic-FK note: recipe_recipes.current_branch_id → recipe_branches.id, AND
+    // recipe_branches.recipe_id → recipe_recipes.id. Naïve "delete branches then recipes"
+    // fails the recipe → branch FK; null out the current_* pointers first to break the
+    // cycle, then proceed in standard dependency order.
+    jdbcTemplate.update(
+        "UPDATE recipe_recipes SET current_branch_id = NULL, current_version_id = NULL "
+            + "WHERE catalogue = 'SYSTEM'");
     jdbcTemplate.update("DELETE FROM recipe_imports");
     jdbcTemplate.update("DELETE FROM recipe_method_steps");
     jdbcTemplate.update("DELETE FROM recipe_ingredients");
