@@ -3,6 +3,7 @@ register:
     tags: [Auth]
     operationId: register
     summary: Create a new user account and auto-log in.
+    security: []
     requestBody:
       required: true
       content:
@@ -33,6 +34,7 @@ login:
     tags: [Auth]
     operationId: login
     summary: Authenticate; receive session cookie.
+    security: []
     requestBody:
       required: true
       content:
@@ -87,6 +89,11 @@ logout:
           Set-Cookie:
             schema: { type: string }
             description: Cleared AUTH_SESSION cookie.
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 me:
   get:
     tags: [Auth]

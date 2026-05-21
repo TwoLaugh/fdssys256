@@ -304,6 +304,14 @@ components:
         Session cookie issued by /api/v1/auth/login or /api/v1/auth/register.
         Auth-01a: anonymous access is rejected outside the whitelisted paths.
         Auth-roles-followup will tighten ROLE_ADMIN gating on admin endpoints.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Reserved for service-token authentication landing in tickets/core/02b-origin-tracking-foundation.md.
+        Not applied to any path in this ticket — purely a definition reservation so 02b
+        can attach `bearerAuth: []` to service-only endpoints without re-touching this scheme.
   schemas:
     # auth
     RegisterRequest: { $ref: 'schemas/auth.yaml#/RegisterRequest' }
@@ -606,6 +614,7 @@ components:
     SweepExpiredPendingResponse: { $ref: 'schemas/adaptation.yaml#/SweepExpiredPendingResponse' }
     # common (cross-module)
     ProblemDetail: { $ref: 'schemas/common.yaml#/ProblemDetail' }
+    PageEnvelope: { $ref: 'schemas/common.yaml#/PageEnvelope' }
     RecipeImportFailure: { $ref: 'schemas/common.yaml#/RecipeImportFailure' }
   responses:
     # Cross-module re-usable responses kept inline (these are tiny and rarely change).

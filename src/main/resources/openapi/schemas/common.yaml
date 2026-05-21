@@ -32,6 +32,31 @@ ProblemDetail:
           field: { type: string }
           message: { type: string }
           rejectedValue: {}
+PageEnvelope:
+  type: object
+  description: >-
+    Shared shape for Spring Data `Page<X>` JSON serialisation. Per-endpoint Page
+    response schemas (e.g. PlanDtoPage, WasteEntryDtoPage) inline this shape with
+    a concrete `content[]` item type; this schema is the canonical reference for
+    consumers (and future spec-side helpers) that want the envelope type without
+    duplicating its fields.
+  required: [content, totalElements, totalPages, number, size, empty, first, last]
+  properties:
+    content:
+      type: array
+      description: Page content; override `items` per-endpoint with the concrete item type.
+      items: { type: object }
+    totalElements: { type: integer, format: int64, minimum: 0 }
+    totalPages: { type: integer, minimum: 0 }
+    number: { type: integer, minimum: 0, description: Zero-based page index. }
+    size: { type: integer, minimum: 1, maximum: 100 }
+    empty: { type: boolean }
+    first: { type: boolean }
+    last: { type: boolean }
+    numberOfElements: { type: integer, minimum: 0 }
+    sort:
+      type: object
+      additionalProperties: true
 RecipeImportFailure:
   type: object
   description: >-
