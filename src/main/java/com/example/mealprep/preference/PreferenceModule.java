@@ -5,6 +5,8 @@ import com.example.mealprep.preference.domain.service.LifestyleConfigQueryServic
 import com.example.mealprep.preference.domain.service.LifestyleConfigUpdateService;
 import com.example.mealprep.preference.domain.service.PreferenceQueryService;
 import com.example.mealprep.preference.domain.service.PreferenceUpdateService;
+import com.example.mealprep.preference.domain.service.TasteProfileQueryService;
+import com.example.mealprep.preference.domain.service.TasteProfileUpdateService;
 import org.springframework.stereotype.Component;
 
 /**
@@ -13,8 +15,9 @@ import org.springframework.stereotype.Component;
  * directly.
  *
  * <p>Mirrors {@code AuthModule} and {@code CoreModule}; thin and carries no business logic. 01a
- * landed the hard-constraints query / update surfaces; 01b adds {@link
- * HardConstraintFilterService}; 01d adds the Tier-3 lifestyle-config surfaces.
+ * landed the hard-constraints query / update surfaces; 01b added {@link
+ * HardConstraintFilterService}; 01c adds the taste-profile query + update pair; 01d adds the Tier-3
+ * lifestyle-config surfaces.
  */
 @Component
 public class PreferenceModule {
@@ -24,18 +27,24 @@ public class PreferenceModule {
   private final HardConstraintFilterService hardConstraintFilterService;
   private final LifestyleConfigQueryService lifestyleConfigQueryService;
   private final LifestyleConfigUpdateService lifestyleConfigUpdateService;
+  private final TasteProfileQueryService tasteProfileQueryService;
+  private final TasteProfileUpdateService tasteProfileUpdateService;
 
   public PreferenceModule(
       PreferenceQueryService preferenceQueryService,
       PreferenceUpdateService preferenceUpdateService,
       HardConstraintFilterService hardConstraintFilterService,
       LifestyleConfigQueryService lifestyleConfigQueryService,
-      LifestyleConfigUpdateService lifestyleConfigUpdateService) {
+      LifestyleConfigUpdateService lifestyleConfigUpdateService,
+      TasteProfileQueryService tasteProfileQueryService,
+      TasteProfileUpdateService tasteProfileUpdateService) {
     this.preferenceQueryService = preferenceQueryService;
     this.preferenceUpdateService = preferenceUpdateService;
     this.hardConstraintFilterService = hardConstraintFilterService;
     this.lifestyleConfigQueryService = lifestyleConfigQueryService;
     this.lifestyleConfigUpdateService = lifestyleConfigUpdateService;
+    this.tasteProfileQueryService = tasteProfileQueryService;
+    this.tasteProfileUpdateService = tasteProfileUpdateService;
   }
 
   public PreferenceQueryService query() {
@@ -56,5 +65,13 @@ public class PreferenceModule {
 
   public LifestyleConfigUpdateService lifestyleConfigUpdate() {
     return lifestyleConfigUpdateService;
+  }
+
+  public TasteProfileQueryService tasteProfileQuery() {
+    return tasteProfileQueryService;
+  }
+
+  public TasteProfileUpdateService tasteProfileUpdate() {
+    return tasteProfileUpdateService;
   }
 }

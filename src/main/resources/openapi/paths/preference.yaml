@@ -223,3 +223,190 @@ lifestyleConfigAuditLog:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+# ============================================================================
+# Taste profile (01c) — six endpoints. Rollback endpoint is deferred.
+# ============================================================================
+tasteProfile:
+  get:
+    tags: [Preferences]
+    operationId: getTasteProfile
+    summary: Read the calling user's taste profile.
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: The user's taste profile.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/preference.yaml#/TasteProfileDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Profile not initialised.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  put:
+    tags: [Preferences]
+    operationId: updateTasteProfile
+    summary: Replace the calling user's taste profile document (manual override).
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/preference.yaml#/UpdateTasteProfileRequest' }
+    responses:
+      '200':
+        description: The updated taste profile.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/preference.yaml#/TasteProfileDto' }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Profile not initialised.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedVersion.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+tasteProfileRefreshNow:
+  post:
+    tags: [Preferences]
+    operationId: triggerTasteProfileRefresh
+    summary: Request an asynchronous AI refresh of the taste profile.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema: { $ref: '../schemas/preference.yaml#/TriggerTasteProfileRefreshRequest' }
+    responses:
+      '202':
+        description: Refresh requested; returns the current state immediately.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/preference.yaml#/TasteProfileDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Profile not initialised.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+tasteProfileVersions:
+  get:
+    tags: [Preferences]
+    operationId: listTasteProfileVersions
+    summary: Paginated taste-profile version snapshots; newest-first.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of version snapshots.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: array
+                  items: { $ref: '../schemas/preference.yaml#/TasteProfileVersionDto' }
+                totalElements: { type: integer }
+                totalPages: { type: integer }
+                number: { type: integer }
+                size: { type: integer }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+tasteProfileVersionByNumber:
+  get:
+    tags: [Preferences]
+    operationId: getTasteProfileVersion
+    summary: Read a single taste-profile version snapshot.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: documentVersion
+        required: true
+        schema: { type: integer, minimum: 1 }
+    responses:
+      '200':
+        description: The requested version snapshot.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/preference.yaml#/TasteProfileVersionDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Version not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+tasteProfileAuditLog:
+  get:
+    tags: [Preferences]
+    operationId: getTasteProfileAuditLog
+    summary: Paginated audit log of taste-profile changes; newest-first.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of audit-log entries; empty when no profile yet.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: array
+                  items: { $ref: '../schemas/preference.yaml#/TasteProfileAuditEntryDto' }
+                totalElements: { type: integer }
+                totalPages: { type: integer }
+                number: { type: integer }
+                size: { type: integer }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

@@ -62,6 +62,16 @@ paths:
     $ref: 'paths/preference.yaml#/lifestyleConfigMarkReviewed'
   /api/v1/preferences/lifestyle-config/audit-log:
     $ref: 'paths/preference.yaml#/lifestyleConfigAuditLog'
+  /api/v1/preferences/taste-profile:
+    $ref: 'paths/preference.yaml#/tasteProfile'
+  /api/v1/preferences/taste-profile/refresh-now:
+    $ref: 'paths/preference.yaml#/tasteProfileRefreshNow'
+  /api/v1/preferences/taste-profile/versions:
+    $ref: 'paths/preference.yaml#/tasteProfileVersions'
+  /api/v1/preferences/taste-profile/versions/{documentVersion}:
+    $ref: 'paths/preference.yaml#/tasteProfileVersionByNumber'
+  /api/v1/preferences/taste-profile/audit-log:
+    $ref: 'paths/preference.yaml#/tasteProfileAuditLog'
   # ===== household =====
   /api/v1/households:
     $ref: 'paths/household.yaml#/households'
@@ -406,6 +416,32 @@ components:
     LifestyleConfigDto: { $ref: 'schemas/preference.yaml#/LifestyleConfigDto' }
     UpdateLifestyleConfigRequest: { $ref: 'schemas/preference.yaml#/UpdateLifestyleConfigRequest' }
     LifestyleConfigAuditEntryDto: { $ref: 'schemas/preference.yaml#/LifestyleConfigAuditEntryDto' }
+    # taste profile (01c)
+    TasteVectorStatus: { $ref: 'schemas/preference.yaml#/TasteVectorStatus' }
+    TasteProfileTrigger: { $ref: 'schemas/preference.yaml#/TasteProfileTrigger' }
+    ActorType: { $ref: 'schemas/preference.yaml#/ActorType' }
+    TasteProfileChangeType: { $ref: 'schemas/preference.yaml#/TasteProfileChangeType' }
+    IngredientPreferenceSource: { $ref: 'schemas/preference.yaml#/IngredientPreferenceSource' }
+    ExperimentStatus: { $ref: 'schemas/preference.yaml#/ExperimentStatus' }
+    SkillLevel: { $ref: 'schemas/preference.yaml#/SkillLevel' }
+    SoftIntolerance: { $ref: 'schemas/preference.yaml#/SoftIntolerance' }
+    SoftConstraintsSection: { $ref: 'schemas/preference.yaml#/SoftConstraintsSection' }
+    FlavourPreferences: { $ref: 'schemas/preference.yaml#/FlavourPreferences' }
+    TexturePreferences: { $ref: 'schemas/preference.yaml#/TexturePreferences' }
+    IngredientPreference: { $ref: 'schemas/preference.yaml#/IngredientPreference' }
+    TrendingIngredient: { $ref: 'schemas/preference.yaml#/TrendingIngredient' }
+    IngredientPreferencesSection: { $ref: 'schemas/preference.yaml#/IngredientPreferencesSection' }
+    CuisinePreferences: { $ref: 'schemas/preference.yaml#/CuisinePreferences' }
+    CookingPreferences: { $ref: 'schemas/preference.yaml#/CookingPreferences' }
+    PortionStyle: { $ref: 'schemas/preference.yaml#/PortionStyle' }
+    HouseholdContextSection: { $ref: 'schemas/preference.yaml#/HouseholdContextSection' }
+    RecipeRecommendation: { $ref: 'schemas/preference.yaml#/RecipeRecommendation' }
+    ActiveExperiment: { $ref: 'schemas/preference.yaml#/ActiveExperiment' }
+    TasteProfileDto: { $ref: 'schemas/preference.yaml#/TasteProfileDto' }
+    TasteProfileVersionDto: { $ref: 'schemas/preference.yaml#/TasteProfileVersionDto' }
+    TasteProfileAuditEntryDto: { $ref: 'schemas/preference.yaml#/TasteProfileAuditEntryDto' }
+    UpdateTasteProfileRequest: { $ref: 'schemas/preference.yaml#/UpdateTasteProfileRequest' }
+    TriggerTasteProfileRefreshRequest: { $ref: 'schemas/preference.yaml#/TriggerTasteProfileRefreshRequest' }
     # household
     HouseholdRole: { $ref: 'schemas/household.yaml#/HouseholdRole' }
     HouseholdDto: { $ref: 'schemas/household.yaml#/HouseholdDto' }
@@ -436,7 +472,10 @@ components:
     MergeStrategy: { $ref: 'schemas/household.yaml#/MergeStrategy' }
     MergedSoftPreferencesDto: { $ref: 'schemas/household.yaml#/MergedSoftPreferencesDto' }
     SoftPreferenceBundleDto: { $ref: 'schemas/household.yaml#/SoftPreferenceBundleDto' }
-    TasteProfileDocument: { $ref: 'schemas/household.yaml#/TasteProfileDocument' }
+    # TasteProfileDocument moved to preference (01c) — the canonical schema. household.yaml retains an
+    # internal-only stub (TasteProfileDocumentStub) for the SoftPreferenceBundleDto / MergedSoftPreferencesDto
+    # inline shape; the global namespace points to the preference module's definition.
+    TasteProfileDocument: { $ref: 'schemas/preference.yaml#/TasteProfileDocument' }
     # provisions
     StorageLocation: { $ref: 'schemas/provisions.yaml#/StorageLocation' }
     TrackingMode: { $ref: 'schemas/provisions.yaml#/TrackingMode' }

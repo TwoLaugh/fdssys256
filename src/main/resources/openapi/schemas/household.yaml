@@ -224,9 +224,13 @@ ChangeRoleRequest:
 MergeStrategy:
   type: string
   enum: [MEAN_WEIGHTED_BY_PRIORITY]
-TasteProfileDocument:
+TasteProfileDocumentStub:
   type: object
-  description: 'Lightweight stub shape; preference-01c will own the canonical record.'
+  description: |
+    Lightweight household-local stub used inside SoftPreferenceBundleDto / MergedSoftPreferencesDto. The canonical
+    TasteProfileDocument schema landed with preference-01c and lives in schemas/preference.yaml. This stub
+    survives only because the household merge view exposes a smaller projection (likes/dislikes/avoid scores) than
+    the full record-tree; rationalising the two shapes is a follow-up.
   properties:
     ingredientLikes:
       type: object
@@ -303,7 +307,7 @@ MergedSoftPreferencesDto:
     contributingUserIds:
       type: array
       items: { type: string, format: uuid }
-    mergedTasteProfile: { $ref: '#/TasteProfileDocument' }
+    mergedTasteProfile: { $ref: '#/TasteProfileDocumentStub' }
     mergedLifestyleConfig: { $ref: '#/LifestyleConfigDocument' }
     userIdsByPriority:
       type: array
