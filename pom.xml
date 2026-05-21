@@ -62,6 +62,13 @@
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
 
+        <!-- Actuator: exposes /actuator/health + /actuator/info ONLY. Exposure list is
+             explicitly enumerated in application.properties — never use include=*. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
         <!-- PostgreSQL driver -->
         <dependency>
             <groupId>org.postgresql</groupId>
@@ -243,10 +250,19 @@
             </resource>
         </resources>
         <plugins>
-            <!-- Spring Boot -->
+            <!-- Spring Boot. The build-info execution generates
+                 META-INF/build-info.properties (version, time, group, artifact) which
+                 /actuator/info surfaces as the `build` JSON block. -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>build-info</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
 
             <!-- Compiler with annotation processors: Lombok BEFORE MapStruct, plus the binding shim -->

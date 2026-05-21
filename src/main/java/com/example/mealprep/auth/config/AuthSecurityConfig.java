@@ -72,6 +72,13 @@ public class AuthSecurityConfig {
                         // (cookie still presented, session already revoked) reaches the controller
                         // and returns 204 + cleared cookie instead of 401.
                         "/api/v1/auth/logout",
+                        // Actuator: ONLY health + info are publicly reachable. We deliberately
+                        // do NOT permit-all on `/actuator/**` — that would auto-expose any
+                        // endpoint a future contributor accidentally adds to
+                        // `management.endpoints.web.exposure.include`. Exposure-list and
+                        // permit-list must both name the path for a 200 response.
+                        "/actuator/health",
+                        "/actuator/info",
                         "/v3/api-docs",
                         "/v3/api-docs/**",
                         "/swagger-ui",
