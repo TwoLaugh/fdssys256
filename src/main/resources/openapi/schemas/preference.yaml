@@ -79,3 +79,285 @@ HardConstraintsAuditEntryDto:
     previousValueJson: {}
     newValueJson: {}
     occurredAt: { type: string, format: date-time }
+# ---- 01d lifestyle config (Tier-3) ----
+PreferenceSnackPolicy:
+  type: object
+  additionalProperties: false
+  required: [planned]
+  properties:
+    planned: { type: boolean }
+    style: { type: string, nullable: true }
+    notes: { type: string, nullable: true }
+PreferenceDayProfile:
+  type: object
+  additionalProperties: false
+  properties:
+    meals:
+      type: array
+      items: { type: string }
+    snacks: { $ref: '#/PreferenceSnackPolicy' }
+PreferenceRecurringSkip:
+  type: object
+  additionalProperties: false
+  properties:
+    day: { type: string, nullable: true }
+    meal: { type: string, nullable: true }
+    reason: { type: string, nullable: true }
+PreferenceMealStructure:
+  type: object
+  additionalProperties: false
+  properties:
+    weekday: { $ref: '#/PreferenceDayProfile' }
+    weekend: { $ref: '#/PreferenceDayProfile' }
+    recurringSkips:
+      type: array
+      items: { $ref: '#/PreferenceRecurringSkip' }
+PreferenceMealSchedule:
+  type: object
+  additionalProperties: false
+  properties:
+    times:
+      type: object
+      additionalProperties: { type: string }
+PreferenceMealTiming:
+  type: object
+  additionalProperties: false
+  properties:
+    preferredSchedule: { $ref: '#/PreferenceMealSchedule' }
+    flexibility: { type: string, nullable: true }
+    notes: { type: string, nullable: true }
+PreferenceNoveltyMode:
+  type: object
+  additionalProperties: false
+  properties:
+    mode: { type: string }
+    rotationSize: { type: integer, nullable: true }
+    maxConsecutiveSame: { type: integer, nullable: true }
+    weeklyUniqueMinimum: { type: integer, nullable: true }
+    newPerWeek: { type: integer, nullable: true }
+PreferenceNoveltyTolerance:
+  type: object
+  additionalProperties: false
+  properties:
+    bySlot:
+      type: object
+      additionalProperties: { $ref: '#/PreferenceNoveltyMode' }
+    recipeRepeatCooldownWeeks:
+      type: object
+      additionalProperties: { type: integer }
+    ingredientFrequencyCaps:
+      type: object
+      additionalProperties: { type: string }
+PreferenceIngredientCountRange:
+  type: object
+  additionalProperties: false
+  required: [min, max]
+  properties:
+    min: { type: integer }
+    max: { type: integer }
+PreferenceCookingContext:
+  type: object
+  additionalProperties: false
+  properties:
+    maxTimeMins: { type: integer }
+    complexity: { type: string, nullable: true }
+    preferredStyles:
+      type: array
+      items: { type: string }
+    preferredIngredientCount: { $ref: '#/PreferenceIngredientCountRange' }
+    notes: { type: string, nullable: true }
+    source: { type: string, nullable: true }
+    frequency: { type: string, nullable: true }
+PreferenceCookingContexts:
+  type: object
+  additionalProperties: false
+  properties:
+    byContext:
+      type: object
+      additionalProperties: { $ref: '#/PreferenceCookingContext' }
+PreferencePrepDay:
+  type: object
+  additionalProperties: false
+  properties:
+    day: { type: string, nullable: true }
+    window: { type: string, nullable: true }
+    maxSessionHours: { type: integer }
+    maxRecipes: { type: integer }
+PreferenceFreezerTolerance:
+  type: object
+  additionalProperties: false
+  properties:
+    acceptable: { type: boolean }
+    maxFrozenMealsPerWeek: { type: integer }
+    exclusions:
+      type: array
+      items: { type: string }
+PreferenceBatchCooking:
+  type: object
+  additionalProperties: false
+  properties:
+    prepDays:
+      type: array
+      items: { $ref: '#/PreferencePrepDay' }
+    maxLeftoverDays:
+      type: object
+      additionalProperties: { type: integer }
+    leftoverStrategy: { type: string, nullable: true }
+    freezerTolerance: { $ref: '#/PreferenceFreezerTolerance' }
+    sameProteinSameDay: { type: boolean }
+    parallelCookingTolerance: { type: string, nullable: true }
+PreferenceReheatRule:
+  type: object
+  additionalProperties: false
+  properties:
+    category: { type: string, nullable: true }
+    rule: { type: string, nullable: true }
+    reason: { type: string, nullable: true }
+PreferenceReheatingPreferences:
+  type: object
+  additionalProperties: false
+  properties:
+    availableAtWork:
+      type: array
+      items: { type: string }
+    availableAtHome:
+      type: array
+      items: { type: string }
+    preferredMethod: { type: string, nullable: true }
+    exclusions:
+      type: array
+      items: { $ref: '#/PreferenceReheatRule' }
+    coldMealTolerance:
+      type: array
+      items: { type: string }
+PreferenceContextEntry:
+  type: object
+  additionalProperties: false
+  properties:
+    location: { type: string, nullable: true }
+    format: { type: string, nullable: true }
+    constraints:
+      type: array
+      items: { type: string }
+PreferenceEatingContext:
+  type: object
+  additionalProperties: false
+  properties:
+    bySlot:
+      type: object
+      additionalProperties: { $ref: '#/PreferenceContextEntry' }
+PreferenceSeasonPolicy:
+  type: object
+  additionalProperties: false
+  properties:
+    leanToward:
+      type: array
+      items: { type: string }
+    avoid:
+      type: array
+      items: { type: string }
+PreferenceSeasonalPreferences:
+  type: object
+  additionalProperties: false
+  properties:
+    bySeason:
+      type: object
+      additionalProperties: { $ref: '#/PreferenceSeasonPolicy' }
+PreferenceMealTypeRule:
+  type: object
+  additionalProperties: false
+  properties:
+    varietyTolerance: { type: string, nullable: true }
+    complexityTolerance: { type: string, nullable: true }
+    staples:
+      type: array
+      items: { type: string }
+    notes: { type: string, nullable: true }
+PreferenceMealTypePreferences:
+  type: object
+  additionalProperties: false
+  properties:
+    byType:
+      type: object
+      additionalProperties: { $ref: '#/PreferenceMealTypeRule' }
+PreferenceBeveragePolicy:
+  type: object
+  additionalProperties: false
+  properties:
+    withMeals: { type: string, nullable: true }
+    morning: { type: string, nullable: true }
+    avoids:
+      type: array
+      items: { type: string }
+PreferenceSidesPolicy:
+  type: object
+  additionalProperties: false
+  properties:
+    notes: { type: string, nullable: true }
+PreferenceAccompaniments:
+  type: object
+  additionalProperties: false
+  properties:
+    beverages: { $ref: '#/PreferenceBeveragePolicy' }
+    sides: { $ref: '#/PreferenceSidesPolicy' }
+PreferenceGroceryQualityPreferences:
+  type: object
+  additionalProperties: false
+  properties:
+    organic: { type: string, nullable: true }
+    freeRangeEggs: { type: string, nullable: true }
+    freeRangeMeat: { type: string, nullable: true }
+    brandedVsOwnLabel: { type: string, nullable: true }
+    notes: { type: string, nullable: true }
+PreferencePantryTracking:
+  type: object
+  additionalProperties: false
+  required: [enabled]
+  properties:
+    enabled: { type: boolean }
+PreferenceLifestyleConfigDocument:
+  type: object
+  additionalProperties: false
+  properties:
+    mealStructure: { $ref: '#/PreferenceMealStructure' }
+    mealTiming: { $ref: '#/PreferenceMealTiming' }
+    noveltyTolerance: { $ref: '#/PreferenceNoveltyTolerance' }
+    cookingContexts: { $ref: '#/PreferenceCookingContexts' }
+    batchCooking: { $ref: '#/PreferenceBatchCooking' }
+    reheatingPreferences: { $ref: '#/PreferenceReheatingPreferences' }
+    eatingContext: { $ref: '#/PreferenceEatingContext' }
+    seasonalPreferences: { $ref: '#/PreferenceSeasonalPreferences' }
+    mealTypePreferences: { $ref: '#/PreferenceMealTypePreferences' }
+    accompaniments: { $ref: '#/PreferenceAccompaniments' }
+    groceryQualityPreferences: { $ref: '#/PreferenceGroceryQualityPreferences' }
+    pantryTracking: { $ref: '#/PreferencePantryTracking' }
+LifestyleConfigDto:
+  type: object
+  required: [id, userId, document, optimisticVersion, createdAt, updatedAt]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    document: { $ref: '#/PreferenceLifestyleConfigDocument' }
+    lastReviewPromptAt: { type: string, format: date-time, nullable: true }
+    optimisticVersion: { type: integer, format: int64 }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+UpdateLifestyleConfigRequest:
+  type: object
+  required: [document, expectedVersion]
+  properties:
+    document: { $ref: '#/PreferenceLifestyleConfigDocument' }
+    expectedVersion:
+      type: integer
+      format: int64
+      minimum: 0
+LifestyleConfigAuditEntryDto:
+  type: object
+  required: [id, actorUserId, fieldPath, previousValueJson, newValueJson, occurredAt]
+  properties:
+    id: { type: string, format: uuid }
+    actorUserId: { type: string, format: uuid }
+    fieldPath: { type: string }
+    previousValueJson: {}
+    newValueJson: {}
+    occurredAt: { type: string, format: date-time }

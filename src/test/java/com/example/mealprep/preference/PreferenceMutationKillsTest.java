@@ -83,6 +83,14 @@ class PreferenceMutationKillsTest {
   @Mock private CurrentUserResolver currentUserResolver;
   @Mock private HardConstraintFilterService hardConstraintFilterService;
 
+  @Mock
+  private com.example.mealprep.preference.domain.service.LifestyleConfigQueryService
+      lifestyleConfigQueryService;
+
+  @Mock
+  private com.example.mealprep.preference.domain.service.LifestyleConfigUpdateService
+      lifestyleConfigUpdateService;
+
   private final HardConstraintsMapper mapper =
       new com.example.mealprep.preference.api.mapper.HardConstraintsMapperImpl();
   private final ObjectMapper objectMapper = new ObjectMapper();
@@ -280,11 +288,18 @@ class PreferenceMutationKillsTest {
   @Test
   void preferenceModule_facadeAccessors_returnConstructorArgumentsByIdentity() {
     PreferenceModule module =
-        new PreferenceModule(queryService, updateService, hardConstraintFilterService);
+        new PreferenceModule(
+            queryService,
+            updateService,
+            hardConstraintFilterService,
+            lifestyleConfigQueryService,
+            lifestyleConfigUpdateService);
 
     assertThat(module.query()).isSameAs(queryService);
     assertThat(module.update()).isSameAs(updateService);
     assertThat(module.filter()).isSameAs(hardConstraintFilterService);
+    assertThat(module.lifestyleConfigQuery()).isSameAs(lifestyleConfigQueryService);
+    assertThat(module.lifestyleConfigUpdate()).isSameAs(lifestyleConfigUpdateService);
   }
 
   // =================================================================================
