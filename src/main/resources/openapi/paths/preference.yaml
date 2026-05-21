@@ -97,3 +97,129 @@ hardConstraintsAuditLog:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+lifestyleConfig:
+  get:
+    tags: [Preferences]
+    operationId: getLifestyleConfig
+    summary: Read the calling user's lifestyle config.
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: The user's lifestyle config.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/preference.yaml#/LifestyleConfigDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Resource not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  put:
+    tags: [Preferences]
+    operationId: updateLifestyleConfig
+    summary: Replace the calling user's lifestyle config.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/preference.yaml#/UpdateLifestyleConfigRequest' }
+    responses:
+      '200':
+        description: The updated lifestyle config.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/preference.yaml#/LifestyleConfigDto' }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Resource not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Conflict.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+lifestyleConfigMarkReviewed:
+  post:
+    tags: [Preferences]
+    operationId: markLifestyleConfigReviewed
+    summary: Acknowledge a behavioural-drift review nudge; resets lastReviewPromptAt.
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: The lifestyle config with lastReviewPromptAt reset to null.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/preference.yaml#/LifestyleConfigDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Resource not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+lifestyleConfigAuditLog:
+  get:
+    tags: [Preferences]
+    operationId: getLifestyleConfigAuditLog
+    summary: Paginated audit log of lifestyle-config changes; newest-first.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - in: query
+        name: section
+        required: false
+        schema: { type: string }
+    responses:
+      '200':
+        description: Page of audit-log entries; empty content when no changes (or no aggregate yet).
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: array
+                  items: { $ref: '../schemas/preference.yaml#/LifestyleConfigAuditEntryDto' }
+                totalElements: { type: integer }
+                totalPages: { type: integer }
+                number: { type: integer }
+                size: { type: integer }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

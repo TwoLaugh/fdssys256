@@ -46,6 +46,12 @@ paths:
     $ref: 'paths/preference.yaml#/hardConstraints'
   /api/v1/preferences/hard-constraints/audit-log:
     $ref: 'paths/preference.yaml#/hardConstraintsAuditLog'
+  /api/v1/preferences/lifestyle-config:
+    $ref: 'paths/preference.yaml#/lifestyleConfig'
+  /api/v1/preferences/lifestyle-config/mark-reviewed:
+    $ref: 'paths/preference.yaml#/lifestyleConfigMarkReviewed'
+  /api/v1/preferences/lifestyle-config/audit-log:
+    $ref: 'paths/preference.yaml#/lifestyleConfigAuditLog'
   # ===== household =====
   /api/v1/households:
     $ref: 'paths/household.yaml#/households'
@@ -334,6 +340,10 @@ components:
     HardConstraintsDto: { $ref: 'schemas/preference.yaml#/HardConstraintsDto' }
     UpdateHardConstraintsRequest: { $ref: 'schemas/preference.yaml#/UpdateHardConstraintsRequest' }
     HardConstraintsAuditEntryDto: { $ref: 'schemas/preference.yaml#/HardConstraintsAuditEntryDto' }
+    PreferenceLifestyleConfigDocument: { $ref: 'schemas/preference.yaml#/PreferenceLifestyleConfigDocument' }
+    LifestyleConfigDto: { $ref: 'schemas/preference.yaml#/LifestyleConfigDto' }
+    UpdateLifestyleConfigRequest: { $ref: 'schemas/preference.yaml#/UpdateLifestyleConfigRequest' }
+    LifestyleConfigAuditEntryDto: { $ref: 'schemas/preference.yaml#/LifestyleConfigAuditEntryDto' }
     # household
     HouseholdRole: { $ref: 'schemas/household.yaml#/HouseholdRole' }
     HouseholdDto: { $ref: 'schemas/household.yaml#/HouseholdDto' }

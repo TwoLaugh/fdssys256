@@ -1,6 +1,8 @@
 package com.example.mealprep.preference;
 
 import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
+import com.example.mealprep.preference.domain.service.LifestyleConfigQueryService;
+import com.example.mealprep.preference.domain.service.LifestyleConfigUpdateService;
 import com.example.mealprep.preference.domain.service.PreferenceQueryService;
 import com.example.mealprep.preference.domain.service.PreferenceUpdateService;
 import org.springframework.stereotype.Component;
@@ -12,7 +14,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>Mirrors {@code AuthModule} and {@code CoreModule}; thin and carries no business logic. 01a
  * landed the hard-constraints query / update surfaces; 01b adds {@link
- * HardConstraintFilterService}, the hot-path read every food-output module calls.
+ * HardConstraintFilterService}; 01d adds the Tier-3 lifestyle-config surfaces.
  */
 @Component
 public class PreferenceModule {
@@ -20,14 +22,20 @@ public class PreferenceModule {
   private final PreferenceQueryService preferenceQueryService;
   private final PreferenceUpdateService preferenceUpdateService;
   private final HardConstraintFilterService hardConstraintFilterService;
+  private final LifestyleConfigQueryService lifestyleConfigQueryService;
+  private final LifestyleConfigUpdateService lifestyleConfigUpdateService;
 
   public PreferenceModule(
       PreferenceQueryService preferenceQueryService,
       PreferenceUpdateService preferenceUpdateService,
-      HardConstraintFilterService hardConstraintFilterService) {
+      HardConstraintFilterService hardConstraintFilterService,
+      LifestyleConfigQueryService lifestyleConfigQueryService,
+      LifestyleConfigUpdateService lifestyleConfigUpdateService) {
     this.preferenceQueryService = preferenceQueryService;
     this.preferenceUpdateService = preferenceUpdateService;
     this.hardConstraintFilterService = hardConstraintFilterService;
+    this.lifestyleConfigQueryService = lifestyleConfigQueryService;
+    this.lifestyleConfigUpdateService = lifestyleConfigUpdateService;
   }
 
   public PreferenceQueryService query() {
@@ -40,5 +48,13 @@ public class PreferenceModule {
 
   public HardConstraintFilterService filter() {
     return hardConstraintFilterService;
+  }
+
+  public LifestyleConfigQueryService lifestyleConfigQuery() {
+    return lifestyleConfigQueryService;
+  }
+
+  public LifestyleConfigUpdateService lifestyleConfigUpdate() {
+    return lifestyleConfigUpdateService;
   }
 }
