@@ -342,6 +342,48 @@ IntakeAuditEntryDtoPage:
     last: { type: boolean }
     numberOfElements: { type: integer }
     empty: { type: boolean }
+IntakeListFilter:
+  type: object
+  description: >-
+    Documentation-only schema for the GET /api/v1/nutrition/intake/search query parameters
+    (C-B-048). Spring binds these as flat @RequestParam values; the schema exists so
+    consumer-side type generation can produce a single filter type rather than three loose
+    parameters. Empty `q` is treated as no filter.
+  properties:
+    recipeId: { type: string, format: uuid, nullable: true }
+    mealSlot: { $ref: '#/MealSlot' }
+    q: { type: string, maxLength: 200, nullable: true }
+IntakeSlotSearchResultDto:
+  type: object
+  description: >-
+    Flat read shape for an intake-slot search result. Returned by
+    GET /api/v1/nutrition/intake/search.
+  required: [slotId, intakeDayId, onDate, mealSlot, actualStatus]
+  properties:
+    slotId: { type: string, format: uuid }
+    intakeDayId: { type: string, format: uuid }
+    onDate: { type: string, format: date }
+    mealSlot: { $ref: '#/MealSlot' }
+    actualStatus: { $ref: '#/IntakeSlotStatus' }
+    plannedRecipeId: { type: string, format: uuid, nullable: true }
+    overrideFreeText: { type: string, maxLength: 512, nullable: true }
+IntakeSlotSearchResultDtoPage:
+  type: object
+  additionalProperties: true
+  description: Spring Data Page envelope around IntakeSlotSearchResultDto.
+  required: [content, totalElements, totalPages, number, size, empty, first, last]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/IntakeSlotSearchResultDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    numberOfElements: { type: integer }
+    empty: { type: boolean }
 DailyActivityDto:
   type: object
   required: [id, userId, onDate, activityLevel, createdAt]

@@ -1,6 +1,7 @@
 package com.example.mealprep.planner.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.planner.api.dto.AbandonPlanRequest;
 import com.example.mealprep.planner.api.dto.GeneratePlanRequest;
 import com.example.mealprep.planner.api.dto.PlanDto;
@@ -248,6 +249,7 @@ public class PlansController {
       summary =
           "Fetch all plan generations for a (household, weekStartDate); latest first; capped at"
               + " 100.")
+  @BoundedCollection("bounded by service-level cap of 100 generations per (household, week)")
   public ResponseEntity<List<PlanDto>> getHistory(
       @RequestParam UUID householdId,
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate weekStartDate) {

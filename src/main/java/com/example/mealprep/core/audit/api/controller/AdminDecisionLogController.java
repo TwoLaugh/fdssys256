@@ -1,5 +1,6 @@
 package com.example.mealprep.core.audit.api.controller;
 
+import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.core.audit.api.dto.AncestryResponse;
 import com.example.mealprep.core.audit.api.dto.DecisionLogDto;
 import com.example.mealprep.core.audit.domain.service.DecisionLogQueryService;
@@ -60,6 +61,7 @@ public class AdminDecisionLogController {
   @GetMapping("/trace/{traceId}")
   @PreAuthorize("hasRole('ADMIN')")
   @Operation(summary = "Get all decision-log entries for a trace, ordered by creation time.")
+  @BoundedCollection("bounded-by-trace; a trace is a single request's decision chain")
   public List<DecisionLogDto> getByTraceId(@PathVariable UUID traceId) {
     return queryService.getByTraceId(traceId);
   }

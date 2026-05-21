@@ -1,6 +1,7 @@
 package com.example.mealprep.discovery.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.discovery.api.dto.DiscoverySourceDto;
 import com.example.mealprep.discovery.domain.service.DiscoveryQueryService;
 import com.example.mealprep.discovery.exception.DiscoverySourceNotFoundException;
@@ -37,6 +38,7 @@ public class DiscoverySourcesController {
 
   @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "List all discovery sources (sorted by displayName).")
+  @BoundedCollection("static registry; bounded by configured source count")
   public List<DiscoverySourceDto> list() {
     requireAuthenticated();
     return discoveryQueryService.listSources();

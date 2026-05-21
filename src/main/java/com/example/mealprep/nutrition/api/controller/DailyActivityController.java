@@ -1,6 +1,7 @@
 package com.example.mealprep.nutrition.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
 import com.example.mealprep.nutrition.api.dto.UpsertDailyActivityRequest;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
@@ -48,6 +49,7 @@ public class DailyActivityController {
 
   @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "List daily activity log entries in [from, to].")
+  @BoundedCollection("bounded by date range; one row per day")
   public List<DailyActivityDto> getRange(
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {

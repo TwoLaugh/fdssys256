@@ -9,6 +9,8 @@ import com.example.mealprep.nutrition.api.dto.IngredientLookupResultDto;
 import com.example.mealprep.nutrition.api.dto.IngredientNutritionDto;
 import com.example.mealprep.nutrition.api.dto.IntakeAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
+import com.example.mealprep.nutrition.api.dto.IntakeListFilter;
+import com.example.mealprep.nutrition.api.dto.IntakeSlotSearchResultDto;
 import com.example.mealprep.nutrition.api.dto.NutritionTargetsAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
@@ -62,6 +64,20 @@ public interface NutritionQueryService {
    * not exist (consistent with targets-audit semantics).
    */
   Page<IntakeAuditEntryDto> getIntakeAuditLog(UUID userId, LocalDate onDate, Pageable pageable);
+
+  /**
+   * Paginated search across the user's intake slots, with optional filters per {@link
+   * IntakeListFilter} (recipe id, meal slot, free-text substring). Tenant scope is always composed
+   * first — cross-tenant leakage is structurally impossible.
+   *
+   * <p>Sort defaults to {@code onDate DESC, id ASC} (stable cross-page ordering); see {@link
+   * com.example.mealprep.nutrition.api.controller.IntakeController#search} for the HTTP boundary
+   * that supplies the {@code Pageable}.
+   *
+   * <p>Per C-B-048 / infra-01b.
+   */
+  Page<IntakeSlotSearchResultDto> searchIntakeSlots(
+      UUID userId, IntakeListFilter filter, Pageable pageable);
 
   /** Read the user's daily activity entry for a single date, or empty if not logged. */
   Optional<DailyActivityDto> getDailyActivity(UUID userId, LocalDate onDate);

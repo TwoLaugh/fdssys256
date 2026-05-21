@@ -1,6 +1,7 @@
 package com.example.mealprep.nutrition.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
 import com.example.mealprep.nutrition.api.dto.UpsertFoodMoodEntryRequest;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
@@ -61,6 +62,7 @@ public class JournalController {
 
   @GetMapping(path = "/{date}", produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "List the calling user's food/mood journal entries for a date.")
+  @BoundedCollection("bounded-by-date; journal entries per day are typically < 20")
   public List<FoodMoodEntryDto> getForDay(
       @PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
     UUID userId = requireCurrentUserId();

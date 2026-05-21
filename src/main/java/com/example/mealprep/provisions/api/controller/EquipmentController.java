@@ -1,6 +1,7 @@
 package com.example.mealprep.provisions.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
 import com.example.mealprep.provisions.domain.service.ProvisionQueryService;
@@ -53,6 +54,7 @@ public class EquipmentController {
 
   @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "List the calling user's equipment.")
+  @BoundedCollection("bounded by user kitchen inventory; typically < 50 items")
   public List<EquipmentDto> list() {
     UUID userId = requireCurrentUserId();
     return queryService.getEquipment(userId);

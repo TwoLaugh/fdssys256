@@ -345,6 +345,54 @@ intakeAuditLog:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+intakeSearch:
+  get:
+    tags: [Nutrition]
+    operationId: searchIntakeSlots
+    summary: >-
+      Paginated search across the caller's intake slots (C-B-048). Optional filters:
+      recipeId / mealSlot / q (case-insensitive substring on overrideFreeText). All filters
+      AND-compose. Default sort: onDate DESC, id ASC (id-tiebreaker for cross-page stability).
+    description: >-
+      Empty `q` is treated as no filter. Tenant scope is composed first server-side; no
+      cross-tenant leakage is structurally possible. Page envelope uses Spring Data's default
+      JSON shape — read `content` + `totalElements` + `number` directly.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: recipeId
+        schema: { type: string, format: uuid }
+        description: Exact match against planned recipe id; omit for no filter.
+      - in: query
+        name: mealSlot
+        schema: { $ref: '../schemas/nutrition.yaml#/MealSlot' }
+        description: Exact match; omit for no filter.
+      - in: query
+        name: q
+        schema: { type: string, maxLength: 200 }
+        description: Case-insensitive substring match on overrideFreeText. Empty = no filter.
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Search results page.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IntakeSlotSearchResultDtoPage' }
+      '400':
+        description: 'Invalid pagination params (page < 0, size out of bounds, q > 200 chars).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 targetsActivityRange:
   get:
     tags: [Nutrition]

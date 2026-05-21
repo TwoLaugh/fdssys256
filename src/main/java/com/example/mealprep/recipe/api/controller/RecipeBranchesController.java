@@ -1,6 +1,7 @@
 package com.example.mealprep.recipe.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.recipe.api.dto.CreateBranchRequest;
 import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
@@ -47,6 +48,7 @@ public class RecipeBranchesController {
 
   @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "List a recipe's branches (always at least 'main').")
+  @BoundedCollection("bounded by recipe; branches per recipe are typically < 10")
   public List<RecipeBranchDto> list(@PathVariable UUID recipeId) {
     requireCurrentUserId();
     return queryService.getBranches(recipeId);
