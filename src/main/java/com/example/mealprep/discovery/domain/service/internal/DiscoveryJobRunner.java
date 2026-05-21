@@ -18,10 +18,14 @@ import com.example.mealprep.discovery.domain.service.DiscoverySource;
 import com.example.mealprep.discovery.domain.service.RobotsTxtGate;
 import com.example.mealprep.discovery.event.DiscoveryJobCompletedEvent;
 import com.example.mealprep.discovery.event.DiscoveryJobStartedEvent;
+import com.example.mealprep.discovery.event.DiscoveryRecipeIngestedEvent;
 import com.example.mealprep.discovery.exception.DiscoverySourceUnavailableException;
 import com.example.mealprep.discovery.exception.ExtractionFailedException;
 import com.example.mealprep.preference.api.dto.FilterResult;
 import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
+import com.example.mealprep.recipe.spi.ImportedRecipeData;
+import com.example.mealprep.recipe.spi.ImportedRecipeResult;
+import com.example.mealprep.recipe.spi.RecipeWriteApi;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.NullNode;
@@ -84,6 +88,7 @@ public class DiscoveryJobRunner {
   private final ApplicationEventPublisher eventPublisher;
   private final DiscoveryProperties properties;
   private final ObjectMapper objectMapper;
+  private final RecipeWriteApi recipeWriteApi;
 
   /**
    * In-memory cancellation flags. Written by the controller thread via {@link
@@ -118,7 +123,8 @@ public class DiscoveryJobRunner {
       DiscoveryJobTransitions transitions,
       ApplicationEventPublisher eventPublisher,
       DiscoveryProperties properties,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      RecipeWriteApi recipeWriteApi) {
     this.jobRepository = jobRepository;
     this.sourceRepository = sourceRepository;
     this.sourceRegistry = sourceRegistry;
@@ -131,6 +137,7 @@ public class DiscoveryJobRunner {
     this.eventPublisher = eventPublisher;
     this.properties = properties;
     this.objectMapper = objectMapper;
+    this.recipeWriteApi = recipeWriteApi;
   }
 
   // ===== Listener =====
@@ -618,37 +625,134 @@ public class DiscoveryJobRunner {
         continue;
       }
 
-      // === Persist via RecipeWriteApi.saveImportedRecipe ===
-      // SKELETON MODE: the SPI method does not yet exist (recipe-01l). Write an EXTRACTION_FAILED
-      // row carrying the gap reason so the row is auditable and the job continues. The
-      // 5-minute follow-up (discovery-01d-real-handoff) replaces this block with the real call.
-      writeScrapeRow(
-          scrapeRowBuilder(jobId, source.key(), candidate.candidateUrl())
-              .canonicalUrl(parsed.canonicalUrl())
-              .status(ScrapeOutcome.EXTRACTION_FAILED)
-              .robotsTxtOutcome(robotsOutcome)
-              .contentFingerprint(fingerprint)
-              .extractionMethod(parsed.extractionMethod())
-              .extractionConfidence(parsed.extractionConfidence())
-              .errorClass("saveImportedRecipeNotYetImplemented")
-              .errorMessage(
-                  "RecipeWriteApi.saveImportedRecipe SPI ships in recipe-01l; skeleton row.")
-              .latencyMs(latencyMs(fetchStart))
-              .occurredAt(Instant.now())
-              .build());
-      // In skeleton mode we do NOT increment ingested or mark source as succeeded — there is
-      // no recipe to credit. The job's terminal state reflects the gap (FAILED unless any
-      // source's search succeeded, in which case PARTIAL via succeeded-by-search bookkeeping
-      // below at finaliseTerminal; ingested remains 0).
-      // The full happy-path is documented for reference:
-      //   UUID recipeId = recipeWriteApi.saveImportedRecipe(userId, command);
-      //   writeScrapeRow(... SUCCESS, recipeId, contentFingerprint ...);
-      //   transitions.incrementIngested(jobId);
-      //   sourceRegistry.recordSuccess(source.key());
-      //   if (!sourcesSucceeded.contains(source.key())) sourcesSucceeded.add(source.key());
-      //   eventPublisher.publishEvent(new DiscoveryRecipeIngestedEvent(...));
-      //   ingested++;
+      // === Persist via RecipeWriteApi.saveImportedRecipe (discovery-01g) ===
+      ImportedRecipeData importData =
+          toImportedRecipeData(jobId, traceId, source.key(), parsed, fingerprint);
+      try {
+        ImportedRecipeResult result = recipeWriteApi.saveImportedRecipe(importData);
+        if (result.newlyCreated()) {
+          writeScrapeRow(
+              scrapeRowBuilder(jobId, source.key(), candidate.candidateUrl())
+                  .canonicalUrl(parsed.canonicalUrl())
+                  .status(ScrapeOutcome.SUCCESS)
+                  .robotsTxtOutcome(robotsOutcome)
+                  .recipeId(result.recipeId())
+                  .contentFingerprint(fingerprint)
+                  .extractionMethod(parsed.extractionMethod())
+                  .extractionConfidence(parsed.extractionConfidence())
+                  .latencyMs(latencyMs(fetchStart))
+                  .occurredAt(Instant.now())
+                  .build());
+          transitions.incrementIngested(jobId);
+          sourceRegistry.recordSuccess(source.key());
+          if (!sourcesSucceeded.contains(source.key())) {
+            sourcesSucceeded.add(source.key());
+          }
+          eventPublisher.publishEvent(
+              new DiscoveryRecipeIngestedEvent(
+                  jobId,
+                  userId,
+                  result.recipeId(),
+                  source.key(),
+                  parsed.canonicalUrl(),
+                  parsed.extractionConfidence(),
+                  traceId,
+                  Instant.now()));
+          ingested++;
+        } else {
+          // Dedup-by-fingerprint: SPI returned an existing recipe id without persisting.
+          writeScrapeRow(
+              scrapeRowBuilder(jobId, source.key(), candidate.candidateUrl())
+                  .canonicalUrl(parsed.canonicalUrl())
+                  .status(ScrapeOutcome.DUPLICATE)
+                  .robotsTxtOutcome(robotsOutcome)
+                  .recipeId(result.recipeId())
+                  .skipReason(ScrapeSkipReason.DUPLICATE)
+                  .contentFingerprint(fingerprint)
+                  .extractionMethod(parsed.extractionMethod())
+                  .extractionConfidence(parsed.extractionConfidence())
+                  .latencyMs(latencyMs(fetchStart))
+                  .occurredAt(Instant.now())
+                  .build());
+          transitions.incrementSkippedDuplicate(jobId);
+        }
+      } catch (RuntimeException ex) {
+        log.warn(
+            "saveImportedRecipe failed for {} ({}): {}",
+            candidate.candidateUrl(),
+            ex.getClass().getSimpleName(),
+            ex.getMessage());
+        writeScrapeRow(
+            scrapeRowBuilder(jobId, source.key(), candidate.candidateUrl())
+                .canonicalUrl(parsed.canonicalUrl())
+                .status(ScrapeOutcome.EXTRACTION_FAILED)
+                .robotsTxtOutcome(robotsOutcome)
+                .contentFingerprint(fingerprint)
+                .extractionMethod(parsed.extractionMethod())
+                .extractionConfidence(parsed.extractionConfidence())
+                .errorClass(ex.getClass().getSimpleName())
+                .errorMessage(ex.getMessage())
+                .latencyMs(latencyMs(fetchStart))
+                .occurredAt(Instant.now())
+                .build());
+      }
     }
+  }
+
+  /**
+   * Map the parsed-recipe + discovery context onto the {@link ImportedRecipeData} SPI carrier.
+   * Ingredient {@code lineOrder} is synthesised from list order (extractors don't reliably set it)
+   * and {@code optional} defaults to false.
+   */
+  private static ImportedRecipeData toImportedRecipeData(
+      UUID jobId, UUID traceId, String sourceKey, ParsedRecipe parsed, String fingerprint) {
+    List<ImportedRecipeData.ImportedIngredient> ingredients = new ArrayList<>();
+    if (parsed.ingredients() != null) {
+      int idx = 0;
+      for (ParsedRecipe.ParsedIngredient i : parsed.ingredients()) {
+        ingredients.add(
+            new ImportedRecipeData.ImportedIngredient(
+                idx++, i.displayName(), i.quantity(), i.unit(), i.preparation(), i.optional()));
+      }
+    }
+    List<ImportedRecipeData.ImportedMethodStep> method = new ArrayList<>();
+    if (parsed.method() != null) {
+      for (ParsedRecipe.ParsedMethodStep s : parsed.method()) {
+        method.add(
+            new ImportedRecipeData.ImportedMethodStep(
+                s.stepNumber(), s.instruction(), s.durationMinutes()));
+      }
+    }
+    ImportedRecipeData.ImportedRecipeMetadata metadata = null;
+    if (parsed.metadata() != null) {
+      ParsedRecipe.ParsedRecipeMetadata md = parsed.metadata();
+      metadata =
+          new ImportedRecipeData.ImportedRecipeMetadata(
+              md.servings(),
+              md.prepTimeMins(),
+              md.cookTimeMins(),
+              md.totalTimeMins(),
+              md.equipmentRequired(),
+              null,
+              null,
+              null,
+              md.cuisine(),
+              md.mealTypes());
+    }
+    return new ImportedRecipeData(
+        sourceKey,
+        parsed.canonicalUrl(),
+        fingerprint,
+        parsed.name(),
+        parsed.description(),
+        ingredients,
+        method,
+        metadata,
+        null,
+        parsed.extractionMethod(),
+        parsed.extractionConfidence(),
+        jobId,
+        traceId);
   }
 
   private RobotsTxtOutcome checkRobots(DiscoverySource source, DiscoveryCandidate candidate) {

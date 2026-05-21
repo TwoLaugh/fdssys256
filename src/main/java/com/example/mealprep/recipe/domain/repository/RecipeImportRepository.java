@@ -17,4 +17,11 @@ public interface RecipeImportRepository extends JpaRepository<RecipeImport, UUID
    * recipes from 01a (no import row was ever written).
    */
   Optional<RecipeImport> findByRecipeId(UUID recipeId);
+
+  /**
+   * Dedup probe used by {@code RecipeWriteApi.saveImportedRecipe} (discovery-01g). Returns the
+   * existing provenance row whose {@code content_fingerprint} matches; empty if no prior import
+   * shared the fingerprint. Backed by the partial UNIQUE index on {@code content_fingerprint}.
+   */
+  Optional<RecipeImport> findByContentFingerprint(String contentFingerprint);
 }

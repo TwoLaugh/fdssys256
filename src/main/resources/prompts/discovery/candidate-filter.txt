@@ -1,0 +1,27 @@
+You are filtering recipe candidates discovered from the web. Given a candidate URL,
+title, and snippet, decide whether this is a relevant recipe to add to the catalogue
+given the user's constraints.
+
+Candidate:
+URL: {{candidate.canonicalUrl}}
+Title: {{candidate.title}}
+Snippet: {{candidate.snippet}}
+
+Constraints:
+Cuisines preferred: {{constraints.cuisines}}
+Dietary flags required: {{constraints.dietaryFlags}}
+Max prep time (mins): {{constraints.maxPrepMins}}
+
+Respond with JSON:
+{
+  "relevant": true | false,
+  "confidence": 0.00 - 1.00,
+  "reason": "<one-sentence explanation>"
+}
+
+Reject candidates that are:
+- Not actually recipes (blog posts, listicles without recipe content)
+- Obvious duplicates of common recipes (vague titles like "easy chicken")
+- Violations of the constraints
+
+Be conservative; when uncertain, reject.

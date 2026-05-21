@@ -1,6 +1,7 @@
 package com.example.mealprep.discovery.config;
 
 import jakarta.validation.constraints.NotNull;
+import java.math.BigDecimal;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
@@ -26,7 +27,8 @@ public record DiscoveryProperties(
     int duplicateLookbackDays,
     @NotNull Duration syncTimeout,
     @NotNull Duration robotsCacheTtl,
-    @NotNull Duration sitemapCacheTtl) {
+    @NotNull Duration sitemapCacheTtl,
+    @NotNull BigDecimal candidateFilterMinConfidence) {
 
   public DiscoveryProperties {
     if (heartbeatTimeout == null) {
@@ -43,6 +45,9 @@ public record DiscoveryProperties(
     }
     if (sitemapCacheTtl == null) {
       sitemapCacheTtl = Duration.ofHours(6);
+    }
+    if (candidateFilterMinConfidence == null) {
+      candidateFilterMinConfidence = new BigDecimal("0.6");
     }
   }
 }

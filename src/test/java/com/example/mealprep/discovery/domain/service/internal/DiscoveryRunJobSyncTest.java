@@ -75,7 +75,12 @@ class DiscoveryRunJobSyncTest {
             scrapeLogMapper,
             runner,
             new DiscoveryProperties(
-                Duration.ofMinutes(10), 30, SYNC_CAP, Duration.ofHours(1), Duration.ofHours(6)),
+                Duration.ofMinutes(10),
+                30,
+                SYNC_CAP,
+                Duration.ofHours(1),
+                Duration.ofHours(6),
+                null),
             jobStarter);
   }
 

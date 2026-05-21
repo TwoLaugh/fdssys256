@@ -33,6 +33,9 @@ import com.example.mealprep.discovery.event.DiscoveryJobStartedEvent;
 import com.example.mealprep.discovery.testdata.DiscoveryTestData;
 import com.example.mealprep.preference.api.dto.FilterResult;
 import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
+import com.example.mealprep.recipe.spi.ImportedRecipeData;
+import com.example.mealprep.recipe.spi.ImportedRecipeResult;
+import com.example.mealprep.recipe.spi.RecipeWriteApi;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.net.URI;
@@ -71,6 +74,7 @@ class DiscoveryRunnerMutationKillsTest {
   @Mock private HardConstraintFilterService hardConstraintFilter;
   @Mock private DiscoveryJobTransitions transitions;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private RecipeWriteApi recipeWriteApi;
 
   private DiscoveryJobRunner runner;
 
@@ -84,7 +88,8 @@ class DiscoveryRunnerMutationKillsTest {
             30,
             Duration.ofSeconds(60),
             Duration.ofHours(1),
-            Duration.ofHours(6));
+            Duration.ofHours(6),
+            null);
     runner =
         new DiscoveryJobRunner(
             jobRepository,
@@ -98,7 +103,12 @@ class DiscoveryRunnerMutationKillsTest {
             transitions,
             eventPublisher,
             properties,
-            new ObjectMapper());
+            new ObjectMapper(),
+            recipeWriteApi);
+    lenient()
+        .when(recipeWriteApi.saveImportedRecipe(any(ImportedRecipeData.class)))
+        .thenAnswer(
+            inv -> new ImportedRecipeResult(UUID.randomUUID(), UUID.randomUUID(), true, null));
   }
 
   // ===================== fetchPhase boundary: ingested >= requestedCount (line 467)
@@ -148,7 +158,7 @@ class DiscoveryRunnerMutationKillsTest {
     // kills NegateConditionalsMutator (line 656) and NullReturnValsMutator (line 657). When the
     // source's robotsTxtUri() returns empty, checkRobots returns SKIPPED — robots gate is never
     // consulted. We assert by verifying the gate was NOT called even with a candidate present;
-    // the skeleton-mode EXTRACTION_FAILED row carries robotsTxtOutcome=SKIPPED.
+    // the persisted scrape row carries robotsTxtOutcome=SKIPPED.
     UUID jobId = UUID.randomUUID();
     DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
     job.setId(jobId);
@@ -175,7 +185,7 @@ class DiscoveryRunnerMutationKillsTest {
 
     // robotsTxtGate must never have been called for this candidate (skipped at source-URI gate).
     verify(robotsTxtGate, never()).check(any(URI.class), anyString());
-    // Skeleton row carries SKIPPED robots outcome.
+    // The persisted SUCCESS row carries SKIPPED robots outcome.
     verify(transitions, atLeastOnce())
         .writeScrapeRow(argThat(r -> r.getRobotsTxtOutcome() == RobotsTxtOutcome.SKIPPED));
   }
@@ -188,7 +198,7 @@ class DiscoveryRunnerMutationKillsTest {
     // kills the NullReturnValsMutator at line 668 (RobotsTxtOutcome.UNAVAILABLE return in the
     // catch block) — mutating to null would NPE downstream. The runner consults respectsRobots()
     // on UNAVAILABLE; we wire the source row to respectRobotsTxt=false so the fetch proceeds and
-    // produces the skeleton EXTRACTION_FAILED row.
+    // produces the persisted SUCCESS row.
     UUID jobId = UUID.randomUUID();
     DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
     job.setId(jobId);
@@ -222,7 +232,7 @@ class DiscoveryRunnerMutationKillsTest {
 
     runner.run(startedEvent(jobId));
 
-    // Fetch proceeded → skeleton row stamped UNAVAILABLE (from the catch branch).
+    // Fetch proceeded → persisted row stamped UNAVAILABLE (from the catch branch).
     verify(transitions, atLeastOnce())
         .writeScrapeRow(argThat(r -> r.getRobotsTxtOutcome() == RobotsTxtOutcome.UNAVAILABLE));
   }

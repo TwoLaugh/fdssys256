@@ -90,4 +90,26 @@ public interface RecipeWriteApi {
    * @throws com.example.mealprep.recipe.exception.RecipeVersionNotFoundException missing version
    */
   void markEmbeddingFailed(UUID versionId);
+
+  /**
+   * Persists a recipe scraped by the discovery pipeline.
+   *
+   * <ul>
+   *   <li>Creates a {@code Recipe} with {@code catalogue=SYSTEM}, {@code
+   *       data_quality=WEB_DISCOVERED}.
+   *   <li>Creates a single {@code 'main'} branch + {@code RecipeVersion v1} with {@code
+   *       trigger=IMPORT}.
+   *   <li>Persists ingredients + method + metadata + tags.
+   *   <li>Idempotency: if a {@code Recipe} already exists with the same {@code content_fingerprint}
+   *       (looked up via the {@code recipe_imports} table), returns the existing recipe's id
+   *       without creating a duplicate.
+   *   <li>Returns the saved recipe's id + a flag indicating new-vs-existing.
+   * </ul>
+   *
+   * <p>Called by {@code discovery.runner.DiscoveryJobRunner} only (enforced by ArchUnit).
+   *
+   * @throws com.example.mealprep.recipe.exception.RecipeImportFailedException persistence failed
+   *     (validation, downstream DB error).
+   */
+  ImportedRecipeResult saveImportedRecipe(ImportedRecipeData data);
 }

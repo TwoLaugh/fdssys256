@@ -82,7 +82,8 @@ class DiscoveryServiceImplTest {
                 30,
                 java.time.Duration.ofSeconds(60),
                 java.time.Duration.ofHours(1),
-                java.time.Duration.ofHours(6)),
+                java.time.Duration.ofHours(6),
+                null),
             jobStarter);
   }
 
