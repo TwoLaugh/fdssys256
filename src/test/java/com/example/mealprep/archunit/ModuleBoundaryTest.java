@@ -2,6 +2,7 @@ package com.example.mealprep.archunit;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noFields;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
 
 import com.example.mealprep.core.api.markers.BoundedCollection;
@@ -15,6 +16,7 @@ import java.util.Collection;
 import java.util.List;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
  * Cross-module / cross-cutting architectural rules. Per-module repository-isolation rules live in
@@ -111,6 +113,54 @@ class ModuleBoundaryTest {
               "Controller @GetMapping methods returning List<*Dto> / Collection<*Dto> must be"
                   + " annotated @BoundedCollection (justifying why the collection is bounded by"
                   + " domain semantics). Otherwise use Page<*Dto> + Pageable.")
+          .allowEmptyShould(true);
+
+  /**
+   * Core-02b: only the {@link com.example.mealprep.core.origin.OriginFilter} reads the {@code
+   * X-Origin} family of headers. If anyone else writes their own {@link OncePerRequestFilter} that
+   * inspects {@code X-Origin}, the centralised confidence-floor / depth-check / rate-limit /
+   * annotation-check policy splinters across the codebase — and the next refactor of any of those
+   * policies would silently miss the duplicate. Production-only scope (tests are excluded by the
+   * class-level {@code ImportOption.DoNotIncludeTests}).
+   */
+  @ArchTest
+  static final ArchRule onlyOriginFilterReadsOriginHeaders =
+      noClasses()
+          .that()
+          .areAssignableTo(OncePerRequestFilter.class)
+          .and()
+          .resideOutsideOfPackage("com.example.mealprep.core.origin..")
+          .should()
+          .dependOnClassesThat()
+          .haveFullyQualifiedName("com.example.mealprep.core.api.OriginHeaders")
+          .as(
+              "Only OriginFilter (in core.origin) may read X-Origin* headers via OriginHeaders."
+                  + " Other filters must not duplicate the origin policy.")
+          .allowEmptyShould(true);
+
+  /**
+   * Belt-and-braces companion to {@link #onlyOriginFilterReadsOriginHeaders}: if a future
+   * contributor types the literal {@code "X-Origin"} into a non-{@code core.origin} filter class
+   * (sidestepping the constants), this rule still catches it. ArchUnit cannot match arbitrary
+   * string literals, but it can detect classes that reference our {@link
+   * com.example.mealprep.core.api.OriginHeaders} constants — the supplementary {@code grep
+   * '"X-Origin"' src/} acceptance check covers the literal-string escape hatch (per the ticket
+   * edge-case list).
+   */
+  @ArchTest
+  static final ArchRule noFiltersOutsideCoreOriginUseOriginContext =
+      noFields()
+          .that()
+          .areDeclaredInClassesThat()
+          .areAssignableTo(OncePerRequestFilter.class)
+          .and()
+          .areDeclaredInClassesThat()
+          .resideOutsideOfPackage("com.example.mealprep.core.origin..")
+          .should()
+          .haveRawType("com.example.mealprep.core.origin.OriginContext")
+          .as(
+              "OriginContext is populated only by OriginFilter; other filters must not hold a"
+                  + " field of that type.")
           .allowEmptyShould(true);
 
   private static DescribedPredicate<JavaClass> returnsRawListOfDto() {

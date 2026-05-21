@@ -6,15 +6,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.example.mealprep.auth.config.AuthSecurityConfig;
+import com.example.mealprep.auth.domain.repository.ServiceTokenRepository;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.domain.service.internal.SessionTokenGenerator;
 import com.example.mealprep.config.GlobalExceptionHandler;
 import com.example.mealprep.core.audit.api.controller.AdminDecisionLogController;
 import com.example.mealprep.core.audit.domain.service.DecisionLogQueryService;
+import com.example.mealprep.core.origin.OriginContext;
+import com.example.mealprep.core.origin.OriginProperties;
+import com.example.mealprep.core.origin.internal.InMemoryTokenBucketRateLimiter;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -33,7 +38,21 @@ import org.springframework.test.web.servlet.MockMvc;
  */
 @WebMvcTest(controllers = AdminDecisionLogController.class)
 @AutoConfigureMockMvc
-@Import({AuthSecurityConfig.class, GlobalExceptionHandler.class})
+// AuthSecurityConfig now wires an OriginFilter (core/02b) into the chain. The filter's
+// collaborators — OriginContext (request-scoped), OriginProperties, the rate limiter — are
+// core.origin @Components not picked up by the @WebMvcTest slice's component scan, so import
+// them explicitly. ServiceTokenRepository is a JPA repo (no slice support) → @MockBean. The
+// Clock + ServiceTokenAuthenticationProvider beans come transitively from AuthSecurityConfig.
+@Import({
+  AuthSecurityConfig.class,
+  GlobalExceptionHandler.class,
+  OriginContext.class,
+  InMemoryTokenBucketRateLimiter.class
+})
+// OriginProperties is a constructor-bound @ConfigurationProperties record; @Import can't
+// instantiate it — @EnableConfigurationProperties triggers Spring Boot's binding from the
+// mealprep.origin.* keys in application.properties.
+@EnableConfigurationProperties(OriginProperties.class)
 @ActiveProfiles("test")
 class SecurityChainTest {
 
@@ -42,6 +61,7 @@ class SecurityChainTest {
   @MockBean private SessionRepository sessionRepository;
   @MockBean private UserRepository userRepository;
   @MockBean private SessionTokenGenerator sessionTokenGenerator;
+  @MockBean private ServiceTokenRepository serviceTokenRepository;
 
   @Test
   void protectedEndpoint_returns401_whenNoCookiePresent() throws Exception {

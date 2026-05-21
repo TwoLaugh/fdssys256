@@ -5,6 +5,16 @@ info:
     Backend API for the MealPrep AI personal meal-planning system.
     See the architectural docs in `design/` and the LLDs in `lld/`.
     CORS for `http://localhost:5173` is active under the `dev` Spring profile only; production requires same-origin requests.
+
+    ## Origin tracking
+
+    Non-user-originated requests (AI feedback bridges, scheduled jobs, adaptation pipeline) call the
+    same endpoints a user would, with origin-identifying headers (`X-Origin`, `X-Origin-Trace`,
+    `X-Origin-Depth`, `X-Acting-As`). See `design/origin-tracking-pattern.md` and
+    `tickets/core/02b-origin-tracking-foundation.md` for the architectural rationale and policy
+    enforcement (confidence floor, rate-limit, recursion guard, per-endpoint opt-in via
+    `@OriginAware`). The reusable header parameter components are declared under
+    `components.parameters.{Origin,OriginTrace,OriginDepth,ActingAs}Header`.
   version: 0.1.0
   contact:
     name: MealPrep AI
@@ -313,9 +323,61 @@ components:
       scheme: bearer
       bearerFormat: opaque
       description: |
-        Reserved for service-token authentication landing in tickets/core/02b-origin-tracking-foundation.md.
-        Not applied to any path in this ticket — purely a definition reservation so 02b
-        can attach `bearerAuth: []` to service-only endpoints without re-touching this scheme.
+        Service-token authentication (Pattern B) for scheduled jobs and other non-user callers
+        per `design/origin-tracking-pattern.md` §Authentication. The token plaintext is shown once
+        at mint time; only the SHA-256 hash is stored server-side. Tokens carry a whitelist of
+        permitted `X-Origin` values — a token tagged `SYSTEM_SCHEDULED` cannot make
+        `AI_FEEDBACK` calls. The token authenticates the system caller; the `X-Acting-As` header
+        identifies the user the call is for.
+  parameters:
+    # Origin-tracking header parameters (core-02b). Referenced from non-user endpoints in future
+    # tickets via `parameters: [{ $ref: '#/components/parameters/OriginHeader' }, ...]`. No paths
+    # reference these in 02b; the registration here is a forward declaration so consumer tickets
+    # can plug in without re-touching this file.
+    OriginHeader:
+      name: X-Origin
+      in: header
+      required: false
+      schema:
+        type: string
+        enum: [USER, AI_FEEDBACK, AI_ADAPTATION, SYSTEM_SCHEDULED, SYSTEM_REOPT, SYSTEM_DISCOVERY]
+      description: |
+        Origin of the request. Absence means USER (direct user call). Non-USER values require
+        `X-Origin-Trace` and either an inherited user session (Pattern A) or a permitted service
+        token (Pattern B).
+    OriginTraceHeader:
+      name: X-Origin-Trace
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 128
+      description: |
+        Free-form trace string linking the request to the originating event or scheduled-job
+        instance (e.g. `feedback-<uuid>`, `scheduled-price-refresh-<cron>`). Required when
+        `X-Origin` is non-USER.
+    OriginDepthHeader:
+      name: X-Origin-Depth
+      in: header
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 3
+        default: 0
+      description: |
+        Recursion-guard depth. 0 for first-hop calls; system code increments on cascading
+        outbound calls. The filter rejects depth > 3 with HTTP 422.
+    ActingAsHeader:
+      name: X-Acting-As
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+      description: |
+        User the service caller is acting on behalf of (Pattern B). Required when authenticating
+        via `Authorization: Bearer <service-token>`.
   schemas:
     # auth
     RegisterRequest: { $ref: 'schemas/auth.yaml#/RegisterRequest' }
