@@ -18,7 +18,7 @@ import java.util.UUID;
  *
  * @see ScopeChangedEvent for events that target a specific scope (plan-week, recipe, …)
  */
-public sealed interface MealPrepEvent permits ScopeChangedEvent {
+public sealed interface MealPrepEvent permits ScopeChangedEvent, OriginAwareEvent {
   /**
    * Trace identifier linking related events across a multi-stage flow. Always non-null; generators
    * should use {@link UUID#randomUUID()} when no upstream trace is in context.

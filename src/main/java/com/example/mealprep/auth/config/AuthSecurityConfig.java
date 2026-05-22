@@ -1,13 +1,22 @@
 package com.example.mealprep.auth.config;
 
+import com.example.mealprep.auth.domain.repository.ServiceTokenRepository;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.domain.service.internal.SessionTokenGenerator;
+import com.example.mealprep.auth.security.ServiceTokenAuthenticationProvider;
+import com.example.mealprep.core.origin.OriginContext;
+import com.example.mealprep.core.origin.OriginFilter;
+import com.example.mealprep.core.origin.OriginProperties;
+import com.example.mealprep.core.origin.internal.InMemoryTokenBucketRateLimiter;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.URI;
 import java.time.Clock;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -22,6 +31,8 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.servlet.HandlerExceptionResolver;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 /**
  * Replaces the permissive bootstrap chain. The new chain is deny-by-default with a small whitelist
@@ -33,7 +44,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
  */
 @Configuration
 @EnableWebSecurity
-@EnableConfigurationProperties(AuthProperties.class)
+@EnableConfigurationProperties({AuthProperties.class, OriginProperties.class})
 public class AuthSecurityConfig {
 
   /** System default clock — overridden in tests via fixed clocks. */
@@ -55,8 +66,39 @@ public class AuthSecurityConfig {
   }
 
   @Bean
+  public ServiceTokenAuthenticationProvider serviceTokenAuthenticationProvider(
+      ServiceTokenRepository serviceTokenRepository, Clock clock) {
+    return new ServiceTokenAuthenticationProvider(serviceTokenRepository, clock);
+  }
+
+  /**
+   * The {@code OriginFilter} bean. Wired here (rather than in a {@code core}
+   * {@code @Configuration}) so it can be registered onto {@link HttpSecurity} in the same chain
+   * definition.
+   */
+  @Bean
+  public OriginFilter originFilter(
+      OriginContext originContext,
+      OriginProperties originProperties,
+      InMemoryTokenBucketRateLimiter rateLimiter,
+      ServiceTokenAuthenticationProvider serviceTokenAuth,
+      ObjectProvider<RequestMappingHandlerMapping> handlerMappingProvider,
+      ObjectMapper objectMapper,
+      @Qualifier("handlerExceptionResolver") HandlerExceptionResolver handlerExceptionResolver) {
+    return new OriginFilter(
+        originContext,
+        originProperties,
+        rateLimiter,
+        serviceTokenAuth,
+        handlerMappingProvider,
+        objectMapper,
+        handlerExceptionResolver);
+  }
+
+  @Bean
   public SecurityFilterChain authSecurityFilterChain(
-      HttpSecurity http, SessionAuthenticationFilter sessionFilter) throws Exception {
+      HttpSecurity http, SessionAuthenticationFilter sessionFilter, OriginFilter originFilter)
+      throws Exception {
     return http.csrf(csrf -> csrf.disable())
         .formLogin(form -> form.disable())
         .httpBasic(basic -> basic.disable())
@@ -98,6 +140,11 @@ public class AuthSecurityConfig {
         .exceptionHandling(
             ex -> ex.authenticationEntryPoint(AuthSecurityConfig::writeUnauthorizedProblem))
         .addFilterBefore(sessionFilter, UsernamePasswordAuthenticationFilter.class)
+        // OriginFilter runs AFTER the session-cookie filter so a Pattern-A request reaches it
+        // with the SecurityContext already populated from the cookie; the filter trusts that
+        // identity. Pattern-B traffic (bearer service token) carries no cookie — OriginFilter
+        // sets the context itself in that branch.
+        .addFilterAfter(originFilter, SessionAuthenticationFilter.class)
         .build();
   }
 
