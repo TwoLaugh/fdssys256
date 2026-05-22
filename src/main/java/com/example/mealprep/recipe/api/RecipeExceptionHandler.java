@@ -1,6 +1,7 @@
 package com.example.mealprep.recipe.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
+import com.example.mealprep.recipe.exception.DuplicateRecipeRatingException;
 import com.example.mealprep.recipe.exception.NoChangesException;
 import com.example.mealprep.recipe.exception.RecipeAccessDeniedException;
 import com.example.mealprep.recipe.exception.RecipeBranchNameConflictException;
@@ -16,6 +17,8 @@ import com.example.mealprep.recipe.exception.RecipeImportFailedException;
 import com.example.mealprep.recipe.exception.RecipeImportFailureException;
 import com.example.mealprep.recipe.exception.RecipeImportNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
+import com.example.mealprep.recipe.exception.RecipeRatingNotFoundException;
+import com.example.mealprep.recipe.exception.RecipeRatingValidationException;
 import com.example.mealprep.recipe.exception.RecipeSubstitutionNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeVersionConflictException;
 import com.example.mealprep.recipe.exception.RecipeVersionNotFoundException;
@@ -327,6 +330,53 @@ public class RecipeExceptionHandler {
             "Substitution must be ACCEPTED to record plan application",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  // ---------------- recipe-02b multi-dimensional rating ----------------
+
+  @ExceptionHandler(RecipeRatingNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeRatingNotFound(
+      RecipeRatingNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "recipe-rating-not-found",
+            "Recipe rating not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(DuplicateRecipeRatingException.class)
+  public ResponseEntity<ProblemDetail> handleDuplicateRecipeRating(
+      DuplicateRecipeRatingException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "duplicate-recipe-rating",
+            "Recipe rating already exists",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeRatingValidationException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeRatingValidation(
+      RecipeRatingValidationException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.BAD_REQUEST,
+            ex.getMessage(),
+            "recipe-rating-validation",
+            "Recipe rating validation failed",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

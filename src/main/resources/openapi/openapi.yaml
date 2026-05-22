@@ -220,6 +220,14 @@ paths:
     $ref: 'paths/recipe.yaml#/recipeAdminRunArchiveScan'
   /api/v1/recipes/{recipeId}/image:
     $ref: 'paths/recipe.yaml#/recipeImage'
+  /api/v1/recipes/{recipeId}/ratings:
+    $ref: 'paths/recipe.yaml#/recipeRatings'
+  /api/v1/recipes/{recipeId}/ratings/mine:
+    $ref: 'paths/recipe.yaml#/recipeRatingsMine'
+  /api/v1/recipes/{recipeId}/ratings/summary:
+    $ref: 'paths/recipe.yaml#/recipeRatingsSummary'
+  /api/v1/recipes/{recipeId}/ratings/{ratingId}:
+    $ref: 'paths/recipe.yaml#/recipeRatingById'
   # ===== planner =====
   /api/v1/plans:
     $ref: 'paths/planner.yaml#/plansRange'
@@ -593,6 +601,11 @@ components:
     SubstitutionItemRequest: { $ref: 'schemas/recipe.yaml#/SubstitutionItemRequest' }
     SubstitutionReason: { $ref: 'schemas/recipe.yaml#/SubstitutionReason' }
     SubstitutionState: { $ref: 'schemas/recipe.yaml#/SubstitutionState' }
+    RecipeRatingDto: { $ref: 'schemas/recipe.yaml#/RecipeRatingDto' }
+    CreateRatingRequest: { $ref: 'schemas/recipe.yaml#/CreateRatingRequest' }
+    UpdateRatingRequest: { $ref: 'schemas/recipe.yaml#/UpdateRatingRequest' }
+    RecipeRatingSummaryDto: { $ref: 'schemas/recipe.yaml#/RecipeRatingSummaryDto' }
+    RecipeRatingDtoPage: { $ref: 'schemas/recipe.yaml#/RecipeRatingDtoPage' }
     # planner
     PlanStatus: { $ref: 'schemas/planner.yaml#/PlanStatus' }
     TriggerKind: { $ref: 'schemas/planner.yaml#/TriggerKind' }

@@ -1,6 +1,8 @@
 package com.example.mealprep.recipe;
 
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
+import com.example.mealprep.recipe.domain.service.RecipeRatingQueryService;
+import com.example.mealprep.recipe.domain.service.RecipeRatingUpdateService;
 import com.example.mealprep.recipe.domain.service.RecipeUpdateService;
 import org.springframework.stereotype.Component;
 
@@ -19,11 +21,18 @@ public class RecipeModule {
 
   private final RecipeQueryService recipeQueryService;
   private final RecipeUpdateService recipeUpdateService;
+  private final RecipeRatingQueryService ratingQueryService;
+  private final RecipeRatingUpdateService ratingUpdateService;
 
   public RecipeModule(
-      RecipeQueryService recipeQueryService, RecipeUpdateService recipeUpdateService) {
+      RecipeQueryService recipeQueryService,
+      RecipeUpdateService recipeUpdateService,
+      RecipeRatingQueryService ratingQueryService,
+      RecipeRatingUpdateService ratingUpdateService) {
     this.recipeQueryService = recipeQueryService;
     this.recipeUpdateService = recipeUpdateService;
+    this.ratingQueryService = ratingQueryService;
+    this.ratingUpdateService = ratingUpdateService;
   }
 
   public RecipeQueryService query() {
@@ -32,5 +41,13 @@ public class RecipeModule {
 
   public RecipeUpdateService update() {
     return recipeUpdateService;
+  }
+
+  public RecipeRatingQueryService ratingQuery() {
+    return ratingQueryService;
+  }
+
+  public RecipeRatingUpdateService ratingUpdate() {
+    return ratingUpdateService;
   }
 }
