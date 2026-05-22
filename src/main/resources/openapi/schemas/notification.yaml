@@ -80,6 +80,9 @@ NotificationDto:
 
 NotificationDtoPage:
   type: object
+  description: 'Paged response of NotificationDto rows.'
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
   properties:
     content:
       type: array
@@ -88,6 +91,10 @@ NotificationDtoPage:
     totalPages: { type: integer }
     number: { type: integer }
     size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
 
 NotificationSummaryDto:
   type: object

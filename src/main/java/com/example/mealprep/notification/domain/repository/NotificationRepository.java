@@ -34,9 +34,9 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
       """
       select n from Notification n
       where n.userId = :userId
-        and (:status is null or n.status = :status)
-        and (:kind is null or n.kind = :kind)
-        and (:since is null or n.createdAt >= :since)
+        and (cast(:status as string) is null or n.status = :status)
+        and (cast(:kind as string) is null or n.kind = :kind)
+        and (cast(:since as timestamp) is null or n.createdAt >= :since)
       order by n.createdAt desc
       """)
   Page<Notification> search(
