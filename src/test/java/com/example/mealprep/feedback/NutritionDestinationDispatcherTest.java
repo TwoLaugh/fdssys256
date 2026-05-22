@@ -13,7 +13,7 @@ import com.example.mealprep.feedback.domain.entity.RoutingStatus;
 import com.example.mealprep.feedback.domain.service.internal.DestinationDispatcher;
 import com.example.mealprep.feedback.domain.service.internal.DispatchContext;
 import com.example.mealprep.feedback.domain.service.internal.DispatchResult;
-import com.example.mealprep.feedback.exception.NutritionFeedbackBridgeUnavailableException;
+import com.example.mealprep.feedback.exception.FeedbackBridgeDispatchFailedException;
 import com.example.mealprep.feedback.spi.Destination;
 import com.example.mealprep.feedback.spi.NutritionFeedbackBridge;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,7 +23,6 @@ import java.math.BigDecimal;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 class NutritionDestinationDispatcherTest {
 
@@ -43,15 +42,18 @@ class NutritionDestinationDispatcherTest {
   }
 
   @Test
-  void noopBridge_propagatesUnavailableException() {
-    try (AnnotationConfigApplicationContext ctxApp = new AnnotationConfigApplicationContext()) {
-      ctxApp.register(com.example.mealprep.feedback.config.NoopFeedbackBridgesConfiguration.class);
-      ctxApp.refresh();
-      NutritionFeedbackBridge noop = ctxApp.getBean(NutritionFeedbackBridge.class);
-      DestinationDispatcher dispatcher = dispatcher(noop);
-      assertThatThrownBy(() -> dispatcher.dispatch(ctx()))
-          .isInstanceOf(NutritionFeedbackBridgeUnavailableException.class);
-    }
+  void bridgeDispatchFailure_propagates() {
+    // The Noop config was removed in 01g; the real bridge throws FeedbackBridgeDispatchFailed on a
+    // failed/deferred destination call, which the dispatcher must propagate for the router to
+    // classify as AI_UNAVAILABLE.
+    NutritionFeedbackBridge bridge = mock(NutritionFeedbackBridge.class);
+    when(bridge.applyFeedback(any(NutritionFeedbackBridge.Input.class)))
+        .thenThrow(
+            new FeedbackBridgeDispatchFailedException(
+                Destination.NUTRITION, UUID.randomUUID(), new UnsupportedOperationException("x")));
+    DestinationDispatcher dispatcher = dispatcher(bridge);
+    assertThatThrownBy(() -> dispatcher.dispatch(ctx()))
+        .isInstanceOf(FeedbackBridgeDispatchFailedException.class);
   }
 
   private DestinationDispatcher dispatcher(NutritionFeedbackBridge bridge) {

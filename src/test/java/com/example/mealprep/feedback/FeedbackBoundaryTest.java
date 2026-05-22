@@ -3,10 +3,12 @@ package com.example.mealprep.feedback;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
+import com.example.mealprep.feedback.bridge.internal.FeedbackBridgeSupport;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
+import org.springframework.stereotype.Component;
 
 /**
  * Feedback-module architectural boundary. Two rules:
@@ -52,5 +54,28 @@ class FeedbackBoundaryTest {
           .should()
           .bePublic()
           .as("feedback SPIs are intended to be cross-module visible")
+          .allowEmptyShould(true);
+
+  /**
+   * feedback-01g §24: every concrete class in {@code feedback.bridge..} must be a
+   * {@code @Component} and/or extend {@link FeedbackBridgeSupport}. Prevents drift toward rogue
+   * bridge patterns. The abstract {@link FeedbackBridgeSupport} base itself is exempt (it is not a
+   * registrable bean), as is the {@code feedback.bridge.internal} infrastructure that is wired
+   * explicitly (the cleanup scheduler is a {@code @Component}; the support base is abstract).
+   */
+  @ArchTest
+  static final ArchRule bridgesAreComponentsOrExtendSupport =
+      classes()
+          .that()
+          .resideInAPackage("com.example.mealprep.feedback.bridge..")
+          .and()
+          .doNotHaveModifier(com.tngtech.archunit.core.domain.JavaModifier.ABSTRACT)
+          .should()
+          .beAnnotatedWith(Component.class)
+          .orShould()
+          .beAssignableTo(FeedbackBridgeSupport.class)
+          .as(
+              "feedback.bridge classes must be @Component beans or extend FeedbackBridgeSupport"
+                  + " (no rogue bridge patterns).")
           .allowEmptyShould(true);
 }

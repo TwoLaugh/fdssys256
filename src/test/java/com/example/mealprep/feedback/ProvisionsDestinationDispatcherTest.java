@@ -13,7 +13,7 @@ import com.example.mealprep.feedback.domain.entity.RoutingStatus;
 import com.example.mealprep.feedback.domain.service.internal.DestinationDispatcher;
 import com.example.mealprep.feedback.domain.service.internal.DispatchContext;
 import com.example.mealprep.feedback.domain.service.internal.DispatchResult;
-import com.example.mealprep.feedback.exception.ProvisionsFeedbackBridgeUnavailableException;
+import com.example.mealprep.feedback.exception.FeedbackBridgeDispatchFailedException;
 import com.example.mealprep.feedback.spi.Destination;
 import com.example.mealprep.feedback.spi.ProvisionsFeedbackBridge;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,7 +23,6 @@ import java.math.BigDecimal;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 class ProvisionsDestinationDispatcherTest {
 
@@ -43,15 +42,20 @@ class ProvisionsDestinationDispatcherTest {
   }
 
   @Test
-  void noopBridge_propagatesUnavailableException() {
-    try (AnnotationConfigApplicationContext ctxApp = new AnnotationConfigApplicationContext()) {
-      ctxApp.register(com.example.mealprep.feedback.config.NoopFeedbackBridgesConfiguration.class);
-      ctxApp.refresh();
-      ProvisionsFeedbackBridge noop = ctxApp.getBean(ProvisionsFeedbackBridge.class);
-      DestinationDispatcher dispatcher = dispatcher(noop);
-      assertThatThrownBy(() -> dispatcher.dispatch(ctx()))
-          .isInstanceOf(ProvisionsFeedbackBridgeUnavailableException.class);
-    }
+  void bridgeDispatchFailure_propagates() {
+    // The Noop config was removed in 01g; the real bridge throws FeedbackBridgeDispatchFailed on a
+    // failed/deferred destination call (unsupported action, missing field, deferred surface), which
+    // the dispatcher must propagate so the router classifies as AI_UNAVAILABLE.
+    ProvisionsFeedbackBridge bridge = mock(ProvisionsFeedbackBridge.class);
+    when(bridge.applyFeedback(any(ProvisionsFeedbackBridge.Input.class)))
+        .thenThrow(
+            new FeedbackBridgeDispatchFailedException(
+                Destination.PROVISIONS,
+                UUID.randomUUID(),
+                new UnsupportedOperationException("unsupported-provisions-action")));
+    DestinationDispatcher dispatcher = dispatcher(bridge);
+    assertThatThrownBy(() -> dispatcher.dispatch(ctx()))
+        .isInstanceOf(FeedbackBridgeDispatchFailedException.class);
   }
 
   private DestinationDispatcher dispatcher(ProvisionsFeedbackBridge bridge) {

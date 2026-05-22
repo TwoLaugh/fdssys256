@@ -15,7 +15,7 @@ import com.example.mealprep.feedback.domain.service.internal.DestinationDispatch
 import com.example.mealprep.feedback.domain.service.internal.DestinationDispatcherRegistry;
 import com.example.mealprep.feedback.domain.service.internal.DispatchContext;
 import com.example.mealprep.feedback.domain.service.internal.DispatchResult;
-import com.example.mealprep.feedback.exception.RecipeFeedbackHandlerUnavailableException;
+import com.example.mealprep.feedback.exception.FeedbackBridgeDispatchFailedException;
 import com.example.mealprep.feedback.spi.Destination;
 import com.example.mealprep.feedback.spi.RecipeFeedbackHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,8 +25,6 @@ import java.math.BigDecimal;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.context.ApplicationContext;
-import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 /**
  * Unit tests for the RECIPE dispatcher: recipe-id resolution (payload, fallback, missing), happy +
@@ -102,19 +100,20 @@ class RecipeDestinationDispatcherTest {
   }
 
   @Test
-  void noopHandler_propagatesUnavailableException() {
+  void bridgeDispatchFailure_propagates() {
+    // The Noop config was removed in 01g; the real recipe bridge throws
+    // FeedbackBridgeDispatchFailed
+    // when the adaptation call fails, which the dispatcher must propagate so the router classifies
+    // the routing-log row as AI_UNAVAILABLE.
     UUID recipeId = UUID.randomUUID();
-    // Wire the Noop config via Spring so we can call the real Noop bean.
-    try (AnnotationConfigApplicationContext ctxApp = new AnnotationConfigApplicationContext()) {
-      ctxApp.register(
-          com.example.mealprep.feedback.config.NoopRecipeFeedbackHandlerConfiguration.class);
-      ctxApp.refresh();
-      ApplicationContext appCtx = ctxApp;
-      RecipeFeedbackHandler noop = appCtx.getBean(RecipeFeedbackHandler.class);
-      DestinationDispatcher dispatcher = dispatcher(noop);
-      assertThatThrownBy(() -> dispatcher.dispatch(ctxWithPayloadRecipeId(recipeId, null)))
-          .isInstanceOf(RecipeFeedbackHandlerUnavailableException.class);
-    }
+    RecipeFeedbackHandler handler = mock(RecipeFeedbackHandler.class);
+    when(handler.handleRecipeFeedback(any(RecipeFeedbackHandler.Input.class)))
+        .thenThrow(
+            new FeedbackBridgeDispatchFailedException(
+                Destination.RECIPE, UUID.randomUUID(), new IllegalStateException("pipeline down")));
+    DestinationDispatcher dispatcher = dispatcher(handler);
+    assertThatThrownBy(() -> dispatcher.dispatch(ctxWithPayloadRecipeId(recipeId, null)))
+        .isInstanceOf(FeedbackBridgeDispatchFailedException.class);
   }
 
   private DestinationDispatcher dispatcher(RecipeFeedbackHandler handler) {

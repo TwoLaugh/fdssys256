@@ -14,6 +14,7 @@ import com.example.mealprep.feedback.domain.entity.SubmissionStatus;
 import com.example.mealprep.feedback.domain.repository.FeedbackEntryRepository;
 import com.example.mealprep.feedback.domain.repository.RoutingLogRepository;
 import com.example.mealprep.feedback.event.FeedbackProcessedEvent;
+import com.example.mealprep.feedback.exception.FeedbackBridgeDispatchFailedException;
 import com.example.mealprep.feedback.exception.FeedbackEntryNotFoundException;
 import com.example.mealprep.feedback.exception.NutritionFeedbackBridgeUnavailableException;
 import com.example.mealprep.feedback.exception.PreferenceFeedbackBridgeUnavailableException;
@@ -388,6 +389,7 @@ public class FeedbackRouterImpl implements FeedbackRouter {
         || ex instanceof PreferenceFeedbackBridgeUnavailableException
         || ex instanceof NutritionFeedbackBridgeUnavailableException
         || ex instanceof ProvisionsFeedbackBridgeUnavailableException
+        || ex instanceof FeedbackBridgeDispatchFailedException
         || ex instanceof AiUnavailableException
         || ex instanceof AiInvalidResponseException
         || ex instanceof AiInvalidRequestException) {
