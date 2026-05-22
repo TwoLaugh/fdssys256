@@ -8,10 +8,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
+import com.example.mealprep.notification.domain.repository.DefrostReminderDispatchLogRepository;
 import com.example.mealprep.notification.scanner.DefrostReminderScanner;
 import com.example.mealprep.notification.scanner.config.ScannerProperties;
 import com.example.mealprep.notification.scanner.internal.entity.DefrostReminderDispatchLog;
-import com.example.mealprep.notification.scanner.internal.repository.DefrostReminderDispatchLogRepository;
 import com.example.mealprep.provisions.api.dto.FreezerExtensionDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus;

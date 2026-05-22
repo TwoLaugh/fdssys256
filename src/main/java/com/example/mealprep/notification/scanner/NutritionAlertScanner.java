@@ -1,9 +1,9 @@
 package com.example.mealprep.notification.scanner;
 
+import com.example.mealprep.notification.domain.repository.NutritionAlertDispatchLogRepository;
 import com.example.mealprep.notification.scanner.config.ScannerProperties;
 import com.example.mealprep.notification.scanner.internal.ScannerSupport;
 import com.example.mealprep.notification.scanner.internal.entity.NutritionAlertDispatchLog;
-import com.example.mealprep.notification.scanner.internal.repository.NutritionAlertDispatchLogRepository;
 import com.example.mealprep.nutrition.api.dto.ActualIntakeDto;
 import com.example.mealprep.nutrition.api.dto.DivergenceSummaryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;

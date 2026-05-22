@@ -1,4 +1,4 @@
-package com.example.mealprep.notification.scanner.internal.repository;
+package com.example.mealprep.notification.domain.repository;
 
 import com.example.mealprep.notification.scanner.internal.entity.StapleReplenishmentDispatchLog;
 import java.time.Instant;

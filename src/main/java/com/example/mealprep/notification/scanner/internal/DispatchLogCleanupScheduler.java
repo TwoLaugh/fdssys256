@@ -1,11 +1,11 @@
 package com.example.mealprep.notification.scanner.internal;
 
+import com.example.mealprep.notification.domain.repository.DefrostReminderDispatchLogRepository;
+import com.example.mealprep.notification.domain.repository.ExpiryWarningDispatchLogRepository;
+import com.example.mealprep.notification.domain.repository.NutritionAlertDispatchLogRepository;
+import com.example.mealprep.notification.domain.repository.PrepReminderDispatchLogRepository;
+import com.example.mealprep.notification.domain.repository.StapleReplenishmentDispatchLogRepository;
 import com.example.mealprep.notification.scanner.config.ScannerProperties;
-import com.example.mealprep.notification.scanner.internal.repository.DefrostReminderDispatchLogRepository;
-import com.example.mealprep.notification.scanner.internal.repository.ExpiryWarningDispatchLogRepository;
-import com.example.mealprep.notification.scanner.internal.repository.NutritionAlertDispatchLogRepository;
-import com.example.mealprep.notification.scanner.internal.repository.PrepReminderDispatchLogRepository;
-import com.example.mealprep.notification.scanner.internal.repository.StapleReplenishmentDispatchLogRepository;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;

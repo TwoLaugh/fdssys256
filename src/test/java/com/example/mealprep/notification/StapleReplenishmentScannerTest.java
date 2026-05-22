@@ -7,11 +7,11 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.notification.domain.repository.StapleReplenishmentDispatchLogRepository;
 import com.example.mealprep.notification.event.StapleReplenishmentNeededEvent;
 import com.example.mealprep.notification.scanner.StapleReplenishmentScanner;
 import com.example.mealprep.notification.scanner.config.ScannerProperties;
 import com.example.mealprep.notification.scanner.internal.entity.StapleReplenishmentDispatchLog;
-import com.example.mealprep.notification.scanner.internal.repository.StapleReplenishmentDispatchLogRepository;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus;
 import com.example.mealprep.provisions.domain.entity.ItemSource;

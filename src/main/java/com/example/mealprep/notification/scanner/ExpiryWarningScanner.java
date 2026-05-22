@@ -2,10 +2,10 @@ package com.example.mealprep.notification.scanner;
 
 import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
+import com.example.mealprep.notification.domain.repository.ExpiryWarningDispatchLogRepository;
 import com.example.mealprep.notification.scanner.config.ScannerProperties;
 import com.example.mealprep.notification.scanner.internal.ScannerSupport;
 import com.example.mealprep.notification.scanner.internal.entity.ExpiryWarningDispatchLog;
-import com.example.mealprep.notification.scanner.internal.repository.ExpiryWarningDispatchLogRepository;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.domain.entity.StorageLocation;
 import com.example.mealprep.provisions.domain.service.ProvisionQueryService;

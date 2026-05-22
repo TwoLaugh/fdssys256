@@ -7,10 +7,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.notification.domain.repository.NutritionAlertDispatchLogRepository;
 import com.example.mealprep.notification.scanner.NutritionAlertScanner;
 import com.example.mealprep.notification.scanner.config.ScannerProperties;
 import com.example.mealprep.notification.scanner.internal.entity.NutritionAlertDispatchLog;
-import com.example.mealprep.notification.scanner.internal.repository.NutritionAlertDispatchLogRepository;
 import com.example.mealprep.nutrition.api.dto.ActualIntakeDto;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
