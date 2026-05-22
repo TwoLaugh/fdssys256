@@ -314,6 +314,25 @@ paths:
     $ref: 'paths/adaptation.yaml#/adaptationRunHistory'
   /api/v1/adaptation/run-history/by-prompt-version:
     $ref: 'paths/adaptation.yaml#/adaptationRunHistoryByPromptVersion'
+  # ===== notification =====
+  /api/v1/notifications:
+    $ref: 'paths/notification.yaml#/notifications'
+  /api/v1/notifications/summary:
+    $ref: 'paths/notification.yaml#/notificationsSummary'
+  /api/v1/notifications/preferences:
+    $ref: 'paths/notification.yaml#/notificationPreferences'
+  /api/v1/notifications/bulk/read:
+    $ref: 'paths/notification.yaml#/notificationsBulkRead'
+  /api/v1/notifications/{id}:
+    $ref: 'paths/notification.yaml#/notificationById'
+  /api/v1/notifications/{id}/read:
+    $ref: 'paths/notification.yaml#/notificationRead'
+  /api/v1/notifications/{id}/dismiss:
+    $ref: 'paths/notification.yaml#/notificationDismiss'
+  /api/v1/notifications/{id}/action:
+    $ref: 'paths/notification.yaml#/notificationAction'
+  /api/v1/notifications/{id}/delivery-log:
+    $ref: 'paths/notification.yaml#/notificationDeliveryLog'
 components:
   securitySchemes:
     cookieAuth:
@@ -689,6 +708,23 @@ components:
     AdaptationTraceDtoPage: { $ref: 'schemas/adaptation.yaml#/AdaptationTraceDtoPage' }
     RetryFailedJobRequest: { $ref: 'schemas/adaptation.yaml#/RetryFailedJobRequest' }
     SweepExpiredPendingResponse: { $ref: 'schemas/adaptation.yaml#/SweepExpiredPendingResponse' }
+    # notification
+    NotificationKind: { $ref: 'schemas/notification.yaml#/NotificationKind' }
+    NotificationSeverity: { $ref: 'schemas/notification.yaml#/NotificationSeverity' }
+    NotificationStatus: { $ref: 'schemas/notification.yaml#/NotificationStatus' }
+    DeliveryChannel: { $ref: 'schemas/notification.yaml#/DeliveryChannel' }
+    DeliveryOutcome: { $ref: 'schemas/notification.yaml#/DeliveryOutcome' }
+    DeliverySkipReason: { $ref: 'schemas/notification.yaml#/DeliverySkipReason' }
+    NotificationPayload: { $ref: 'schemas/notification.yaml#/NotificationPayload' }
+    NotificationDto: { $ref: 'schemas/notification.yaml#/NotificationDto' }
+    NotificationDtoPage: { $ref: 'schemas/notification.yaml#/NotificationDtoPage' }
+    NotificationSummaryDto: { $ref: 'schemas/notification.yaml#/NotificationSummaryDto' }
+    NotificationPreferenceDto: { $ref: 'schemas/notification.yaml#/NotificationPreferenceDto' }
+    UpdateNotificationPreferenceRequest: { $ref: 'schemas/notification.yaml#/UpdateNotificationPreferenceRequest' }
+    DeliveryLogEntryDto: { $ref: 'schemas/notification.yaml#/DeliveryLogEntryDto' }
+    DeliveryLogEntryDtoPage: { $ref: 'schemas/notification.yaml#/DeliveryLogEntryDtoPage' }
+    BulkReadRequest: { $ref: 'schemas/notification.yaml#/BulkReadRequest' }
+    BulkReadResponse: { $ref: 'schemas/notification.yaml#/BulkReadResponse' }
     # common (cross-module)
     ProblemDetail: { $ref: 'schemas/common.yaml#/ProblemDetail' }
     PageEnvelope: { $ref: 'schemas/common.yaml#/PageEnvelope' }

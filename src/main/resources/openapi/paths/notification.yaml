@@ -1,0 +1,297 @@
+notifications:
+  get:
+    tags: [Notifications]
+    operationId: listNotifications
+    summary: List the calling user's notifications, newest-first, with optional filters.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: status
+        required: false
+        schema: { $ref: '../schemas/notification.yaml#/NotificationStatus' }
+      - in: query
+        name: kind
+        required: false
+        schema: { $ref: '../schemas/notification.yaml#/NotificationKind' }
+      - in: query
+        name: since
+        required: false
+        schema: { type: string, format: date-time }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of notifications.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/notification.yaml#/NotificationDtoPage' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+notificationsSummary:
+  get:
+    tags: [Notifications]
+    operationId: getNotificationSummary
+    summary: Unread / attention / urgent badge counts for the calling user.
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: Badge summary.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/notification.yaml#/NotificationSummaryDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+notificationById:
+  get:
+    tags: [Notifications]
+    operationId: getNotificationById
+    summary: Read a single notification owned by the calling user.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The notification.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/notification.yaml#/NotificationDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+notificationRead:
+  post:
+    tags: [Notifications]
+    operationId: markNotificationRead
+    summary: Mark a notification read.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The updated notification.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/notification.yaml#/NotificationDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Illegal state transition.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+notificationDismiss:
+  post:
+    tags: [Notifications]
+    operationId: markNotificationDismissed
+    summary: Dismiss a notification.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The updated notification.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/notification.yaml#/NotificationDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Illegal state transition.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+notificationAction:
+  post:
+    tags: [Notifications]
+    operationId: markNotificationActioned
+    summary: Mark a notification actioned.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The updated notification.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/notification.yaml#/NotificationDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Illegal state transition.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+notificationsBulkRead:
+  post:
+    tags: [Notifications]
+    operationId: markAllNotificationsRead
+    summary: Mark all unread notifications read; an empty kinds list means all kinds.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/notification.yaml#/BulkReadRequest' }
+    responses:
+      '200':
+        description: The number of notifications updated.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/notification.yaml#/BulkReadResponse' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+notificationDeliveryLog:
+  get:
+    tags: [Notifications]
+    operationId: getNotificationDeliveryLog
+    summary: Paginated delivery-log entries for a notification; newest-first.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of delivery-log entries.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/notification.yaml#/DeliveryLogEntryDtoPage' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+notificationPreferences:
+  get:
+    tags: [Notifications]
+    operationId: getNotificationPreferences
+    summary: Read the calling user's notification preferences; auto-seeds defaults.
+    security:
+      - cookieAuth: []
+    responses:
+      '200':
+        description: The user's notification preferences.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/notification.yaml#/NotificationPreferenceDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  put:
+    tags: [Notifications]
+    operationId: updateNotificationPreferences
+    summary: Replace the calling user's notification preferences.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/notification.yaml#/UpdateNotificationPreferenceRequest' }
+    responses:
+      '200':
+        description: The updated notification preferences.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/notification.yaml#/NotificationPreferenceDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Optimistic-lock conflict.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

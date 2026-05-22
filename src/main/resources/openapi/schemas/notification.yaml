@@ -1,0 +1,173 @@
+NotificationKind:
+  type: string
+  enum:
+    - PROVISION_ITEM_NEAR_EXPIRY
+    - PROVISION_ITEM_SPOILED
+    - PROVISION_DEFROST_REMINDER
+    - NUTRITION_INTAKE_DIVERGED
+    - HEALTH_DIRECTIVE_RECEIVED
+    - PLANNER_PREP_REMINDER
+    - PLANNER_REOPT_SUGGESTED
+    - PLANNER_PLAN_GENERATED
+
+NotificationSeverity:
+  type: string
+  enum: [INFO, ATTENTION, URGENT]
+
+NotificationStatus:
+  type: string
+  enum: [UNREAD, READ, DISMISSED, ACTIONED]
+
+DeliveryChannel:
+  type: string
+  enum: [IN_APP, PUSH, EMAIL]
+
+DeliveryOutcome:
+  type: string
+  enum: [DELIVERED, SKIPPED, DEFERRED, FAILED]
+
+DeliverySkipReason:
+  type: string
+  enum: [DISABLED_BY_PREF, QUIET_HOURS, DEDUPED_INTO_BUNDLE, CHANNEL_UNAVAILABLE]
+
+NotificationPayload:
+  type: object
+  description: >
+    Kind-specific payload. Polymorphic on the `kind` discriminator: each variant's `kind` field
+    selects the concrete shape. Additional fields per variant are kind-specific and free-form on the
+    wire; the discriminator below maps each NotificationKind to its payload record.
+  required: [kind]
+  properties:
+    kind: { $ref: '#/NotificationKind' }
+  additionalProperties: true
+
+NotificationDto:
+  type: object
+  required:
+    - id
+    - userId
+    - kind
+    - severity
+    - title
+    - body
+    - payload
+    - status
+    - bundleCount
+    - createdAt
+    - version
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    householdId: { type: string, format: uuid, nullable: true }
+    kind: { $ref: '#/NotificationKind' }
+    severity: { $ref: '#/NotificationSeverity' }
+    title: { type: string, maxLength: 200 }
+    body: { type: string, maxLength: 1000 }
+    payload: { $ref: '#/NotificationPayload' }
+    status: { $ref: '#/NotificationStatus' }
+    actionTargetUri: { type: string, maxLength: 512, nullable: true }
+    bundleCount: { type: integer }
+    bundleKeys:
+      type: array
+      items: { type: string }
+      nullable: true
+    traceId: { type: string, format: uuid, nullable: true }
+    createdAt: { type: string, format: date-time }
+    readAt: { type: string, format: date-time, nullable: true }
+    actionedAt: { type: string, format: date-time, nullable: true }
+    dismissedAt: { type: string, format: date-time, nullable: true }
+    version: { type: integer, format: int64 }
+
+NotificationDtoPage:
+  type: object
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/NotificationDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+
+NotificationSummaryDto:
+  type: object
+  required: [unreadCount, attentionCount, urgentCount, generatedAt]
+  properties:
+    unreadCount: { type: integer }
+    attentionCount: { type: integer }
+    urgentCount: { type: integer }
+    generatedAt: { type: string, format: date-time }
+
+NotificationPreferenceDto:
+  type: object
+  required:
+    - id
+    - userId
+    - enabledKinds
+    - quietHoursEnabled
+    - timezone
+    - debounceWindowMinutes
+    - version
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    enabledKinds:
+      type: object
+      additionalProperties: { type: boolean }
+    quietHoursEnabled: { type: boolean }
+    quietHoursStart: { type: string, format: time, nullable: true }
+    quietHoursEnd: { type: string, format: time, nullable: true }
+    timezone: { type: string, maxLength: 64 }
+    debounceWindowMinutes: { type: integer }
+    version: { type: integer, format: int64 }
+
+UpdateNotificationPreferenceRequest:
+  type: object
+  required: [enabledKinds, timezone]
+  properties:
+    enabledKinds:
+      type: object
+      additionalProperties: { type: boolean }
+    quietHoursEnabled: { type: boolean }
+    quietHoursStart: { type: string, format: time, nullable: true }
+    quietHoursEnd: { type: string, format: time, nullable: true }
+    timezone: { type: string, maxLength: 64 }
+    debounceWindowMinutes: { type: integer, minimum: 0, maximum: 360 }
+    expectedVersion: { type: integer, format: int64 }
+
+DeliveryLogEntryDto:
+  type: object
+  required: [id, notificationId, channel, outcome, attemptedAt]
+  properties:
+    id: { type: string, format: uuid }
+    notificationId: { type: string, format: uuid }
+    channel: { $ref: '#/DeliveryChannel' }
+    outcome: { $ref: '#/DeliveryOutcome' }
+    skipReason:
+      allOf: [{ $ref: '#/DeliverySkipReason' }]
+      nullable: true
+    attemptedAt: { type: string, format: date-time }
+
+DeliveryLogEntryDtoPage:
+  type: object
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/DeliveryLogEntryDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+
+BulkReadRequest:
+  type: object
+  properties:
+    kinds:
+      type: array
+      items: { $ref: '#/NotificationKind' }
+
+BulkReadResponse:
+  type: object
+  required: [updated]
+  properties:
+    updated: { type: integer }
