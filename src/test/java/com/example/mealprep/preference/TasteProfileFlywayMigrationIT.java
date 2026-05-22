@@ -61,8 +61,11 @@ class TasteProfileFlywayMigrationIT {
             "SELECT tablename FROM pg_tables WHERE tablename LIKE 'preference_taste_profile%' "
                 + "ORDER BY tablename",
             String.class);
+    // contains (not containsExactly): the preference_taste_profile_archive table (added by
+    // preference-01e) also matches the LIKE prefix. This test's intent is "the taste-profile
+    // migration created its 3 tables", not "no future table may share the prefix".
     assertThat(tables)
-        .containsExactly(
+        .contains(
             "preference_taste_profile",
             "preference_taste_profile_audit",
             "preference_taste_profile_versions");
