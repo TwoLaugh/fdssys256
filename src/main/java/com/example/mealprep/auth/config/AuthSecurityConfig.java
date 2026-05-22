@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.time.Clock;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -30,6 +31,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 /**
@@ -81,14 +83,16 @@ public class AuthSecurityConfig {
       InMemoryTokenBucketRateLimiter rateLimiter,
       ServiceTokenAuthenticationProvider serviceTokenAuth,
       ObjectProvider<RequestMappingHandlerMapping> handlerMappingProvider,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      @Qualifier("handlerExceptionResolver") HandlerExceptionResolver handlerExceptionResolver) {
     return new OriginFilter(
         originContext,
         originProperties,
         rateLimiter,
         serviceTokenAuth,
         handlerMappingProvider,
-        objectMapper);
+        objectMapper,
+        handlerExceptionResolver);
   }
 
   @Bean

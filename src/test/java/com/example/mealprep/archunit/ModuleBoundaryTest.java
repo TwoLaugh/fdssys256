@@ -42,7 +42,14 @@ class ModuleBoundaryTest {
               // application-specific re-wrapping buys nothing. Conventional carve-out, same
               // pattern as the ai.domain.service.internal exception above.
               "com.example.mealprep.recipe.spi..",
-              "com.example.mealprep.recipe.domain.service.internal..")
+              "com.example.mealprep.recipe.domain.service.internal..",
+              // core-02b: the origin-tracking foundation is itself an HTTP-layer concern that, per
+              // lld/core.md, lives in core.origin (cross-cutting) rather than a per-module .api.
+              // OriginFilter (a OncePerRequestFilter), the @RequestScope OriginContext, the servlet
+              // request/response handling, and the HandlerExceptionResolver delegation that routes
+              // filter-thrown rejections back through @ExceptionHandler all legitimately depend on
+              // Spring Web / Servlet types. Same sanctioned carve-out as the SPI exceptions above.
+              "com.example.mealprep.core.origin..")
           .should()
           .dependOnClassesThat()
           .resideInAnyPackage(

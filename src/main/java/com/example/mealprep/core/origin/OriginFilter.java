@@ -22,10 +22,13 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.lang.Nullable;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.method.HandlerMethod;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 import org.springframework.web.servlet.HandlerExecutionChain;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 import org.springframework.web.util.ContentCachingRequestWrapper;
@@ -41,9 +44,18 @@ import org.springframework.web.util.ContentCachingRequestWrapper;
  * already populated. The filter only mutates the security context under Pattern B (bearer token +
  * non-USER origin); under Pattern A it trusts whatever the cookie filter resolved.
  *
- * <p><b>Fail-closed:</b> any validation problem rethrows the corresponding exception so the global
+ * <p><b>Fail-closed:</b> any validation problem raises the corresponding exception so the global
  * exception handler emits a {@code ProblemDetail} response. Per the design doc's "Open Questions",
  * fail-closed was the chosen posture.
+ *
+ * <p><b>Exception routing:</b> a servlet filter runs OUTSIDE the {@code DispatcherServlet}, so
+ * exceptions thrown here never reach {@code @RestControllerAdvice} / {@code @ExceptionHandler}
+ * naturally — they would propagate as raw 500s (or be rethrown by MockMvc). To produce the same
+ * {@code ProblemDetail} responses a controller would, the filter delegates rejection exceptions to
+ * the composite {@link HandlerExceptionResolver} (the {@code handlerExceptionResolver} bean), which
+ * routes them through the very same {@code @ExceptionHandler} infrastructure controllers use. When
+ * the resolver is {@code null} (e.g. the pure-unit {@code OriginFilterTest} constructs the filter
+ * directly with no Spring context) the filter rethrows so callers still observe the raw exception.
  *
  * <p><b>Body buffering:</b> AI-origin requests require the {@code confidence} field to be parsed
  * before the controller binds the body. The filter wraps the request in {@link
@@ -75,19 +87,28 @@ public class OriginFilter extends OncePerRequestFilter {
   private final ObjectProvider<RequestMappingHandlerMapping> handlerMappingProvider;
   private final ObjectMapper objectMapper;
 
+  /**
+   * Composite resolver used to turn filter-thrown rejection exceptions into {@code ProblemDetail}
+   * responses via the {@code @ExceptionHandler} chain. Nullable: the pure-unit test constructs the
+   * filter without one, in which case rejections are rethrown rather than resolved.
+   */
+  @Nullable private final HandlerExceptionResolver exceptionResolver;
+
   public OriginFilter(
       OriginContext originContext,
       OriginProperties properties,
       InMemoryTokenBucketRateLimiter rateLimiter,
       ServiceTokenAuthenticationProvider serviceTokenAuth,
       ObjectProvider<RequestMappingHandlerMapping> handlerMappingProvider,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      @Nullable HandlerExceptionResolver exceptionResolver) {
     this.originContext = originContext;
     this.properties = properties;
     this.rateLimiter = rateLimiter;
     this.serviceTokenAuth = serviceTokenAuth;
     this.handlerMappingProvider = handlerMappingProvider;
     this.objectMapper = objectMapper;
+    this.exceptionResolver = exceptionResolver;
   }
 
   @Override
@@ -103,6 +124,41 @@ public class OriginFilter extends OncePerRequestFilter {
       return;
     }
 
+    HttpServletRequest effectiveRequest;
+    try {
+      effectiveRequest = applyOriginPolicy(request);
+    } catch (OriginValidationException
+        | OriginDepthExceededException
+        | ConfidenceBelowThresholdException
+        | OriginNotPermittedOnEndpointException
+        | OriginRateLimitExceededException
+        | AuthenticationException
+        | ServiceTokenAuthenticationProvider.OriginNotPermittedByTokenException ex) {
+      // A servlet filter is OUTSIDE the DispatcherServlet, so @ExceptionHandler advice never sees
+      // these. Route them through the composite HandlerExceptionResolver — the same machinery the
+      // DispatcherServlet uses — so they become the ProblemDetail responses controllers produce.
+      if (exceptionResolver != null
+          && exceptionResolver.resolveException(request, response, null, ex) != null) {
+        return;
+      }
+      // No resolver (pure-unit construction) or the resolver declined: preserve fail-closed by
+      // rethrowing so the exception still surfaces.
+      throw ex;
+    }
+
+    chain.doFilter(effectiveRequest, response);
+  }
+
+  /**
+   * Run every origin-policy gate (validation, recursion guard, Pattern-B auth, confidence floor,
+   * {@code @OriginAware} check, rate limit) and populate the {@link OriginContext}. Returns the
+   * request the chain should continue with — the original, or a {@link
+   * ContentCachingRequestWrapper} when the body had to be buffered for the confidence check. Throws
+   * the relevant rejection exception on any gate failure; {@link #doFilterInternal} routes those to
+   * the exception resolver.
+   */
+  private HttpServletRequest applyOriginPolicy(HttpServletRequest request) throws IOException {
+    String rawOrigin = request.getHeader(OriginHeaders.X_ORIGIN);
     Origin origin = parseOrigin(rawOrigin);
 
     // Required trace for any non-USER origin.
@@ -179,7 +235,7 @@ public class OriginFilter extends OncePerRequestFilter {
     originContext.setConfidence(confidence);
     originContext.setActingAsUserId(actingAsUserId);
 
-    chain.doFilter(effectiveRequest, response);
+    return effectiveRequest;
   }
 
   private Origin parseOrigin(String raw) {

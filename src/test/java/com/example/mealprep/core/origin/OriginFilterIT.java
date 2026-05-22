@@ -55,7 +55,9 @@ import org.springframework.web.bind.annotation.RestController;
   AuthSecurityConfig.class,
   GlobalExceptionHandler.class,
   OriginContext.class,
-  InMemoryTokenBucketRateLimiter.class
+  InMemoryTokenBucketRateLimiter.class,
+  OriginFilterIT.OriginAwareTestController.class,
+  OriginFilterIT.PlainTestController.class
 })
 // OriginProperties is a constructor-bound @ConfigurationProperties record; it must be registered
 // via @EnableConfigurationProperties (not @Import) so the @TestPropertySource values below bind.
@@ -177,6 +179,12 @@ class OriginFilterIT {
 
   @Test
   void rate_limit_exhaustion_returns_429_with_retry_after_header() throws Exception {
+    // The AI_FEEDBACK bucket is PER_USER with limit=2 (see @TestPropertySource). All three calls
+    // must therefore resolve to the SAME rate-limit identity for the bucket to accumulate — so we
+    // pin a single fixed user (authenticatedAsAnyUser() would mint a fresh UUID per call, giving
+    // each call its own bucket and never exhausting). No X-Acting-As → the filter scopes the bucket
+    // by the session principal's userId, which this fixed principal supplies.
+    UUID rateLimitedUser = UUID.fromString("0a0a0a0a-0000-0000-0000-0000000feed0");
     // Bucket is 2 per props; third call rejected.
     for (int i = 0; i < 2; i++) {
       mvc.perform(
@@ -185,7 +193,7 @@ class OriginFilterIT {
                   .content("{\"confidence\": 0.9}")
                   .header(OriginHeaders.X_ORIGIN, "AI_FEEDBACK")
                   .header(OriginHeaders.X_ORIGIN_TRACE, "feedback-" + i)
-                  .with(authenticatedAsAnyUser()))
+                  .with(authenticatedAs(rateLimitedUser)))
           .andExpect(status().isOk());
     }
 
@@ -195,7 +203,7 @@ class OriginFilterIT {
                 .content("{\"confidence\": 0.9}")
                 .header(OriginHeaders.X_ORIGIN, "AI_FEEDBACK")
                 .header(OriginHeaders.X_ORIGIN_TRACE, "feedback-rejected")
-                .with(authenticatedAsAnyUser()))
+                .with(authenticatedAs(rateLimitedUser)))
         .andExpect(status().isTooManyRequests())
         .andExpect(header().exists("Retry-After"))
         .andExpect(
@@ -284,23 +292,38 @@ class OriginFilterIT {
   // The test controllers & helpers.
 
   /**
-   * Helper: attach an arbitrary authenticated user to the SecurityContext for the slice request.
-   * Pattern A flows still need the chain to consider the request authenticated.
+   * Helper: attach an arbitrary authenticated user to the request for the slice. Pattern A flows
+   * still need the chain to consider the request authenticated.
+   *
+   * <p>Uses {@link
+   * org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors#authentication}
+   * (NOT a raw {@code SecurityContextHolder.setAuthentication}) so the authentication survives the
+   * {@code SecurityContextHolderFilter} that runs first in the chain — a directly-set holder is
+   * cleared by that filter before {@code OriginFilter} sees it, which would surface as a spurious
+   * 401. The post-processor stashes the {@code Authentication} on a request attribute that the test
+   * security context repository restores during the chain.
    */
   private static org.springframework.test.web.servlet.request.RequestPostProcessor
       authenticatedAsAnyUser() {
-    return req -> {
-      org.springframework.security.core.context.SecurityContextHolder.getContext()
-          .setAuthentication(
-              new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
-                  new com.example.mealprep.auth.domain.service.AuthenticatedPrincipal(
-                      UUID.randomUUID(), UUID.randomUUID()),
-                  null,
-                  java.util.List.of(
-                      new org.springframework.security.core.authority.SimpleGrantedAuthority(
-                          "ROLE_USER"))));
-      return req;
-    };
+    return authenticatedAs(UUID.randomUUID());
+  }
+
+  /**
+   * Same as {@link #authenticatedAsAnyUser()} but pins a specific {@code userId} on the principal —
+   * needed when a test depends on a stable rate-limit identity across multiple requests (the
+   * PER_USER token bucket is keyed on this id).
+   */
+  private static org.springframework.test.web.servlet.request.RequestPostProcessor authenticatedAs(
+      UUID userId) {
+    return org.springframework.security.test.web.servlet.request
+        .SecurityMockMvcRequestPostProcessors.authentication(
+        new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+            new com.example.mealprep.auth.domain.service.AuthenticatedPrincipal(
+                userId, UUID.randomUUID()),
+            null,
+            java.util.List.of(
+                new org.springframework.security.core.authority.SimpleGrantedAuthority(
+                    "ROLE_USER"))));
   }
 
   /** Test controller method marked {@link OriginAware}. */

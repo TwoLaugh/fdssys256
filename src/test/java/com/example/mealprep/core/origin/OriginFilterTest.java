@@ -89,6 +89,11 @@ class OriginFilterTest {
     lenient()
         .when(handlerMapping.getHandler(any(HttpServletRequest.class)))
         .thenReturn(handlerForAnnotated());
+    // No HandlerExceptionResolver here: this pure-unit test asserts the filter RAISES each
+    // rejection
+    // exception (the routing-through-the-resolver behaviour is covered end-to-end by
+    // OriginFilterIT).
+    // With a null resolver the filter rethrows, which is exactly what these assertions expect.
     filter =
         new OriginFilter(
             originContext,
@@ -96,7 +101,8 @@ class OriginFilterTest {
             rateLimiter,
             serviceTokenAuth,
             handlerMappingProvider,
-            new ObjectMapper());
+            new ObjectMapper(),
+            null);
     SecurityContextHolder.clearContext();
   }
 
