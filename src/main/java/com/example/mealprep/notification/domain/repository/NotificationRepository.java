@@ -25,22 +25,25 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
   Optional<Notification> findByIdAndUserId(UUID id, UUID userId);
 
   /**
-   * Inbox search with optional status / kind / since filters. A null (or empty) collection means
-   * "no constraint on that dimension"; a null {@code since} means no lower time bound.
-   * Newest-first.
+   * Inbox search with optional status / kind / since filters. The {@code *FilterActive} booleans
+   * gate the {@code in} clauses so we never compare a collection-valued parameter with {@code is
+   * null} (Hibernate 6 rejects that); a null {@code since} means no lower time bound. Newest-first.
+   * Callers pass non-empty collections only when the matching boolean is true.
    */
   @Query(
       """
       select n from Notification n
       where n.userId = :userId
-        and (:statuses is null or n.status in :statuses)
-        and (:kinds is null or n.kind in :kinds)
+        and (:statusFilterActive = false or n.status in :statuses)
+        and (:kindFilterActive = false or n.kind in :kinds)
         and (:since is null or n.createdAt >= :since)
       order by n.createdAt desc
       """)
   Page<Notification> search(
       @Param("userId") UUID userId,
+      @Param("statusFilterActive") boolean statusFilterActive,
       @Param("statuses") Collection<NotificationStatus> statuses,
+      @Param("kindFilterActive") boolean kindFilterActive,
       @Param("kinds") Collection<NotificationKind> kinds,
       @Param("since") Instant since,
       Pageable pageable);

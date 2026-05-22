@@ -11,8 +11,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
-/** Listens to planner-module events. Never throws — see {@link ProvisionEventListener}. */
-@Component
+/**
+ * Listens to planner-module events. Never throws — see {@link ProvisionEventListener}.
+ *
+ * <p>Explicit bean name avoids a collision with the planner module's own {@code
+ * planner.domain.service.internal.listeners.PlannerEventListener}, which would otherwise share the
+ * default {@code plannerEventListener} bean name.
+ */
+@Component("notificationPlannerEventListener")
 public class PlannerEventListener {
 
   private static final Logger log = LoggerFactory.getLogger(PlannerEventListener.class);

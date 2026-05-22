@@ -27,6 +27,7 @@ import com.example.mealprep.notification.exception.NotificationStateTransitionEx
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
@@ -108,17 +109,20 @@ public class NotificationServiceImpl
   @Override
   @Transactional(readOnly = true)
   public Page<NotificationDto> list(UUID userId, NotificationListFilter filter, Pageable pageable) {
-    Set<NotificationStatus> statuses =
-        filter == null || filter.statuses() == null || filter.statuses().isEmpty()
-            ? null
-            : filter.statuses();
-    Set<NotificationKind> kinds =
-        filter == null || filter.kinds() == null || filter.kinds().isEmpty()
-            ? null
-            : filter.kinds();
+    boolean statusFilterActive =
+        filter != null && filter.statuses() != null && !filter.statuses().isEmpty();
+    boolean kindFilterActive =
+        filter != null && filter.kinds() != null && !filter.kinds().isEmpty();
+    // The IN clauses are gated by the *FilterActive booleans, but the named parameters must still
+    // be
+    // bound to a non-empty collection — Hibernate rejects an empty collection in an IN list.
+    Collection<NotificationStatus> statuses =
+        statusFilterActive ? filter.statuses() : EnumSet.allOf(NotificationStatus.class);
+    Collection<NotificationKind> kinds =
+        kindFilterActive ? filter.kinds() : EnumSet.allOf(NotificationKind.class);
     Instant since = filter == null ? null : filter.since();
     return notificationRepository
-        .search(userId, statuses, kinds, since, pageable)
+        .search(userId, statusFilterActive, statuses, kindFilterActive, kinds, since, pageable)
         .map(notificationMapper::toDto);
   }
 

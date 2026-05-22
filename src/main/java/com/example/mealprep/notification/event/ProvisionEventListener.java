@@ -16,7 +16,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * AFTER_COMMIT}. Each handler never throws: a dispatch failure is logged and metric-counted so the
  * already-committed publisher transaction is never affected.
  */
-@Component
+@Component("notificationProvisionEventListener")
 public class ProvisionEventListener {
 
   private static final Logger log = LoggerFactory.getLogger(ProvisionEventListener.class);

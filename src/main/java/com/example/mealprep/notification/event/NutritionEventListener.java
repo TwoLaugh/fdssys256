@@ -11,7 +11,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /** Listens to nutrition-module events. Never throws — see {@link ProvisionEventListener}. */
-@Component
+@Component("notificationNutritionEventListener")
 public class NutritionEventListener {
 
   private static final Logger log = LoggerFactory.getLogger(NutritionEventListener.class);
