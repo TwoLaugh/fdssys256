@@ -170,6 +170,25 @@ class ModuleBoundaryTest {
                   + " field of that type.")
           .allowEmptyShould(true);
 
+  /**
+   * Notification-01a: the notification module's repositories are module-private — cross-module
+   * callers route through {@code NotificationQueryService} / {@code NotificationUpdateService}.
+   * Per-module isolation also lives in {@code notification.NotificationBoundaryTest}; this entry
+   * keeps the cross-cutting suite's coverage explicit for the newest module per the ticket.
+   */
+  @ArchTest
+  static final ArchRule notificationReposAreModulePrivate =
+      noClasses()
+          .that()
+          .resideOutsideOfPackage("com.example.mealprep.notification..")
+          .should()
+          .dependOnClassesThat()
+          .resideInAPackage("com.example.mealprep.notification.domain.repository..")
+          .as(
+              "notification repos are accessible only within the notification module —"
+                  + " cross-module callers go through the notification service interfaces.")
+          .allowEmptyShould(true);
+
   private static DescribedPredicate<JavaClass> returnsRawListOfDto() {
     return new DescribedPredicate<>("a raw List/Collection (assignable to java.util.Collection)") {
       @Override
