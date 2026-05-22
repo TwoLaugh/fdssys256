@@ -2,6 +2,7 @@ package com.example.mealprep.planner.domain.service;
 
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
+import com.example.mealprep.planner.api.dto.UpcomingSlotView;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -80,4 +81,13 @@ public interface PlanQueryService {
    * suggestion does not exist.
    */
   Optional<ReoptSuggestionDto> getSuggestion(UUID suggestionId);
+
+  /**
+   * Flat list of upcoming meal slots for a household whose day date falls in {@code [fromDate,
+   * toDate]} inclusive, drawn from the household's {@code ACTIVE} plans only. Read-only
+   * cross-module helper for the notification/01b {@code PrepReminderScanner}; returns one {@link
+   * UpcomingSlotView} per slot (empty list when the household has no active plan in the window). No
+   * HTTP exposure.
+   */
+  List<UpcomingSlotView> getUpcomingSlots(UUID householdId, LocalDate fromDate, LocalDate toDate);
 }

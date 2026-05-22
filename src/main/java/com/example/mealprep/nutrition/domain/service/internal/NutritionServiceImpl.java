@@ -271,6 +271,12 @@ public class NutritionServiceImpl
 
   @Override
   @Transactional(readOnly = true)
+  public List<UUID> getUserIdsWithTargets() {
+    return targetsRepository.findDistinctUserIds();
+  }
+
+  @Override
+  @Transactional(readOnly = true)
   public Page<NutritionTargetsAuditEntryDto> getTargetsAuditLog(UUID userId, Pageable pageable) {
     Optional<NutritionTargets> aggregate = targetsRepository.findByUserId(userId);
     if (aggregate.isEmpty()) {

@@ -998,4 +998,59 @@ class ProvisionServiceImplTest {
     InventoryItemDto dto = service().createInventoryItem(userId, request, AuditActor.USER);
     assertThat(dto.quantity()).isEqualByComparingTo(BigDecimal.ZERO);
   }
+
+  // ---------------- notification/01b scanner reads ----------------
+
+  @Test
+  void getUserIdsWithActiveInventory_delegatesToRepo() {
+    UUID u1 = UUID.randomUUID();
+    UUID u2 = UUID.randomUUID();
+    when(inventoryItemRepository.findDistinctUserIdsByItemStatus(ItemLifecycleStatus.ACTIVE))
+        .thenReturn(java.util.List.of(u1, u2));
+
+    assertThat(service().getUserIdsWithActiveInventory()).containsExactly(u1, u2);
+  }
+
+  @Test
+  void getExpiringInventory_mapsToDto() {
+    UUID userId = UUID.randomUUID();
+    java.time.LocalDate max = java.time.LocalDate.of(2026, 6, 30);
+    InventoryItem item = ProvisionsTestData.quantityTrackedItem(userId).build();
+    when(inventoryItemRepository.findActiveExpiringForUser(userId, max))
+        .thenReturn(java.util.List.of(item));
+
+    assertThat(service().getExpiringInventory(userId, max))
+        .extracting(InventoryItemDto::id)
+        .containsExactly(item.getId());
+  }
+
+  @Test
+  void getDefrostCandidates_mapsToDto() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem frozen = ProvisionsTestData.freezerItem(userId).build();
+    when(inventoryItemRepository.findActiveDefrostCandidatesForUser(userId))
+        .thenReturn(java.util.List.of(frozen));
+
+    java.util.List<InventoryItemDto> result = service().getDefrostCandidates(userId);
+
+    assertThat(result).hasSize(1);
+    assertThat(result.get(0).freezerExtension().defrostLeadTimeHours()).isEqualTo(8);
+  }
+
+  @Test
+  void getStaplesNeedingReplenishment_queriesLowAndOut() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem staple =
+        ProvisionsTestData.statusTrackedItem(userId)
+            .isStaple(true)
+            .status(StapleStatus.LOW)
+            .build();
+    when(inventoryItemRepository.findActiveStaplesForUserByStatusIn(
+            userId, java.util.List.of(StapleStatus.LOW, StapleStatus.OUT)))
+        .thenReturn(java.util.List.of(staple));
+
+    assertThat(service().getStaplesNeedingReplenishment(userId))
+        .extracting(InventoryItemDto::id)
+        .containsExactly(staple.getId());
+  }
 }

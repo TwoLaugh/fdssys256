@@ -25,4 +25,11 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface NutritionTargetsRepository extends JpaRepository<NutritionTargets, UUID> {
 
   Optional<NutritionTargets> findByUserId(UUID userId);
+
+  /**
+   * Distinct {@code user_id}s with a targets row. Drives the notification/01b {@code
+   * NutritionAlertScanner}'s per-user sweep.
+   */
+  @org.springframework.data.jpa.repository.Query("SELECT DISTINCT t.userId FROM NutritionTargets t")
+  java.util.List<UUID> findDistinctUserIds();
 }

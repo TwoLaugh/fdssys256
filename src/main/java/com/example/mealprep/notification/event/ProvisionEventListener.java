@@ -57,6 +57,15 @@ public class ProvisionEventListener {
     }
   }
 
+  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  public void onStapleReplenishmentNeeded(StapleReplenishmentNeededEvent event) {
+    try {
+      dispatcher.dispatchStapleReplenishmentNeeded(event);
+    } catch (Exception e) {
+      handleFailure("STAPLE_REPLENISHMENT_NEEDED", event, e);
+    }
+  }
+
   private void handleFailure(String kind, Object event, Exception e) {
     log.error("notification dispatch failed for event={}", event, e);
     meterRegistry.counter("notification.dispatch.failure", "kind", kind).increment();

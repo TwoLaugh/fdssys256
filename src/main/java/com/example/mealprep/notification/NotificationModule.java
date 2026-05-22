@@ -3,6 +3,7 @@ package com.example.mealprep.notification;
 import com.example.mealprep.notification.config.NotificationProperties;
 import com.example.mealprep.notification.domain.service.NotificationQueryService;
 import com.example.mealprep.notification.domain.service.NotificationUpdateService;
+import com.example.mealprep.notification.scanner.config.ScannerProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -17,7 +18,7 @@ import org.springframework.stereotype.Component;
  * re-exported — it is package-private and listener-facing only.
  */
 @Component
-@EnableConfigurationProperties(NotificationProperties.class)
+@EnableConfigurationProperties({NotificationProperties.class, ScannerProperties.class})
 public class NotificationModule {
 
   private final NotificationQueryService notificationQueryService;

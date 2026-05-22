@@ -44,6 +44,62 @@ public interface InventoryItemRepository extends JpaRepository<InventoryItem, UU
   Optional<InventoryItem> findByIdAndUserId(UUID id, UUID userId);
 
   /**
+   * Distinct {@code user_id}s that own at least one inventory row with the given lifecycle status.
+   * Drives the notification/01b expiry + staple scanners (which iterate users, then load each
+   * user's candidate rows). Bounded by the number of users with inventory; a future
+   * Shedlock-paginated scan would chunk this, but single-instance v1 reads the full set.
+   */
+  @Query("SELECT DISTINCT i.userId FROM InventoryItem i WHERE i.itemStatus = :itemStatus")
+  List<UUID> findDistinctUserIdsByItemStatus(ItemLifecycleStatus itemStatus);
+
+  /**
+   * Active rows for {@code userId} with a non-null {@code expiry_date} on or before {@code
+   * maxExpiryDate}. Drives the notification/01b {@code ExpiryWarningScanner} — the scanner passes
+   * {@code today + max(threshold across storage locations)} so a single query covers fridge /
+   * freezer / pantry, then applies the per-location threshold in code. Ordered by {@code
+   * expiry_date ASC} (soonest-expiring first).
+   */
+  @Query(
+      "SELECT i FROM InventoryItem i"
+          + " WHERE i.userId = :userId"
+          + " AND i.itemStatus = com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus.ACTIVE"
+          + " AND i.expiryDate IS NOT NULL"
+          + " AND i.expiryDate <= :maxExpiryDate"
+          + " ORDER BY i.expiryDate ASC")
+  List<InventoryItem> findActiveExpiringForUser(UUID userId, java.time.LocalDate maxExpiryDate);
+
+  /**
+   * Active FREEZER rows for {@code userId} that carry both a {@code defrost_lead_time_hours} and an
+   * {@code expiry_date} (the use-by anchor the {@code DefrostReminderScanner} treats as the meal
+   * time). Per {@code design/provision-model.md} the defrost lead-time data lives in provisions, so
+   * the defrost scanner reads it here rather than from the planner.
+   */
+  @Query(
+      "SELECT i FROM InventoryItem i"
+          + " WHERE i.userId = :userId"
+          + " AND i.itemStatus = com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus.ACTIVE"
+          + " AND i.storageLocation = com.example.mealprep.provisions.domain.entity.StorageLocation.FREEZER"
+          + " AND i.defrostLeadTimeHours IS NOT NULL"
+          + " AND i.expiryDate IS NOT NULL"
+          + " ORDER BY i.expiryDate ASC")
+  List<InventoryItem> findActiveDefrostCandidatesForUser(UUID userId);
+
+  /**
+   * Active staple rows for {@code userId} whose {@code status} is in the given set (typically
+   * {@code LOW}/{@code OUT}). Drives the notification/01b {@code StapleReplenishmentScanner}.
+   * Unlike {@link #findAllByUserIdAndIsStapleTrueAndStatusIn} this also pins {@code item_status =
+   * ACTIVE} so soft-deleted rows never surface a replenishment alert.
+   */
+  @Query(
+      "SELECT i FROM InventoryItem i"
+          + " WHERE i.userId = :userId"
+          + " AND i.isStaple = true"
+          + " AND i.itemStatus = com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus.ACTIVE"
+          + " AND i.status IN :statuses")
+  List<InventoryItem> findActiveStaplesForUserByStatusIn(
+      UUID userId, Collection<StapleStatus> statuses);
+
+  /**
    * Unpaged list of inventory items belonging to {@code userId} with the given lifecycle {@code
    * itemStatus}. Driven by 01f's planner-bundle aggregator — bounded by per-user state (typical
    * pantry has tens of rows; the 01f IT asserts no N+1 explosion).

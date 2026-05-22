@@ -248,6 +248,38 @@ public class ProvisionServiceImpl
 
   @Override
   @Transactional(readOnly = true)
+  public List<UUID> getUserIdsWithActiveInventory() {
+    return inventoryItemRepository.findDistinctUserIdsByItemStatus(ItemLifecycleStatus.ACTIVE);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<InventoryItemDto> getExpiringInventory(UUID userId, LocalDate maxExpiryDate) {
+    return inventoryItemRepository.findActiveExpiringForUser(userId, maxExpiryDate).stream()
+        .map(mapper::toDto)
+        .toList();
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<InventoryItemDto> getDefrostCandidates(UUID userId) {
+    return inventoryItemRepository.findActiveDefrostCandidatesForUser(userId).stream()
+        .map(mapper::toDto)
+        .toList();
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<InventoryItemDto> getStaplesNeedingReplenishment(UUID userId) {
+    return inventoryItemRepository
+        .findActiveStaplesForUserByStatusIn(userId, List.of(StapleStatus.LOW, StapleStatus.OUT))
+        .stream()
+        .map(mapper::toDto)
+        .toList();
+  }
+
+  @Override
+  @Transactional(readOnly = true)
   public List<EquipmentDto> getEquipment(UUID userId) {
     return equipmentRepository.findAllByUserIdOrderByNameAsc(userId).stream()
         .map(equipmentMapper::toDto)

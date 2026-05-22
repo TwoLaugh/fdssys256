@@ -123,6 +123,7 @@ public class NotificationDebouncer {
       case PLANNER_PREP_REMINDER -> bundleCount + " meals need advance prep.";
       case PLANNER_REOPT_SUGGESTED -> "A re-optimisation is suggested.";
       case PLANNER_PLAN_GENERATED -> bundleCount + " plans were generated.";
+      case STAPLE_REPLENISHMENT_NEEDED -> bundleCount + " staple items need replenishing.";
     };
   }
 }

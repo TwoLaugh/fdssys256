@@ -24,5 +24,10 @@ public enum NotificationKind {
   /** {@code ReoptSuggestedEvent} — a re-optimisation suggestion is ready to review. */
   PLANNER_REOPT_SUGGESTED,
   /** {@code PlanGeneratedEvent} — a new plan was generated (optional, default OFF). */
-  PLANNER_PLAN_GENERATED
+  PLANNER_PLAN_GENERATED,
+  /**
+   * {@code StapleReplenishmentNeededEvent} — staple inventory item(s) dropped below their restock
+   * threshold (notification/01b {@code StapleReplenishmentScanner}).
+   */
+  STAPLE_REPLENISHMENT_NEEDED
 }

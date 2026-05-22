@@ -158,6 +158,15 @@ class NutritionServiceImplTest {
     assertThat(dto.get().userId()).isEqualTo(userId);
   }
 
+  @Test
+  void getUserIdsWithTargets_delegatesToRepo() {
+    UUID u1 = UUID.randomUUID();
+    UUID u2 = UUID.randomUUID();
+    when(targetsRepository.findDistinctUserIds()).thenReturn(java.util.List.of(u1, u2));
+
+    assertThat(service().getUserIdsWithTargets()).containsExactly(u1, u2);
+  }
+
   // ---------------- updateTargets ----------------
 
   @Test
