@@ -5,6 +5,7 @@ import com.example.mealprep.preference.exception.HardConstraintsNotFoundExceptio
 import com.example.mealprep.preference.exception.InvalidNoveltyToleranceException;
 import com.example.mealprep.preference.exception.InvalidTasteProfileDeltaException;
 import com.example.mealprep.preference.exception.LifestyleConfigNotFoundException;
+import com.example.mealprep.preference.exception.PreferenceArchiveEntryNotFoundException;
 import com.example.mealprep.preference.exception.TasteProfileBudgetExceededException;
 import com.example.mealprep.preference.exception.TasteProfileNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -33,6 +34,16 @@ public class PreferenceExceptionHandler {
   public ResponseEntity<ProblemDetail> handleTasteProfileNotFound(
       TasteProfileNotFoundException ex, HttpServletRequest req) {
     return notFound(ex.getMessage(), "taste-profile-not-found", "Taste profile not found", req);
+  }
+
+  @ExceptionHandler(PreferenceArchiveEntryNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handlePreferenceArchiveEntryNotFound(
+      PreferenceArchiveEntryNotFoundException ex, HttpServletRequest req) {
+    return notFound(
+        ex.getMessage(),
+        "preference-archive-entry-not-found",
+        "Preference archive entry not found",
+        req);
   }
 
   @ExceptionHandler(InvalidTasteProfileDeltaException.class)

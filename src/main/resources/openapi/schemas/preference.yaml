@@ -613,3 +613,37 @@ TriggerTasteProfileRefreshRequest:
   properties:
     feedbackRangeStart: { type: string, maxLength: 64, nullable: true }
     feedbackRangeEnd: { type: string, maxLength: 64, nullable: true }
+# ============================================================================
+# Preference archive (01e) — pruned-item retention + re-emergence storage.
+# ============================================================================
+PreferenceArchiveEntryDto:
+  type: object
+  required: [id, userId, fieldPath, itemKey, itemPayload, evidenceCount, archivedAt, archivedReason]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    fieldPath: { type: string, maxLength: 128 }
+    itemKey: { type: string, maxLength: 128 }
+    itemPayload: { type: object, additionalProperties: true }
+    evidenceCount: { type: integer, minimum: 0 }
+    lastSignalAt: { type: string, format: date, nullable: true }
+    archivedAt: { type: string, format: date-time }
+    archivedReason: { type: string, enum: [LOW_EVIDENCE, STALE, TOKEN_PRESSURE] }
+    rePromotedAt: { type: string, format: date-time, nullable: true }
+PreferenceArchiveEntryDtoPage:
+  type: object
+  description: 'Paged response of PreferenceArchiveEntryDto rows.'
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/PreferenceArchiveEntryDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }

@@ -72,6 +72,10 @@ paths:
     $ref: 'paths/preference.yaml#/tasteProfileVersionByNumber'
   /api/v1/preferences/taste-profile/audit-log:
     $ref: 'paths/preference.yaml#/tasteProfileAuditLog'
+  /api/v1/preferences/archive:
+    $ref: 'paths/preference.yaml#/preferenceArchive'
+  /api/v1/preferences/archive/active-count:
+    $ref: 'paths/preference.yaml#/preferenceArchiveActiveCount'
   # ===== household =====
   /api/v1/households:
     $ref: 'paths/household.yaml#/households'
@@ -450,6 +454,8 @@ components:
     TasteProfileAuditEntryDto: { $ref: 'schemas/preference.yaml#/TasteProfileAuditEntryDto' }
     UpdateTasteProfileRequest: { $ref: 'schemas/preference.yaml#/UpdateTasteProfileRequest' }
     TriggerTasteProfileRefreshRequest: { $ref: 'schemas/preference.yaml#/TriggerTasteProfileRefreshRequest' }
+    PreferenceArchiveEntryDto: { $ref: 'schemas/preference.yaml#/PreferenceArchiveEntryDto' }
+    PreferenceArchiveEntryDtoPage: { $ref: 'schemas/preference.yaml#/PreferenceArchiveEntryDtoPage' }
     # household
     HouseholdRole: { $ref: 'schemas/household.yaml#/HouseholdRole' }
     HouseholdDto: { $ref: 'schemas/household.yaml#/HouseholdDto' }
