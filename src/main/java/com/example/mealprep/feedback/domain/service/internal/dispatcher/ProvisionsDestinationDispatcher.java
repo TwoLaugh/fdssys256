@@ -34,7 +34,9 @@ class ProvisionsDestinationDispatcher implements DestinationDispatcher {
   public DispatchResult dispatch(DispatchContext ctx) {
     ProvisionsFeedbackBridge.Input input =
         new ProvisionsFeedbackBridge.Input(
+            ctx.feedbackId(),
             ctx.userId(),
+            ctx.classification().confidence(),
             ctx.classification().extractedFeedback(),
             ctx.traceId(),
             ctx.classification().structuredPayload());

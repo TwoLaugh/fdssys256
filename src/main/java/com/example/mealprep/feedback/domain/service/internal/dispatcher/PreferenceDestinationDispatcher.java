@@ -38,7 +38,9 @@ class PreferenceDestinationDispatcher implements DestinationDispatcher {
   public DispatchResult dispatch(DispatchContext ctx) {
     PreferenceFeedbackBridge.Input input =
         new PreferenceFeedbackBridge.Input(
+            ctx.feedbackId(),
             ctx.userId(),
+            ctx.classification().confidence(),
             ctx.classification().extractedFeedback(),
             ctx.traceId(),
             ctx.classification().structuredPayload());

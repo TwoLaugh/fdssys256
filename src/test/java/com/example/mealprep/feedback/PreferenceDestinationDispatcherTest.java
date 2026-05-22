@@ -13,7 +13,7 @@ import com.example.mealprep.feedback.domain.entity.RoutingStatus;
 import com.example.mealprep.feedback.domain.service.internal.DestinationDispatcher;
 import com.example.mealprep.feedback.domain.service.internal.DispatchContext;
 import com.example.mealprep.feedback.domain.service.internal.DispatchResult;
-import com.example.mealprep.feedback.exception.PreferenceFeedbackBridgeUnavailableException;
+import com.example.mealprep.feedback.exception.FeedbackBridgeDispatchFailedException;
 import com.example.mealprep.feedback.spi.Destination;
 import com.example.mealprep.feedback.spi.PreferenceFeedbackBridge;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,7 +23,6 @@ import java.math.BigDecimal;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 class PreferenceDestinationDispatcherTest {
 
@@ -44,15 +43,20 @@ class PreferenceDestinationDispatcherTest {
   }
 
   @Test
-  void noopBridge_propagatesUnavailableException() {
-    try (AnnotationConfigApplicationContext ctxApp = new AnnotationConfigApplicationContext()) {
-      ctxApp.register(com.example.mealprep.feedback.config.NoopFeedbackBridgesConfiguration.class);
-      ctxApp.refresh();
-      PreferenceFeedbackBridge noop = ctxApp.getBean(PreferenceFeedbackBridge.class);
-      DestinationDispatcher dispatcher = dispatcher(noop);
-      assertThatThrownBy(() -> dispatcher.dispatch(ctx()))
-          .isInstanceOf(PreferenceFeedbackBridgeUnavailableException.class);
-    }
+  void bridgeDispatchFailure_propagates() {
+    // The Noop config was removed in 01g; the real bridge throws FeedbackBridgeDispatchFailed when
+    // applyDeltas is stubbed (the expected v1 outcome), which the dispatcher must propagate so the
+    // router classifies the routing-log row as AI_UNAVAILABLE.
+    PreferenceFeedbackBridge bridge = mock(PreferenceFeedbackBridge.class);
+    when(bridge.applyFeedback(any(PreferenceFeedbackBridge.Input.class)))
+        .thenThrow(
+            new FeedbackBridgeDispatchFailedException(
+                Destination.PREFERENCE,
+                UUID.randomUUID(),
+                new UnsupportedOperationException("applier-stubbed")));
+    DestinationDispatcher dispatcher = dispatcher(bridge);
+    assertThatThrownBy(() -> dispatcher.dispatch(ctx()))
+        .isInstanceOf(FeedbackBridgeDispatchFailedException.class);
   }
 
   private DestinationDispatcher dispatcher(PreferenceFeedbackBridge bridge) {

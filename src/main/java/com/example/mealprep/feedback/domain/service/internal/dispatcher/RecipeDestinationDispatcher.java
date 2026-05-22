@@ -46,8 +46,10 @@ class RecipeDestinationDispatcher implements DestinationDispatcher {
     }
     RecipeFeedbackHandler.Input input =
         new RecipeFeedbackHandler.Input(
+            ctx.feedbackId(),
             recipeId,
             ctx.userId(),
+            ctx.classification().confidence(),
             ctx.classification().extractedFeedback(),
             ctx.traceId(),
             ctx.classification().structuredPayload());

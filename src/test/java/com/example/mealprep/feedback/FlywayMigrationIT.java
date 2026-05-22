@@ -60,17 +60,39 @@ class FlywayMigrationIT {
   }
 
   @Test
-  void allFourFeedbackTables_exist() {
+  void allFeedbackTables_exist() {
     List<String> tables =
         jdbcTemplate.queryForList(
             "SELECT tablename FROM pg_tables WHERE tablename LIKE 'feedback_%' ORDER BY tablename",
             String.class);
     assertThat(tables)
         .containsExactly(
+            "feedback_bridge_idempotency",
             "feedback_clarification_queries",
             "feedback_entries",
             "feedback_misclassification_corrections",
             "feedback_routing_log");
+  }
+
+  @Test
+  void bridgeIdempotency_hasUniqueFeedbackIdDestination_andRecentIndex() {
+    // The (feedback_id, destination) UNIQUE constraint is the idempotency guard (feedback-01g §4).
+    Long uniqueCount =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM pg_constraint c"
+                + " JOIN pg_class t ON t.oid = c.conrelid"
+                + " WHERE t.relname = 'feedback_bridge_idempotency'"
+                + "   AND c.contype = 'u'"
+                + "   AND pg_get_constraintdef(c.oid) LIKE '%feedback_id, destination%'",
+            Long.class);
+    assertThat(uniqueCount).isEqualTo(1L);
+
+    List<String> indexes =
+        jdbcTemplate.queryForList(
+            "SELECT indexname FROM pg_indexes"
+                + " WHERE indexname = 'idx_feedback_bridge_idempotency_recent'",
+            String.class);
+    assertThat(indexes).containsExactly("idx_feedback_bridge_idempotency_recent");
   }
 
   @Test

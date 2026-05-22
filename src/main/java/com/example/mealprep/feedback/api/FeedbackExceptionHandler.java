@@ -4,6 +4,7 @@ import com.example.mealprep.config.ProblemDetailSupport;
 import com.example.mealprep.feedback.exception.ClarificationQueryAlreadyAnsweredException;
 import com.example.mealprep.feedback.exception.ClarificationQueryExpiredException;
 import com.example.mealprep.feedback.exception.ClarificationQueryNotFoundException;
+import com.example.mealprep.feedback.exception.FeedbackBridgeDispatchFailedException;
 import com.example.mealprep.feedback.exception.FeedbackEntryNotFoundException;
 import com.example.mealprep.feedback.exception.InvalidCorrectionTargetException;
 import com.example.mealprep.feedback.exception.RoutingDecisionNotFoundException;
@@ -117,6 +118,30 @@ public class FeedbackExceptionHandler {
             "Invalid correction target",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  /**
+   * A destination bridge's downstream call failed (feedback-01g §22). This is normally caught by
+   * the router and recorded as a routing-log FAILED row — it does not propagate out of the
+   * AFTER-routing dispatch — so this handler is defensive: it maps the (rare) surfaced case to a
+   * 500 with a stable slug rather than letting {@code GlobalExceptionHandler}'s catch-all dilute
+   * it.
+   */
+  @ExceptionHandler(FeedbackBridgeDispatchFailedException.class)
+  public ResponseEntity<ProblemDetail> handleBridgeDispatchFailed(
+      FeedbackBridgeDispatchFailedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            ex.getMessage(),
+            "feedback-bridge-dispatch-failed",
+            "Feedback bridge dispatch failed",
+            req.getRequestURI());
+    pd.setProperty("destination", ex.destination().name());
+    pd.setProperty("feedbackId", ex.feedbackId());
+    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

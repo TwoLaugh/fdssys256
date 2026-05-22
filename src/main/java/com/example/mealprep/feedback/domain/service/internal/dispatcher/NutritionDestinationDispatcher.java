@@ -34,7 +34,9 @@ class NutritionDestinationDispatcher implements DestinationDispatcher {
   public DispatchResult dispatch(DispatchContext ctx) {
     NutritionFeedbackBridge.Input input =
         new NutritionFeedbackBridge.Input(
+            ctx.feedbackId(),
             ctx.userId(),
+            ctx.classification().confidence(),
             ctx.classification().extractedFeedback(),
             ctx.traceId(),
             ctx.classification().structuredPayload());
