@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.mealprep.notification.api.dto.NotificationDto;
+import com.example.mealprep.notification.config.NotificationProperties;
 import com.example.mealprep.notification.domain.entity.DeliveryLog;
 import com.example.mealprep.notification.domain.entity.DeliveryOutcome;
 import com.example.mealprep.notification.domain.entity.DeliverySkipReason;
@@ -20,7 +21,6 @@ import com.example.mealprep.notification.domain.entity.NotificationStatus;
 import com.example.mealprep.notification.domain.repository.DeliveryLogRepository;
 import com.example.mealprep.notification.domain.repository.NotificationPreferenceRepository;
 import com.example.mealprep.notification.domain.repository.NotificationRepository;
-import com.example.mealprep.notification.domain.service.NotificationUpdateService;
 import com.example.mealprep.notification.domain.service.internal.delivery.DeliveryChannelRegistry;
 import com.example.mealprep.notification.domain.service.internal.delivery.InAppDeliveryChannel;
 import com.example.mealprep.notification.event.NotificationCreatedEvent;
@@ -44,7 +44,7 @@ import org.springframework.context.ApplicationEventPublisher;
 @ExtendWith(MockitoExtension.class)
 class NotificationDispatcherTest {
 
-  @Mock private NotificationUpdateService updateService;
+  @Mock private NotificationServiceImpl notificationService;
   @Mock private NotificationRepository notificationRepository;
   @Mock private NotificationPreferenceRepository preferenceRepository;
   @Mock private DeliveryLogRepository deliveryLogRepository;
@@ -62,7 +62,7 @@ class NotificationDispatcherTest {
         new DeliveryChannelRegistry(List.of(new InAppDeliveryChannel()));
     dispatcher =
         new NotificationDispatcherImpl(
-            updateService,
+            notificationService,
             notificationRepository,
             preferenceRepository,
             deliveryLogRepository,
@@ -70,6 +70,7 @@ class NotificationDispatcherTest {
             debouncer,
             registry,
             eventPublisher,
+            new NotificationProperties(null, null, null),
             clock);
   }
 
@@ -98,7 +99,7 @@ class NotificationDispatcherTest {
     assertThat(logCaptor.getValue().getOutcome()).isEqualTo(DeliveryOutcome.SKIPPED);
     assertThat(logCaptor.getValue().getSkipReason()).isEqualTo(DeliverySkipReason.DISABLED_BY_PREF);
     verify(eventPublisher, never()).publishEvent(any(NotificationCreatedEvent.class));
-    verify(updateService, never()).create(any());
+    verify(notificationService, never()).create(any());
   }
 
   @Test
@@ -131,7 +132,7 @@ class NotificationDispatcherTest {
     Notification created =
         NotificationTestData.notification(
             user, NotificationKind.HEALTH_DIRECTIVE_RECEIVED, NotificationStatus.UNREAD);
-    when(updateService.create(any())).thenReturn(toDto(created));
+    when(notificationService.create(any())).thenReturn(toDto(created));
     when(notificationRepository.findById(created.getId())).thenReturn(Optional.of(created));
 
     Optional<UUID> result =
@@ -152,7 +153,7 @@ class NotificationDispatcherTest {
     Notification created =
         NotificationTestData.notification(
             user, NotificationKind.PROVISION_ITEM_NEAR_EXPIRY, NotificationStatus.UNREAD);
-    when(updateService.create(any())).thenReturn(toDto(created));
+    when(notificationService.create(any())).thenReturn(toDto(created));
     when(notificationRepository.findById(created.getId())).thenReturn(Optional.of(created));
 
     Optional<UUID> result =
@@ -192,7 +193,7 @@ class NotificationDispatcherTest {
     assertThat(logCaptor.getValue().getSkipReason())
         .isEqualTo(DeliverySkipReason.DEDUPED_INTO_BUNDLE);
     verify(eventPublisher, never()).publishEvent(any(NotificationCreatedEvent.class));
-    verify(updateService, never()).create(any());
+    verify(notificationService, never()).create(any());
   }
 
   private static NotificationDto toDto(Notification n) {

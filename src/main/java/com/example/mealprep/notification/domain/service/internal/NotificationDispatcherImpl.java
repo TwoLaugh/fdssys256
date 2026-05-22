@@ -1,6 +1,7 @@
 package com.example.mealprep.notification.domain.service.internal;
 
 import com.example.mealprep.notification.api.dto.NotificationDto;
+import com.example.mealprep.notification.config.NotificationProperties;
 import com.example.mealprep.notification.domain.entity.DeliveryLog;
 import com.example.mealprep.notification.domain.entity.DeliveryOutcome;
 import com.example.mealprep.notification.domain.entity.DeliverySkipReason;
@@ -10,7 +11,6 @@ import com.example.mealprep.notification.domain.entity.NotificationStatus;
 import com.example.mealprep.notification.domain.repository.DeliveryLogRepository;
 import com.example.mealprep.notification.domain.repository.NotificationPreferenceRepository;
 import com.example.mealprep.notification.domain.repository.NotificationRepository;
-import com.example.mealprep.notification.domain.service.NotificationUpdateService;
 import com.example.mealprep.notification.domain.service.internal.delivery.DeliveryChannel;
 import com.example.mealprep.notification.domain.service.internal.delivery.DeliveryChannelRegistry;
 import com.example.mealprep.notification.event.NotificationCreatedEvent;
@@ -22,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -35,7 +36,7 @@ class NotificationDispatcherImpl implements NotificationDispatcher {
 
   private static final Logger log = LoggerFactory.getLogger(NotificationDispatcherImpl.class);
 
-  private final NotificationUpdateService updateService;
+  private final NotificationServiceImpl notificationService;
   private final NotificationRepository notificationRepository;
   private final NotificationPreferenceRepository preferenceRepository;
   private final DeliveryLogRepository deliveryLogRepository;
@@ -43,10 +44,11 @@ class NotificationDispatcherImpl implements NotificationDispatcher {
   private final NotificationDebouncer debouncer;
   private final DeliveryChannelRegistry channelRegistry;
   private final ApplicationEventPublisher eventPublisher;
+  private final NotificationProperties properties;
   private final Clock clock;
 
   NotificationDispatcherImpl(
-      NotificationUpdateService updateService,
+      NotificationServiceImpl notificationService,
       NotificationRepository notificationRepository,
       NotificationPreferenceRepository preferenceRepository,
       DeliveryLogRepository deliveryLogRepository,
@@ -54,8 +56,9 @@ class NotificationDispatcherImpl implements NotificationDispatcher {
       NotificationDebouncer debouncer,
       DeliveryChannelRegistry channelRegistry,
       ApplicationEventPublisher eventPublisher,
+      NotificationProperties properties,
       Clock clock) {
-    this.updateService = updateService;
+    this.notificationService = notificationService;
     this.notificationRepository = notificationRepository;
     this.preferenceRepository = preferenceRepository;
     this.deliveryLogRepository = deliveryLogRepository;
@@ -63,23 +66,19 @@ class NotificationDispatcherImpl implements NotificationDispatcher {
     this.debouncer = debouncer;
     this.channelRegistry = channelRegistry;
     this.eventPublisher = eventPublisher;
+    this.properties = properties;
     this.clock = clock;
   }
 
   @Override
-  @Transactional
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
   public Optional<UUID> dispatch(NotificationDraft draft) {
     Instant now = Instant.now(clock);
 
-    // Ensure a preference row exists (idempotent), then load it for filtering.
-    updateService.ensurePreferencesForUser(draft.userId());
-    NotificationPreference preference =
-        preferenceRepository
-            .findByUserId(draft.userId())
-            .orElseThrow(
-                () ->
-                    new IllegalStateException(
-                        "preferences missing after ensure for user=" + draft.userId()));
+    // Load (or create-and-flush) the preference row in THIS transaction so it is immediately
+    // readable for filtering. We do not re-query through ensurePreferencesForUser because a freshly
+    // saved manually-IDed entity may not be visible to a follow-up derived query in the same tx.
+    NotificationPreference preference = getOrCreatePreference(draft.userId());
 
     // F8 — preference + quiet-hours filter.
     QuietHoursEvaluator.Decision decision =
@@ -117,8 +116,8 @@ class NotificationDispatcherImpl implements NotificationDispatcher {
       return Optional.of(bundleTarget.getId());
     }
 
-    // Persist a fresh notification via the public create seam.
-    NotificationDto created = updateService.create(draft.toCreateRequest());
+    // Persist a fresh notification via the create seam (same module impl).
+    NotificationDto created = notificationService.create(draft.toCreateRequest());
     Notification persisted =
         notificationRepository
             .findById(created.id())
@@ -153,6 +152,29 @@ class NotificationDispatcherImpl implements NotificationDispatcher {
             now));
 
     return Optional.of(persisted.getId());
+  }
+
+  /**
+   * Return the user's preference row, creating a defaults row (flushed) when absent. Flushing keeps
+   * the row immediately readable within this transaction and gives the debouncer's window math the
+   * correct {@code debounceWindowMinutes}.
+   */
+  private NotificationPreference getOrCreatePreference(UUID userId) {
+    return preferenceRepository
+        .findByUserId(userId)
+        .orElseGet(
+            () ->
+                preferenceRepository.saveAndFlush(
+                    NotificationPreference.builder()
+                        .id(UUID.randomUUID())
+                        .userId(userId)
+                        .enabledKinds(
+                            NotificationDefaults.defaultEnabledKinds(
+                                properties.planGeneratedDefaultEnabled()))
+                        .quietHoursEnabled(false)
+                        .timezone(NotificationDefaults.DEFAULT_TIMEZONE)
+                        .debounceWindowMinutes(properties.defaultDebounceWindowMinutes())
+                        .build()));
   }
 
   private Notification persistSuppressed(NotificationDraft draft, Instant now) {

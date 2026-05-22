@@ -5,5 +5,6 @@
 -- create a dual source of truth (every new enum value would need both a code default and a seed
 -- row). This repeatable migration ships as a placeholder for future opt-in user-side seed data.
 
--- (Empty body — defaults live in NotificationDefaults.java.)
-SELECT 1;
+-- (Empty body — defaults live in NotificationDefaults.java.) The no-op DO block keeps Flyway happy
+-- with a non-empty repeatable migration without emitting a result set.
+DO $$ BEGIN END $$;

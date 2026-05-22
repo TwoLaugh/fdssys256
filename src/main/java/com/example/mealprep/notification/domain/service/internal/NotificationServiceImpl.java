@@ -27,7 +27,6 @@ import com.example.mealprep.notification.exception.NotificationStateTransitionEx
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
@@ -109,20 +108,19 @@ public class NotificationServiceImpl
   @Override
   @Transactional(readOnly = true)
   public Page<NotificationDto> list(UUID userId, NotificationListFilter filter, Pageable pageable) {
-    boolean statusFilterActive =
-        filter != null && filter.statuses() != null && !filter.statuses().isEmpty();
-    boolean kindFilterActive =
-        filter != null && filter.kinds() != null && !filter.kinds().isEmpty();
-    // The IN clauses are gated by the *FilterActive booleans, but the named parameters must still
-    // be
-    // bound to a non-empty collection — Hibernate rejects an empty collection in an IN list.
-    Collection<NotificationStatus> statuses =
-        statusFilterActive ? filter.statuses() : EnumSet.allOf(NotificationStatus.class);
-    Collection<NotificationKind> kinds =
-        kindFilterActive ? filter.kinds() : EnumSet.allOf(NotificationKind.class);
+    // The REST surface filters on at most one status and one kind; take the first element of each
+    // set (null = no constraint on that dimension).
+    NotificationStatus status =
+        filter == null || filter.statuses() == null || filter.statuses().isEmpty()
+            ? null
+            : filter.statuses().iterator().next();
+    NotificationKind kind =
+        filter == null || filter.kinds() == null || filter.kinds().isEmpty()
+            ? null
+            : filter.kinds().iterator().next();
     Instant since = filter == null ? null : filter.since();
     return notificationRepository
-        .search(userId, statusFilterActive, statuses, kindFilterActive, kinds, since, pageable)
+        .search(userId, status, kind, since, pageable)
         .map(notificationMapper::toDto);
   }
 
