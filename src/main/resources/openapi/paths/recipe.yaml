@@ -790,3 +790,209 @@ recipeImage:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeRatings:
+  post:
+    tags: [Recipes]
+    operationId: createRecipeRating
+    summary: 'Record a multi-dimensional rating on a recipe version. One-tap (taste only) or detailed.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/recipe.yaml#/CreateRatingRequest' }
+    responses:
+      '201':
+        description: 'Rating recorded; aggregate computed server-side.'
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeRatingDto' }
+      '400':
+        description: 'Validation error, or versionId does not belong to the path recipe.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Recipe or version not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'A rating by this user already exists for this version; use PUT.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  get:
+    tags: [Recipes]
+    operationId: listRecipeRatings
+    summary: 'Paginated list of ratings for a version, newest-first.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: versionId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: 'Page of ratings for the version.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeRatingDtoPage' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeRatingsMine:
+  get:
+    tags: [Recipes]
+    operationId: getMyRecipeRating
+    summary: 'The caller''s own rating for a version, if any.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: versionId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'The caller''s rating for the version.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeRatingDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'The caller has not rated this version.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeRatingsSummary:
+  get:
+    tags: [Recipes]
+    operationId: getRecipeRatingSummary
+    summary: 'Aggregate rating summary for a version, or the whole recipe when versionId is omitted.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: versionId
+        required: false
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Aggregate summary (averages + count).'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeRatingSummaryDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeRatingById:
+  put:
+    tags: [Recipes]
+    operationId: updateRecipeRating
+    summary: 'Revise an existing rating; recomputes the aggregate and re-fires the rating event.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: ratingId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/recipe.yaml#/UpdateRatingRequest' }
+    responses:
+      '200':
+        description: 'Rating updated; aggregate recomputed, optimistic version bumped.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeRatingDto' }
+      '400':
+        description: 'Validation error, or versionId mismatch.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Rating not found, or not owned by the caller.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Stale expectedVersion (optimistic-lock conflict).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  delete:
+    tags: [Recipes]
+    operationId: deleteRecipeRating
+    summary: 'Delete the caller''s rating.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: ratingId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '204':
+        description: 'Rating deleted.'
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Rating not found, or not owned by the caller.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

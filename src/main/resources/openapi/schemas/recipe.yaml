@@ -764,3 +764,82 @@ RecipeImageDto:
     contentType:
       type: string
       enum: [image/jpeg, image/png, image/webp]
+RecipeRatingDto:
+  type: object
+  description: 'A user''s multi-dimensional rating of a recipe version (recipe-02b).'
+  required: [id, recipeId, versionId, userId, taste, aggregate, optimisticVersion, createdAt, updatedAt]
+  properties:
+    id: { type: string, format: uuid }
+    recipeId: { type: string, format: uuid }
+    versionId: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    householdId: { type: string, format: uuid, nullable: true }
+    slotId: { type: string, format: uuid, nullable: true }
+    taste: { type: integer, minimum: 0, maximum: 100 }
+    effortWorthIt: { type: integer, minimum: 0, maximum: 100, nullable: true }
+    portionFit: { type: integer, minimum: 0, maximum: 100, nullable: true }
+    repeatValue: { type: integer, minimum: 0, maximum: 100, nullable: true }
+    aggregate: { type: integer, minimum: 0, maximum: 100 }
+    notes: { type: string, maxLength: 1000, nullable: true }
+    traceId: { type: string, format: uuid, nullable: true }
+    optimisticVersion: { type: integer, format: int64, minimum: 0 }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+CreateRatingRequest:
+  type: object
+  description: >-
+    Request body for POST /ratings. taste is required (one-tap default path);
+    the other three dimensions are optional and coalesce to taste in the
+    aggregate when absent.
+  required: [versionId, taste]
+  properties:
+    versionId: { type: string, format: uuid }
+    slotId: { type: string, format: uuid, nullable: true }
+    taste: { type: integer, minimum: 0, maximum: 100 }
+    effortWorthIt: { type: integer, minimum: 0, maximum: 100, nullable: true }
+    portionFit: { type: integer, minimum: 0, maximum: 100, nullable: true }
+    repeatValue: { type: integer, minimum: 0, maximum: 100, nullable: true }
+    notes: { type: string, maxLength: 1000, nullable: true }
+UpdateRatingRequest:
+  type: object
+  description: 'Request body for PUT /ratings/{ratingId}; same shape as create plus the optimistic-lock guard.'
+  required: [versionId, taste, expectedVersion]
+  properties:
+    versionId: { type: string, format: uuid }
+    slotId: { type: string, format: uuid, nullable: true }
+    taste: { type: integer, minimum: 0, maximum: 100 }
+    effortWorthIt: { type: integer, minimum: 0, maximum: 100, nullable: true }
+    portionFit: { type: integer, minimum: 0, maximum: 100, nullable: true }
+    repeatValue: { type: integer, minimum: 0, maximum: 100, nullable: true }
+    notes: { type: string, maxLength: 1000, nullable: true }
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+RecipeRatingSummaryDto:
+  type: object
+  description: >-
+    Aggregate-rating summary for a version or a whole recipe. versionId is null
+    for recipe-level aggregates; the avg* fields are null when no ratings exist.
+  required: [count]
+  properties:
+    versionId: { type: string, format: uuid, nullable: true }
+    avgTaste: { type: number, format: double, nullable: true }
+    avgEffortWorthIt: { type: number, format: double, nullable: true }
+    avgPortionFit: { type: number, format: double, nullable: true }
+    avgRepeatValue: { type: number, format: double, nullable: true }
+    avgAggregate: { type: number, format: double, nullable: true }
+    count: { type: integer, format: int64, minimum: 0 }
+RecipeRatingDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/RecipeRatingDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
