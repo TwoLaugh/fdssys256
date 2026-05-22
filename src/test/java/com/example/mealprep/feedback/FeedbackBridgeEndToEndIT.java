@@ -66,6 +66,11 @@ class FeedbackBridgeEndToEndIT {
 
   @Test
   void preferenceBridge_stubbedApplyDeltas_booksFailed() {
+    // applyDeltas is deferred end-to-end: it does a lookup-then-apply, so for a fresh user with no
+    // lazily-initialised taste profile it throws TasteProfileNotFoundException before it ever
+    // reaches the (separately stubbed) delta-applier. Either way the bridge owns the failure: it
+    // books a FAILED idempotency row and rethrows FeedbackBridgeDispatchFailedException. We pass a
+    // random userId (no profile row) to exercise that wired-but-deferred dispatch-failure path.
     UUID feedbackId = UUID.randomUUID();
     ObjectNode payload = JsonNodeFactory.instance.objectNode();
     payload.put("trigger", "BATCH");
