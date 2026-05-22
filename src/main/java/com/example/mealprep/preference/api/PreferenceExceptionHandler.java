@@ -3,7 +3,10 @@ package com.example.mealprep.preference.api;
 import com.example.mealprep.config.ProblemDetailSupport;
 import com.example.mealprep.preference.exception.HardConstraintsNotFoundException;
 import com.example.mealprep.preference.exception.InvalidNoveltyToleranceException;
+import com.example.mealprep.preference.exception.InvalidTasteProfileDeltaException;
 import com.example.mealprep.preference.exception.LifestyleConfigNotFoundException;
+import com.example.mealprep.preference.exception.TasteProfileBudgetExceededException;
+import com.example.mealprep.preference.exception.TasteProfileNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -22,13 +25,34 @@ public class PreferenceExceptionHandler {
   @ExceptionHandler(HardConstraintsNotFoundException.class)
   public ResponseEntity<ProblemDetail> handleHardConstraintsNotFound(
       HardConstraintsNotFoundException ex, HttpServletRequest req) {
+    return notFound(
+        ex.getMessage(), "hard-constraints-not-found", "Hard constraints not found", req);
+  }
+
+  @ExceptionHandler(TasteProfileNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleTasteProfileNotFound(
+      TasteProfileNotFoundException ex, HttpServletRequest req) {
+    return notFound(ex.getMessage(), "taste-profile-not-found", "Taste profile not found", req);
+  }
+
+  @ExceptionHandler(InvalidTasteProfileDeltaException.class)
+  public ResponseEntity<ProblemDetail> handleInvalidDelta(
+      InvalidTasteProfileDeltaException ex, HttpServletRequest req) {
+    return unprocessable(
+        ex.getMessage(), "invalid-taste-profile-delta", "Invalid taste profile delta", req);
+  }
+
+  @ExceptionHandler(TasteProfileBudgetExceededException.class)
+  public ResponseEntity<ProblemDetail> handleBudgetExceeded(
+      TasteProfileBudgetExceededException ex, HttpServletRequest req) {
+    return unprocessable(
+        ex.getMessage(), "taste-profile-budget-exceeded", "Taste profile budget exceeded", req);
+  }
+
+  private static ResponseEntity<ProblemDetail> notFound(
+      String message, String type, String title, HttpServletRequest req) {
     ProblemDetail pd =
-        ProblemDetailSupport.build(
-            HttpStatus.NOT_FOUND,
-            ex.getMessage(),
-            "hard-constraints-not-found",
-            "Hard constraints not found",
-            req.getRequestURI());
+        ProblemDetailSupport.build(HttpStatus.NOT_FOUND, message, type, title, req.getRequestURI());
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
@@ -62,6 +86,16 @@ public class PreferenceExceptionHandler {
     pd.setProperty("offendingMode", ex.offendingMode());
     pd.setProperty("offendingField", ex.offendingField());
     return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  private static ResponseEntity<ProblemDetail> unprocessable(
+      String message, String type, String title, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY, message, type, title, req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

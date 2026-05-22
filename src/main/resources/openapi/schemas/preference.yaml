@@ -361,3 +361,255 @@ LifestyleConfigAuditEntryDto:
     previousValueJson: {}
     newValueJson: {}
     occurredAt: { type: string, format: date-time }
+# ============================================================================
+# Taste profile (01c) — canonical record-tree mirror of the JSONB document.
+# Household's lightweight TasteProfileDocument stub is preserved local-only in
+# household.yaml (used inside SoftPreferenceBundleDto's inline shape) but the
+# global components.schemas.TasteProfileDocument points here.
+# ============================================================================
+TasteVectorStatus:
+  type: string
+  enum: [PENDING, EMBEDDED, FAILED]
+TasteProfileTrigger:
+  type: string
+  enum: [BATCH, WEEKLY, MANUAL]
+ActorType:
+  type: string
+  enum: [USER, AI, SYSTEM]
+TasteProfileChangeType:
+  type: string
+  enum: [INITIALIZED, MANUAL_OVERRIDE, AI_DELTA_APPLIED, REFRESH_TRIGGERED, ROLLED_BACK]
+IngredientPreferenceSource:
+  type: string
+  enum: [FEEDBACK, INFERRED, ONBOARDING]
+ExperimentStatus:
+  type: string
+  enum: [TESTING, PROMOTED, DISCARDED]
+SkillLevel:
+  type: string
+  enum: [BEGINNER, INTERMEDIATE, ADVANCED]
+SoftIntolerance:
+  type: object
+  additionalProperties: false
+  properties:
+    substance: { type: string, maxLength: 64 }
+    severity: { type: string, maxLength: 32 }
+    notes: { type: string, maxLength: 255, nullable: true }
+SoftConstraintsSection:
+  type: object
+  additionalProperties: false
+  properties:
+    intolerances:
+      type: array
+      maxItems: 30
+      items: { $ref: '#/SoftIntolerance' }
+FlavourPreferences:
+  type: object
+  additionalProperties: false
+  properties:
+    likes:
+      type: array
+      maxItems: 30
+      items: { type: string, maxLength: 64 }
+    dislikes:
+      type: array
+      maxItems: 30
+      items: { type: string, maxLength: 64 }
+    notes: { type: string, maxLength: 512, nullable: true }
+TexturePreferences:
+  type: object
+  additionalProperties: false
+  properties:
+    likes:
+      type: array
+      maxItems: 30
+      items: { type: string, maxLength: 64 }
+    dislikes:
+      type: array
+      maxItems: 30
+      items: { type: string, maxLength: 64 }
+IngredientPreference:
+  type: object
+  additionalProperties: false
+  properties:
+    item: { type: string, maxLength: 128 }
+    evidenceCount: { type: integer }
+    lastSignal: { type: string, format: date, nullable: true }
+    source: { $ref: '#/IngredientPreferenceSource' }
+TrendingIngredient:
+  type: object
+  additionalProperties: false
+  properties:
+    item: { type: string, maxLength: 128 }
+    evidenceCount: { type: integer }
+    firstSignal: { type: string, format: date, nullable: true }
+IngredientPreferencesSection:
+  type: object
+  additionalProperties: false
+  properties:
+    favourites:
+      type: array
+      maxItems: 50
+      items: { $ref: '#/IngredientPreference' }
+    disliked:
+      type: array
+      maxItems: 50
+      items: { $ref: '#/IngredientPreference' }
+    trendingPositive:
+      type: array
+      maxItems: 50
+      items: { $ref: '#/TrendingIngredient' }
+    trendingNegative:
+      type: array
+      maxItems: 50
+      items: { $ref: '#/TrendingIngredient' }
+CuisinePreferences:
+  type: object
+  additionalProperties: false
+  properties:
+    favourites:
+      type: array
+      maxItems: 30
+      items: { type: string, maxLength: 64 }
+    enjoys:
+      type: array
+      maxItems: 30
+      items: { type: string, maxLength: 64 }
+    lessPreferred:
+      type: array
+      maxItems: 30
+      items: { type: string, maxLength: 64 }
+    notes: { type: string, maxLength: 512, nullable: true }
+CookingPreferences:
+  type: object
+  additionalProperties: false
+  properties:
+    skillLevel: { $ref: '#/SkillLevel' }
+    preferredMethods:
+      type: array
+      maxItems: 30
+      items: { type: string, maxLength: 64 }
+    dislikedMethods:
+      type: array
+      maxItems: 30
+      items: { type: string, maxLength: 64 }
+PortionStyle:
+  type: object
+  additionalProperties: false
+  properties:
+    preference: { type: string, maxLength: 64, nullable: true }
+    saladMeals: { type: string, maxLength: 64, nullable: true }
+HouseholdContextSection:
+  type: object
+  additionalProperties: false
+  properties:
+    individualOnlyPreferences:
+      type: array
+      maxItems: 30
+      items: { type: string, maxLength: 128 }
+    householdSuitableNotes: { type: string, maxLength: 512, nullable: true }
+RecipeRecommendation:
+  type: object
+  additionalProperties: false
+  properties:
+    name: { type: string, maxLength: 128 }
+    suitableFor: { type: string, maxLength: 64, nullable: true }
+    reason: { type: string, maxLength: 512, nullable: true }
+ActiveExperiment:
+  type: object
+  additionalProperties: false
+  properties:
+    hypothesis: { type: string, maxLength: 512 }
+    status: { $ref: '#/ExperimentStatus' }
+    evidenceFor: { type: integer }
+    evidenceAgainst: { type: integer }
+    created: { type: string, format: date, nullable: true }
+TasteProfileDocument:
+  type: object
+  additionalProperties: false
+  description: |
+    Canonical taste profile document — preference-01c owns this schema; the AI never produces it whole, it
+    produces deltas applied to this structure by the (deferred) delta-applier pipeline.
+  properties:
+    lastUpdated: { type: string, format: date, nullable: true }
+    version: { type: integer }
+    basedOnFeedbackCount: { type: integer }
+    feedbackCursor: { type: string, maxLength: 64, nullable: true }
+    softConstraints: { $ref: '#/SoftConstraintsSection' }
+    flavourPreferences: { $ref: '#/FlavourPreferences' }
+    texturePreferences: { $ref: '#/TexturePreferences' }
+    ingredientPreferences: { $ref: '#/IngredientPreferencesSection' }
+    cuisinePreferences: { $ref: '#/CuisinePreferences' }
+    cookingPreferences: { $ref: '#/CookingPreferences' }
+    portionStyle: { $ref: '#/PortionStyle' }
+    householdContext: { $ref: '#/HouseholdContextSection' }
+    recipesToRepeat:
+      type: array
+      maxItems: 50
+      items: { $ref: '#/RecipeRecommendation' }
+    recipesToAvoid:
+      type: array
+      maxItems: 50
+      items: { $ref: '#/RecipeRecommendation' }
+    activeExperiments:
+      type: array
+      maxItems: 20
+      items: { $ref: '#/ActiveExperiment' }
+    learnedInsights:
+      type: array
+      maxItems: 20
+      items: { type: string, maxLength: 512 }
+TasteProfileDto:
+  type: object
+  required: [id, userId, document, documentVersion, basedOnFeedbackCount, tasteVectorStatus, optimisticVersion]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    document: { $ref: '#/TasteProfileDocument' }
+    documentVersion: { type: integer, minimum: 1 }
+    feedbackCursor: { type: string, maxLength: 64, nullable: true }
+    basedOnFeedbackCount: { type: integer, minimum: 0 }
+    lastDeltaAppliedAt: { type: string, format: date-time, nullable: true }
+    lastTokenEstimate: { type: integer, nullable: true }
+    tasteVectorStatus: { $ref: '#/TasteVectorStatus' }
+    optimisticVersion: { type: integer, format: int64 }
+    createdAt: { type: string, format: date-time, nullable: true }
+    updatedAt: { type: string, format: date-time, nullable: true }
+TasteProfileVersionDto:
+  type: object
+  required: [id, tasteProfileId, documentVersion, documentSnapshot, trigger, deltasApplied, modelTierUsed, generatedAt]
+  properties:
+    id: { type: string, format: uuid }
+    tasteProfileId: { type: string, format: uuid }
+    documentVersion: { type: integer, minimum: 1 }
+    documentSnapshot: { $ref: '#/TasteProfileDocument' }
+    feedbackRangeStart: { type: string, maxLength: 64, nullable: true }
+    feedbackRangeEnd: { type: string, maxLength: 64, nullable: true }
+    trigger: { $ref: '#/TasteProfileTrigger' }
+    deltasApplied: {}
+    modelTierUsed: { type: string, maxLength: 16 }
+    generatedAt: { type: string, format: date-time }
+TasteProfileAuditEntryDto:
+  type: object
+  required: [id, actorUserId, actorType, changeType, newDocumentVersion, occurredAt]
+  properties:
+    id: { type: string, format: uuid }
+    actorUserId: { type: string, format: uuid }
+    actorType: { $ref: '#/ActorType' }
+    changeType: { $ref: '#/TasteProfileChangeType' }
+    previousDocumentVersion: { type: integer, nullable: true }
+    newDocumentVersion: { type: integer }
+    summary: { type: string, maxLength: 512, nullable: true }
+    traceId: { type: string, format: uuid, nullable: true }
+    occurredAt: { type: string, format: date-time }
+UpdateTasteProfileRequest:
+  type: object
+  required: [document, expectedVersion]
+  properties:
+    document: { $ref: '#/TasteProfileDocument' }
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
+TriggerTasteProfileRefreshRequest:
+  type: object
+  properties:
+    feedbackRangeStart: { type: string, maxLength: 64, nullable: true }
+    feedbackRangeEnd: { type: string, maxLength: 64, nullable: true }
