@@ -14,11 +14,13 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -116,6 +118,32 @@ public class GlobalExceptionHandler {
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
+  }
+
+  /**
+   * A request hits a mapped path with an unsupported HTTP method (e.g. POST to a GET-only,
+   * read-only endpoint like the preference archive). Without this handler the framework exception
+   * would fall through to the {@link Exception} catch-all below and surface as a misleading 500;
+   * here we emit the correct {@code 405 Method Not Allowed} with the {@code Allow} header
+   * advertising the methods the endpoint does support.
+   */
+  @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+  public ResponseEntity<ProblemDetail> handleMethodNotSupported(
+      HttpRequestMethodNotSupportedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.METHOD_NOT_ALLOWED,
+            ex.getMessage(),
+            "method-not-allowed",
+            "Method not allowed",
+            req.getRequestURI());
+    ResponseEntity.BodyBuilder builder =
+        ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+            .contentType(MediaType.APPLICATION_PROBLEM_JSON);
+    if (ex.getSupportedHttpMethods() != null && !ex.getSupportedHttpMethods().isEmpty()) {
+      builder.allow(ex.getSupportedHttpMethods().toArray(new HttpMethod[0]));
+    }
+    return builder.body(pd);
   }
 
   // ------------------------------------------------------------------------------------------

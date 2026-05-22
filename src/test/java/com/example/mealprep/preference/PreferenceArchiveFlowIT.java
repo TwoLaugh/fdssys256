@@ -278,11 +278,12 @@ class PreferenceArchiveFlowIT {
             .andReturn()
             .getResponse()
             .getStatus();
-    // The archive is read-only via REST — no POST mapping that creates anything. The exact
-    // rejection status depends on the security layer: 404/405 if the dispatcher rejects the
-    // unmapped method, 401/403 if the security chain (CSRF on a cookie-auth POST) rejects first.
-    // All four prove "no functional write endpoint"; a 2xx or 5xx would (correctly) fail here.
-    assertThat(statusCode).isIn(401, 403, 404, 405);
+    // The archive is read-only via REST — no POST mapping that creates anything. CSRF is disabled
+    // and the user is authenticated, so the request reaches the dispatcher, which finds the path
+    // mapped only for GET and rejects the unmapped POST with a clean 405 Method Not Allowed
+    // (GlobalExceptionHandler maps HttpRequestMethodNotSupportedException). 404 is the only other
+    // acceptable "no write endpoint" outcome; a 2xx or 5xx would (correctly) fail here.
+    assertThat(statusCode).isIn(404, 405);
   }
 
   /** Sanity: full archive (used by the AI delta task) returns both promoted and unpromoted rows. */
