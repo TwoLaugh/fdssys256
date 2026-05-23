@@ -1,5 +1,6 @@
 package com.example.mealprep.preference.domain.service.internal;
 
+import com.example.mealprep.household.api.dto.SoftPreferenceBundleDto;
 import com.example.mealprep.preference.api.dto.AgeRestrictionDto;
 import com.example.mealprep.preference.api.dto.DietaryIdentityExceptionDto;
 import com.example.mealprep.preference.api.dto.HardConstraintsAuditEntryDto;
@@ -12,9 +13,13 @@ import com.example.mealprep.preference.domain.entity.DietaryIdentityException;
 import com.example.mealprep.preference.domain.entity.HardConstraints;
 import com.example.mealprep.preference.domain.entity.HardConstraintsAuditLog;
 import com.example.mealprep.preference.domain.entity.HardIntolerance;
+import com.example.mealprep.preference.domain.entity.LifestyleConfig;
+import com.example.mealprep.preference.domain.entity.TasteProfile;
 import com.example.mealprep.preference.domain.repository.HardConstraintsAuditLogRepository;
 import com.example.mealprep.preference.domain.repository.HardConstraintsRepository;
 import com.example.mealprep.preference.domain.repository.HardIntoleranceRepository;
+import com.example.mealprep.preference.domain.repository.LifestyleConfigRepository;
+import com.example.mealprep.preference.domain.repository.TasteProfileRepository;
 import com.example.mealprep.preference.domain.service.PreferenceQueryService;
 import com.example.mealprep.preference.domain.service.PreferenceUpdateService;
 import com.example.mealprep.preference.event.HardConstraintsUpdatedEvent;
@@ -28,14 +33,17 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -102,6 +110,20 @@ public class PreferenceServiceImpl implements PreferenceQueryService, Preference
    */
   @PersistenceContext private EntityManager entityManager;
 
+  /**
+   * Field-injected (like {@link #entityManager}) so the 7-arg constructor used by {@code
+   * HardConstraintsServiceImplTest} / {@code PreferenceMutationKillsTest} / {@code
+   * PreferenceDirectiveApplyTarget} stays unchanged. They are read ONLY by the soft-preference
+   * projection (household/preference-01g); the hard-constraints unit tests never touch that path,
+   * so leaving these null there is safe. {@code required = false} keeps the pure-unit construction
+   * (where Spring isn't wiring fields) from failing.
+   */
+  @Autowired(required = false)
+  private TasteProfileRepository tasteProfileRepository;
+
+  @Autowired(required = false)
+  private LifestyleConfigRepository lifestyleConfigRepository;
+
   public PreferenceServiceImpl(
       HardConstraintsRepository hardConstraintsRepository,
       HardConstraintsAuditLogRepository auditLogRepository,
@@ -138,6 +160,79 @@ public class PreferenceServiceImpl implements PreferenceQueryService, Preference
     return auditLogRepository
         .findByHardConstraintsIdOrderByOccurredAtDesc(aggregate.get().getId(), pageable)
         .map(mapper::toAuditEntryDto);
+  }
+
+  // ---------------- Soft-preference read (household/preference-01g) ----------------
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<SoftPreferenceBundleDto> getSoftPreferences(UUID userId) {
+    if (userId == null) {
+      return Optional.empty();
+    }
+    Optional<TasteProfile> tasteProfile =
+        tasteProfileRepository == null
+            ? Optional.empty()
+            : tasteProfileRepository.findByUserId(userId);
+    Optional<LifestyleConfig> lifestyleConfig =
+        lifestyleConfigRepository == null
+            ? Optional.empty()
+            : lifestyleConfigRepository.findByUserId(userId);
+    if (tasteProfile.isEmpty() && lifestyleConfig.isEmpty()) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        new SoftPreferenceBundleDto(
+            userId,
+            // Projects only the JSONB document — the taste vector status fields on the entity are
+            // never read (the type system enforces it: the projection takes the document, not the
+            // entity).
+            tasteProfile
+                .map(tp -> SoftPreferenceProjection.toHouseholdTasteProfile(tp.getDocument()))
+                .orElse(null),
+            lifestyleConfig
+                .map(lc -> SoftPreferenceProjection.toHouseholdLifestyleConfig(lc.getDocument()))
+                .orElse(null)));
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<SoftPreferenceBundleDto> getSoftPreferencesByUserIds(List<UUID> userIds) {
+    if (userIds == null || userIds.isEmpty()) {
+      return List.of();
+    }
+    // Batch-load both collections in one query each (no N+1) — the household merge passes the full
+    // eater set. Index by userId so we can project in input order below.
+    Map<UUID, TasteProfile> tasteByUser = new HashMap<>();
+    if (tasteProfileRepository != null) {
+      for (TasteProfile tp : tasteProfileRepository.findByUserIdIn(userIds)) {
+        tasteByUser.put(tp.getUserId(), tp);
+      }
+    }
+    Map<UUID, LifestyleConfig> lifestyleByUser = new HashMap<>();
+    if (lifestyleConfigRepository != null) {
+      for (LifestyleConfig lc : lifestyleConfigRepository.findByUserIdIn(userIds)) {
+        lifestyleByUser.put(lc.getUserId(), lc);
+      }
+    }
+
+    // One bundle per input user, in input order — never fewer (the SPI contract; callers index by
+    // position). A user with neither profile nor config yields a fully null-fielded bundle.
+    List<SoftPreferenceBundleDto> bundles = new ArrayList<>(userIds.size());
+    for (UUID userId : userIds) {
+      TasteProfile tp = userId == null ? null : tasteByUser.get(userId);
+      LifestyleConfig lc = userId == null ? null : lifestyleByUser.get(userId);
+      bundles.add(
+          new SoftPreferenceBundleDto(
+              userId,
+              tp == null
+                  ? null
+                  : SoftPreferenceProjection.toHouseholdTasteProfile(tp.getDocument()),
+              lc == null
+                  ? null
+                  : SoftPreferenceProjection.toHouseholdLifestyleConfig(lc.getDocument())));
+    }
+    return bundles;
   }
 
   // ---------------- Update ----------------
