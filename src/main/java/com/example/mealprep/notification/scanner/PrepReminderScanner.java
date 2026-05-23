@@ -1,6 +1,5 @@
 package com.example.mealprep.notification.scanner;
 
-import com.example.mealprep.core.types.SlotKind;
 import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.notification.domain.repository.PrepReminderDispatchLogRepository;
@@ -14,7 +13,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -28,12 +26,14 @@ import org.springframework.transaction.annotation.Transactional;
  * that reminds users to start an advance-prep step for an upcoming planned meal. Per {@code
  * tickets/notification/01b-scanners.md} §Scanner #3.
  *
- * <p>The planner does not (yet) store a wall-clock meal time or an explicit {@code
- * prep_step_at_time} — those are an unbuilt "pre-cook actions" planner concern (see {@code
- * design/provision-model.md}). The scanner therefore derives a deterministic prep moment from the
- * slot's real scheduling facts: {@code prepStepAtTime = dayDate@defaultMealTime(kind) −
- * timeBudgetMin}, evaluated in the clock's zone. When the current time is within {@code
- * leadMinutes} (default 15) of that moment, it fires a {@code PrepReminderEvent}.
+ * <p>The prep moment anchors on the slot's resolved wall-clock meal time, which the planner now
+ * supplies on {@link UpcomingSlotView#mealTime()} (planner-01m — coalesced from the slot override,
+ * the household owner's lifestyle-config schedule, then the slot-kind default; never null). When
+ * the slot carries an explicit {@link UpcomingSlotView#prepStepAtTime()} override (reserved for the
+ * future "pre-cook actions" feature; currently always null) the scanner fires relative to it;
+ * otherwise it derives {@code prepStepAtTime = dayDate@mealTime − timeBudgetMin}, evaluated in the
+ * clock's zone. When the current time is within {@code leadMinutes} (default 15) of that moment, it
+ * fires a {@code PrepReminderEvent}.
  *
  * <p>Users are enumerated via provisions; each user's household → active plan slots come from
  * {@link PlanQueryService#getUpcomingSlots}. Idempotent per {@code (slotId, prepStepAtTime)} via
@@ -131,22 +131,18 @@ public class PrepReminderScanner extends ScannerSupport {
     return fired;
   }
 
-  /** Derive the prep moment: the slot's meal time minus its time budget (the prep lead). */
+  /**
+   * Resolve the prep moment. Prefer the slot's explicit {@code prepStepAtTime} override when set;
+   * otherwise derive it as the slot's resolved meal time ({@link UpcomingSlotView#mealTime()},
+   * never null) minus its time budget (the prep lead). Both are evaluated on {@code dayDate} in the
+   * clock's zone, so the recomputed value is stable across scan runs (idempotency holds).
+   */
   private static Instant prepMomentFor(UpcomingSlotView slot, ZoneId zone) {
-    LocalTime mealTime = defaultMealTime(slot.kind());
-    Instant mealInstant = slot.dayDate().atTime(mealTime).atZone(zone).toInstant();
+    if (slot.prepStepAtTime() != null) {
+      return slot.dayDate().atTime(slot.prepStepAtTime()).atZone(zone).toInstant();
+    }
+    Instant mealInstant = slot.dayDate().atTime(slot.mealTime()).atZone(zone).toInstant();
     return mealInstant.minus(Duration.ofMinutes(slot.timeBudgetMin()));
-  }
-
-  /** Default wall-clock meal time per slot kind — the planner has no explicit time field in v1. */
-  private static LocalTime defaultMealTime(SlotKind kind) {
-    return switch (kind) {
-      case BREAKFAST -> LocalTime.of(8, 0);
-      case LUNCH -> LocalTime.of(12, 30);
-      case DINNER -> LocalTime.of(18, 0);
-      case SNACK -> LocalTime.of(15, 0);
-      case CUSTOM -> LocalTime.of(12, 0);
-    };
   }
 
   private UUID householdIdFor(UUID userId) {

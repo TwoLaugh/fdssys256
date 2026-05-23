@@ -37,9 +37,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 /**
- * Unit tests for {@link DefrostReminderScanner}. The meal anchor is the item's {@code expiryDate}
- * at start-of-day (UTC here); the defrost target = anchor − leadHours. The 1-hour fire window
- * boundary is the focus.
+ * Unit tests for {@link DefrostReminderScanner}. The v1 meal anchor is the item's {@code
+ * expiryDate} at start-of-day (UTC here) — <b>not</b> a planned slot's meal time, because no
+ * frozen-inventory → consuming-slot link exists in the data model (notification-01c keeps the
+ * approximation rather than inventing the link). The defrost target = anchor − leadHours. The
+ * 1-hour fire window boundary is the focus.
  *
  * <p>Anchor for an item expiring 2026-06-16 is {@code 2026-06-16T00:00Z}; with {@code
  * defrostLeadTimeHours=10} the target is {@code 2026-06-15T14:00Z}.
@@ -117,6 +119,23 @@ class DefrostReminderScannerTest {
 
     assertThat(scanner.scan()).isZero();
     verify(publisher, never()).publishEvent(any());
+  }
+
+  @Test
+  void frozenItemWithNoConsumingSlotLink_anchorsOnExpiryDate_noRegression() {
+    // v1 contract: with no inventory→slot link, the anchor stays the expiryDate start-of-day.
+    // Item expires 2026-06-16, lead 10h → target 2026-06-15T14:00Z, identical to pre-01c behaviour.
+    var scanner = scannerAt("2026-06-15T14:00:00Z");
+    UUID itemId = UUID.randomUUID();
+    setUser();
+    when(householdQueryService.getByUserId(USER)).thenReturn(Optional.empty());
+    when(dispatchLogRepository.existsBySlotIdAndDefrostTargetTime(any(), any())).thenReturn(false);
+    stubCandidates(frozen(itemId, EXPIRY, 10));
+
+    assertThat(scanner.scan()).isEqualTo(1);
+    DefrostReminderEvent event = capture();
+    assertThat(event.inventoryItemId()).isEqualTo(itemId);
+    assertThat(event.defrostBy()).isEqualTo(Instant.parse("2026-06-15T14:00:00Z"));
   }
 
   @Test

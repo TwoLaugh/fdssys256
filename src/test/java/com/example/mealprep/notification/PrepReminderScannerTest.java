@@ -23,6 +23,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
@@ -35,9 +36,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 /**
- * Unit tests for {@link PrepReminderScanner}. The prep moment is derived as {@code
- * dayDate@defaultMealTime(kind) − timeBudgetMin}. For a DINNER slot (default 18:00) with {@code
- * timeBudgetMin=15} the prep moment is {@code 17:45}; the 15-minute fire window is the focus.
+ * Unit tests for {@link PrepReminderScanner}. The prep moment is derived as {@code dayDate@mealTime
+ * − timeBudgetMin} from the slot's resolved wall-clock meal time (planner-01m's {@code
+ * UpcomingSlotView.mealTime()}), or the explicit {@code prepStepAtTime} override when set. For a
+ * DINNER slot whose resolved meal time is 19:00 with {@code timeBudgetMin=45} the prep moment is
+ * {@code 18:15}; the 15-minute fire window is the focus.
  */
 @ExtendWith(MockitoExtension.class)
 class PrepReminderScannerTest {
@@ -82,6 +85,69 @@ class PrepReminderScannerTest {
     assertThat(event.recipeId()).isEqualTo(recipeId);
     assertThat(event.prepBy()).isEqualTo(Instant.parse("2026-06-15T17:45:00Z"));
     verify(dispatchLogRepository).save(any(PrepReminderDispatchLog.class));
+  }
+
+  @Test
+  void realConfiguredMealTime_firesRelativeToResolvedMealTimeMinusBudget() {
+    // Owner lifestyle config resolves DINNER to 19:00; budget 45 → prep moment = 18:15.
+    // now == 18:15 → fires. (Old hard-coded default would have been 18:00 − 45 = 17:15.)
+    var scanner = scannerAt("2026-06-15T18:15:00Z");
+    setUserHousehold();
+    UUID slotId = UUID.randomUUID();
+    UUID recipeId = UUID.randomUUID();
+    stubSlots(slot(slotId, recipeId, SlotKind.DINNER, 45, LocalTime.of(19, 0), null));
+    when(dispatchLogRepository.existsBySlotIdAndPrepStepAtTime(any(), any())).thenReturn(false);
+
+    int fired = scanner.scan();
+
+    assertThat(fired).isEqualTo(1);
+    assertThat(capture().prepBy()).isEqualTo(Instant.parse("2026-06-15T18:15:00Z"));
+  }
+
+  @Test
+  void realConfiguredMealTime_outsideWindow_doesNotFire() {
+    // Resolved DINNER 19:00, budget 45 → prep 18:15; now 17:55 → 20min away → no fire.
+    // (The old 18:00-default would have fired here at 17:15 ± 15min; the real meal time does not.)
+    var scanner = scannerAt("2026-06-15T17:55:00Z");
+    setUserHousehold();
+    stubSlots(
+        slot(UUID.randomUUID(), UUID.randomUUID(), SlotKind.DINNER, 45, LocalTime.of(19, 0), null));
+
+    assertThat(scanner.scan()).isZero();
+    verify(publisher, never()).publishEvent(any());
+  }
+
+  @Test
+  void explicitPrepStepAtTimeOverride_firesRelativeToOverrideNotDerivedMealTime() {
+    // prepStepAtTime override = 16:30 takes precedence over (mealTime 19:00 − budget 45 = 18:15).
+    var scanner = scannerAt("2026-06-15T16:30:00Z");
+    setUserHousehold();
+    UUID slotId = UUID.randomUUID();
+    stubSlots(
+        slot(
+            slotId,
+            UUID.randomUUID(),
+            SlotKind.DINNER,
+            45,
+            LocalTime.of(19, 0),
+            LocalTime.of(16, 30)));
+    when(dispatchLogRepository.existsBySlotIdAndPrepStepAtTime(any(), any())).thenReturn(false);
+
+    int fired = scanner.scan();
+
+    assertThat(fired).isEqualTo(1);
+    assertThat(capture().prepBy()).isEqualTo(Instant.parse("2026-06-15T16:30:00Z"));
+  }
+
+  @Test
+  void atExactly15MinutesBefore_fires() {
+    // now 17:30, prep moment 17:45 → exactly 15min away → inclusive lead window → fires.
+    var scanner = scannerAt("2026-06-15T17:30:00Z");
+    setUserHousehold();
+    stubSlots(slot(UUID.randomUUID(), UUID.randomUUID(), SlotKind.DINNER, 15));
+    when(dispatchLogRepository.existsBySlotIdAndPrepStepAtTime(any(), any())).thenReturn(false);
+
+    assertThat(scanner.scan()).isEqualTo(1);
   }
 
   @Test
@@ -163,12 +229,33 @@ class PrepReminderScannerTest {
     return captor.getValue();
   }
 
+  /**
+   * Slot with the slot-kind default meal time the planner would resolve when a household has no
+   * lifestyle config (DINNER 18:00) — preserves the pre-01c no-config arithmetic (prep = 18:00 −
+   * budget).
+   */
   private static UpcomingSlotView slot(UUID slotId, UUID recipeId, SlotKind kind, int timeBudget) {
-    // planner-01m extended UpcomingSlotView with resolved mealTime + nullable prepStepAtTime.
-    // This scanner (notification-01b) still derives its own prep moment from the slot kind, so the
-    // values here are inert; notification-01c re-wires the scanner to consume slot.mealTime().
+    return slot(slotId, recipeId, kind, timeBudget, LocalTime.of(18, 0), null);
+  }
+
+  private static UpcomingSlotView slot(
+      UUID slotId,
+      UUID recipeId,
+      SlotKind kind,
+      int timeBudget,
+      LocalTime mealTime,
+      LocalTime prepStepAtTime) {
     return new UpcomingSlotView(
-        slotId, UUID.randomUUID(), HOUSEHOLD, TODAY, kind, 0, timeBudget, recipeId, null, null);
+        slotId,
+        UUID.randomUUID(),
+        HOUSEHOLD,
+        TODAY,
+        kind,
+        0,
+        timeBudget,
+        recipeId,
+        mealTime,
+        prepStepAtTime);
   }
 
   private static ScannerProperties defaultProps() {
