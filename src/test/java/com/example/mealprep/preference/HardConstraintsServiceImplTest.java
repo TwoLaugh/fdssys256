@@ -17,6 +17,7 @@ import com.example.mealprep.preference.domain.entity.HardConstraints;
 import com.example.mealprep.preference.domain.entity.HardConstraintsAuditLog;
 import com.example.mealprep.preference.domain.repository.HardConstraintsAuditLogRepository;
 import com.example.mealprep.preference.domain.repository.HardConstraintsRepository;
+import com.example.mealprep.preference.domain.repository.HardIntoleranceRepository;
 import com.example.mealprep.preference.domain.service.internal.PreferenceServiceImpl;
 import com.example.mealprep.preference.event.HardConstraintsUpdatedEvent;
 import com.example.mealprep.preference.exception.HardConstraintsNotFoundException;
@@ -50,6 +51,7 @@ class HardConstraintsServiceImplTest {
 
   @Mock private HardConstraintsRepository hardConstraintsRepository;
   @Mock private HardConstraintsAuditLogRepository auditLogRepository;
+  @Mock private HardIntoleranceRepository hardIntoleranceRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final HardConstraintsMapper mapper =
@@ -62,6 +64,7 @@ class HardConstraintsServiceImplTest {
     return new PreferenceServiceImpl(
         hardConstraintsRepository,
         auditLogRepository,
+        hardIntoleranceRepository,
         mapper,
         eventPublisher,
         objectMapper,

@@ -26,6 +26,7 @@ import com.example.mealprep.preference.domain.entity.HardIntolerance;
 import com.example.mealprep.preference.domain.repository.AllergenDerivativeRepository;
 import com.example.mealprep.preference.domain.repository.HardConstraintsAuditLogRepository;
 import com.example.mealprep.preference.domain.repository.HardConstraintsRepository;
+import com.example.mealprep.preference.domain.repository.HardIntoleranceRepository;
 import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
 import com.example.mealprep.preference.domain.service.PreferenceQueryService;
 import com.example.mealprep.preference.domain.service.PreferenceUpdateService;
@@ -76,6 +77,7 @@ class PreferenceMutationKillsTest {
 
   @Mock private HardConstraintsRepository hardConstraintsRepository;
   @Mock private HardConstraintsAuditLogRepository auditLogRepository;
+  @Mock private HardIntoleranceRepository hardIntoleranceRepository;
   @Mock private AllergenDerivativeRepository allergenDerivativeRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
   @Mock private PreferenceQueryService queryService;
@@ -117,6 +119,7 @@ class PreferenceMutationKillsTest {
     return new PreferenceServiceImpl(
         hardConstraintsRepository,
         auditLogRepository,
+        hardIntoleranceRepository,
         mapper,
         eventPublisher,
         objectMapper,

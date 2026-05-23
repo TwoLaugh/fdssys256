@@ -2,6 +2,7 @@ package com.example.mealprep.preference.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
 import com.example.mealprep.preference.exception.HardConstraintsNotFoundException;
+import com.example.mealprep.preference.exception.InvalidDirectivePreferenceRouteException;
 import com.example.mealprep.preference.exception.InvalidNoveltyToleranceException;
 import com.example.mealprep.preference.exception.InvalidTasteProfileDeltaException;
 import com.example.mealprep.preference.exception.LifestyleConfigNotFoundException;
@@ -58,6 +59,23 @@ public class PreferenceExceptionHandler {
       TasteProfileBudgetExceededException ex, HttpServletRequest req) {
     return unprocessable(
         ex.getMessage(), "taste-profile-budget-exceeded", "Taste profile budget exceeded", req);
+  }
+
+  /**
+   * A {@code preference_model} health directive whose {@code action} doesn't map to a
+   * hard-constraint mutation. The throw originates in-process from {@code
+   * PreferenceDirectiveApplyTarget} (invoked by the nutrition {@code DirectiveApplier} inside the
+   * accept tx); this advice is global, so it maps the exception to a clean 422 no matter which
+   * controller surfaced it.
+   */
+  @ExceptionHandler(InvalidDirectivePreferenceRouteException.class)
+  public ResponseEntity<ProblemDetail> handleInvalidDirectivePreferenceRoute(
+      InvalidDirectivePreferenceRouteException ex, HttpServletRequest req) {
+    return unprocessable(
+        ex.getMessage(),
+        "invalid-directive-preference-route",
+        "Invalid directive preference route",
+        req);
   }
 
   private static ResponseEntity<ProblemDetail> notFound(

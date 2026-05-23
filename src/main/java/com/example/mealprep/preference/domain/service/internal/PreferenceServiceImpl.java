@@ -14,12 +14,16 @@ import com.example.mealprep.preference.domain.entity.HardConstraintsAuditLog;
 import com.example.mealprep.preference.domain.entity.HardIntolerance;
 import com.example.mealprep.preference.domain.repository.HardConstraintsAuditLogRepository;
 import com.example.mealprep.preference.domain.repository.HardConstraintsRepository;
+import com.example.mealprep.preference.domain.repository.HardIntoleranceRepository;
 import com.example.mealprep.preference.domain.service.PreferenceQueryService;
 import com.example.mealprep.preference.domain.service.PreferenceUpdateService;
 import com.example.mealprep.preference.event.HardConstraintsUpdatedEvent;
 import com.example.mealprep.preference.exception.HardConstraintsNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.PersistenceContext;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -61,24 +65,54 @@ public class PreferenceServiceImpl implements PreferenceQueryService, Preference
   static final String FIELD_INTOLERANCES = "intolerances";
   static final String FIELD_AGE_RESTRICTIONS = "ageRestrictions";
 
+  /**
+   * Parent-owned columns whose change dirties the {@code HardConstraints} root, so Hibernate bumps
+   * {@code @Version} on flush by itself. A change to ONLY owned child collections (intolerances /
+   * dietary-identity exceptions / age restrictions) does not dirty the root and needs an explicit
+   * force-increment; a change that also touches one of these must NOT be force-incremented or the
+   * version would jump by 2 and break the sequential optimistic-locking contract.
+   */
+  private static final java.util.Set<String> PARENT_OWNED_FIELDS =
+      java.util.Set.of(
+          FIELD_ALLERGIES,
+          FIELD_DIETARY_IDENTITY_BASE,
+          FIELD_DIETARY_IDENTITY_LABEL,
+          FIELD_MEDICAL_DIETS);
+
   private static final String DEFAULT_DIETARY_BASE = "omnivore";
 
   private final HardConstraintsRepository hardConstraintsRepository;
   private final HardConstraintsAuditLogRepository auditLogRepository;
+  private final HardIntoleranceRepository hardIntoleranceRepository;
   private final HardConstraintsMapper mapper;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
 
+  /**
+   * Field-injected so the existing constructor (and {@code HardConstraintsServiceImplTest}, which
+   * mocks the repository layer and never flushes) stay unchanged. Mirrors the
+   * {@code @PersistenceContext EntityManager} idiom already used in {@code AdvisoryLockServiceImpl}
+   * / {@code DiscoveryServiceImpl}. Used to force-increment the aggregate root's {@code @Version}
+   * when only an owned child collection (intolerances, exceptions, age restrictions) changed —
+   * Hibernate does not dirty the parent root on a child-collection-only mutation, so the
+   * {@code @Version} would otherwise stay put (the optimistic-locking contract is "any aggregate
+   * mutation bumps {@code @Version}"). Null in the pure unit test, where there is no real flush to
+   * protect.
+   */
+  @PersistenceContext private EntityManager entityManager;
+
   public PreferenceServiceImpl(
       HardConstraintsRepository hardConstraintsRepository,
       HardConstraintsAuditLogRepository auditLogRepository,
+      HardIntoleranceRepository hardIntoleranceRepository,
       HardConstraintsMapper mapper,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
     this.hardConstraintsRepository = hardConstraintsRepository;
     this.auditLogRepository = auditLogRepository;
+    this.hardIntoleranceRepository = hardIntoleranceRepository;
     this.mapper = mapper;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
@@ -177,6 +211,16 @@ public class PreferenceServiceImpl implements PreferenceQueryService, Preference
     Instant now = Instant.now(clock);
     writeAuditRows(aggregate.getId(), actorUserId, changedFields, before, after, now);
 
+    // Force-increment the root @Version ONLY when the change is to owned child collections alone
+    // (intolerances / dietary-identity exceptions / age restrictions). Hibernate does not dirty the
+    // parent root on a child-collection-only mutation, so its @Version UPDATE never fires. When a
+    // parent-owned column (allergies / medical diets / dietary-identity base|label) also changed,
+    // Hibernate already bumps @Version once — force-incrementing again would double-bump (+2) and
+    // break the sequential optimistic-locking contract (HardConstraintsFlowIT's audit-log flow).
+    if (java.util.Collections.disjoint(changedFields, PARENT_OWNED_FIELDS)) {
+      forceIncrementRootVersion(aggregate);
+    }
+
     // saveAndFlush so the @Version bump materialises before we map to DTO — otherwise the
     // response would carry the stale version. The IT explicitly asserts the post-PUT version.
     HardConstraints saved = hardConstraintsRepository.saveAndFlush(aggregate);
@@ -188,6 +232,132 @@ public class PreferenceServiceImpl implements PreferenceQueryService, Preference
         changedFields,
         saved.getVersion());
     return mapper.toDto(saved);
+  }
+
+  // ---------------- Directive provenance (nutrition/01j) ----------------
+
+  /**
+   * Stamp {@code sourceDirectiveId} + {@code autoExpiresAt} on the intolerance row a temporary
+   * directive just added, so the future auto-expiry sweep can find and reverse exactly that row.
+   *
+   * <p>Module-internal helper invoked by {@code PreferenceDirectiveApplyTarget} (same module, in
+   * {@code preference.spi.internal}) AFTER its {@code updateHardConstraints} call has added the row
+   * (riding that method's audit + version + event machinery). Runs in the same transaction (no
+   * {@code @Transactional} of its own — joins the caller's). Matches by {@code (hardConstraintsId,
+   * substance)} among rows not yet stamped, so a re-add doesn't restamp an already-attributed row.
+   */
+  public void stampTemporaryConstraint(
+      UUID userId, String substance, UUID directiveId, Instant autoExpiresAt) {
+    HardConstraints aggregate =
+        hardConstraintsRepository
+            .findByUserId(userId)
+            .orElseThrow(() -> new HardConstraintsNotFoundException(userId));
+    List<HardIntolerance> candidates =
+        hardIntoleranceRepository.findByHardConstraintsIdAndSubstanceAndSourceDirectiveIdIsNull(
+            aggregate.getId(), substance);
+    for (HardIntolerance row : candidates) {
+      row.setSourceDirectiveId(directiveId);
+      row.setAutoExpiresAt(autoExpiresAt);
+    }
+    if (!candidates.isEmpty()) {
+      hardIntoleranceRepository.saveAll(candidates);
+      log.info(
+          "stamped temporary directive provenance userId={} substance={} directiveId={} rows={}",
+          userId,
+          substance,
+          directiveId,
+          candidates.size());
+    }
+  }
+
+  @Override
+  @Transactional
+  public void removeTemporaryConstraint(UUID userId, UUID directiveId) {
+    List<HardIntolerance> sourced = hardIntoleranceRepository.findBySourceDirectiveId(directiveId);
+    // Best-effort + idempotent: scope to this user's rows; a directive whose rows the user has
+    // since edited away (or one already reversed) leaves nothing to do — no audit, no event, no
+    // throw.
+    Optional<HardConstraints> aggregateOpt = hardConstraintsRepository.findByUserId(userId);
+    if (sourced.isEmpty() || aggregateOpt.isEmpty()) {
+      log.info(
+          "removeTemporaryConstraint no-op userId={} directiveId={} (no surviving directive-sourced"
+              + " rows)",
+          userId,
+          directiveId);
+      return;
+    }
+    HardConstraints aggregate = aggregateOpt.get();
+    List<HardIntolerance> toRemove = new ArrayList<>();
+    for (HardIntolerance row : sourced) {
+      if (row.getHardConstraints() != null
+          && aggregate.getId().equals(row.getHardConstraints().getId())) {
+        toRemove.add(row);
+      }
+    }
+    if (toRemove.isEmpty()) {
+      log.info(
+          "removeTemporaryConstraint no-op userId={} directiveId={} (rows belong to another user)",
+          userId,
+          directiveId);
+      return;
+    }
+
+    // Audit the intolerances field as a whole (mirrors the updateHardConstraints diff granularity):
+    // previous = the full intolerance set, new = that set minus the removed directive-sourced rows.
+    List<HardIntoleranceDto> previous = intoleranceDtos(aggregate.getIntolerances());
+    aggregate.getIntolerances().removeAll(toRemove);
+    List<HardIntoleranceDto> next = intoleranceDtos(aggregate.getIntolerances());
+
+    Instant now = Instant.now(clock);
+    auditLogRepository.save(
+        new HardConstraintsAuditLog(
+            UUID.randomUUID(),
+            aggregate.getId(),
+            userId,
+            FIELD_INTOLERANCES,
+            objectMapper.valueToTree(previous),
+            objectMapper.valueToTree(next),
+            now));
+
+    // Same child-only-mutation concern as updateHardConstraints: removing intolerance rows doesn't
+    // dirty the parent root, so force the @Version bump the contract (and the IT) require.
+    forceIncrementRootVersion(aggregate);
+
+    HardConstraints saved = hardConstraintsRepository.saveAndFlush(aggregate);
+    eventPublisher.publishEvent(
+        new HardConstraintsUpdatedEvent(
+            userId, Set.of(FIELD_INTOLERANCES), UUID.randomUUID(), now));
+    log.info(
+        "removeTemporaryConstraint reversed userId={} directiveId={} removed={} version={}",
+        userId,
+        directiveId,
+        toRemove.size(),
+        saved.getVersion());
+  }
+
+  /**
+   * Force Hibernate to bump the aggregate root's {@code @Version} even when only an owned child
+   * collection changed. {@code OPTIMISTIC_FORCE_INCREMENT} schedules a version UPDATE on the root
+   * at flush time; without it a child-only mutation leaves the parent clean and the version stale.
+   *
+   * <p>Guarded for the pure unit test ({@code HardConstraintsServiceImplTest}) where the {@code
+   * EntityManager} is not injected (repositories are mocked, nothing is really flushed, so there is
+   * no real version to protect).
+   */
+  private void forceIncrementRootVersion(HardConstraints aggregate) {
+    if (entityManager != null) {
+      entityManager.lock(aggregate, LockModeType.OPTIMISTIC_FORCE_INCREMENT);
+    }
+  }
+
+  private static List<HardIntoleranceDto> intoleranceDtos(List<HardIntolerance> rows) {
+    List<HardIntoleranceDto> dtos = new ArrayList<>();
+    if (rows != null) {
+      for (HardIntolerance i : rows) {
+        dtos.add(new HardIntoleranceDto(i.getSubstance(), i.getSeverity(), i.getNotes()));
+      }
+    }
+    return dtos;
   }
 
   // ---------------- Diff + audit ----------------

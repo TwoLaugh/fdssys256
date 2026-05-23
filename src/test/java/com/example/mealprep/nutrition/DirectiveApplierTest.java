@@ -129,6 +129,11 @@ class DirectiveApplierTest {
 
   @Test
   void preference_route_delegates_to_spi_with_directive_fields() {
+    // With preference on the classpath the ObjectProvider resolves the real
+    // PreferenceDirectiveApplyTarget (nutrition/01j) rather than the throwing Noop; here we mock
+    // the
+    // SPI to assert DirectiveApplier hands it the directive's fields verbatim. No nutrition-targets
+    // write occurs on the preference route.
     when(preferenceProvider.getObject()).thenReturn(preferenceTarget);
     HealthDirective d = directive("preference_model", null);
     DirectiveInstructionDocument doc =
@@ -144,6 +149,24 @@ class DirectiveApplierTest {
             eq(fixedNow.plusSeconds(3600)),
             eq(directiveId),
             eq(actorUserId));
+    verifyNoInteractions(targetsRepository, auditRepository, eventPublisher);
+  }
+
+  @Test
+  void preference_route_propagates_spi_failure_so_accept_tx_rolls_back() {
+    // A failure inside applyPreferenceDirective (e.g. unmapped action → 422) must propagate out of
+    // DirectiveApplier so the accept tx rolls back the directive's status update (atomicity).
+    when(preferenceProvider.getObject()).thenReturn(preferenceTarget);
+    HealthDirective d = directive("preference_model", null);
+    DirectiveInstructionDocument doc =
+        new DirectiveInstructionDocument("adjust_target", "protein_floor_g", "global", null, null);
+    org.mockito.Mockito.doThrow(new IllegalStateException("boom"))
+        .when(preferenceTarget)
+        .applyPreferenceDirective(
+            any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any(), any(), any());
+
+    assertThatThrownBy(() -> applier.apply(d, doc, actorUserId))
+        .isInstanceOf(IllegalStateException.class);
     verifyNoInteractions(targetsRepository, auditRepository, eventPublisher);
   }
 

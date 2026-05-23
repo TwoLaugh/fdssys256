@@ -17,6 +17,7 @@ import com.example.mealprep.nutrition.api.dto.InboundHealthDirectiveRequest;
 import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
 import com.example.mealprep.nutrition.domain.entity.Goal;
 import com.example.mealprep.nutrition.testdata.NutritionTestData;
+import com.example.mealprep.preference.domain.service.PreferenceUpdateService;
 import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -54,6 +55,7 @@ class HealthDirectivesFlowIT {
   @Autowired private SessionRepository sessionRepository;
   @Autowired private JdbcTemplate jdbcTemplate;
   @Autowired private AuthProperties authProperties;
+  @Autowired private PreferenceUpdateService preferenceUpdateService;
 
   @AfterEach
   void cleanup() {
@@ -64,6 +66,12 @@ class HealthDirectivesFlowIT {
     jdbcTemplate.update("DELETE FROM nutrition_activity_adjustment");
     jdbcTemplate.update("DELETE FROM nutrition_eating_window");
     jdbcTemplate.update("DELETE FROM nutrition_targets");
+    // 01j: the preference_model accept path writes hard constraints + audit; clear them too.
+    jdbcTemplate.update("DELETE FROM preference_hard_constraints_audit");
+    jdbcTemplate.update("DELETE FROM preference_hard_intolerances");
+    jdbcTemplate.update("DELETE FROM preference_dietary_identity_exceptions");
+    jdbcTemplate.update("DELETE FROM preference_age_restrictions");
+    jdbcTemplate.update("DELETE FROM preference_hard_constraints");
     sessionRepository.deleteAll();
     userRepository.deleteAll();
   }
@@ -291,14 +299,16 @@ class HealthDirectivesFlowIT {
     assertThat(status).isEqualTo("PENDING_REVIEW");
   }
 
-  // ---------------- Accept — preference_model route → 422 (Noop) ----------------
+  // ---------------- Accept — preference_model route → 200, real apply (01j) ----------------
 
   @Test
-  void accept_preferenceModelRoute_returns422_directiveApplyTargetUnavailable() throws Exception {
+  void accept_preferenceModelRoute_returns200_addsHardConstraintWithProvenance() throws Exception {
     AuthedUser user = registerUser();
+    preferenceUpdateService.initialiseHardConstraints(user.userId());
 
     com.example.mealprep.nutrition.api.dto.DirectiveInstructionDocument instr =
         NutritionTestData.instructionFor("restrict_ingredient", "shellfish", null);
+    Instant expiry = Instant.parse("2026-08-01T00:00:00Z");
     InboundHealthDirectiveRequest body =
         NutritionTestData.inboundDirectiveRequest(
             user.userId(),
@@ -309,7 +319,66 @@ class HealthDirectivesFlowIT {
             "preference_model",
             null,
             true,
-            Instant.parse("2026-08-01T00:00:00Z"));
+            expiry);
+
+    MvcResult posted =
+        mvc.perform(
+                post("/api/v1/nutrition/health-directives/inbound")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(body)))
+            .andExpect(status().isCreated())
+            .andReturn();
+    String directiveId =
+        objectMapper.readTree(posted.getResponse().getContentAsString()).get("id").asText();
+
+    // With preference on the classpath the real PreferenceDirectiveApplyTarget wins over the Noop,
+    // so the accept succeeds (was 422 with the Noop).
+    mvc.perform(
+            post("/api/v1/nutrition/health-directives/" + directiveId + "/accept")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(NutritionTestData.acceptRequest(null, 0L))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("ACCEPTED"))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // The directive's restriction landed as a hard-constraint intolerance, stamped with the source
+    // directive id + expiry (temporary == true).
+    Long intoleranceCount =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM preference_hard_intolerances hi"
+                + " JOIN preference_hard_constraints hc ON hc.id = hi.hard_constraints_id"
+                + " WHERE hc.user_id = ? AND hi.substance = 'shellfish'"
+                + " AND hi.source_directive_id = ?::uuid AND hi.auto_expires_at IS NOT NULL",
+            Long.class,
+            user.userId(),
+            directiveId);
+    assertThat(intoleranceCount).isEqualTo(1L);
+  }
+
+  @Test
+  void accept_preferenceModelRoute_unmappedAction_returns422_directiveStaysPending()
+      throws Exception {
+    AuthedUser user = registerUser();
+    preferenceUpdateService.initialiseHardConstraints(user.userId());
+
+    // adjust_target should route nutrition_model; reaching the preference target with it is a
+    // routing bug → clean 422 (not 500), directive stays PENDING_REVIEW.
+    com.example.mealprep.nutrition.api.dto.DirectiveInstructionDocument instr =
+        NutritionTestData.instructionFor("adjust_target", "protein_floor_g", null);
+    InboundHealthDirectiveRequest body =
+        NutritionTestData.inboundDirectiveRequest(
+            user.userId(),
+            "ext-pref-bad",
+            "apple-health",
+            com.example.mealprep.nutrition.api.dto.DirectiveType.INGREDIENT_RESTRICTION,
+            instr,
+            "preference_model",
+            null,
+            false,
+            null);
 
     MvcResult posted =
         mvc.perform(
@@ -331,7 +400,14 @@ class HealthDirectivesFlowIT {
         .andExpect(status().isUnprocessableEntity())
         .andExpect(
             jsonPath("$.type")
-                .value(org.hamcrest.Matchers.endsWith("directive-apply-target-unavailable")));
+                .value(org.hamcrest.Matchers.endsWith("invalid-directive-preference-route")));
+
+    String status =
+        jdbcTemplate.queryForObject(
+            "SELECT status FROM nutrition_health_directives WHERE id = ?::uuid",
+            String.class,
+            directiveId);
+    assertThat(status).isEqualTo("PENDING_REVIEW");
   }
 
   // ---------------- GET list / single ----------------
