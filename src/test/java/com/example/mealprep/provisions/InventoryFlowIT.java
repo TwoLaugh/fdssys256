@@ -19,6 +19,10 @@ import com.example.mealprep.auth.testdata.AuthTestData;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
+import com.example.mealprep.provisions.domain.entity.ItemSource;
+import com.example.mealprep.provisions.domain.entity.StorageLocation;
+import com.example.mealprep.provisions.domain.entity.TrackingMode;
+import com.example.mealprep.provisions.domain.service.ProvisionQueryService;
 import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
 import com.example.mealprep.provisions.event.InventoryItemUpsertedEvent;
 import com.example.mealprep.provisions.testdata.ProvisionsTestData;
@@ -26,6 +30,8 @@ import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.Cookie;
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -65,6 +71,7 @@ class InventoryFlowIT {
   @Autowired private UserRepository userRepository;
   @Autowired private SessionRepository sessionRepository;
   @Autowired private ProvisionUpdateService provisionUpdateService;
+  @Autowired private ProvisionQueryService provisionQueryService;
   @Autowired private JdbcTemplate jdbcTemplate;
   @Autowired private AuthProperties authProperties;
   @Autowired private InventoryEventCapture eventCapture;
@@ -522,6 +529,67 @@ class InventoryFlowIT {
             Long.class,
             created.id());
     assertThat(auditCountAfterChange).isEqualTo(2L);
+  }
+
+  // ---------------- getActiveInventoryByMappingKey (cross-module read) ----------------
+
+  @Test
+  void getActiveInventoryByMappingKey_returnsActiveRowsOldestExpiryFirst_scopedToUser()
+      throws Exception {
+    AuthedUser owner = registerUser();
+    AuthedUser other = registerUser();
+
+    // Two ACTIVE soy_sauce rows for the owner, plus one for another user (cross-tenant guard).
+    InventoryItemDto newer =
+        provisionUpdateService.createInventoryItem(
+            owner.userId(), soySauceRequest(LocalDate.parse("2026-07-01")), AuditActor.USER);
+    InventoryItemDto older =
+        provisionUpdateService.createInventoryItem(
+            owner.userId(), soySauceRequest(LocalDate.parse("2026-06-01")), AuditActor.USER);
+    provisionUpdateService.createInventoryItem(
+        other.userId(), soySauceRequest(LocalDate.parse("2026-05-30")), AuditActor.USER);
+
+    // An EXHAUSTED soy_sauce row for the owner must NOT surface (ACTIVE-only filter).
+    InventoryItemDto spent =
+        provisionUpdateService.createInventoryItem(
+            owner.userId(), soySauceRequest(LocalDate.parse("2026-05-25")), AuditActor.USER);
+    provisionUpdateService.markExhausted(spent.id(), owner.userId());
+
+    List<InventoryItemDto> rows =
+        provisionQueryService.getActiveInventoryByMappingKey(owner.userId(), "soy_sauce");
+
+    // Owner's two ACTIVE rows only, oldest-expiry first; other user's + exhausted row excluded.
+    assertThat(rows).extracting(InventoryItemDto::id).containsExactly(older.id(), newer.id());
+    assertThat(rows).allMatch(r -> r.userId().equals(owner.userId()));
+  }
+
+  @Test
+  void getActiveInventoryByMappingKey_noMatchingRows_returnsEmpty() throws Exception {
+    AuthedUser user = registerUser();
+    provisionUpdateService.createInventoryItem(
+        user.userId(), ProvisionsTestData.createQuantityTrackedRequest(), AuditActor.USER);
+
+    assertThat(provisionQueryService.getActiveInventoryByMappingKey(user.userId(), "soy_sauce"))
+        .isEmpty();
+  }
+
+  private static CreateInventoryItemRequest soySauceRequest(LocalDate expiry) {
+    return new CreateInventoryItemRequest(
+        "Soy Sauce",
+        "condiment",
+        StorageLocation.CUPBOARD,
+        TrackingMode.QUANTITY,
+        new BigDecimal("150.000"),
+        "ml",
+        new BigDecimal("1.50"),
+        null,
+        false,
+        expiry,
+        "soy_sauce",
+        null,
+        ItemSource.MANUAL_ADD,
+        null,
+        null);
   }
 
   // ---------------- AFTER_COMMIT capture wiring ----------------

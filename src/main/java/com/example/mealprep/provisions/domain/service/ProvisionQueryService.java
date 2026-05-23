@@ -67,6 +67,13 @@ public interface ProvisionQueryService {
    */
   List<InventoryItemDto> getStaplesNeedingReplenishment(UUID userId);
 
+  /**
+   * ACTIVE inventory rows for {@code (userId, ingredientMappingKey)}, oldest-expiry first (NULLS
+   * LAST). Read-only cross-module helper for the feedback module's MARK_DEPLETED bridge ("I'm out
+   * of soy sauce"). Empty list when the user has no active rows for that key. No HTTP exposure.
+   */
+  List<InventoryItemDto> getActiveInventoryByMappingKey(UUID userId, String ingredientMappingKey);
+
   /** Equipment rows for {@code userId}, sorted by {@code name} ascending. */
   List<EquipmentDto> getEquipment(UUID userId);
 
