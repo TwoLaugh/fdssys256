@@ -36,6 +36,13 @@ public interface NutritionQueryService {
    */
   Optional<TargetsDto> getTargets(UUID userId);
 
+  /**
+   * Distinct user-ids that have a nutrition-targets row configured. Read-only cross-module helper
+   * for the notification/01b {@code NutritionAlertScanner}, which iterates users then compares each
+   * user's intake-so-far against their targets. No HTTP exposure.
+   */
+  List<UUID> getUserIdsWithTargets();
+
   /** Paginated audit log of changes to the user's targets, newest-first. */
   Page<NutritionTargetsAuditEntryDto> getTargetsAuditLog(UUID userId, Pageable pageable);
 

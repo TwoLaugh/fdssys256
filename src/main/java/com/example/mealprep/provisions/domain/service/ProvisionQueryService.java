@@ -37,6 +37,36 @@ public interface ProvisionQueryService {
   Page<InventoryItemDto> listActiveInventory(
       UUID userId, InventorySearchCriteria criteria, Pageable pageable);
 
+  /**
+   * Distinct user-ids that own at least one {@code ACTIVE} inventory row. Read-only cross-module
+   * helper for the notification/01b expiry + staple scanners, which iterate users then load each
+   * user's candidate rows. No HTTP exposure.
+   */
+  List<UUID> getUserIdsWithActiveInventory();
+
+  /**
+   * {@code ACTIVE} inventory items for {@code userId} whose non-null {@code expiryDate} is on or
+   * before {@code maxExpiryDate}, soonest-expiring first. Read-only cross-module helper for the
+   * notification/01b {@code ExpiryWarningScanner}; the scanner passes {@code today + the widest
+   * per-location threshold} and applies the precise fridge/freezer/pantry cut-off in code.
+   */
+  List<InventoryItemDto> getExpiringInventory(UUID userId, LocalDate maxExpiryDate);
+
+  /**
+   * {@code ACTIVE} FREEZER items for {@code userId} that carry both a defrost lead-time and an
+   * {@code expiryDate}. Read-only cross-module helper for the notification/01b {@code
+   * DefrostReminderScanner}; the lead-time + use-by anchor live in provisions per {@code
+   * design/provision-model.md}.
+   */
+  List<InventoryItemDto> getDefrostCandidates(UUID userId);
+
+  /**
+   * {@code ACTIVE} staple items for {@code userId} at/below restock level (status {@code LOW} or
+   * {@code OUT}). Read-only cross-module helper for the notification/01b {@code
+   * StapleReplenishmentScanner}.
+   */
+  List<InventoryItemDto> getStaplesNeedingReplenishment(UUID userId);
+
   /** Equipment rows for {@code userId}, sorted by {@code name} ascending. */
   List<EquipmentDto> getEquipment(UUID userId);
 

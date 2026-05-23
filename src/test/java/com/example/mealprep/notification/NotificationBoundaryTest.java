@@ -1,7 +1,9 @@
 package com.example.mealprep.notification;
 
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
+import com.example.mealprep.notification.scanner.internal.ScannerSupport;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
@@ -48,5 +50,24 @@ class NotificationBoundaryTest {
               "the notification dispatcher/resolver/debouncer are internal — cross-module callers"
                   + " use the public service interfaces. (The DeliveryChannel SPI lives in the"
                   + " .delivery sub-package and is intentionally public.)")
+          .allowEmptyShould(true);
+
+  /**
+   * Drift-prevention (notification/01b §25): every concrete scheduled scanner — the {@code
+   * *Scanner} classes in the top-level {@code notification.scanner} package — must extend {@code
+   * ScannerSupport}, which carries the injected Clock + publisher seam the {@code @Scheduled}
+   * triggers rely on. (The {@code internal} / {@code config} / {@code entity} / {@code repository}
+   * sub-packages are infrastructure, not scanners, and are excluded by the package + name filter.)
+   */
+  @ArchTest
+  static final ArchRule scannersExtendScannerSupport =
+      classes()
+          .that()
+          .resideInAPackage("com.example.mealprep.notification.scanner")
+          .and()
+          .haveSimpleNameEndingWith("Scanner")
+          .should()
+          .beAssignableTo(ScannerSupport.class)
+          .as("every notification.scanner..*Scanner extends ScannerSupport (drift prevention)")
           .allowEmptyShould(true);
 }

@@ -81,6 +81,7 @@ class NotificationPreferencesControllerIT {
     enabled.put("PLANNER_PREP_REMINDER", true);
     enabled.put("PLANNER_REOPT_SUGGESTED", true);
     enabled.put("PLANNER_PLAN_GENERATED", false);
+    enabled.put("STAPLE_REPLENISHMENT_NEEDED", true);
     body.put("quietHoursEnabled", true);
     body.put("quietHoursStart", "22:00:00");
     body.put("quietHoursEnd", "06:00:00");

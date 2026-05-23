@@ -44,7 +44,10 @@ import java.util.UUID;
       name = "PLANNER_REOPT_SUGGESTED"),
   @JsonSubTypes.Type(
       value = NotificationPayload.PlanGeneratedPayload.class,
-      name = "PLANNER_PLAN_GENERATED")
+      name = "PLANNER_PLAN_GENERATED"),
+  @JsonSubTypes.Type(
+      value = NotificationPayload.StapleReplenishmentPayload.class,
+      name = "STAPLE_REPLENISHMENT_NEEDED")
 })
 public sealed interface NotificationPayload
     permits NotificationPayload.ItemNearExpiryPayload,
@@ -54,7 +57,8 @@ public sealed interface NotificationPayload
         NotificationPayload.HealthDirectivePayload,
         NotificationPayload.PrepReminderPayload,
         NotificationPayload.ReoptSuggestedPayload,
-        NotificationPayload.PlanGeneratedPayload {
+        NotificationPayload.PlanGeneratedPayload,
+        NotificationPayload.StapleReplenishmentPayload {
 
   /** Discriminator — also the notification kind. Always non-null. */
   NotificationKind kind();
@@ -92,5 +96,12 @@ public sealed interface NotificationPayload
       implements NotificationPayload {}
 
   record PlanGeneratedPayload(NotificationKind kind, UUID planId, int generation)
+      implements NotificationPayload {}
+
+  record StapleReplenishmentPayload(
+      NotificationKind kind,
+      List<UUID> inventoryItemIds,
+      List<String> ingredientMappingKeys,
+      BigDecimal lowestStockRatio)
       implements NotificationPayload {}
 }

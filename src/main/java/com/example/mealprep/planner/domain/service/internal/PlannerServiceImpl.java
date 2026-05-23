@@ -2,6 +2,7 @@ package com.example.mealprep.planner.domain.service.internal;
 
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
+import com.example.mealprep.planner.api.dto.UpcomingSlotView;
 import com.example.mealprep.planner.api.mapper.PlanMapper;
 import com.example.mealprep.planner.api.mapper.ReoptSuggestionMapper;
 import com.example.mealprep.planner.domain.entity.Plan;
@@ -139,6 +140,43 @@ public class PlannerServiceImpl implements PlanQueryService {
   @Transactional(readOnly = true)
   public Optional<ReoptSuggestionDto> getSuggestion(UUID suggestionId) {
     return reoptSuggestionRepository.findById(suggestionId).map(reoptSuggestionMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<UpcomingSlotView> getUpcomingSlots(
+      UUID householdId, LocalDate fromDate, LocalDate toDate) {
+    if (fromDate.isAfter(toDate)) {
+      throw new IllegalArgumentException("fromDate must be <= toDate");
+    }
+    List<Plan> activePlans =
+        planRepository.findByHouseholdIdAndStatusIn(householdId, List.of(PlanStatus.ACTIVE));
+    if (activePlans.isEmpty()) {
+      return Collections.emptyList();
+    }
+    List<UpcomingSlotView> out = new ArrayList<>();
+    for (Plan plan : activePlans) {
+      for (var day : plan.getDays()) {
+        LocalDate date = day.getOnDate();
+        if (date.isBefore(fromDate) || date.isAfter(toDate)) {
+          continue;
+        }
+        for (var slot : day.getSlots()) {
+          var scheduled = slot.getScheduledRecipe();
+          out.add(
+              new UpcomingSlotView(
+                  slot.getId(),
+                  plan.getId(),
+                  plan.getHouseholdId(),
+                  date,
+                  slot.getKind(),
+                  slot.getSlotIndex(),
+                  slot.getTimeBudgetMin(),
+                  scheduled == null ? null : scheduled.getRecipeId()));
+        }
+      }
+    }
+    return out;
   }
 
   /**

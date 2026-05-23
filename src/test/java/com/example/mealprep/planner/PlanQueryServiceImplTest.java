@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
+import com.example.mealprep.planner.api.dto.UpcomingSlotView;
 import com.example.mealprep.planner.api.mapper.PlanMapper;
 import com.example.mealprep.planner.api.mapper.ReoptSuggestionMapper;
 import com.example.mealprep.planner.domain.entity.Plan;
@@ -316,5 +317,46 @@ class PlanQueryServiceImplTest {
 
     assertThat(result).hasValue(dto);
     verify(reoptSuggestionMapper, times(1)).toDto(suggestion);
+  }
+
+  // ---------------- getUpcomingSlots (notification/01b) ----------------
+
+  @Test
+  void getUpcomingSlots_whenFromAfterTo_throwsIllegalArgument() {
+    UUID householdId = UUID.randomUUID();
+    assertThatThrownBy(
+            () ->
+                service.getUpcomingSlots(
+                    householdId, LocalDate.of(2026, 6, 16), LocalDate.of(2026, 6, 15)))
+        .isInstanceOf(IllegalArgumentException.class);
+    verifyNoInteractions(planRepository);
+  }
+
+  @Test
+  void getUpcomingSlots_noActivePlans_returnsEmpty() {
+    UUID householdId = UUID.randomUUID();
+    LocalDate from = LocalDate.of(2026, 6, 15);
+    when(planRepository.findByHouseholdIdAndStatusIn(householdId, List.of(PlanStatus.ACTIVE)))
+        .thenReturn(Collections.emptyList());
+
+    assertThat(service.getUpcomingSlots(householdId, from, from.plusDays(1))).isEmpty();
+  }
+
+  @Test
+  void getUpcomingSlots_projectsSlotsWithinWindow_onlyInRange() {
+    UUID householdId = UUID.randomUUID();
+    LocalDate week = LocalDate.of(2026, 6, 15);
+    // 3 days, 2 slots/day → days 06-15, 06-16, 06-17.
+    Plan plan = PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.ACTIVE, 3, 2);
+    when(planRepository.findByHouseholdIdAndStatusIn(householdId, List.of(PlanStatus.ACTIVE)))
+        .thenReturn(List.of(plan));
+
+    // Window only covers the first two days → 2 days * 2 slots = 4 slot views.
+    List<UpcomingSlotView> views = service.getUpcomingSlots(householdId, week, week.plusDays(1));
+
+    assertThat(views).hasSize(4);
+    assertThat(views).allSatisfy(v -> assertThat(v.householdId()).isEqualTo(householdId));
+    assertThat(views).allSatisfy(v -> assertThat(v.recipeId()).isNotNull());
+    assertThat(views).extracting(UpcomingSlotView::dayDate).containsOnly(week, week.plusDays(1));
   }
 }

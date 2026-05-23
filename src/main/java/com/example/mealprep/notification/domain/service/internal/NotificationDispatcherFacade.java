@@ -1,5 +1,6 @@
 package com.example.mealprep.notification.domain.service.internal;
 
+import com.example.mealprep.notification.event.StapleReplenishmentNeededEvent;
 import com.example.mealprep.nutrition.event.HealthDirectiveReceivedEvent;
 import com.example.mealprep.nutrition.event.NutritionIntakeDivergedEvent;
 import com.example.mealprep.planner.event.PlanGeneratedEvent;
@@ -57,6 +58,10 @@ public class NotificationDispatcherFacade {
   }
 
   public void dispatchPlanGenerated(PlanGeneratedEvent event) {
+    dispatcher.dispatch(resolver.resolve(event));
+  }
+
+  public void dispatchStapleReplenishmentNeeded(StapleReplenishmentNeededEvent event) {
     dispatcher.dispatch(resolver.resolve(event));
   }
 }

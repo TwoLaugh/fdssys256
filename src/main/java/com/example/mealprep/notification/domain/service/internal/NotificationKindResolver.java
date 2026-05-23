@@ -8,6 +8,7 @@ import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.notification.domain.entity.NotificationKind;
 import com.example.mealprep.notification.domain.entity.NotificationPayload;
 import com.example.mealprep.notification.domain.entity.NotificationSeverity;
+import com.example.mealprep.notification.event.StapleReplenishmentNeededEvent;
 import com.example.mealprep.nutrition.event.HealthDirectiveReceivedEvent;
 import com.example.mealprep.nutrition.event.NutritionIntakeDivergedEvent;
 import com.example.mealprep.planner.event.PlanGeneratedEvent;
@@ -232,6 +233,31 @@ public class NotificationKindResolver {
         event.traceId(),
         keyOf(event.planId()),
         Origin.SYSTEM_REOPT,
+        null,
+        kind.name());
+  }
+
+  public NotificationDraft resolve(StapleReplenishmentNeededEvent event) {
+    NotificationKind kind = NotificationKind.STAPLE_REPLENISHMENT_NEEDED;
+    List<UUID> itemIds = event.inventoryItemIds() == null ? List.of() : event.inventoryItemIds();
+    List<String> mappingKeys =
+        event.ingredientMappingKeys() == null ? List.of() : event.ingredientMappingKeys();
+    var payload =
+        new NotificationPayload.StapleReplenishmentPayload(
+            kind, itemIds, mappingKeys, event.lowestStockRatio());
+    return new NotificationDraft(
+        event.userId(),
+        null,
+        kind,
+        NotificationSeverity.INFO,
+        "Staples running low",
+        itemIds.size() + " staple item(s) need replenishing.",
+        payload,
+        "/app/provisions/inventory",
+        event.traceId(),
+        event.traceId(),
+        null,
+        Origin.SYSTEM_SCHEDULED,
         null,
         kind.name());
   }
