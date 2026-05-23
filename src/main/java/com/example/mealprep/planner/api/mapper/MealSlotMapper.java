@@ -33,6 +33,8 @@ public abstract class MealSlotMapper {
         entity.getEaters() == null ? Collections.emptyList() : List.copyOf(entity.getEaters()),
         entity.getState(),
         entity.getPinnedReason(),
+        entity.getMealTime(),
+        entity.getPrepStepAtTime(),
         scheduledRecipeMapper.toDto(entity.getScheduledRecipe()));
   }
 
