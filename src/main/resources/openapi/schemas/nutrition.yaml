@@ -607,6 +607,7 @@ DirectiveInstructionDocument:
     extras:
       type: object
       additionalProperties: true
+      nullable: true
 HealthDirectiveDto:
   type: object
   required: [id, userId, externalDirectiveId, sourcePlatform, receivedAt, status, directiveType, instruction, mapsToModel, temporary, optimisticVersion]
