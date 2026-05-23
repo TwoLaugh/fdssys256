@@ -3,6 +3,7 @@ package com.example.mealprep.preference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -10,11 +11,13 @@ import static org.mockito.Mockito.when;
 
 import com.example.mealprep.preference.api.dto.ApplyTasteProfileDeltasRequest;
 import com.example.mealprep.preference.api.dto.TasteProfileAuditEntryDto;
+import com.example.mealprep.preference.api.dto.TasteProfileDelta;
 import com.example.mealprep.preference.api.dto.TasteProfileDto;
 import com.example.mealprep.preference.api.dto.TasteProfileVersionDto;
 import com.example.mealprep.preference.api.dto.TriggerTasteProfileRefreshRequest;
 import com.example.mealprep.preference.api.dto.UpdateTasteProfileRequest;
 import com.example.mealprep.preference.api.mapper.TasteProfileMapper;
+import com.example.mealprep.preference.domain.document.TasteProfileDocument;
 import com.example.mealprep.preference.domain.entity.ActorType;
 import com.example.mealprep.preference.domain.entity.TasteProfile;
 import com.example.mealprep.preference.domain.entity.TasteProfileAuditLog;
@@ -25,6 +28,7 @@ import com.example.mealprep.preference.domain.entity.TasteVectorStatus;
 import com.example.mealprep.preference.domain.repository.TasteProfileAuditLogRepository;
 import com.example.mealprep.preference.domain.repository.TasteProfileRepository;
 import com.example.mealprep.preference.domain.repository.TasteProfileVersionRepository;
+import com.example.mealprep.preference.domain.service.internal.TasteProfileBudgetGuard;
 import com.example.mealprep.preference.domain.service.internal.TasteProfileDeltaApplier;
 import com.example.mealprep.preference.domain.service.internal.TasteProfileServiceImpl;
 import com.example.mealprep.preference.event.TasteProfileChangedEvent;
@@ -32,6 +36,7 @@ import com.example.mealprep.preference.event.TasteProfileRefreshRequestedEvent;
 import com.example.mealprep.preference.exception.TasteProfileNotFoundException;
 import com.example.mealprep.preference.testdata.TasteProfileTestData;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -66,7 +71,11 @@ class TasteProfileServiceImplTest {
 
   private final TasteProfileMapper mapper =
       new com.example.mealprep.preference.api.mapper.TasteProfileMapperImpl();
-  private final ObjectMapper objectMapper = new ObjectMapper();
+  private final ObjectMapper objectMapper =
+      new ObjectMapper()
+          .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
+          .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+  private final TasteProfileBudgetGuard budgetGuard = new TasteProfileBudgetGuard(objectMapper);
   private final Clock fixedClock =
       Clock.fixed(Instant.parse("2026-05-20T10:00:00Z"), ZoneOffset.UTC);
 
@@ -78,6 +87,7 @@ class TasteProfileServiceImplTest {
         mapper,
         eventPublisher,
         deltaApplier,
+        budgetGuard,
         objectMapper,
         fixedClock);
   }
@@ -320,26 +330,7 @@ class TasteProfileServiceImplTest {
     assertThat(dto.document().version()).isEqualTo(2);
   }
 
-  // ---------------- applyDeltas (stub) ----------------
-
-  @Test
-  void applyDeltas_callsStub_whichThrowsUnsupported() {
-    UUID userId = UUID.randomUUID();
-    TasteProfile aggregate = TasteProfileTestData.aggregate(userId);
-    when(tasteProfileRepository.findByUserId(userId)).thenReturn(Optional.of(aggregate));
-    when(deltaApplier.apply(any(), any()))
-        .thenThrow(
-            new UnsupportedOperationException(
-                "delta application landing in deferred ticket 01c-delta-applier"));
-
-    ApplyTasteProfileDeltasRequest request =
-        new ApplyTasteProfileDeltasRequest(
-            List.of(), TasteProfileTrigger.BATCH, null, null, "cheap");
-
-    assertThatThrownBy(() -> service().applyDeltas(userId, request))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("01c-delta-applier");
-  }
+  // ---------------- applyDeltas ----------------
 
   @Test
   void applyDeltas_whenProfileMissing_throwsNotFound() {
@@ -353,6 +344,140 @@ class TasteProfileServiceImplTest {
     assertThatThrownBy(() -> service().applyDeltas(userId, request))
         .isInstanceOf(TasteProfileNotFoundException.class);
     verifyNoInteractions(deltaApplier);
+  }
+
+  @Test
+  void applyDeltas_emptyBatch_isNoOp_noVersionBump_noAuditNoEvent() {
+    UUID userId = UUID.randomUUID();
+    TasteProfile aggregate = TasteProfileTestData.aggregate(userId);
+    when(tasteProfileRepository.findByUserId(userId)).thenReturn(Optional.of(aggregate));
+
+    ApplyTasteProfileDeltasRequest request =
+        new ApplyTasteProfileDeltasRequest(
+            List.of(), TasteProfileTrigger.BATCH, "feedback-1", "feedback-1", "cheap");
+
+    TasteProfileDto dto = service().applyDeltas(userId, request);
+
+    assertThat(aggregate.getDocumentVersion()).isEqualTo(1);
+    assertThat(dto.documentVersion()).isEqualTo(1);
+    verifyNoInteractions(deltaApplier, versionRepository, auditLogRepository, eventPublisher);
+  }
+
+  @Test
+  void applyDeltas_bumpsVersionLockstep_setsCursor_writesAiAuditAndVersion_publishesEvent() {
+    UUID userId = UUID.randomUUID();
+    UUID feedbackId = UUID.randomUUID();
+    TasteProfile aggregate = TasteProfileTestData.aggregate(userId);
+    when(tasteProfileRepository.findByUserId(userId)).thenReturn(Optional.of(aggregate));
+    when(tasteProfileRepository.saveAndFlush(any(TasteProfile.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    // The applier returns the version-2 document; the service bumps the entity version in
+    // lock-step.
+    TasteProfileDocument applied = TasteProfileTestData.populatedDocument(2);
+    when(deltaApplier.apply(any(), any(), eq(userId))).thenReturn(applied);
+
+    String trace = "feedback-" + feedbackId;
+    ApplyTasteProfileDeltasRequest request =
+        new ApplyTasteProfileDeltasRequest(
+            List.of(
+                new TasteProfileDelta.Add(
+                    "flavourPreferences.likes", JsonNodeFactory.instance.textNode("tangy"))),
+            TasteProfileTrigger.BATCH,
+            trace,
+            trace,
+            "cheap");
+
+    TasteProfileDto dto = service().applyDeltas(userId, request);
+
+    assertThat(aggregate.getDocumentVersion()).isEqualTo(2);
+    assertThat(aggregate.getDocument().version()).isEqualTo(2);
+    assertThat(aggregate.getFeedbackCursor()).isEqualTo(trace);
+    assertThat(aggregate.getTasteVectorStatus()).isEqualTo(TasteVectorStatus.PENDING);
+    assertThat(aggregate.getLastDeltaAppliedAt()).isEqualTo(Instant.parse("2026-05-20T10:00:00Z"));
+    assertThat(aggregate.getLastTokenEstimate()).isNotNull().isPositive();
+
+    ArgumentCaptor<TasteProfileAuditLog> auditCaptor =
+        ArgumentCaptor.forClass(TasteProfileAuditLog.class);
+    verify(auditLogRepository).save(auditCaptor.capture());
+    assertThat(auditCaptor.getValue().getActorType()).isEqualTo(ActorType.AI);
+    assertThat(auditCaptor.getValue().getChangeType())
+        .isEqualTo(TasteProfileChangeType.AI_DELTA_APPLIED);
+    assertThat(auditCaptor.getValue().getPreviousDocumentVersion()).isEqualTo(1);
+    assertThat(auditCaptor.getValue().getNewDocumentVersion()).isEqualTo(2);
+    assertThat(auditCaptor.getValue().getTraceId()).isEqualTo(feedbackId);
+    assertThat(auditCaptor.getValue().getSummary()).contains("applied 1 deltas");
+
+    ArgumentCaptor<TasteProfileVersion> versionCaptor =
+        ArgumentCaptor.forClass(TasteProfileVersion.class);
+    verify(versionRepository).save(versionCaptor.capture());
+    assertThat(versionCaptor.getValue().getTrigger()).isEqualTo(TasteProfileTrigger.BATCH);
+    assertThat(versionCaptor.getValue().getModelTierUsed()).isEqualTo("cheap");
+    assertThat(versionCaptor.getValue().getFeedbackRangeEnd()).isEqualTo(trace);
+    // Real deltasApplied JSON, not the empty array used by the manual path.
+    assertThat(versionCaptor.getValue().getDeltasApplied().isArray()).isTrue();
+    assertThat(versionCaptor.getValue().getDeltasApplied()).hasSize(1);
+    assertThat(versionCaptor.getValue().getDeltasApplied().get(0).get("op").asText())
+        .isEqualTo("ADD");
+
+    ArgumentCaptor<TasteProfileChangedEvent> eventCaptor =
+        ArgumentCaptor.forClass(TasteProfileChangedEvent.class);
+    verify(eventPublisher).publishEvent(eventCaptor.capture());
+    assertThat(eventCaptor.getValue().changeType())
+        .isEqualTo(TasteProfileChangeType.AI_DELTA_APPLIED);
+    assertThat(eventCaptor.getValue().actorType()).isEqualTo(ActorType.AI);
+    assertThat(eventCaptor.getValue().documentVersion()).isEqualTo(2);
+    assertThat(eventCaptor.getValue().traceId()).isEqualTo(feedbackId);
+
+    assertThat(dto.documentVersion()).isEqualTo(2);
+  }
+
+  @Test
+  void applyDeltas_whenBudgetExceeded_propagates422_andDoesNotPublishEvent() {
+    UUID userId = UUID.randomUUID();
+    TasteProfile aggregate = TasteProfileTestData.aggregate(userId);
+    when(tasteProfileRepository.findByUserId(userId)).thenReturn(Optional.of(aggregate));
+    // Applier returns a document; the budget guard (real instance) is fed an over-budget doc.
+    when(deltaApplier.apply(any(), any(), eq(userId))).thenReturn(overBudgetDocument());
+
+    ApplyTasteProfileDeltasRequest request =
+        new ApplyTasteProfileDeltasRequest(
+            List.of(
+                new TasteProfileDelta.Add(
+                    "learnedInsights", JsonNodeFactory.instance.textNode("x"))),
+            TasteProfileTrigger.BATCH,
+            "feedback-1",
+            "feedback-1",
+            "cheap");
+
+    assertThatThrownBy(() -> service().applyDeltas(userId, request))
+        .isInstanceOf(
+            com.example.mealprep.preference.exception.TasteProfileBudgetExceededException.class);
+    verifyNoInteractions(eventPublisher, auditLogRepository, versionRepository);
+  }
+
+  private static TasteProfileDocument overBudgetDocument() {
+    java.util.List<String> huge = new java.util.ArrayList<>();
+    for (int i = 0; i < 20; i++) {
+      huge.add("x".repeat(512));
+    }
+    TasteProfileDocument base = TasteProfileTestData.populatedDocument(2);
+    return new TasteProfileDocument(
+        base.lastUpdated(),
+        base.version(),
+        base.basedOnFeedbackCount(),
+        base.feedbackCursor(),
+        base.softConstraints(),
+        base.flavourPreferences(),
+        base.texturePreferences(),
+        base.ingredientPreferences(),
+        base.cuisinePreferences(),
+        base.cookingPreferences(),
+        base.portionStyle(),
+        base.householdContext(),
+        base.recipesToRepeat(),
+        base.recipesToAvoid(),
+        base.activeExperiments(),
+        huge);
   }
 
   // ---------------- triggerRefresh ----------------
@@ -402,20 +527,5 @@ class TasteProfileServiceImplTest {
     // No version snapshot — no document mutation occurred.
     verifyNoInteractions(versionRepository);
     assertThat(dto.documentVersion()).isEqualTo(1);
-  }
-
-  // ---------------- delta applier stub direct test ----------------
-
-  @Test
-  void deltaApplier_noopStub_throwsWithDeferredMessage() {
-    TasteProfileDeltaApplier.NoopStub stub = new TasteProfileDeltaApplier.NoopStub();
-    assertThatThrownBy(
-            () ->
-                stub.apply(
-                    TasteProfileTestData.populatedDocument(1),
-                    new ApplyTasteProfileDeltasRequest(
-                        List.of(), TasteProfileTrigger.BATCH, null, null, "cheap")))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessage(TasteProfileDeltaApplier.DEFERRED_MESSAGE);
   }
 }

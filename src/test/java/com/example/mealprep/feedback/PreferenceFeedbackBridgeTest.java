@@ -19,6 +19,9 @@ import com.example.mealprep.feedback.spi.PreferenceFeedbackBridge;
 import com.example.mealprep.feedback.testdata.InlineTransactionTemplate;
 import com.example.mealprep.preference.api.dto.ApplyTasteProfileDeltasRequest;
 import com.example.mealprep.preference.domain.service.TasteProfileUpdateService;
+import com.example.mealprep.preference.exception.InvalidTasteProfileDeltaException;
+import com.example.mealprep.preference.exception.TasteProfileBudgetExceededException;
+import com.example.mealprep.preference.exception.TasteProfileNotFoundException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -65,9 +68,13 @@ class PreferenceFeedbackBridgeTest {
   }
 
   @Test
-  void stubbedApplyDeltas_booksFailed_andThrowsDispatchFailed() {
+  void invalidDelta_booksFailed_andThrowsDispatchFailed() {
+    // preference-01f: applyDeltas now runs the real applier; a delta-validation failure surfaces as
+    // a preference domain exception (InvalidTasteProfileDeltaException), which the bridge catches
+    // via
+    // the PreferenceException base, books FAILED, and rethrows FeedbackBridgeDispatchFailed.
     when(tasteProfileUpdateService.applyDeltas(any(UUID.class), any()))
-        .thenThrow(new UnsupportedOperationException("delta-applier stub"));
+        .thenThrow(new InvalidTasteProfileDeltaException("unknown fieldPath: bogus"));
 
     PreferenceFeedbackBridge.Input input = input(new BigDecimal("0.7"));
 
@@ -76,6 +83,42 @@ class PreferenceFeedbackBridgeTest {
 
     // applyDeltas was attempted (bridge is wired) and the idempotency row is booked FAILED.
     verify(tasteProfileUpdateService).applyDeltas(eq(input.userId()), any());
+    verify(idempotencyRepository)
+        .insertIfAbsent(
+            any(),
+            eq(input.feedbackId()),
+            eq("PREFERENCE"),
+            eq(BridgeDispatchStatus.FAILED.name()),
+            eq(NOW));
+  }
+
+  @Test
+  void budgetExceeded_booksFailed_andThrowsDispatchFailed() {
+    when(tasteProfileUpdateService.applyDeltas(any(UUID.class), any()))
+        .thenThrow(new TasteProfileBudgetExceededException("over budget"));
+
+    PreferenceFeedbackBridge.Input input = input(new BigDecimal("0.8"));
+
+    assertThatThrownBy(() -> bridge.applyFeedback(input))
+        .isInstanceOf(FeedbackBridgeDispatchFailedException.class);
+    verify(idempotencyRepository)
+        .insertIfAbsent(
+            any(),
+            eq(input.feedbackId()),
+            eq("PREFERENCE"),
+            eq(BridgeDispatchStatus.FAILED.name()),
+            eq(NOW));
+  }
+
+  @Test
+  void missingProfile_booksFailed_andThrowsDispatchFailed() {
+    when(tasteProfileUpdateService.applyDeltas(any(UUID.class), any()))
+        .thenThrow(new TasteProfileNotFoundException(UUID.randomUUID()));
+
+    PreferenceFeedbackBridge.Input input = input(new BigDecimal("0.9"));
+
+    assertThatThrownBy(() -> bridge.applyFeedback(input))
+        .isInstanceOf(FeedbackBridgeDispatchFailedException.class);
     verify(idempotencyRepository)
         .insertIfAbsent(
             any(),

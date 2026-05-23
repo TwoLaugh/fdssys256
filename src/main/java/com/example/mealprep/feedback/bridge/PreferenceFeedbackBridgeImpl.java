@@ -10,7 +10,7 @@ import com.example.mealprep.preference.api.dto.ApplyTasteProfileDeltasRequest;
 import com.example.mealprep.preference.api.dto.TasteProfileDelta;
 import com.example.mealprep.preference.domain.entity.TasteProfileTrigger;
 import com.example.mealprep.preference.domain.service.TasteProfileUpdateService;
-import com.example.mealprep.preference.exception.TasteProfileNotFoundException;
+import com.example.mealprep.preference.exception.PreferenceException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
@@ -30,23 +30,21 @@ import org.springframework.transaction.support.TransactionTemplate;
  * ApplyTasteProfileDeltasRequest} and calls {@link TasteProfileUpdateService#applyDeltas} with AI
  * origin attribution (origin_trace = {@code feedback-<feedback_id>}).
  *
- * <p><b>Stubbed / deferred downstream</b>: {@code applyDeltas} does a lookup-then-apply — it first
- * loads the user's taste-profile aggregate (throwing {@link TasteProfileNotFoundException} if the
- * lazily-initialised profile does not exist yet) and only then invokes the underlying {@code
- * TasteProfileDeltaApplier}, which per tickets/preference/01c is a stub that throws {@link
- * UnsupportedOperationException}. Both are <b>expected v1 dispatch failures</b> the bridge owns
- * gracefully: it catches them, books a {@code FAILED} idempotency row, logs a structured line, and
- * rethrows {@code FeedbackBridgeDispatchFailedException} so the router records {@code
- * AI_UNAVAILABLE}. Neither the stub exception nor the missing-profile exception is allowed to
- * propagate raw past the bridge edge. We deliberately do NOT implement the delta-applier here (out
- * of scope, ticket §"What's NOT in scope").
+ * <p><b>Dispatch-failure handling</b>: {@code applyDeltas} does a lookup-then-apply — it loads the
+ * user's taste-profile aggregate (404 if the lazily-initialised profile does not exist yet) and
+ * runs the real {@code TasteProfileDeltaApplier} + {@code TasteProfileBudgetGuard}
+ * (preference-01f). Any failure surfaces as a {@link PreferenceException} subtype (missing profile,
+ * invalid delta, or budget exceeded). All are <b>legitimate dispatch failures</b> the bridge owns
+ * gracefully: it catches the {@code PreferenceException} base, books a {@code FAILED} idempotency
+ * row, logs a structured line, and rethrows {@code FeedbackBridgeDispatchFailedException} so the
+ * router records {@code AI_UNAVAILABLE}. No raw preference exception is allowed to propagate past
+ * the bridge edge.
  */
 @Component
 public class PreferenceFeedbackBridgeImpl extends FeedbackBridgeSupport
     implements PreferenceFeedbackBridge {
 
   private static final Destination DESTINATION = Destination.PREFERENCE;
-  private static final String DEFERRED_APPLIER_TICKET = "tickets/preference/01c-delta-applier";
 
   private final TasteProfileUpdateService tasteProfileUpdateService;
   private final ObjectMapper objectMapper;
@@ -93,48 +91,36 @@ public class PreferenceFeedbackBridgeImpl extends FeedbackBridgeSupport
       return new Result(
           "taste profile deltas applied",
           Map.of("status", "DISPATCHED", "originTrace", originTrace(input.feedbackId())));
-    } catch (TasteProfileNotFoundException missingProfile) {
-      // The target user has no taste-profile aggregate yet — applyDeltas does its lookup-then-throw
-      // before it ever reaches the (stubbed) applier. This is a legitimate dispatch failure the
-      // bridge owns gracefully: the profile is initialised lazily and may simply not exist when AI
-      // feedback arrives. Book FAILED + structured log, then throw so the router records
-      // AI_UNAVAILABLE — never let the raw preference exception propagate past the bridge edge.
+    } catch (PreferenceException dispatchFailure) {
+      // Every applyDeltas failure surfaces as a preference domain exception:
+      //   - TasteProfileNotFoundException (404)  — the lazily-initialised profile doesn't exist
+      // yet;
+      //   - InvalidTasteProfileDeltaException (422) — a delta in the batch failed validation;
+      //   - TasteProfileBudgetExceededException (422) — the post-apply doc blew the token budget.
+      // All are legitimate dispatch failures the bridge owns gracefully: book a FAILED idempotency
+      // row + structured log, then throw FeedbackBridgeDispatchFailedException so the router
+      // records
+      // AI_UNAVAILABLE. No raw preference exception is allowed past the bridge edge. (Pre-01f this
+      // also caught the applier's UnsupportedOperationException stub; the stub is now gone.)
       log()
           .error(
-              "preference taste-profile applyDeltas could not dispatch — no taste profile for user"
-                  + " (initialised lazily; none exists yet). feedbackId={} userId={} actorType={}"
-                  + " originTrace={}",
+              "preference taste-profile applyDeltas dispatch failed. feedbackId={} userId={}"
+                  + " actorType={} originTrace={}",
               input.feedbackId(),
               input.userId(),
               actorType(),
               originTrace(input.feedbackId()),
-              missingProfile);
-      throw failed(input.feedbackId(), DESTINATION, missingProfile);
-    } catch (UnsupportedOperationException stubbed) {
-      // Expected v1 outcome — the delta-applier is a stub. Book FAILED + structured log, then throw
-      // FeedbackBridgeDispatchFailedException so the router records AI_UNAVAILABLE (the bridge is
-      // wired and ready; the applier ships in the deferred ticket).
-      log()
-          .error(
-              "preference taste-profile applyDeltas is not yet implemented (stubbed per {}); bridge"
-                  + " is wired and ready, applier ships in the deferred ticket. feedbackId={}"
-                  + " userId={} actorType={} originTrace={}",
-              DEFERRED_APPLIER_TICKET,
-              input.feedbackId(),
-              input.userId(),
-              actorType(),
-              originTrace(input.feedbackId()),
-              stubbed);
-      throw failed(input.feedbackId(), DESTINATION, stubbed);
+              dispatchFailure);
+      throw failed(input.feedbackId(), DESTINATION, dispatchFailure);
     }
   }
 
   /**
-   * Parse the classifier's {@code {deltas:[...], trigger, feedbackRange*}} payload defensively. The
-   * downstream applier is stubbed today, so we keep parsing tolerant: malformed / absent deltas
-   * yield an empty list rather than a hard failure (the call throws {@code
-   * UnsupportedOperationException} regardless). The {@code feedbackRange*} fields are stamped with
-   * the origin trace so the future applier's audit row carries provenance.
+   * Parse the classifier's {@code {deltas:[...], trigger, feedbackRange*}} payload defensively.
+   * Parsing stays tolerant: a delta the polymorphic mapper can't resolve is skipped rather than
+   * failing the whole batch (a single malformed op should not poison a good batch). The {@code
+   * feedbackRange*} fields are stamped with the {@code feedback-<id>} origin trace so the applier's
+   * audit row + event carry provenance (the service parses the UUID back out for the traceId).
    */
   private ApplyTasteProfileDeltasRequest buildRequest(Input input) {
     String trace = originTrace(input.feedbackId());
