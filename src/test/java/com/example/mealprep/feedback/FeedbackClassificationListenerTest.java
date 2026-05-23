@@ -127,8 +127,10 @@ class FeedbackClassificationListenerTest {
               entry.setClassificationAttempts(entry.getClassificationAttempts() + 1);
               return 1;
             });
-    when(entryRepository.updateSubmissionStatusAndDecrementAttempts(
-            org.mockito.ArgumentMatchers.eq(feedbackId), any(SubmissionStatus.class)))
+    when(entryRepository.updateSubmissionStatusAndDecrementAttemptsAndLastClassifiedAt(
+            org.mockito.ArgumentMatchers.eq(feedbackId),
+            any(SubmissionStatus.class),
+            any(java.time.Instant.class)))
         .thenAnswer(
             inv -> {
               entry.setSubmissionStatus(inv.getArgument(1, SubmissionStatus.class));
