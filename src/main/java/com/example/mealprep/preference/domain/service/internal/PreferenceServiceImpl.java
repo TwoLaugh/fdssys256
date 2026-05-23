@@ -65,6 +65,20 @@ public class PreferenceServiceImpl implements PreferenceQueryService, Preference
   static final String FIELD_INTOLERANCES = "intolerances";
   static final String FIELD_AGE_RESTRICTIONS = "ageRestrictions";
 
+  /**
+   * Parent-owned columns whose change dirties the {@code HardConstraints} root, so Hibernate bumps
+   * {@code @Version} on flush by itself. A change to ONLY owned child collections (intolerances /
+   * dietary-identity exceptions / age restrictions) does not dirty the root and needs an explicit
+   * force-increment; a change that also touches one of these must NOT be force-incremented or the
+   * version would jump by 2 and break the sequential optimistic-locking contract.
+   */
+  private static final java.util.Set<String> PARENT_OWNED_FIELDS =
+      java.util.Set.of(
+          FIELD_ALLERGIES,
+          FIELD_DIETARY_IDENTITY_BASE,
+          FIELD_DIETARY_IDENTITY_LABEL,
+          FIELD_MEDICAL_DIETS);
+
   private static final String DEFAULT_DIETARY_BASE = "omnivore";
 
   private final HardConstraintsRepository hardConstraintsRepository;
@@ -197,13 +211,15 @@ public class PreferenceServiceImpl implements PreferenceQueryService, Preference
     Instant now = Instant.now(clock);
     writeAuditRows(aggregate.getId(), actorUserId, changedFields, before, after, now);
 
-    // Force-increment the root @Version. A change to only an owned child collection (e.g. adding an
-    // intolerance) does NOT dirty the parent root in Hibernate, so without this the parent's UPDATE
-    // (and its @Version bump) never fires — the optimistic-locking contract is "any aggregate
-    // mutation bumps @Version", and the IT asserts the post-write version.
-    // OPTIMISTIC_FORCE_INCREMENT
-    // makes Hibernate issue the version UPDATE on the root regardless of which fields changed.
-    forceIncrementRootVersion(aggregate);
+    // Force-increment the root @Version ONLY when the change is to owned child collections alone
+    // (intolerances / dietary-identity exceptions / age restrictions). Hibernate does not dirty the
+    // parent root on a child-collection-only mutation, so its @Version UPDATE never fires. When a
+    // parent-owned column (allergies / medical diets / dietary-identity base|label) also changed,
+    // Hibernate already bumps @Version once — force-incrementing again would double-bump (+2) and
+    // break the sequential optimistic-locking contract (HardConstraintsFlowIT's audit-log flow).
+    if (java.util.Collections.disjoint(changedFields, PARENT_OWNED_FIELDS)) {
+      forceIncrementRootVersion(aggregate);
+    }
 
     // saveAndFlush so the @Version bump materialises before we map to DTO — otherwise the
     // response would carry the stale version. The IT explicitly asserts the post-PUT version.
