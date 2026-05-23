@@ -2,6 +2,7 @@ package com.example.mealprep.preference.domain.service.internal;
 
 import com.example.mealprep.preference.api.dto.ApplyTasteProfileDeltasRequest;
 import com.example.mealprep.preference.api.dto.TasteProfileAuditEntryDto;
+import com.example.mealprep.preference.api.dto.TasteProfileDelta;
 import com.example.mealprep.preference.api.dto.TasteProfileDto;
 import com.example.mealprep.preference.api.dto.TasteProfileVersionDto;
 import com.example.mealprep.preference.api.dto.TriggerTasteProfileRefreshRequest;
@@ -74,6 +75,7 @@ public class TasteProfileServiceImpl
   private final TasteProfileMapper mapper;
   private final ApplicationEventPublisher eventPublisher;
   private final TasteProfileDeltaApplier deltaApplier;
+  private final TasteProfileBudgetGuard budgetGuard;
   private final ObjectMapper objectMapper;
   private final Clock clock;
 
@@ -84,6 +86,7 @@ public class TasteProfileServiceImpl
       TasteProfileMapper mapper,
       ApplicationEventPublisher eventPublisher,
       TasteProfileDeltaApplier deltaApplier,
+      TasteProfileBudgetGuard budgetGuard,
       ObjectMapper objectMapper,
       Clock clock) {
     this.tasteProfileRepository = tasteProfileRepository;
@@ -92,6 +95,7 @@ public class TasteProfileServiceImpl
     this.mapper = mapper;
     this.eventPublisher = eventPublisher;
     this.deltaApplier = deltaApplier;
+    this.budgetGuard = budgetGuard;
     this.objectMapper = objectMapper;
     this.clock = clock;
   }
@@ -303,15 +307,102 @@ public class TasteProfileServiceImpl
         tasteProfileRepository
             .findByUserId(userId)
             .orElseThrow(() -> new TasteProfileNotFoundException(userId));
-    // The applier is a stub in 01c and always throws — feedback bridge in 01g must not call this
-    // until the
-    // deferred 01c-delta-applier ticket lands. The lookup-then-throw shape ensures any caller that
-    // wrongly
-    // invokes this still sees the canonical "deferred" message and not a null pointer.
-    deltaApplier.apply(profile.getDocument(), request);
-    // Unreachable in 01c. Kept here so the compiler is satisfied and the IDE doesn't flag unused
-    // locals.
-    return mapper.toDto(profile);
+
+    // Empty batch → no-op (lld/prompts/01-taste-profile-delta.md:325). No version bump, no version
+    // snapshot, no audit row, no event. The bridge still books DISPATCHED on the empty success.
+    if (request.deltas() == null || request.deltas().isEmpty()) {
+      log.info("taste profile applyDeltas no-op (empty delta batch) userId={}", userId);
+      return mapper.toDto(profile);
+    }
+
+    int previousVersion = profile.getDocumentVersion();
+    int newVersion = previousVersion + 1;
+    Instant now = Instant.now(clock);
+
+    // Validate + apply + budget run inside the applier / guard; any failure throws a preference
+    // domain exception (422) that propagates to the bridge, which books FAILED. REQUIRED
+    // propagation
+    // means we join the bridge's REQUIRES_NEW template tx so the whole feedback-processing unit
+    // (document update + version snapshot + audit + archive rows + the bridge's DISPATCHED row)
+    // commits or rolls back atomically (decision-log 0010; do NOT add REQUIRES_NEW here).
+    TasteProfileDocument newDoc = deltaApplier.apply(profile.getDocument(), request, userId);
+    int tokenEstimate = budgetGuard.enforce(newDoc);
+
+    profile.setDocument(newDoc);
+    profile.setDocumentVersion(newVersion);
+    profile.setFeedbackCursor(request.feedbackRangeEnd());
+    profile.setBasedOnFeedbackCount(profile.getBasedOnFeedbackCount() + request.deltas().size());
+    profile.setLastDeltaAppliedAt(now);
+    profile.setLastTokenEstimate(tokenEstimate);
+    // AI mutation invalidates the embedded vector — flag for re-embed (mirrors manual override).
+    profile.setTasteVectorStatus(TasteVectorStatus.PENDING);
+    TasteProfile saved = tasteProfileRepository.saveAndFlush(profile);
+
+    UUID traceId = parseTraceId(request.feedbackRangeStart(), request.feedbackRangeEnd());
+    writeVersionSnapshot(
+        saved,
+        newDoc,
+        request.trigger(),
+        request.feedbackRangeStart(),
+        request.feedbackRangeEnd(),
+        request.modelTierUsed(),
+        request.deltas(),
+        now);
+    writeAudit(
+        saved,
+        null,
+        ActorType.AI,
+        TasteProfileChangeType.AI_DELTA_APPLIED,
+        previousVersion,
+        newVersion,
+        "applied "
+            + request.deltas().size()
+            + " deltas from feedback batch "
+            + request.feedbackRangeStart()
+            + ".."
+            + request.feedbackRangeEnd(),
+        traceId,
+        now);
+
+    eventPublisher.publishEvent(
+        new TasteProfileChangedEvent(
+            userId,
+            saved.getId(),
+            newVersion,
+            TasteProfileChangeType.AI_DELTA_APPLIED,
+            ActorType.AI,
+            traceId,
+            now));
+
+    log.info(
+        "taste profile AI deltas applied userId={} previousVersion={} newVersion={} deltaCount={} "
+            + "tokenEstimate={}",
+        userId,
+        previousVersion,
+        newVersion,
+        request.deltas().size(),
+        tokenEstimate);
+    return mapper.toDto(saved);
+  }
+
+  /**
+   * Derive the audit/event {@code traceId} from the bridge's {@code feedback-<uuid>} origin trace.
+   * If the trace does not parse to a UUID (e.g. a non-standard cursor), returns null — the audit
+   * {@code traceId} column is nullable and the raw trace is preserved in the audit summary. Per
+   * ticket §10 ("worth implementer review"): a non-parseable trace → null traceId is acceptable.
+   */
+  private static UUID parseTraceId(String feedbackRangeStart, String feedbackRangeEnd) {
+    String trace = feedbackRangeStart != null ? feedbackRangeStart : feedbackRangeEnd;
+    if (trace == null) {
+      return null;
+    }
+    String candidate =
+        trace.startsWith("feedback-") ? trace.substring("feedback-".length()) : trace;
+    try {
+      return UUID.fromString(candidate);
+    } catch (IllegalArgumentException notAUuid) {
+      return null;
+    }
   }
 
   @Override
@@ -365,7 +456,34 @@ public class TasteProfileServiceImpl
       String feedbackRangeEnd,
       String modelTierUsed,
       Instant generatedAt) {
-    JsonNode emptyDeltas = JsonNodeFactory.instance.arrayNode();
+    // Manual / init path: empty deltasApplied array (no AI deltas were applied).
+    writeVersionSnapshot(
+        profile,
+        snapshot,
+        trigger,
+        feedbackRangeStart,
+        feedbackRangeEnd,
+        modelTierUsed,
+        null,
+        generatedAt);
+  }
+
+  /**
+   * AI-path overload: serialises the real {@code deltas} into the {@code deltas_applied} JSONB
+   * column (the {@code ObjectMapper} dependency was reserved for exactly this). A {@code null}
+   * {@code deltas} list yields the empty array used by the manual / init path.
+   */
+  private void writeVersionSnapshot(
+      TasteProfile profile,
+      TasteProfileDocument snapshot,
+      TasteProfileTrigger trigger,
+      String feedbackRangeStart,
+      String feedbackRangeEnd,
+      String modelTierUsed,
+      List<TasteProfileDelta> deltas,
+      Instant generatedAt) {
+    JsonNode deltasApplied =
+        deltas == null ? JsonNodeFactory.instance.arrayNode() : serialiseDeltas(deltas);
     versionRepository.save(
         TasteProfileVersion.builder()
             .id(UUID.randomUUID())
@@ -375,10 +493,32 @@ public class TasteProfileServiceImpl
             .feedbackRangeStart(feedbackRangeStart)
             .feedbackRangeEnd(feedbackRangeEnd)
             .trigger(trigger)
-            .deltasApplied(emptyDeltas)
+            .deltasApplied(deltasApplied)
             .modelTierUsed(modelTierUsed == null ? "manual" : modelTierUsed)
             .generatedAt(generatedAt)
             .build());
+  }
+
+  /**
+   * Serialise the deltas to a JSON array, preserving the polymorphic {@code op} discriminator. A
+   * plain {@code valueToTree(List)} erases the declared element type, so Jackson omits the
+   * {@code @JsonTypeInfo} discriminator for the sealed {@link TasteProfileDelta}; writing through a
+   * {@link java.util.List}-of-base-type writer keeps it.
+   */
+  private JsonNode serialiseDeltas(List<TasteProfileDelta> deltas) {
+    com.fasterxml.jackson.databind.node.ArrayNode array =
+        JsonNodeFactory.instance.arrayNode(deltas.size());
+    try {
+      for (TasteProfileDelta delta : deltas) {
+        // writerFor(base type) forces Jackson to emit the @JsonTypeInfo "op" discriminator that a
+        // plain valueToTree(concreteSubtype) would drop.
+        String json = objectMapper.writerFor(TasteProfileDelta.class).writeValueAsString(delta);
+        array.add(objectMapper.readTree(json));
+      }
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      throw new IllegalStateException("failed to serialise applied deltas for version snapshot", e);
+    }
+    return array;
   }
 
   private void writeAudit(
@@ -404,14 +544,5 @@ public class TasteProfileServiceImpl
             .traceId(traceId)
             .occurredAt(occurredAt)
             .build());
-  }
-
-  /**
-   * Exposed so unit tests can verify the {@code ObjectMapper} dependency was wired through. The
-   * delta-applier ticket will use the mapper to serialise the {@code deltasApplied} JSON column
-   * when real (non-empty) delta batches land; until then the field exists but is otherwise unused.
-   */
-  ObjectMapper objectMapper() {
-    return objectMapper;
   }
 }

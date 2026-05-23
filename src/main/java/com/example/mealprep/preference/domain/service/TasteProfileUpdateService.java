@@ -38,11 +38,24 @@ public interface TasteProfileUpdateService {
       UUID userId, UpdateTasteProfileRequest request, UUID actorUserId);
 
   /**
-   * AI delta application — called in-process by the feedback bridge (NOT exposed via REST). 01c
-   * ships a stub: the underlying {@code TasteProfileDeltaApplier} throws {@link
-   * UnsupportedOperationException} with a reference to the deferred {@code 01c-delta-applier}
-   * ticket. The bridge in {@code tickets/feedback/01g} is responsible for not calling this until
-   * the deferred ticket lands.
+   * AI delta application — called in-process by the feedback bridge (NOT exposed via REST).
+   * Validates the delta batch, applies it via {@code TasteProfileDeltaApplier} (whole-batch reject
+   * on any invalid op → 422), enforces the {@code TasteProfileBudgetGuard} 2500-token budget (422
+   * on overflow), then bumps {@code documentVersion} in lock-step with the document's internal
+   * {@code version}, advances {@code feedbackCursor} / {@code basedOnFeedbackCount}, flips {@code
+   * tasteVectorStatus = PENDING}, writes a version snapshot (real {@code deltasApplied}) + an
+   * {@code actor_type = AI} / {@code AI_DELTA_APPLIED} audit row, and publishes {@code
+   * TasteProfileChangedEvent} {@code AFTER_COMMIT}. {@code Archive} / {@code RePromote} ops also
+   * write the preference archive in the same transaction. An empty delta batch is a no-op (no
+   * version bump, no audit, no event). {@code @Transactional} REQUIRED so it joins the bridge's
+   * REQUIRES_NEW template tx (preference-01f).
+   *
+   * @throws com.example.mealprep.preference.exception.TasteProfileNotFoundException if no profile
+   *     exists for {@code userId} (404).
+   * @throws com.example.mealprep.preference.exception.InvalidTasteProfileDeltaException if a delta
+   *     fails validation (422).
+   * @throws com.example.mealprep.preference.exception.TasteProfileBudgetExceededException if the
+   *     post-apply document exceeds the token budget (422).
    */
   TasteProfileDto applyDeltas(UUID userId, ApplyTasteProfileDeltasRequest request);
 
