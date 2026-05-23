@@ -280,6 +280,17 @@ public class ProvisionServiceImpl
 
   @Override
   @Transactional(readOnly = true)
+  public List<InventoryItemDto> getActiveInventoryByMappingKey(
+      UUID userId, String ingredientMappingKey) {
+    return inventoryItemRepository
+        .findActiveByMappingKeyOrderByExpiryAsc(userId, ingredientMappingKey)
+        .stream()
+        .map(mapper::toDto)
+        .toList();
+  }
+
+  @Override
+  @Transactional(readOnly = true)
   public List<EquipmentDto> getEquipment(UUID userId) {
     return equipmentRepository.findAllByUserIdOrderByNameAsc(userId).stream()
         .map(equipmentMapper::toDto)

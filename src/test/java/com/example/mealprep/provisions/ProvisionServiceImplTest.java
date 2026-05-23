@@ -1053,4 +1053,38 @@ class ProvisionServiceImplTest {
         .extracting(InventoryItemDto::id)
         .containsExactly(staple.getId());
   }
+
+  @Test
+  void getActiveInventoryByMappingKey_mapsRepoRowsToDtoPreservingOrder() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem older =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .ingredientMappingKey("soy_sauce")
+            .expiryDate(java.time.LocalDate.of(2026, 6, 1))
+            .build();
+    InventoryItem newer =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .ingredientMappingKey("soy_sauce")
+            .expiryDate(java.time.LocalDate.of(2026, 7, 1))
+            .build();
+    // Repo returns oldest-expiry first (NULLS LAST) — the service must preserve that order.
+    when(inventoryItemRepository.findActiveByMappingKeyOrderByExpiryAsc(userId, "soy_sauce"))
+        .thenReturn(java.util.List.of(older, newer));
+
+    java.util.List<InventoryItemDto> result =
+        service().getActiveInventoryByMappingKey(userId, "soy_sauce");
+
+    assertThat(result)
+        .extracting(InventoryItemDto::id)
+        .containsExactly(older.getId(), newer.getId());
+  }
+
+  @Test
+  void getActiveInventoryByMappingKey_noRows_returnsEmptyList() {
+    UUID userId = UUID.randomUUID();
+    when(inventoryItemRepository.findActiveByMappingKeyOrderByExpiryAsc(userId, "soy_sauce"))
+        .thenReturn(java.util.List.of());
+
+    assertThat(service().getActiveInventoryByMappingKey(userId, "soy_sauce")).isEmpty();
+  }
 }

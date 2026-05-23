@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -16,6 +17,12 @@ import com.example.mealprep.feedback.exception.FeedbackBridgeDispatchFailedExcep
 import com.example.mealprep.feedback.spi.Destination;
 import com.example.mealprep.feedback.spi.ProvisionsFeedbackBridge;
 import com.example.mealprep.feedback.testdata.InlineTransactionTemplate;
+import com.example.mealprep.provisions.api.dto.InventoryItemDto;
+import com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus;
+import com.example.mealprep.provisions.domain.entity.ItemSource;
+import com.example.mealprep.provisions.domain.entity.StorageLocation;
+import com.example.mealprep.provisions.domain.entity.TrackingMode;
+import com.example.mealprep.provisions.domain.service.ProvisionQueryService;
 import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
 import com.example.mealprep.provisions.exception.EquipmentNotFoundException;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -23,7 +30,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,19 +41,22 @@ import org.mockito.Mockito;
 
 /**
  * Unit tests for the real PROVISIONS bridge: equipment removal (real end-to-end + idempotent
- * no-op), inventory depletion (wired-but-deferred), unsupported action, confidence floor.
+ * no-op), inventory depletion (single-row, multi-row, no-row no-op, missing-key FAILED),
+ * unsupported action, confidence floor.
  */
 class ProvisionsFeedbackBridgeTest {
 
   private static final Instant NOW = Instant.parse("2026-05-22T10:00:00Z");
 
   private ProvisionUpdateService provisionUpdateService;
+  private ProvisionQueryService provisionQueryService;
   private FeedbackBridgeIdempotencyRepository idempotencyRepository;
   private ProvisionsFeedbackBridgeImpl bridge;
 
   @BeforeEach
   void setUp() {
     provisionUpdateService = Mockito.mock(ProvisionUpdateService.class);
+    provisionQueryService = Mockito.mock(ProvisionQueryService.class);
     idempotencyRepository = Mockito.mock(FeedbackBridgeIdempotencyRepository.class);
     when(idempotencyRepository.findByFeedbackIdAndDestination(any(), any()))
         .thenReturn(Optional.empty());
@@ -53,7 +65,11 @@ class ProvisionsFeedbackBridgeTest {
     Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
     bridge =
         new ProvisionsFeedbackBridgeImpl(
-            provisionUpdateService, idempotencyRepository, new InlineTransactionTemplate(), clock);
+            provisionUpdateService,
+            provisionQueryService,
+            idempotencyRepository,
+            new InlineTransactionTemplate(),
+            clock);
   }
 
   @Test
@@ -94,13 +110,79 @@ class ProvisionsFeedbackBridgeTest {
   }
 
   @Test
-  void markDepleted_isWiredButDeferred_booksFailed_andThrows() {
+  void markDepleted_singleActiveRow_exhaustsItAndBooksDispatched() {
     ProvisionsFeedbackBridge.Input input =
         action("MARK_DEPLETED", "soy_sauce", new BigDecimal("0.9"));
+    InventoryItemDto row = activeRow(input.userId(), "soy_sauce");
+    when(provisionQueryService.getActiveInventoryByMappingKey(input.userId(), "soy_sauce"))
+        .thenReturn(List.of(row));
+
+    ProvisionsFeedbackBridge.Result result = bridge.applyFeedback(input);
+
+    assertThat(result.payload()).containsEntry("status", "DISPATCHED");
+    verify(provisionUpdateService).markExhausted(eq(row.id()), eq(input.userId()));
+    verify(idempotencyRepository)
+        .insertIfAbsent(
+            any(),
+            eq(input.feedbackId()),
+            eq("PROVISIONS"),
+            eq(BridgeDispatchStatus.DISPATCHED.name()),
+            eq(NOW));
+  }
+
+  @Test
+  void markDepleted_multipleActiveRows_exhaustsEachAndBooksDispatched() {
+    ProvisionsFeedbackBridge.Input input =
+        action("MARK_DEPLETED", "soy_sauce", new BigDecimal("0.9"));
+    InventoryItemDto rowA = activeRow(input.userId(), "soy_sauce");
+    InventoryItemDto rowB = activeRow(input.userId(), "soy_sauce");
+    when(provisionQueryService.getActiveInventoryByMappingKey(input.userId(), "soy_sauce"))
+        .thenReturn(List.of(rowA, rowB));
+
+    ProvisionsFeedbackBridge.Result result = bridge.applyFeedback(input);
+
+    assertThat(result.payload()).containsEntry("status", "DISPATCHED");
+    verify(provisionUpdateService).markExhausted(eq(rowA.id()), eq(input.userId()));
+    verify(provisionUpdateService).markExhausted(eq(rowB.id()), eq(input.userId()));
+    verify(idempotencyRepository)
+        .insertIfAbsent(
+            any(),
+            eq(input.feedbackId()),
+            eq("PROVISIONS"),
+            eq(BridgeDispatchStatus.DISPATCHED.name()),
+            eq(NOW));
+  }
+
+  @Test
+  void markDepleted_noActiveRows_isIdempotentNoOp_booksDispatched_andDoesNotExhaust() {
+    ProvisionsFeedbackBridge.Input input =
+        action("MARK_DEPLETED", "soy_sauce", new BigDecimal("0.9"));
+    when(provisionQueryService.getActiveInventoryByMappingKey(input.userId(), "soy_sauce"))
+        .thenReturn(List.of());
+
+    ProvisionsFeedbackBridge.Result result = bridge.applyFeedback(input);
+
+    assertThat(result.payload()).containsEntry("status", "DISPATCHED");
+    assertThat(result.payload()).containsEntry("noop", "nothing-to-deplete");
+    verify(provisionUpdateService, never()).markExhausted(any(), any());
+    verify(idempotencyRepository)
+        .insertIfAbsent(
+            any(),
+            eq(input.feedbackId()),
+            eq("PROVISIONS"),
+            eq(BridgeDispatchStatus.DISPATCHED.name()),
+            eq(NOW));
+  }
+
+  @Test
+  void markDepleted_missingIngredientKey_booksFailed_andThrows_andDoesNotLookUp() {
+    ProvisionsFeedbackBridge.Input input = action("MARK_DEPLETED", null, new BigDecimal("0.9"));
 
     assertThatThrownBy(() -> bridge.applyFeedback(input))
         .isInstanceOf(FeedbackBridgeDispatchFailedException.class);
 
+    verify(provisionQueryService, never()).getActiveInventoryByMappingKey(any(), any());
+    verify(provisionUpdateService, never()).markExhausted(any(), any());
     verify(idempotencyRepository)
         .insertIfAbsent(
             any(),
@@ -163,5 +245,30 @@ class ProvisionsFeedbackBridgeTest {
     }
     return new ProvisionsFeedbackBridge.Input(
         UUID.randomUUID(), UUID.randomUUID(), confidence, "feedback", UUID.randomUUID(), payload);
+  }
+
+  private static InventoryItemDto activeRow(UUID userId, String mappingKey) {
+    return new InventoryItemDto(
+        UUID.randomUUID(),
+        userId,
+        mappingKey,
+        "condiment",
+        StorageLocation.CUPBOARD,
+        TrackingMode.STATUS,
+        null,
+        null,
+        null,
+        null,
+        false,
+        LocalDate.parse("2026-12-01"),
+        mappingKey,
+        null,
+        ItemSource.MANUAL_ADD,
+        null,
+        ItemLifecycleStatus.ACTIVE,
+        null,
+        NOW,
+        NOW,
+        0L);
   }
 }

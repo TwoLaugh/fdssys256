@@ -6,10 +6,13 @@ import com.example.mealprep.feedback.domain.entity.BridgeDispatchStatus;
 import com.example.mealprep.feedback.domain.repository.FeedbackBridgeIdempotencyRepository;
 import com.example.mealprep.feedback.spi.Destination;
 import com.example.mealprep.feedback.spi.ProvisionsFeedbackBridge;
+import com.example.mealprep.provisions.api.dto.InventoryItemDto;
+import com.example.mealprep.provisions.domain.service.ProvisionQueryService;
 import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
 import com.example.mealprep.provisions.exception.EquipmentNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Clock;
+import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -26,12 +29,15 @@ import org.springframework.transaction.support.TransactionTemplate;
  *   <li>{@code REMOVE_EQUIPMENT} → {@link ProvisionUpdateService#deleteEquipment(java.util.UUID,
  *       String)}. <b>Real, end-to-end</b>. Idempotent: a missing equipment row is a no-op (the
  *       service's {@code EquipmentNotFoundException} is swallowed).
- *   <li>{@code MARK_DEPLETED} → mark the matching inventory row exhausted. The provisions write
- *       surface ({@code markExhausted(itemId, actorUserId)}) is keyed by item id, and the public
- *       provisions <i>read</i> surface does not yet expose a lookup by {@code ingredientMappingKey}
- *       ({@code InventorySearchCriteria} carries only storage-location / staple filters). The
- *       bridge is fully wired; the depletion call is recorded as a <b>deferred FAILED</b> with a
- *       structured reason until provisions exposes a by-key lookup (a sibling provisions LLD note).
+ *   <li>{@code MARK_DEPLETED} ("I'm out of soy sauce") → look up the user's ACTIVE inventory rows
+ *       for the {@code ingredientMappingKey} via {@link
+ *       ProvisionQueryService#getActiveInventoryByMappingKey(java.util.UUID, String)} and mark each
+ *       resolved row exhausted via {@link ProvisionUpdateService#markExhausted(java.util.UUID,
+ *       java.util.UUID)}. <b>Real, end-to-end</b>. Idempotent: no active rows for the key is a
+ *       no-op success (the user being "out" of something they don't track is not a failure), and
+ *       {@code markExhausted} itself is idempotent on already-exhausted rows. All rows are
+ *       exhausted (zero remaining), each emitting an {@code ItemRanOutEvent}; a missing/blank
+ *       {@code ingredientMappingKey} books FAILED.
  *   <li>any other / reserved action ({@code ADJUST_BUDGET}, …) → {@code FAILED} with reason {@code
  *       unsupported-provisions-action} (ticket §14).
  * </ul>
@@ -45,15 +51,18 @@ public class ProvisionsFeedbackBridgeImpl extends FeedbackBridgeSupport
   private static final String ACTION_MARK_DEPLETED = "MARK_DEPLETED";
 
   private final ProvisionUpdateService provisionUpdateService;
+  private final ProvisionQueryService provisionQueryService;
 
   public ProvisionsFeedbackBridgeImpl(
       ProvisionUpdateService provisionUpdateService,
+      ProvisionQueryService provisionQueryService,
       FeedbackBridgeIdempotencyRepository idempotencyRepository,
       @Qualifier(FeedbackTxTemplateConfig.REQUIRES_NEW_TX_TEMPLATE)
           TransactionTemplate requiresNewTxTemplate,
       Clock clock) {
     super(idempotencyRepository, requiresNewTxTemplate, clock);
     this.provisionUpdateService = provisionUpdateService;
+    this.provisionQueryService = provisionQueryService;
   }
 
   @Override
@@ -129,30 +138,57 @@ public class ProvisionsFeedbackBridgeImpl extends FeedbackBridgeSupport
   }
 
   /**
-   * Mark the {@code (userId, ingredientMappingKey)} inventory row exhausted. Wired-but-deferred:
-   * the provisions write surface ({@code markExhausted(itemId, …)}) needs an item id, and no public
-   * by-mapping-key lookup exists on {@code ProvisionQueryService} yet. Recorded as FAILED with a
-   * structured reason so the feedback quality-monitoring path surfaces it; the call lands once
-   * provisions exposes the lookup.
+   * Mark every ACTIVE inventory row for {@code (userId, ingredientMappingKey)} exhausted ("I'm out
+   * of soy sauce" → zero remaining). Looks the rows up via {@link
+   * ProvisionQueryService#getActiveInventoryByMappingKey(java.util.UUID, String)} then calls {@link
+   * ProvisionUpdateService#markExhausted(java.util.UUID, java.util.UUID)} per row. No active rows
+   * is an idempotent no-op success (mirrors the equipment-already-absent branch); a missing/blank
+   * {@code ingredientMappingKey} books FAILED (mirrors the equipment-name guard).
    */
   private Result markDepleted(Input input) {
     String ingredientKey = textOrNull(input.structuredPayload(), "ingredientMappingKey");
+    if (ingredientKey == null || ingredientKey.isBlank()) {
+      log()
+          .error(
+              "provisions MARK_DEPLETED missing ingredientMappingKey. feedbackId={} originTrace={}",
+              input.feedbackId(),
+              originTrace(input.feedbackId()));
+      throw failed(
+          input.feedbackId(),
+          DESTINATION,
+          new IllegalArgumentException("missing-ingredient-mapping-key"));
+    }
+    List<InventoryItemDto> rows =
+        provisionQueryService.getActiveInventoryByMappingKey(input.userId(), ingredientKey);
+    if (rows.isEmpty()) {
+      // Being "out" of something the user doesn't track is success, not failure (ticket §13).
+      recordOutcome(input.feedbackId(), DESTINATION, BridgeDispatchStatus.DISPATCHED);
+      log()
+          .info(
+              "provisions MARK_DEPLETED — no active rows to deplete, idempotent no-op."
+                  + " feedbackId={} ingredientKey={}",
+              input.feedbackId(),
+              ingredientKey);
+      return new Result(
+          "nothing to deplete: " + ingredientKey,
+          Map.of("status", "DISPATCHED", "noop", "nothing-to-deplete"));
+    }
+    for (InventoryItemDto row : rows) {
+      provisionUpdateService.markExhausted(row.id(), input.userId());
+    }
+    recordOutcome(input.feedbackId(), DESTINATION, BridgeDispatchStatus.DISPATCHED);
     log()
-        .error(
-            "provisions MARK_DEPLETED is wired-but-deferred: provisions exposes no by-mapping-key"
-                + " inventory lookup on its public read surface yet ({}). feedbackId={}"
-                + " ingredientKey={} actorType={} originTrace={}",
-            "provisions-inventory-lookup-by-key-not-exposed",
+        .info(
+            "provisions inventory depleted via feedback. feedbackId={} ingredientKey={} rows={}"
+                + " actorType={} originTrace={}",
             input.feedbackId(),
             ingredientKey,
+            rows.size(),
             actorType(),
             originTrace(input.feedbackId()));
-    // Book FAILED + throw so the router records AI_UNAVAILABLE; lands when provisions exposes the
-    // by-mapping-key lookup that markExhausted(itemId,…) needs.
-    throw failed(
-        input.feedbackId(),
-        DESTINATION,
-        new UnsupportedOperationException("provisions-inventory-lookup-by-key-not-exposed"));
+    return new Result(
+        "inventory depleted: " + ingredientKey + " (" + rows.size() + " row(s))",
+        Map.of("status", "DISPATCHED", "originTrace", originTrace(input.feedbackId())));
   }
 
   private Result unsupportedAction(Input input, String action) {
