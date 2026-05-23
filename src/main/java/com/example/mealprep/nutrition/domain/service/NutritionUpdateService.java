@@ -2,6 +2,7 @@ package com.example.mealprep.nutrition.domain.service;
 
 import com.example.mealprep.nutrition.api.dto.AcceptDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
+import com.example.mealprep.nutrition.api.dto.FeedbackTargetAdjustment;
 import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
 import com.example.mealprep.nutrition.api.dto.HealthDirectiveDto;
 import com.example.mealprep.nutrition.api.dto.InboundHealthDirectiveRequest;
@@ -44,6 +45,33 @@ public interface NutritionUpdateService {
    *     today; later sub-tickets layer admin / system actor flows
    */
   TargetsDto updateTargets(UUID userId, UpdateTargetsRequest request, UUID actorUserId);
+
+  /**
+   * Apply a single-field, relative feedback-driven adjustment to one nutrition target. Unlike
+   * {@link #updateTargets}, this is NOT a full-document replacement: it reads the current value of
+   * the named target, nudges it by a relative magnitude in the given direction, and writes only
+   * that field — safe to call fire-and-forget from the feedback bridge (no client-supplied
+   * expectedVersion; the {@code @Version} bump is internal). Writes one {@code
+   * nutrition_targets_audit} row with {@code actor_kind = feedback} ({@code actor_type = AI},
+   * {@code origin_trace = feedback-<feedback_id>}). Publishes {@code NutritionTargetsChangedEvent}
+   * carrying the single changed field path.
+   *
+   * <p>If {@code adjustment.absoluteValue()} is present it sets the target to it directly (ignoring
+   * the relative magnitude); otherwise the value is {@code current ± pct·current} per the
+   * configured magnitude steps, clamped to a sanity floor (never driven to zero or below).
+   * Adjusting a {@code micro.<key>} target whose row does not exist is a no-op (no row created, no
+   * audit, no event) — returns the unchanged targets. An unknown {@code target} throws {@link
+   * com.example.mealprep.nutrition.exception.InvalidFeedbackAdjustmentException} (422). Enforcement
+   * direction / hard-floor semantics are never touched.
+   *
+   * <p>Plain {@code @Transactional} (REQUIRED): the bridge calls this from inside its {@code
+   * REQUIRES_NEW} {@code TransactionTemplate}, so the target update + audit row + the bridge's
+   * idempotency row commit as one unit. Do NOT make this {@code REQUIRES_NEW} (decision-log 0010).
+   *
+   * @param userId the targets owner
+   * @param adjustment the classifier-shaped single-field adjustment
+   */
+  TargetsDto applyFeedbackAdjustment(UUID userId, FeedbackTargetAdjustment adjustment);
 
   /**
    * Pre-fill an intake day from a plan snapshot. In-process only in 01b — no HTTP endpoint accepts

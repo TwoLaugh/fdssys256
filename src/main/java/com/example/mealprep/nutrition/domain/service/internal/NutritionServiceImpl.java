@@ -1,5 +1,6 @@
 package com.example.mealprep.nutrition.domain.service.internal;
 
+import com.example.mealprep.core.origin.ActorType;
 import com.example.mealprep.nutrition.api.dto.AcceptDirectiveRequest;
 import com.example.mealprep.nutrition.api.dto.ActivityAdjustmentDto;
 import com.example.mealprep.nutrition.api.dto.CalculateRecipeNutritionRequest;
@@ -10,6 +11,7 @@ import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
 import com.example.mealprep.nutrition.api.dto.DirectiveInstructionDocument;
 import com.example.mealprep.nutrition.api.dto.DirectiveStatus;
 import com.example.mealprep.nutrition.api.dto.EatingWindowDto;
+import com.example.mealprep.nutrition.api.dto.FeedbackTargetAdjustment;
 import com.example.mealprep.nutrition.api.dto.FloorGateResultDto;
 import com.example.mealprep.nutrition.api.dto.FloorViolationDto;
 import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
@@ -47,9 +49,11 @@ import com.example.mealprep.nutrition.api.mapper.IngredientMappingMapper;
 import com.example.mealprep.nutrition.api.mapper.IntakeMapper;
 import com.example.mealprep.nutrition.api.mapper.JournalMapper;
 import com.example.mealprep.nutrition.api.mapper.TargetsMapper;
+import com.example.mealprep.nutrition.config.FeedbackAdjustmentProperties;
 import com.example.mealprep.nutrition.domain.entity.ActivityAdjustment;
 import com.example.mealprep.nutrition.domain.entity.ActivityLevel;
 import com.example.mealprep.nutrition.domain.entity.ActorKind;
+import com.example.mealprep.nutrition.domain.entity.AdjustmentDirection;
 import com.example.mealprep.nutrition.domain.entity.DailyActivityLog;
 import com.example.mealprep.nutrition.domain.entity.EatingWindow;
 import com.example.mealprep.nutrition.domain.entity.FoodMoodJournalEntry;
@@ -200,6 +204,8 @@ public class NutritionServiceImpl
   private final DirectiveApplier directiveApplier;
   private final IntakeAggregator intakeAggregator;
   private final DivergenceDetector divergenceDetector;
+  private final FeedbackTargetResolver feedbackTargetResolver;
+  private final FeedbackAdjustmentProperties feedbackAdjustmentProperties;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -224,6 +230,8 @@ public class NutritionServiceImpl
       DirectiveApplier directiveApplier,
       IntakeAggregator intakeAggregator,
       DivergenceDetector divergenceDetector,
+      FeedbackTargetResolver feedbackTargetResolver,
+      FeedbackAdjustmentProperties feedbackAdjustmentProperties,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
@@ -246,6 +254,8 @@ public class NutritionServiceImpl
     this.directiveApplier = directiveApplier;
     this.intakeAggregator = intakeAggregator;
     this.divergenceDetector = divergenceDetector;
+    this.feedbackTargetResolver = feedbackTargetResolver;
+    this.feedbackAdjustmentProperties = feedbackAdjustmentProperties;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -358,6 +368,148 @@ public class NutritionServiceImpl
         changedFields,
         saved.getVersion());
     return mapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public TargetsDto applyFeedbackAdjustment(UUID userId, FeedbackTargetAdjustment adjustment) {
+    NutritionTargets aggregate =
+        targetsRepository
+            .findByUserId(userId)
+            .orElseThrow(() -> new NutritionTargetsNotFoundException(userId));
+
+    // Force lazy-load of the children the resolver may reach into (micro rows + per-meal slices).
+    aggregate.getPerMealDistribution().size();
+    aggregate.getMicroTargets().size();
+
+    FeedbackTargetResolver.ResolvedTarget resolved =
+        feedbackTargetResolver.resolve(aggregate, adjustment.target()).orElse(null);
+    if (resolved == null) {
+      // Micro target row not opted-in — no-op WARN. No row created, no audit, no event.
+      log.warn(
+          "nutrition feedback adjustment skipped — no opted-in target row. userId={} target={}",
+          userId,
+          adjustment.target());
+      return mapper.toDto(aggregate);
+    }
+
+    BigDecimal current = resolved.currentValue();
+    BigDecimal previous = current == null ? BigDecimal.ZERO : current;
+    BigDecimal computed = computeAdjustedValue(previous, adjustment, resolved);
+
+    if (computed.compareTo(previous) == 0) {
+      // No effective change (e.g. absoluteValue equals current, or a zero-pct nudge) — no-op.
+      log.info(
+          "nutrition feedback adjustment was a no-op userId={} target={} value={}",
+          userId,
+          adjustment.target(),
+          previous);
+      return mapper.toDto(aggregate);
+    }
+
+    resolved.apply(computed);
+
+    Instant now = Instant.now(clock);
+    writeFeedbackAuditRow(
+        aggregate.getId(), userId, resolved.auditFieldPath(), previous, computed, adjustment, now);
+
+    NutritionTargets saved = targetsRepository.saveAndFlush(aggregate);
+    eventPublisher.publishEvent(
+        new NutritionTargetsChangedEvent(
+            userId, saved.getId(), Set.of(resolved.auditFieldPath()), UUID.randomUUID(), now));
+    log.info(
+        "nutrition feedback adjustment applied userId={} field={} {}->{} direction={} magnitude={}"
+            + " version={}",
+        userId,
+        resolved.auditFieldPath(),
+        previous,
+        computed,
+        adjustment.direction(),
+        adjustment.magnitude(),
+        saved.getVersion());
+    return mapper.toDto(saved);
+  }
+
+  /**
+   * Audit field path of the daily calorie target — the only field gated by {@code calorieFloor}.
+   */
+  private static final String DAILY_CALORIE_FIELD_PATH = "calorie_target";
+
+  /**
+   * Resolve the new value for a single-field feedback adjustment. {@code absoluteValue} (when
+   * present) wins outright; otherwise nudge {@code current} by {@code ±pct·current} per the
+   * configured magnitude steps. The result is clamped to a sanity floor so a target is never driven
+   * to zero or below — the DAILY calorie target uses the configured {@code calorieFloor} (e.g.
+   * 1000); every other field (macro / micro / per-meal slice) uses a minimal positive floor (1 for
+   * an integer-valued per-meal calorie field, 0.1 for a {@code BigDecimal} field).
+   */
+  private BigDecimal computeAdjustedValue(
+      BigDecimal current,
+      FeedbackTargetAdjustment adjustment,
+      FeedbackTargetResolver.ResolvedTarget resolved) {
+    boolean integerValued = resolved.integerValued();
+    BigDecimal floor;
+    if (DAILY_CALORIE_FIELD_PATH.equals(resolved.auditFieldPath())) {
+      floor = BigDecimal.valueOf(feedbackAdjustmentProperties.calorieFloor());
+    } else {
+      floor = integerValued ? BigDecimal.ONE : new BigDecimal("0.1");
+    }
+
+    BigDecimal target;
+    if (adjustment.absoluteValue() != null) {
+      target = adjustment.absoluteValue();
+    } else {
+      BigDecimal pct = feedbackAdjustmentProperties.pctFor(adjustment.magnitude());
+      BigDecimal delta = current.multiply(pct);
+      target =
+          adjustment.direction() == AdjustmentDirection.INCREASE
+              ? current.add(delta)
+              : current.subtract(delta);
+    }
+
+    if (target.compareTo(floor) < 0) {
+      log.warn(
+          "nutrition feedback adjustment clamped to floor — requested target {} below floor {}"
+              + " (field={})",
+          target,
+          floor,
+          resolved.auditFieldPath());
+      target = floor;
+    }
+    return integerValued ? target.setScale(0, RoundingMode.HALF_UP) : target;
+  }
+
+  /**
+   * Write one {@code nutrition_targets_audit} row for a feedback adjustment: {@code actor_kind =
+   * FEEDBACK}, {@code actor_user_id = userId} (the feedback originated from the user; the AI agent
+   * is the channel), {@code source_directive_id = null} (that column is health-directive
+   * provenance), and the cross-cutting origin columns {@code actor_type = AI} / {@code origin_trace
+   * = adjustment.reason()}. Per the origin-tracking convention the bridge stamps the adjustment's
+   * {@code reason} with {@code feedback-<feedback_id>} so the cross-cutting provenance lands in
+   * {@code origin_trace}; the nutrition-side classification ({@code actor_kind = FEEDBACK}) plus
+   * the AI actor are recorded independently.
+   */
+  private void writeFeedbackAuditRow(
+      UUID targetsId,
+      UUID actorUserId,
+      String fieldPath,
+      BigDecimal previous,
+      BigDecimal next,
+      FeedbackTargetAdjustment adjustment,
+      Instant now) {
+    auditRepository.save(
+        new NutritionTargetsAuditLog(
+            UUID.randomUUID(),
+            targetsId,
+            actorUserId,
+            ActorKind.FEEDBACK,
+            null,
+            fieldPath,
+            objectMapper.valueToTree(previous),
+            objectMapper.valueToTree(next),
+            now,
+            ActorType.AI,
+            adjustment.reason()));
   }
 
   // ---------------- Apply helpers ----------------

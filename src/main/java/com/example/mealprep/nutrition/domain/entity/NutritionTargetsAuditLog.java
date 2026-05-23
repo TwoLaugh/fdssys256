@@ -1,5 +1,6 @@
 package com.example.mealprep.nutrition.domain.entity;
 
+import com.example.mealprep.core.origin.ActorType;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.Column;
@@ -17,7 +18,12 @@ import org.hibernate.annotations.Type;
  * per {@code fieldPath} per update; no-op fields are skipped at write time.
  *
  * <p>{@code actorKind} discriminates 01a's USER writes from later sub-tickets' HEALTH_DIRECTIVE
- * (01e) and FEEDBACK rows. {@code sourceDirectiveId} is null for USER writes.
+ * (01e) and FEEDBACK (01i) rows. {@code sourceDirectiveId} is null for USER and FEEDBACK writes.
+ *
+ * <p>{@code actorType} / {@code originTrace} (the cross-cutting origin-tracking columns added by
+ * {@code core-02b}'s {@code V20260615180100} migration) are null for USER writes; the feedback path
+ * (01i) sets {@code actorType = AI}, {@code originTrace = feedback-<feedback_id>}. Reads must treat
+ * a null {@code actorType} as USER.
  *
  * <p>No {@code @Version}, no {@code updated_at}, no setters — once written, immutable.
  */
@@ -60,9 +66,20 @@ public class NutritionTargetsAuditLog {
   @Column(name = "occurred_at", updatable = false, nullable = false)
   private Instant occurredAt;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "actor_type", updatable = false, length = 16)
+  private ActorType actorType;
+
+  @Column(name = "origin_trace", updatable = false, length = 128)
+  private String originTrace;
+
   /** For Hibernate. Not for application code. */
   protected NutritionTargetsAuditLog() {}
 
+  /**
+   * USER / HEALTH_DIRECTIVE row constructor — leaves the origin-tracking columns ({@code
+   * actorType}, {@code originTrace}) null. Reads treat a null {@code actorType} as USER.
+   */
   public NutritionTargetsAuditLog(
       UUID id,
       UUID targetsId,
@@ -73,6 +90,36 @@ public class NutritionTargetsAuditLog {
       JsonNode previousValueJson,
       JsonNode newValueJson,
       Instant occurredAt) {
+    this(
+        id,
+        targetsId,
+        actorUserId,
+        actorKind,
+        sourceDirectiveId,
+        fieldPath,
+        previousValueJson,
+        newValueJson,
+        occurredAt,
+        null,
+        null);
+  }
+
+  /**
+   * Full constructor including the cross-cutting origin-tracking columns. The feedback path (01i)
+   * uses this to stamp {@code actorType = AI} + {@code originTrace = feedback-<feedback_id>}.
+   */
+  public NutritionTargetsAuditLog(
+      UUID id,
+      UUID targetsId,
+      UUID actorUserId,
+      ActorKind actorKind,
+      UUID sourceDirectiveId,
+      String fieldPath,
+      JsonNode previousValueJson,
+      JsonNode newValueJson,
+      Instant occurredAt,
+      ActorType actorType,
+      String originTrace) {
     this.id = id;
     this.targetsId = targetsId;
     this.actorUserId = actorUserId;
@@ -82,6 +129,8 @@ public class NutritionTargetsAuditLog {
     this.previousValueJson = previousValueJson;
     this.newValueJson = newValueJson;
     this.occurredAt = occurredAt;
+    this.actorType = actorType;
+    this.originTrace = originTrace;
   }
 
   public UUID getId() {
@@ -118,5 +167,13 @@ public class NutritionTargetsAuditLog {
 
   public Instant getOccurredAt() {
     return occurredAt;
+  }
+
+  public ActorType getActorType() {
+    return actorType;
+  }
+
+  public String getOriginTrace() {
+    return originTrace;
   }
 }

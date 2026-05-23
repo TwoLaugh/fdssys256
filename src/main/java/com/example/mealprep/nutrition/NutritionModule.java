@@ -1,8 +1,10 @@
 package com.example.mealprep.nutrition;
 
+import com.example.mealprep.nutrition.config.FeedbackAdjustmentProperties;
 import com.example.mealprep.nutrition.domain.service.NutritionCalculationService;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.nutrition.domain.service.NutritionUpdateService;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
@@ -13,8 +15,14 @@ import org.springframework.stereotype.Component;
  * <p>Mirrors {@code AuthModule} / {@code PreferenceModule} / {@code HouseholdModule}; thin and
  * carries no business logic. 01a lands the targets query / update surfaces; later sub-tickets add
  * intake, journal, ingredient mapping, directives, calculation, floor-gate.
+ *
+ * <p>{@code @EnableConfigurationProperties(FeedbackAdjustmentProperties.class)} binds the {@code
+ * mealprep.nutrition.feedback-adjustment.*} keys (nutrition-01i) — the project has no
+ * {@code @ConfigurationPropertiesScan}, so config-property records are registered explicitly at
+ * their module facade (mirrors {@code PlannerModule} / {@code FeedbackModule}).
  */
 @Component
+@EnableConfigurationProperties(FeedbackAdjustmentProperties.class)
 public class NutritionModule {
 
   private final NutritionQueryService nutritionQueryService;
