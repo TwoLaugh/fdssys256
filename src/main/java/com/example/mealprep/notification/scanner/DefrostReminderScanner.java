@@ -31,6 +31,15 @@ import org.springframework.transaction.annotation.Transactional;
  * anchor and computes {@code defrostTargetTime = anchor − defrostLeadTimeHours}. When the current
  * time is within 1 hour of the target it fires a {@code DefrostReminderEvent}.
  *
+ * <p><b>v1 anchor (honest scope, notification-01c):</b> the meal anchor is the provisions {@code
+ * expiryDate}, <i>not</i> a planned slot's wall-clock meal time. Anchoring on a real slot meal time
+ * (as the sibling {@link PrepReminderScanner} now does via {@code UpcomingSlotView.mealTime()})
+ * would require a frozen-inventory → consuming-slot link, which the data model does not yet carry:
+ * neither {@code InventoryItemDto} nor {@code FreezerExtensionDto} references a planner slot, and
+ * the planner exposes no inventory-keyed slot lookup. Full slot-time anchoring is therefore a
+ * follow-up gated on that link landing first; this scanner deliberately keeps the {@code
+ * expiryDate} approximation rather than inventing a link.
+ *
  * <p>Idempotent per {@code (inventoryItemId, defrostTargetTime)} via {@link
  * DefrostReminderDispatchLogRepository} (the item id stands in for the slot id — provisions does
  * not carry a planner slot reference). The {@code @Transactional} boundary commits the log row and
