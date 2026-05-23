@@ -130,6 +130,12 @@ class NutritionFloorGateServiceTest {
             directiveApplier,
             intakeAggregator,
             divergenceDetector,
+            new com.example.mealprep.nutrition.domain.service.internal.FeedbackTargetResolver(),
+            new com.example.mealprep.nutrition.config.FeedbackAdjustmentProperties(
+                new java.math.BigDecimal("0.05"),
+                new java.math.BigDecimal("0.10"),
+                new java.math.BigDecimal("0.20"),
+                1000),
             eventPublisher,
             objectMapper,
             fixedClock);

@@ -12,6 +12,7 @@ import com.example.mealprep.nutrition.exception.IntakeDayNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
 import com.example.mealprep.nutrition.exception.InvalidDirectiveRoutingException;
+import com.example.mealprep.nutrition.exception.InvalidFeedbackAdjustmentException;
 import com.example.mealprep.nutrition.exception.InvalidIntakeRangeException;
 import com.example.mealprep.nutrition.exception.InvalidPlanRollupException;
 import com.example.mealprep.nutrition.exception.InvalidWeekStartException;
@@ -325,6 +326,29 @@ public class NutritionExceptionHandler {
             "Invalid plan rollup",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  // ---------------- 01i: feedback target-adjustment exceptions ----------------
+
+  /**
+   * Map an unknown feedback-adjustment target to HTTP 422. {@code applyFeedbackAdjustment} is
+   * in-process (no REST surface), so in practice the feedback bridge catches this and books a
+   * {@code FAILED} idempotency row; the mapping is retained for completeness / consistency.
+   */
+  @ExceptionHandler(InvalidFeedbackAdjustmentException.class)
+  public ResponseEntity<ProblemDetail> handleInvalidFeedbackAdjustment(
+      InvalidFeedbackAdjustmentException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "invalid-feedback-adjustment",
+            "Invalid feedback adjustment target",
+            req.getRequestURI());
+    pd.setProperty("target", ex.target());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }
