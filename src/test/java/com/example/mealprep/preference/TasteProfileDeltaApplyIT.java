@@ -239,9 +239,11 @@ class TasteProfileDeltaApplyIT {
     UUID userId = UUID.randomUUID();
     updateService.initialise(userId);
 
-    // 60 long learned-insights pushes the document well over the 2500-token budget.
+    // 50 long learned-insights (the max batch size) push the document ~5000 tokens, well over the
+    // 2500-token budget — exercising the budget guard without tripping the >50 batch-count
+    // validator.
     java.util.List<TasteProfileDelta> deltas = new java.util.ArrayList<>();
-    for (int i = 0; i < 60; i++) {
+    for (int i = 0; i < 50; i++) {
       deltas.add(
           new TasteProfileDelta.Add(
               "learnedInsights", objectMapper.getNodeFactory().textNode("x".repeat(400) + i)));
