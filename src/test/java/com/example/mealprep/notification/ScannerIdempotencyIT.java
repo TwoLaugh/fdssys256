@@ -240,7 +240,7 @@ class ScannerIdempotencyIT {
     jdbcTemplate.update(
         "INSERT INTO planner_plans (id, household_id, week_start_date, generation, status,"
             + " trigger_kind, trace_id, decision_id, created_at, updated_at) VALUES"
-            + " (?::uuid, ?::uuid, ?, 1, 'ACTIVE', 'INITIAL', ?::uuid, ?::uuid, now(), now())",
+            + " (?::uuid, ?::uuid, ?, 1, 'ACTIVE', 'USER_INITIATED', ?::uuid, ?::uuid, now(), now())",
         plan.toString(),
         household.toString(),
         java.sql.Date.valueOf(onDate),
