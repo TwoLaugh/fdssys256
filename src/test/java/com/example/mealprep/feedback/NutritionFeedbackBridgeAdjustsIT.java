@@ -84,9 +84,17 @@ class NutritionFeedbackBridgeAdjustsIT {
     assertThat(result.payload()).containsEntry("status", "DISPATCHED");
     assertThat(result.payload()).containsEntry("originTrace", "feedback-" + feedbackId);
 
-    // sodium 2300 -> 2070 (-10%).
-    NutritionTargets reloaded = targetsRepository.findByUserId(userId).orElseThrow();
-    assertThat(reloaded.getMicroTargets().get(0).getTargetValue()).isEqualByComparingTo("2070.0");
+    // sodium 2300 -> 2070 (-10%). Asserted via JDBC to avoid lazy-initialising microTargets outside
+    // a Hibernate session (the bridge applies the change within its own transaction; reading the
+    // detached aggregate's lazy child collection here would throw LazyInitializationException).
+    BigDecimal sodium =
+        jdbcTemplate.queryForObject(
+            "SELECT mt.target_value FROM nutrition_micro_target mt"
+                + " JOIN nutrition_targets t ON t.id = mt.targets_id"
+                + " WHERE t.user_id = ?::uuid AND mt.nutrient_key = 'sodium_mg'",
+            BigDecimal.class,
+            userId.toString());
+    assertThat(sodium).isEqualByComparingTo("2070.0");
 
     // One audit row, feedback / AI / origin_trace, committed with the adjustment.
     List<NutritionTargetsAuditLog> audit = auditRepository.findAll();
