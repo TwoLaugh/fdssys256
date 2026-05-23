@@ -164,8 +164,11 @@ class PrepReminderScannerTest {
   }
 
   private static UpcomingSlotView slot(UUID slotId, UUID recipeId, SlotKind kind, int timeBudget) {
+    // planner-01m extended UpcomingSlotView with resolved mealTime + nullable prepStepAtTime.
+    // This scanner (notification-01b) still derives its own prep moment from the slot kind, so the
+    // values here are inert; notification-01c re-wires the scanner to consume slot.mealTime().
     return new UpcomingSlotView(
-        slotId, UUID.randomUUID(), HOUSEHOLD, TODAY, kind, 0, timeBudget, recipeId);
+        slotId, UUID.randomUUID(), HOUSEHOLD, TODAY, kind, 0, timeBudget, recipeId, null, null);
   }
 
   private static ScannerProperties defaultProps() {

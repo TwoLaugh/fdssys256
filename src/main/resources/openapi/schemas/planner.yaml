@@ -137,6 +137,18 @@ MealSlotDto:
       type: string
       enum: [EATEN, COOKED, COOKING, SKIPPED, USER_PINNED]
       nullable: true
+    mealTime:
+      # Stored per-slot wall-clock meal-time override (planner-01m). Nullable: NULL = unset, and
+      # the effective time is resolved at projection time. Explicit `type: string` sibling so the
+      # `nullable: true` is not silently ignored (OpenAPI 3.0 nullable-type-sibling gotcha).
+      type: string
+      format: time
+      nullable: true
+    prepStepAtTime:
+      # Reserved for the future pre-cook-actions feature (planner-01m); always null as of 01m.
+      type: string
+      format: time
+      nullable: true
     scheduledRecipe:
       # Inlined nullable object — $ref + nullable: true is silently ignored by OpenAPI 3.0
       # (gotchas #3). The same shape is published as a named ScheduledRecipeDto for reuse

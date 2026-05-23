@@ -14,6 +14,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -69,6 +70,22 @@ public class MealSlot {
 
   @Column(name = "time_budget_min", nullable = false)
   private int timeBudgetMin;
+
+  /**
+   * Optional per-slot wall-clock meal-time override (planner-01m). {@code null} = no override; the
+   * {@code getUpcomingSlots} projection resolves the effective time from the household owner's
+   * lifestyle-config {@code meal_timing}, falling back to the slot-kind default. Left {@code null}
+   * at composition in 01m; a future feature may populate it.
+   */
+  @Column(name = "meal_time")
+  private LocalTime mealTime;
+
+  /**
+   * Reserved for the future pre-cook-actions feature (planner-01m). Unused (always {@code null}) as
+   * of 01m; ships nullable so the column exists when the feature lands.
+   */
+  @Column(name = "prep_step_at_time")
+  private LocalTime prepStepAtTime;
 
   @Column(name = "shared", nullable = false)
   private boolean shared;

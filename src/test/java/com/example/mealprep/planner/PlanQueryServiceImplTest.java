@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
 import com.example.mealprep.planner.api.dto.UpcomingSlotView;
@@ -23,7 +24,9 @@ import com.example.mealprep.planner.domain.repository.PlanRepository;
 import com.example.mealprep.planner.domain.repository.ReoptSuggestionRepository;
 import com.example.mealprep.planner.domain.service.internal.PlannerServiceImpl;
 import com.example.mealprep.planner.testdata.PlanTestData;
+import com.example.mealprep.preference.domain.service.LifestyleConfigQueryService;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -57,6 +60,8 @@ class PlanQueryServiceImplTest {
   @Mock private ReoptSuggestionRepository reoptSuggestionRepository;
   @Mock private PlanMapper planMapper;
   @Mock private ReoptSuggestionMapper reoptSuggestionMapper;
+  @Mock private HouseholdQueryService householdQueryService;
+  @Mock private LifestyleConfigQueryService lifestyleConfigQueryService;
 
   @InjectMocks private PlannerServiceImpl service;
 
@@ -351,6 +356,7 @@ class PlanQueryServiceImplTest {
     when(planRepository.findByHouseholdIdAndStatusIn(householdId, List.of(PlanStatus.ACTIVE)))
         .thenReturn(List.of(plan));
 
+    // No household / lifestyle config stubbed → resolution falls to the slot-kind default floor.
     // Window only covers the first two days → 2 days * 2 slots = 4 slot views.
     List<UpcomingSlotView> views = service.getUpcomingSlots(householdId, week, week.plusDays(1));
 
@@ -358,5 +364,39 @@ class PlanQueryServiceImplTest {
     assertThat(views).allSatisfy(v -> assertThat(v.householdId()).isEqualTo(householdId));
     assertThat(views).allSatisfy(v -> assertThat(v.recipeId()).isNotNull());
     assertThat(views).extracting(UpcomingSlotView::dayDate).containsOnly(week, week.plusDays(1));
+    // mealTime is never null; with no config it is the slot-kind default (BREAKFAST 08:00 /
+    // LUNCH 12:30). prepStepAtTime is the stored override — null in 01m.
+    assertThat(views).allSatisfy(v -> assertThat(v.mealTime()).isNotNull());
+    assertThat(views).allSatisfy(v -> assertThat(v.prepStepAtTime()).isNull());
+    assertThat(views)
+        .filteredOn(v -> v.kind() == com.example.mealprep.core.types.SlotKind.BREAKFAST)
+        .allSatisfy(v -> assertThat(v.mealTime()).isEqualTo(LocalTime.of(8, 0)));
+    assertThat(views)
+        .filteredOn(v -> v.kind() == com.example.mealprep.core.types.SlotKind.LUNCH)
+        .allSatisfy(v -> assertThat(v.mealTime()).isEqualTo(LocalTime.of(12, 30)));
+  }
+
+  @Test
+  void getUpcomingSlots_loadsLifestyleConfigOncePerCall_notPerSlot() {
+    UUID householdId = UUID.randomUUID();
+    UUID ownerId = UUID.randomUUID();
+    LocalDate week = LocalDate.of(2026, 6, 15);
+    // 2 days * 3 slots = 6 slots, all within the window — yet the owner lifestyle config must
+    // be read exactly once (batch-load contract, ticket §32).
+    Plan plan = PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.ACTIVE, 2, 3);
+    when(planRepository.findByHouseholdIdAndStatusIn(householdId, List.of(PlanStatus.ACTIVE)))
+        .thenReturn(List.of(plan));
+    when(householdQueryService.getById(householdId))
+        .thenReturn(
+            Optional.of(
+                new com.example.mealprep.household.api.dto.HouseholdDto(
+                    householdId, "h", ownerId, List.of(), java.time.Instant.EPOCH, 0L)));
+    when(lifestyleConfigQueryService.getLifestyleConfig(ownerId)).thenReturn(Optional.empty());
+
+    List<UpcomingSlotView> views = service.getUpcomingSlots(householdId, week, week.plusDays(1));
+
+    assertThat(views).hasSize(6);
+    verify(householdQueryService, times(1)).getById(householdId);
+    verify(lifestyleConfigQueryService, times(1)).getLifestyleConfig(ownerId);
   }
 }
