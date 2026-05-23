@@ -71,6 +71,7 @@ class FlywayMigrationIT {
             "feedback_clarification_queries",
             "feedback_entries",
             "feedback_misclassification_corrections",
+            "feedback_preference_delta_cursor",
             "feedback_routing_log");
   }
 

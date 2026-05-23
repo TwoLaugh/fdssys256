@@ -75,9 +75,13 @@ class PreferenceDeltaPipelineIT {
 
   @AfterEach
   void cleanup() {
+    // FK-children of feedback_routing_log first: feedback_misclassification_corrections holds a
+    // NOT-NULL, non-cascading original_routing_id (and a nullable replay_routing_id) → deleting the
+    // routing log before its corrections children raises a DataIntegrityViolationException.
+    jdbcTemplate.update("DELETE FROM feedback_misclassification_corrections");
     jdbcTemplate.update("DELETE FROM feedback_routing_log");
-    jdbcTemplate.update("DELETE FROM feedback_entries");
     jdbcTemplate.update("DELETE FROM feedback_preference_delta_cursor");
+    jdbcTemplate.update("DELETE FROM feedback_entries");
     jdbcTemplate.update("DELETE FROM preference_taste_profile_audit");
     jdbcTemplate.update("DELETE FROM preference_taste_profile_versions");
     jdbcTemplate.update("DELETE FROM preference_taste_profile");
