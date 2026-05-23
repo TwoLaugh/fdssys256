@@ -17,6 +17,7 @@ import com.example.mealprep.feedback.api.mapper.ClarificationQueryMapper;
 import com.example.mealprep.feedback.api.mapper.FeedbackEntryMapper;
 import com.example.mealprep.feedback.api.mapper.MisclassificationCorrectionMapper;
 import com.example.mealprep.feedback.api.mapper.RoutingLogMapper;
+import com.example.mealprep.feedback.config.FeedbackRetrySweepProperties;
 import com.example.mealprep.feedback.domain.document.UiContextDocument;
 import com.example.mealprep.feedback.domain.entity.ClarificationQuery;
 import com.example.mealprep.feedback.domain.entity.ClarificationStatus;
@@ -31,6 +32,7 @@ import com.example.mealprep.feedback.domain.service.FeedbackQueryService;
 import com.example.mealprep.feedback.domain.service.FeedbackUpdateService;
 import com.example.mealprep.feedback.domain.service.internal.ClarificationExpirer;
 import com.example.mealprep.feedback.domain.service.internal.CorrectionReplayer;
+import com.example.mealprep.feedback.domain.service.internal.StuckClassificationRetrier;
 import com.example.mealprep.feedback.event.FeedbackSubmittedEvent;
 import com.example.mealprep.feedback.spi.NutritionFeedbackReverter;
 import com.example.mealprep.feedback.spi.PreferenceFeedbackReverter;
@@ -73,6 +75,7 @@ class FeedbackServiceImplTest {
   @Mock private ClarificationQueryMapper clarificationQueryMapper;
   @Mock private MisclassificationCorrectionMapper misclassificationCorrectionMapper;
   @Mock private ClarificationExpirer clarificationExpirer;
+  @Mock private StuckClassificationRetrier stuckClassificationRetrier;
   @Mock private CorrectionReplayer correctionReplayer;
   @Mock private PreferenceFeedbackReverter preferenceReverter;
   @Mock private NutritionFeedbackReverter nutritionReverter;
@@ -81,6 +84,11 @@ class FeedbackServiceImplTest {
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final Clock clock = Clock.fixed(Instant.parse("2026-05-10T00:00:00Z"), ZoneOffset.UTC);
+
+  // Real record (5-min stuck / 24h escalate) — config-property records carry logic in their compact
+  // constructor, so we use a real instance rather than a mock.
+  private final FeedbackRetrySweepProperties retrySweepProperties =
+      new FeedbackRetrySweepProperties(null, null, null);
 
   private Object serviceObject;
 
@@ -111,6 +119,8 @@ class FeedbackServiceImplTest {
               ClarificationQueryMapper.class,
               MisclassificationCorrectionMapper.class,
               ClarificationExpirer.class,
+              StuckClassificationRetrier.class,
+              FeedbackRetrySweepProperties.class,
               CorrectionReplayer.class,
               PreferenceFeedbackReverter.class,
               NutritionFeedbackReverter.class,
@@ -130,6 +140,8 @@ class FeedbackServiceImplTest {
               clarificationQueryMapper,
               misclassificationCorrectionMapper,
               clarificationExpirer,
+              stuckClassificationRetrier,
+              retrySweepProperties,
               correctionReplayer,
               preferenceReverter,
               nutritionReverter,
@@ -391,18 +403,56 @@ class FeedbackServiceImplTest {
     assertThat(queryService().getRoutingDecision(userId, routingId)).isEmpty();
   }
 
-  // ---------------- deferred methods throw ----------------
+  // ---------------- retryStuckClassifications (01i) ----------------
 
   @Test
-  void stillDeferredMethods_throwUnsupported_withTicketReference() {
-    FeedbackUpdateService u = updateService();
+  void retryStuckClassifications_queriesStuckWindow_andDispatchesEachToRetrier() {
+    UUID id1 = UUID.randomUUID();
+    UUID id2 = UUID.randomUUID();
+    FeedbackEntry e1 = FeedbackTestData.feedbackEntry(UUID.randomUUID(), "a");
+    e1.setId(id1);
+    FeedbackEntry e2 = FeedbackTestData.feedbackEntry(UUID.randomUUID(), "b");
+    e2.setId(id2);
+    // The cutoff is now − 5 min; the sweep filters RECEIVED + CLASSIFYING on the retry clock.
+    Instant expectedCutoff = clock.instant().minus(java.time.Duration.ofMinutes(5));
+    when(feedbackEntryRepository.findStuckForRetry(
+            eq(java.util.Set.of(SubmissionStatus.RECEIVED, SubmissionStatus.CLASSIFYING)),
+            eq(expectedCutoff)))
+        .thenReturn(List.of(e1, e2));
 
-    // 01e implemented answerClarificationQuery / expireOldClarificationQueries /
-    // listClarificationQueries / getClarificationQuery; 01f implemented correctMisclassification /
-    // listCorrections — only retryStuckClassifications (01g) stays deferred.
-    assertThatThrownBy(u::retryStuckClassifications)
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessageContaining("feedback-01g");
+    updateService().retryStuckClassifications();
+
+    verify(stuckClassificationRetrier).retryOne(id1);
+    verify(stuckClassificationRetrier).retryOne(id2);
+  }
+
+  @Test
+  void retryStuckClassifications_oneRetrierThrows_othersStillDispatched() {
+    UUID id1 = UUID.randomUUID();
+    UUID id2 = UUID.randomUUID();
+    FeedbackEntry e1 = FeedbackTestData.feedbackEntry(UUID.randomUUID(), "a");
+    e1.setId(id1);
+    FeedbackEntry e2 = FeedbackTestData.feedbackEntry(UUID.randomUUID(), "b");
+    e2.setId(id2);
+    when(feedbackEntryRepository.findStuckForRetry(any(), any())).thenReturn(List.of(e1, e2));
+    org.mockito.Mockito.doThrow(new RuntimeException("row locked"))
+        .when(stuckClassificationRetrier)
+        .retryOne(id1);
+
+    // Must not propagate; the sweep continues to e2.
+    updateService().retryStuckClassifications();
+
+    verify(stuckClassificationRetrier).retryOne(id1);
+    verify(stuckClassificationRetrier).retryOne(id2);
+  }
+
+  @Test
+  void retryStuckClassifications_noneStuck_isNoop() {
+    when(feedbackEntryRepository.findStuckForRetry(any(), any())).thenReturn(List.of());
+
+    updateService().retryStuckClassifications();
+
+    verify(stuckClassificationRetrier, never()).retryOne(any());
   }
 
   // ---------------- answerClarificationQuery (01e) ----------------

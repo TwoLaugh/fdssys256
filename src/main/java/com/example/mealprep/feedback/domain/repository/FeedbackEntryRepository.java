@@ -36,6 +36,20 @@ public interface FeedbackEntryRepository extends JpaRepository<FeedbackEntry, UU
       Collection<SubmissionStatus> statuses, Instant before);
 
   /**
+   * Retry-sweep query (feedback-01i): entries stuck in one of {@code statuses} whose retry clock —
+   * {@code lastClassifiedAt} when set, else {@code createdAt} for an entry that never progressed —
+   * is older than {@code before}. Measuring time-since-last-attempt (not time-since-creation) stops
+   * a {@code CLASSIFYING} entry retried minutes ago from being re-dispatched on the very next
+   * sweep. {@code lastClassifiedAt} is stamped on every classification transition including the
+   * revert-to-RECEIVED path, so the clock is honest across repeated retries.
+   */
+  @Query(
+      "SELECT e FROM FeedbackEntry e WHERE e.submissionStatus IN :statuses AND"
+          + " COALESCE(e.lastClassifiedAt, e.createdAt) < :before")
+  List<FeedbackEntry> findStuckForRetry(
+      @Param("statuses") Collection<SubmissionStatus> statuses, @Param("before") Instant before);
+
+  /**
    * Native UPDATE for the submission-status flip. Bypasses Hibernate's full-entity dirty-check
    * + @Version optimistic locking which races with the publisher's persistence context when the
    * AFTER_COMMIT listener fires (round-8 retro: native UPDATE pattern). The version column is
@@ -63,6 +77,22 @@ public interface FeedbackEntryRepository extends JpaRepository<FeedbackEntry, UU
           + " END, e.optimisticVersion = e.optimisticVersion + 1 WHERE e.id = :id")
   int updateSubmissionStatusAndDecrementAttempts(
       @Param("id") UUID id, @Param("status") SubmissionStatus status);
+
+  /**
+   * Native UPDATE for the revert-to-RECEIVED path that also stamps {@code lastClassifiedAt}
+   * (feedback-01i): the retry-sweep clock measures time-since-last-attempt, so a deferred attempt
+   * must advance the clock — otherwise an entry stuck on a never-progressing {@code createdAt}
+   * would be re-swept on the very next tick. Decrements attempts (floor at 0) so the revert leaves
+   * the attempt count where it was before this attempt incremented it.
+   */
+  @Modifying
+  @Query(
+      "UPDATE FeedbackEntry e SET e.submissionStatus = :status, e.classificationAttempts ="
+          + " CASE WHEN e.classificationAttempts > 0 THEN e.classificationAttempts - 1 ELSE 0"
+          + " END, e.lastClassifiedAt = :at, e.optimisticVersion = e.optimisticVersion + 1 WHERE"
+          + " e.id = :id")
+  int updateSubmissionStatusAndDecrementAttemptsAndLastClassifiedAt(
+      @Param("id") UUID id, @Param("status") SubmissionStatus status, @Param("at") Instant at);
 
   /** Native UPDATE that also stamps lastClassifiedAt (terminal paths). */
   @Modifying

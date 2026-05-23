@@ -205,11 +205,15 @@ public class FeedbackClassificationListener {
   }
 
   private void revertToReceived(UUID feedbackId) {
+    Instant now = clock.instant();
     requiresNewTxTemplate.executeWithoutResult(
         status -> {
+          // Stamp lastClassifiedAt so the feedback-01i retry sweep measures time-since-last-attempt
+          // (not time-since-creation) — otherwise a never-progressing createdAt would re-sweep this
+          // entry on the very next 2-min tick instead of waiting out the 5-min stuck window.
           int rows =
-              entryRepository.updateSubmissionStatusAndDecrementAttempts(
-                  feedbackId, SubmissionStatus.RECEIVED);
+              entryRepository.updateSubmissionStatusAndDecrementAttemptsAndLastClassifiedAt(
+                  feedbackId, SubmissionStatus.RECEIVED, now);
           if (rows == 0) {
             throw new FeedbackEntryNotFoundException(feedbackId);
           }
