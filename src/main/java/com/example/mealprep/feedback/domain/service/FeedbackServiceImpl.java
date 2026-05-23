@@ -13,6 +13,7 @@ import com.example.mealprep.feedback.api.mapper.ClarificationQueryMapper;
 import com.example.mealprep.feedback.api.mapper.FeedbackEntryMapper;
 import com.example.mealprep.feedback.api.mapper.MisclassificationCorrectionMapper;
 import com.example.mealprep.feedback.api.mapper.RoutingLogMapper;
+import com.example.mealprep.feedback.config.FeedbackRetrySweepProperties;
 import com.example.mealprep.feedback.domain.document.UiContextDocument;
 import com.example.mealprep.feedback.domain.entity.ClarificationQuery;
 import com.example.mealprep.feedback.domain.entity.ClarificationStatus;
@@ -30,6 +31,7 @@ import com.example.mealprep.feedback.domain.service.internal.ClarificationExpire
 import com.example.mealprep.feedback.domain.service.internal.ConfidenceGate;
 import com.example.mealprep.feedback.domain.service.internal.CorrectionReplayer;
 import com.example.mealprep.feedback.domain.service.internal.FeedbackRouter;
+import com.example.mealprep.feedback.domain.service.internal.StuckClassificationRetrier;
 import com.example.mealprep.feedback.event.FeedbackMisclassificationCorrectedEvent;
 import com.example.mealprep.feedback.event.FeedbackSubmittedEvent;
 import com.example.mealprep.feedback.exception.ClarificationQueryAlreadyAnsweredException;
@@ -49,6 +51,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -86,6 +89,8 @@ class FeedbackServiceImpl implements FeedbackQueryService, FeedbackUpdateService
   private final ClarificationQueryMapper clarificationQueryMapper;
   private final MisclassificationCorrectionMapper misclassificationCorrectionMapper;
   private final ClarificationExpirer clarificationExpirer;
+  private final StuckClassificationRetrier stuckClassificationRetrier;
+  private final FeedbackRetrySweepProperties retrySweepProperties;
   private final CorrectionReplayer correctionReplayer;
   private final PreferenceFeedbackReverter preferenceReverter;
   private final NutritionFeedbackReverter nutritionReverter;
@@ -104,6 +109,8 @@ class FeedbackServiceImpl implements FeedbackQueryService, FeedbackUpdateService
       ClarificationQueryMapper clarificationQueryMapper,
       MisclassificationCorrectionMapper misclassificationCorrectionMapper,
       ClarificationExpirer clarificationExpirer,
+      StuckClassificationRetrier stuckClassificationRetrier,
+      FeedbackRetrySweepProperties retrySweepProperties,
       CorrectionReplayer correctionReplayer,
       PreferenceFeedbackReverter preferenceReverter,
       NutritionFeedbackReverter nutritionReverter,
@@ -120,6 +127,8 @@ class FeedbackServiceImpl implements FeedbackQueryService, FeedbackUpdateService
     this.clarificationQueryMapper = clarificationQueryMapper;
     this.misclassificationCorrectionMapper = misclassificationCorrectionMapper;
     this.clarificationExpirer = clarificationExpirer;
+    this.stuckClassificationRetrier = stuckClassificationRetrier;
+    this.retrySweepProperties = retrySweepProperties;
     this.correctionReplayer = correctionReplayer;
     this.preferenceReverter = preferenceReverter;
     this.nutritionReverter = nutritionReverter;
@@ -387,9 +396,45 @@ class FeedbackServiceImpl implements FeedbackQueryService, FeedbackUpdateService
         entry.getId(), entry.getTraceId(), SubmissionStatus.RECEIVED, List.of(), null);
   }
 
+  /**
+   * Recovery half of the classifier's graceful-degrade model (LLD lines 570-581). Every 2 minutes
+   * (LLD line 514) it sweeps entries stuck in {@code RECEIVED}/{@code CLASSIFYING} past the 5-min
+   * window — the listener reverts to {@code RECEIVED} and walks away when the AI is unavailable,
+   * and without this sweep those entries would sit there forever. Entries older than 24h escalate
+   * to {@code FAILED}; the rest are re-classified by re-publishing {@link FeedbackSubmittedEvent}
+   * (same {@code traceId}) onto the proven async pipeline.
+   *
+   * <p>Parser-failed entries are already {@code FAILED} in the listener ("the prompt is the bug,
+   * not the runtime", LLD line 579), so the {@code RECEIVED}/{@code CLASSIFYING} status filter
+   * naturally excludes them — no extra guard.
+   *
+   * <p>Reads {@code clock.instant()} (never {@code Instant.now()} — time-bomb gotcha). Each entry
+   * is dispatched to a sibling {@link StuckClassificationRetrier} that owns its own {@code
+   * REQUIRES_NEW} tx (Spring self-invocation gotcha + per-item isolation, mirrors {@link
+   * #expireOldClarificationQueries}); a per-item failure is logged WARN and the sweep continues.
+   *
+   * <p>{@code @Scheduled(fixedDelay)} cadence is config-overridable via {@code
+   * mealprep.feedback.retry-sweep.fixed-delay-ms} (default 120000). The {@code initialDelay} lets
+   * the test profile push the first auto-fire far out so ITs invoke {@code
+   * retryStuckClassifications} deterministically without a background tick racing the seed.
+   */
   @Override
+  @Scheduled(
+      fixedDelayString = "${mealprep.feedback.retry-sweep.fixed-delay-ms:120000}",
+      initialDelayString = "${mealprep.feedback.retry-sweep.initial-delay-ms:120000}")
   public void retryStuckClassifications() {
-    throw new UnsupportedOperationException("feedback-01g impl pending — see ticket");
+    Instant cutoff = clock.instant().minus(retrySweepProperties.stuckAfter());
+    List<FeedbackEntry> stuck =
+        feedbackEntryRepository.findStuckForRetry(
+            Set.of(SubmissionStatus.RECEIVED, SubmissionStatus.CLASSIFYING), cutoff);
+    for (FeedbackEntry entry : stuck) {
+      try {
+        stuckClassificationRetrier.retryOne(entry.getId());
+      } catch (RuntimeException ex) {
+        log.warn(
+            "Failed to retry stuck classification {}; will retry next sweep", entry.getId(), ex);
+      }
+    }
   }
 
   /**

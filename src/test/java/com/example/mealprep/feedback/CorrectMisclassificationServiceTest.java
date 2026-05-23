@@ -77,6 +77,11 @@ class CorrectMisclassificationServiceTest {
   @Mock private ClarificationQueryMapper clarificationQueryMapper;
   @Mock private MisclassificationCorrectionMapper misclassificationCorrectionMapper;
   @Mock private ClarificationExpirer clarificationExpirer;
+
+  @Mock
+  private com.example.mealprep.feedback.domain.service.internal.StuckClassificationRetrier
+      stuckClassificationRetrier;
+
   @Mock private CorrectionReplayer correctionReplayer;
   @Mock private PreferenceFeedbackReverter preferenceReverter;
   @Mock private NutritionFeedbackReverter nutritionReverter;
@@ -85,6 +90,10 @@ class CorrectMisclassificationServiceTest {
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final Clock clock = Clock.fixed(Instant.parse("2026-05-10T00:00:00Z"), ZoneOffset.UTC);
+
+  private final com.example.mealprep.feedback.config.FeedbackRetrySweepProperties
+      retrySweepProperties =
+          new com.example.mealprep.feedback.config.FeedbackRetrySweepProperties(null, null, null);
 
   private FeedbackUpdateService service() {
     try {
@@ -101,6 +110,9 @@ class CorrectMisclassificationServiceTest {
               ClarificationQueryMapper.class,
               MisclassificationCorrectionMapper.class,
               ClarificationExpirer.class,
+              com.example.mealprep.feedback.domain.service.internal.StuckClassificationRetrier
+                  .class,
+              com.example.mealprep.feedback.config.FeedbackRetrySweepProperties.class,
               CorrectionReplayer.class,
               PreferenceFeedbackReverter.class,
               NutritionFeedbackReverter.class,
@@ -120,6 +132,8 @@ class CorrectMisclassificationServiceTest {
               clarificationQueryMapper,
               misclassificationCorrectionMapper,
               clarificationExpirer,
+              stuckClassificationRetrier,
+              retrySweepProperties,
               correctionReplayer,
               preferenceReverter,
               nutritionReverter,
