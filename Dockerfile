@@ -38,11 +38,16 @@ RUN ./mvnw --batch-mode --no-transfer-progress -DskipTests clean package \
 FROM eclipse-temurin:17-jre AS runtime
 WORKDIR /app
 
-# Run as an unprivileged user.
-RUN groupadd --system mealprep && useradd --system --gid mealprep --no-create-home mealprep
+# Run as an unprivileged user, with a writable data dir for the recipe-image store
+# (LocalFilesystemImageStore creates /app/data/recipe-images on startup). In a real deploy
+# that path is a mounted volume; the image still needs it to exist and be owned by the runtime
+# user so the app can boot.
+RUN groupadd --system mealprep && useradd --system --gid mealprep --no-create-home mealprep \
+    && mkdir -p /app/data/recipe-images \
+    && chown -R mealprep:mealprep /app
 USER mealprep
 
-COPY --from=build /workspace/app.jar /app/app.jar
+COPY --from=build --chown=mealprep:mealprep /workspace/app.jar /app/app.jar
 
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
