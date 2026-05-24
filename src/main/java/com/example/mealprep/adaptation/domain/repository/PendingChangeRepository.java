@@ -24,6 +24,15 @@ public interface PendingChangeRepository extends JpaRepository<PendingChange, UU
   Optional<PendingChange> findByRecipeIdAndChangeDimensionAndStatus(
       UUID rid, ChangeDimension d, PendingChangeStatus s);
 
+  /**
+   * The pending change a FEEDBACK adaptation job created, by the job id. The recipe-feedback bridge
+   * records the {@code jobId} (not the pending-change id) on the routing's {@code
+   * destinationResultJson}; the misclassification reverter (feedback-01h) resolves the pending
+   * change from it. A feedback job creates at most one pending change, so {@code Optional}
+   * suffices.
+   */
+  Optional<PendingChange> findByJobId(UUID jobId);
+
   List<PendingChange> findAllByUserIdAndStatus(UUID userId, PendingChangeStatus status, Sort sort);
 
   Page<PendingChange> findByRecipeIdOrderByCreatedAtDesc(UUID recipeId, Pageable pageable);
