@@ -1,5 +1,6 @@
 package com.example.mealprep.feedback;
 
+import com.example.mealprep.feedback.ai.config.PreferenceDeltaProperties;
 import com.example.mealprep.feedback.config.FeedbackRetrySweepProperties;
 import com.example.mealprep.feedback.domain.service.FeedbackQueryService;
 import com.example.mealprep.feedback.domain.service.FeedbackUpdateService;
@@ -15,13 +16,16 @@ import org.springframework.stereotype.Component;
  * and {@link FeedbackUpdateService} (submission write); subsequent tickets append impl bodies for
  * correction, clarification answer, and scheduled sweep methods on the same interfaces.
  *
- * <p>Registers {@link FeedbackRetrySweepProperties} (feedback-01i) via
- * {@code @EnableConfigurationProperties} — the project has no {@code @ConfigurationPropertiesScan},
- * so config-property records are registered explicitly at their module facade (mirrors {@code
- * PlannerModule}).
+ * <p>Registers {@link FeedbackRetrySweepProperties} (feedback-01i) and {@link
+ * PreferenceDeltaProperties} (preference-01g) via {@code @EnableConfigurationProperties} — the
+ * project has no {@code @ConfigurationPropertiesScan}, so config-property records are registered
+ * explicitly at their module facade (mirrors {@code PlannerModule}).
  */
 @Component
-@EnableConfigurationProperties(FeedbackRetrySweepProperties.class)
+@EnableConfigurationProperties({
+  FeedbackRetrySweepProperties.class,
+  PreferenceDeltaProperties.class
+})
 public class FeedbackModule {
 
   private final FeedbackQueryService feedbackQueryService;
