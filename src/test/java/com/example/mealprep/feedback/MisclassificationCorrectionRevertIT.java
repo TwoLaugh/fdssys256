@@ -162,8 +162,10 @@ class MisclassificationCorrectionRevertIT {
     result.put("originTrace", originTrace);
     row.setDestinationResultJson(result);
     entry.getRoutingLog().add(row);
-    entryRepository.save(entry);
-    return entry.getId();
+    entryRepository.saveAndFlush(entry);
+    // Return the ROUTING-LOG row id (the {routingId} path var the correct endpoint looks up),
+    // NOT the feedback entry id — otherwise the route lookup 404s.
+    return row.getId();
   }
 
   @Test
