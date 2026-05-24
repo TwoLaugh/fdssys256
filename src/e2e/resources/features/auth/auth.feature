@@ -41,14 +41,16 @@ Feature: Auth — register, log in, session behaviour, and the headline errors
     Then the registration is rejected as a username conflict
 
   # AUTH-06: a valid username with the wrong password is rejected, no session issued.
+  # "No session issued" is asserted on the login RESPONSE itself (401 + no AUTH_SESSION
+  # Set-Cookie), made on a fresh anonymous client — NOT by a follow-up /me read. The register
+  # step (auto-login on the SHARED client) only exists to make the username valid/existing, so a
+  # subsequent shared-client /me would legitimately be 200 and must not be asserted as 401.
   Scenario: Logging in with the wrong password is rejected
     Given a fresh anonymous visitor with a random username
     When they register with that username and a valid password
     Then registration succeeds and returns their new account identity
     When they attempt to log in with the wrong password
     Then the login is rejected as invalid credentials
-    When they request their own account while authenticated
-    Then the request is rejected as unauthenticated
 
   # AUTH-07: an unknown username is rejected (same generic error as wrong password).
   Scenario: Logging in with an unknown username is rejected
