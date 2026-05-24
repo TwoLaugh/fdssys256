@@ -18,4 +18,16 @@ public interface TasteProfileVersionRepository extends JpaRepository<TasteProfil
 
   Optional<TasteProfileVersion> findByTasteProfileIdAndDocumentVersion(
       UUID tasteProfileId, int documentVersion);
+
+  /**
+   * Locate the snapshot a feedback-driven delta apply produced, by the {@code
+   * feedback-<feedbackId>} origin trace the bridge stamps on both {@code feedbackRangeStart} and
+   * {@code feedbackRangeEnd} (see {@code
+   * feedback.bridge.PreferenceFeedbackBridgeImpl#buildRequest}). Used by the misclassification
+   * reverter (feedback-01h) to find the version to roll back. Highest {@code documentVersion} first
+   * so a retried apply (same trace, newer snapshot) resolves to the latest.
+   */
+  Optional<TasteProfileVersion>
+      findFirstByTasteProfileIdAndFeedbackRangeStartOrderByDocumentVersionDesc(
+          UUID tasteProfileId, String feedbackRangeStart);
 }
