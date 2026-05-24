@@ -613,6 +613,13 @@ TriggerTasteProfileRefreshRequest:
   properties:
     feedbackRangeStart: { type: string, maxLength: 64, nullable: true }
     feedbackRangeEnd: { type: string, maxLength: 64, nullable: true }
+RollbackTasteProfileRequest:
+  type: object
+  additionalProperties: false
+  required: [targetDocumentVersion, expectedVersion]
+  properties:
+    targetDocumentVersion: { type: integer, minimum: 1 }
+    expectedVersion: { type: integer, format: int64, minimum: 0 }
 # ============================================================================
 # Preference archive (01e) — pruned-item retention + re-emergence storage.
 # ============================================================================

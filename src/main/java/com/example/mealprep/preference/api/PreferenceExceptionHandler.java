@@ -9,6 +9,7 @@ import com.example.mealprep.preference.exception.LifestyleConfigNotFoundExceptio
 import com.example.mealprep.preference.exception.PreferenceArchiveEntryNotFoundException;
 import com.example.mealprep.preference.exception.TasteProfileBudgetExceededException;
 import com.example.mealprep.preference.exception.TasteProfileNotFoundException;
+import com.example.mealprep.preference.exception.TasteProfileVersionNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -35,6 +36,13 @@ public class PreferenceExceptionHandler {
   public ResponseEntity<ProblemDetail> handleTasteProfileNotFound(
       TasteProfileNotFoundException ex, HttpServletRequest req) {
     return notFound(ex.getMessage(), "taste-profile-not-found", "Taste profile not found", req);
+  }
+
+  @ExceptionHandler(TasteProfileVersionNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleTasteProfileVersionNotFound(
+      TasteProfileVersionNotFoundException ex, HttpServletRequest req) {
+    return notFound(
+        ex.getMessage(), "taste-profile-version-not-found", "Taste profile version not found", req);
   }
 
   @ExceptionHandler(PreferenceArchiveEntryNotFoundException.class)

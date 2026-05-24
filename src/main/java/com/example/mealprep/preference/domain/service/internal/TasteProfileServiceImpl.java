@@ -23,10 +23,13 @@ import com.example.mealprep.preference.domain.service.TasteProfileQueryService;
 import com.example.mealprep.preference.domain.service.TasteProfileUpdateService;
 import com.example.mealprep.preference.event.TasteProfileChangedEvent;
 import com.example.mealprep.preference.event.TasteProfileRefreshRequestedEvent;
+import com.example.mealprep.preference.event.TasteProfileRollbackReplayRequestedEvent;
 import com.example.mealprep.preference.exception.TasteProfileNotFoundException;
+import com.example.mealprep.preference.exception.TasteProfileVersionNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -446,6 +449,115 @@ public class TasteProfileServiceImpl
     return mapper.toDto(profile);
   }
 
+  @Override
+  @Transactional
+  public TasteProfileDto rollbackTasteProfile(
+      UUID userId, int targetDocumentVersion, long expectedVersion, UUID actorUserId) {
+    TasteProfile profile =
+        tasteProfileRepository
+            .findByUserId(userId)
+            .orElseThrow(() -> new TasteProfileNotFoundException(userId));
+
+    // Optimistic-lock pre-check (mirrors applyManualOverride): a rollback into a
+    // concurrently-edited
+    // profile is rejected with a 409 rather than clobbering the racing write. Surface it before any
+    // history read so the failure is unambiguous.
+    if (profile.getOptimisticVersion() != expectedVersion) {
+      throw new ObjectOptimisticLockingFailureException(TasteProfile.class, profile.getId());
+    }
+
+    TasteProfileVersion targetVersion =
+        versionRepository
+            .findByTasteProfileIdAndDocumentVersion(profile.getId(), targetDocumentVersion)
+            .orElseThrow(
+                () -> new TasteProfileVersionNotFoundException(userId, targetDocumentVersion));
+
+    int previousVersion = profile.getDocumentVersion();
+    int newVersion = previousVersion + 1; // monotonic — NEVER restore the old integer.
+    Instant now = Instant.now(clock);
+    LocalDate today = LocalDate.ofInstant(now, ZoneOffset.UTC);
+
+    // The cursor as it stood BEFORE the rollback — the forward bound of the replay window.
+    String cursorBefore = profile.getFeedbackCursor();
+    // The deterministic replay anchor: the cursor as-of the rolled-back-to version.
+    String targetCursor = targetVersion.getFeedbackRangeStart();
+
+    TasteProfileDocument restoredSource = targetVersion.getDocumentSnapshot();
+    // Restore the snapshot but re-stamp version + lastUpdated to the NEW entity version (lock-step
+    // invariant — same as applyManualOverride). basedOnFeedbackCount is recovered from the
+    // snapshot.
+    TasteProfileDocument restoredDoc =
+        new TasteProfileDocument(
+            today,
+            newVersion,
+            restoredSource.basedOnFeedbackCount(),
+            restoredSource.feedbackCursor(),
+            restoredSource.softConstraints(),
+            restoredSource.flavourPreferences(),
+            restoredSource.texturePreferences(),
+            restoredSource.ingredientPreferences(),
+            restoredSource.cuisinePreferences(),
+            restoredSource.cookingPreferences(),
+            restoredSource.portionStyle(),
+            restoredSource.householdContext(),
+            restoredSource.recipesToRepeat(),
+            restoredSource.recipesToAvoid(),
+            restoredSource.activeExperiments(),
+            restoredSource.learnedInsights());
+
+    profile.setDocument(restoredDoc);
+    profile.setDocumentVersion(newVersion);
+    // Reset the cursor to the target version's anchor — this makes the forward replay
+    // deterministic.
+    profile.setFeedbackCursor(targetCursor);
+    profile.setBasedOnFeedbackCount(restoredSource.basedOnFeedbackCount());
+    // The restored document needs re-embedding — its content differs from the (now-stale) vector.
+    profile.setTasteVectorStatus(TasteVectorStatus.PENDING);
+    // saveAndFlush so the @Version bump (the JSONB document column rewrite dirties the parent)
+    // materialises before we map to DTO.
+    TasteProfile saved = tasteProfileRepository.saveAndFlush(profile);
+
+    UUID traceId = parseTraceId(targetCursor, cursorBefore);
+    writeRollbackVersionSnapshot(
+        saved, restoredDoc, targetDocumentVersion, targetCursor, cursorBefore, now);
+    writeAudit(
+        saved,
+        actorUserId,
+        ActorType.USER,
+        TasteProfileChangeType.ROLLED_BACK,
+        previousVersion,
+        newVersion,
+        "rolled back to version " + targetDocumentVersion,
+        traceId,
+        now);
+
+    eventPublisher.publishEvent(
+        new TasteProfileChangedEvent(
+            userId,
+            saved.getId(),
+            newVersion,
+            TasteProfileChangeType.ROLLED_BACK,
+            ActorType.USER,
+            traceId,
+            now));
+    // Delegate the forward feedback-replay to the feedback module (the preference module never
+    // replays feedback itself). Published AFTER_COMMIT; the feedback-side listener re-runs the
+    // 01g delta pipeline over [targetCursor, cursorBefore] using a REQUIRES_NEW write boundary.
+    eventPublisher.publishEvent(
+        new TasteProfileRollbackReplayRequestedEvent(
+            userId, saved.getId(), newVersion, targetCursor, cursorBefore, traceId, now));
+
+    log.info(
+        "taste profile rolled back userId={} targetVersion={} previousVersion={} newVersion={} "
+            + "feedbackCursor={}",
+        userId,
+        targetDocumentVersion,
+        previousVersion,
+        newVersion,
+        targetCursor);
+    return mapper.toDto(saved);
+  }
+
   // ---------------- helpers ----------------
 
   private void writeVersionSnapshot(
@@ -495,6 +607,42 @@ public class TasteProfileServiceImpl
             .trigger(trigger)
             .deltasApplied(deltasApplied)
             .modelTierUsed(modelTierUsed == null ? "manual" : modelTierUsed)
+            .generatedAt(generatedAt)
+            .build());
+  }
+
+  /**
+   * Rollback path: the version snapshot's {@code deltasApplied} carries a synthetic {@code
+   * [{"op":"ROLLBACK","fromVersion":F,"toVersion":T}]} marker (rather than an empty array) so the
+   * rollback is self-describing in the version history — forensically distinguishable from a manual
+   * override. {@code fromVersion} is the snapshot version restored FROM (the target the user
+   * picked) and {@code toVersion} is the new monotonic version the rollback landed AS. {@code
+   * trigger = MANUAL} (a rollback is a user-initiated action, not an AI batch); {@code
+   * modelTierUsed} is stamped {@code "manual"}.
+   */
+  private void writeRollbackVersionSnapshot(
+      TasteProfile profile,
+      TasteProfileDocument snapshot,
+      int restoredFromVersion,
+      String feedbackRangeStart,
+      String feedbackRangeEnd,
+      Instant generatedAt) {
+    ObjectNode marker = JsonNodeFactory.instance.objectNode();
+    marker.put("op", "ROLLBACK");
+    marker.put("fromVersion", restoredFromVersion);
+    marker.put("toVersion", profile.getDocumentVersion());
+    JsonNode deltasApplied = JsonNodeFactory.instance.arrayNode().add(marker);
+    versionRepository.save(
+        TasteProfileVersion.builder()
+            .id(UUID.randomUUID())
+            .tasteProfile(profile)
+            .documentVersion(profile.getDocumentVersion())
+            .documentSnapshot(snapshot)
+            .feedbackRangeStart(feedbackRangeStart)
+            .feedbackRangeEnd(feedbackRangeEnd)
+            .trigger(TasteProfileTrigger.MANUAL)
+            .deltasApplied(deltasApplied)
+            .modelTierUsed("manual")
             .generatedAt(generatedAt)
             .build());
   }

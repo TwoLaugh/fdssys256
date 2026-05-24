@@ -15,11 +15,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
 import com.example.mealprep.preference.api.controller.TasteProfileController;
+import com.example.mealprep.preference.api.dto.RollbackTasteProfileRequest;
 import com.example.mealprep.preference.api.dto.TasteProfileDto;
 import com.example.mealprep.preference.domain.document.TasteProfileDocument;
 import com.example.mealprep.preference.domain.entity.TasteVectorStatus;
 import com.example.mealprep.preference.domain.service.TasteProfileQueryService;
 import com.example.mealprep.preference.domain.service.TasteProfileUpdateService;
+import com.example.mealprep.preference.exception.TasteProfileVersionNotFoundException;
 import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
@@ -137,6 +139,80 @@ class TasteProfileControllerWebTest {
         .andExpect(status().isAccepted())
         .andExpect(jsonPath("$.documentVersion", is(1)))
         .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void rollback_returns200_andMatchesOpenApiSchema() throws Exception {
+    UUID userId = UUID.randomUUID();
+    given(currentUserResolver.currentUserId()).willReturn(Optional.of(userId));
+    given(updateService.rollbackTasteProfile(eq(userId), eq(12), eq(7L), eq(userId)))
+        .willReturn(sampleDto(userId, 16));
+
+    String body = objectMapper.writeValueAsString(new RollbackTasteProfileRequest(12, 7L));
+
+    mvc.perform(
+            post("/api/v1/preferences/taste-profile/rollback")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.documentVersion", is(16)))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void rollback_returns409_whenExpectedVersionStale_matchesOpenApiSchema() throws Exception {
+    UUID userId = UUID.randomUUID();
+    given(currentUserResolver.currentUserId()).willReturn(Optional.of(userId));
+    given(updateService.rollbackTasteProfile(eq(userId), eq(12), eq(0L), eq(userId)))
+        .willThrow(
+            new org.springframework.orm.ObjectOptimisticLockingFailureException(
+                com.example.mealprep.preference.domain.entity.TasteProfile.class,
+                UUID.randomUUID()));
+
+    String body = objectMapper.writeValueAsString(new RollbackTasteProfileRequest(12, 0L));
+
+    mvc.perform(
+            post("/api/v1/preferences/taste-profile/rollback")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isConflict())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+        .andExpect(jsonPath("$.status", is(409)))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void rollback_returns404_whenTargetVersionMissing_matchesOpenApiSchema() throws Exception {
+    UUID userId = UUID.randomUUID();
+    given(currentUserResolver.currentUserId()).willReturn(Optional.of(userId));
+    given(updateService.rollbackTasteProfile(eq(userId), eq(99), eq(0L), eq(userId)))
+        .willThrow(new TasteProfileVersionNotFoundException(userId, 99));
+
+    String body = objectMapper.writeValueAsString(new RollbackTasteProfileRequest(99, 0L));
+
+    mvc.perform(
+            post("/api/v1/preferences/taste-profile/rollback")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isNotFound())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+        .andExpect(jsonPath("$.status", is(404)))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void rollback_returns400_whenTargetVersionBelowMin() throws Exception {
+    UUID userId = UUID.randomUUID();
+    given(currentUserResolver.currentUserId()).willReturn(Optional.of(userId));
+
+    // targetDocumentVersion 0 violates @Min(1) → 400 before the service is touched.
+    String body = objectMapper.writeValueAsString(new RollbackTasteProfileRequest(0, 0L));
+
+    mvc.perform(
+            post("/api/v1/preferences/taste-profile/rollback")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isBadRequest());
   }
 
   @Test

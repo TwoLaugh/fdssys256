@@ -66,6 +66,8 @@ paths:
     $ref: 'paths/preference.yaml#/tasteProfile'
   /api/v1/preferences/taste-profile/refresh-now:
     $ref: 'paths/preference.yaml#/tasteProfileRefreshNow'
+  /api/v1/preferences/taste-profile/rollback:
+    $ref: 'paths/preference.yaml#/tasteProfileRollback'
   /api/v1/preferences/taste-profile/versions:
     $ref: 'paths/preference.yaml#/tasteProfileVersions'
   /api/v1/preferences/taste-profile/versions/{documentVersion}:
