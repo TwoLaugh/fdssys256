@@ -57,7 +57,10 @@ Feature: Auth — register, log in, session behaviour, and the headline errors
     Then the login is rejected as invalid credentials
 
   # AUTH-12: any protected action with no session is denied before domain logic runs.
+  # Per the pathway, the action is "any protected (NON-auth) action" — so this hits a
+  # user-scoped domain read (nutrition targets) anonymously, not an auth-domain endpoint,
+  # asserting the deny-by-default gate fires before domain logic runs.
   Scenario: Accessing a protected action with no session is denied
     Given a fresh anonymous visitor with a random username
-    When they request their own account while authenticated
+    When they request a protected domain resource with no session
     Then the request is rejected as unauthenticated

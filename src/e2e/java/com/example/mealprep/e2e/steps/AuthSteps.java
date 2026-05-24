@@ -12,7 +12,8 @@ import java.util.Map;
 /**
  * Auth step definitions for the wave-1 error/lifecycle pathways NOT already covered by the smoke
  * slice ({@link AuthSmokeSteps}): logout (AUTH-10), duplicate-username conflict (AUTH-04),
- * wrong-password (AUTH-06) and unknown-username (AUTH-07) login rejection.
+ * wrong-password (AUTH-06) and unknown-username (AUTH-07) login rejection, and the deny-by-default
+ * gate on a protected non-auth resource (AUTH-12).
  *
  * <p>The shared "fresh anonymous visitor" / register / login / authenticated-read steps live in
  * {@link AuthSmokeSteps} and are REUSED verbatim by {@code auth.feature}; this class only adds the
@@ -30,6 +31,18 @@ public class AuthSteps {
   @When("they log out")
   public void theyLogOut() {
     Response response = context.api().request().when().post("/api/v1/auth/logout");
+    context.setLastResponse(response);
+  }
+
+  @When("they request a protected domain resource with no session")
+  public void theyRequestAProtectedDomainResourceWithNoSession() {
+    // AUTH-12 asserts the deny-by-default gate on "any protected (NON-auth) action". We hit a
+    // user-scoped DOMAIN read (nutrition targets) — protected by the same
+    // .anyRequest().authenticated()
+    // chain — rather than an auth-domain endpoint, so the assertion is the general "must be
+    // authenticated" rule the whole suite leans on. A FRESH client (its own empty cookie jar) makes
+    // the request unambiguously anonymous regardless of any session minted earlier in the scenario.
+    Response response = new ApiClient().get("/api/v1/nutrition/targets");
     context.setLastResponse(response);
   }
 

@@ -10,7 +10,15 @@ Feature: Nutrition — targets CRUD, intake logging, USDA-derived nutrition, key
   Each scenario registers its OWN fresh user (D5) and asserts only on THIS
   user's nutrition state (self-scoped) — never global aggregates.
 
+  @pending
   # NUT-01: accept/set targets, model CONFIGURED, then read them back.
+  # PENDING: PUT /api/v1/nutrition/targets is update-only — it 404s for a user with no targets row
+  # (see TargetsController + NutritionServiceImpl.updateTargets, and the passing
+  # TargetsFlowIT.put_returns404_whenNotInitialised). A fresh user's row is created ONLY by the
+  # auto-seed `initialiseTargets` flow, which is DEFERRED to nutrition-01c (no public create/POST
+  # endpoint exists in 01a — the ITs seed the row directly via the repository). The harness is a
+  # black-box HTTP client (D2) and cannot seed over HTTP, so this set+read flow is not buildable
+  # green yet. The full glue is written; drop @pending once the initialise endpoint lands in 01c.
   Scenario: A user sets their nutrition targets and reads them back
     Given a fresh registered and logged-in user
     When they set their nutrition targets
