@@ -1,0 +1,64 @@
+# ============================================================
+# Prod-parity E2E stack (decision D3).
+#
+#   * postgres — Postgres 16 with pgvector (same image the ITs use via
+#     Testcontainers: pgvector/pgvector:pg16). The first Flyway migration runs
+#     `CREATE EXTENSION vector`, which the plain postgres:16 image lacks.
+#   * app — the REAL MealPrep application (built from ../Dockerfile), booted on
+#     SPRING_PROFILES_ACTIVE=e2e. All external deps are real; ONLY the AI is
+#     faked, in-process, by TestAiService (active under the e2e profile).
+#
+# Bring up:   docker compose -f e2e/docker-compose.yml up -d --build
+# Tear down:  docker compose -f e2e/docker-compose.yml down -v
+#
+# The harness then runs against http://localhost:8080 (see e2e/README.md).
+# DO NOT bring this up on a memory-constrained local VM — CI is the gating run.
+# ============================================================
+
+name: mealprep-e2e
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: mealprep_e2e
+      POSTGRES_USER: mealprep_e2e
+      POSTGRES_PASSWORD: mealprep_e2e
+    # Exposed on the host only for debugging; the app reaches it over the
+    # compose network as `postgres:5432`.
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mealprep_e2e -d mealprep_e2e"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # Ephemeral: no named volume — every stack-up starts from a clean schema,
+    # which Flyway then migrates. (Soak runs keep state for the LIFETIME of one
+    # up'd stack, via the cleanup toggle — not across stack restarts.)
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: e2e
+      # Datasource — points at the compose-network postgres service.
+      MEALPREP_DB_URL: jdbc:postgresql://postgres:5432/mealprep_e2e
+      MEALPREP_DB_USERNAME: mealprep_e2e
+      MEALPREP_DB_PASSWORD: mealprep_e2e
+      # USDA is real but optional; DEMO_KEY degrades gracefully. AI needs no key
+      # (TestAiService intercepts every dispatch).
+      USDA_API_KEY: ${USDA_API_KEY:-DEMO_KEY}
+    ports:
+      - "8080:8080"
+    # No in-container healthcheck: the eclipse-temurin JRE image has no curl/wget
+    # and a /dev/tcp shell probe is brittle. Readiness is polled from the CI
+    # runner host against http://localhost:8080/actuator/health (which is
+    # permit-all per AuthSecurityConfig) before the harness runs. See
+    # .github/workflows/e2e.yml and e2e/README.md.

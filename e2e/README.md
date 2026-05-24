@@ -125,3 +125,61 @@ Gaps are **flagged, not resolved**, during catalogue generation (inline `[HLD-GA
 | Aggregated HLD gaps (triage list) | `pathways/hld-gaps.md` | — | — | 88 unique | ✅ |
 
 **Next:** user batch-triages `hld-gaps.md` (Top-8 first) → Stage 2 (Gherkin + endpoint mapping).
+
+---
+
+## 9. Harness (Stage 2/3 scaffold)
+
+The executable harness lives in a **dedicated, opt-in Maven profile** so it never pollutes the normal unit/IT runs.
+
+### Layout
+| Path | What |
+|---|---|
+| `src/e2e/java/com/example/mealprep/e2e/runner/E2eSmokeE2ETest.java` | JUnit-Platform `@Suite` that launches Cucumber. Compiled **only** under `-Pe2e`. |
+| `src/e2e/java/.../steps/` | Step definitions (`AuthSmokeSteps`) + the toggleable cleanup `Hooks`. REST-assured is confined here. |
+| `src/e2e/java/.../support/` | `E2eConfig` (env-driven base URL + cleanup flag), `ApiClient` (cookie-session-aware REST-assured wrapper), `ScenarioContext` (per-scenario state via PicoContainer DI). |
+| `src/e2e/resources/features/` | The `.feature` files (`auth/auth_smoke.feature`). |
+| `src/e2e/resources/junit-platform.properties` | Cucumber glue/plugin/tag config. |
+| `e2e/docker-compose.yml` | Prod-parity stack: `pgvector/pgvector:pg16` + the real app (`../Dockerfile`) on the `e2e` Spring profile. |
+| `Dockerfile` (repo root) | Two-stage build of the Spring Boot fat jar → slim JRE. |
+| `.github/workflows/e2e.yml` | CI job: build image → up stack → poll health → run `@smoke` → tear down. |
+
+### Isolation from normal runs
+`-Pe2e` is **off by default**. Without it: the cucumber/rest-assured deps are absent, `src/e2e/java` is not a source dir (so the runner/steps don't even compile), and the e2e Failsafe execution does not run. A plain `mvn test` / `mvn verify` is untouched.
+
+### The AI double in the running app (D4)
+`TestAiService` (`src/main/java/.../ai/testing/`) is `@Profile({"test","e2e"})` + `@Primary`. The docker-compose `app` boots on `SPRING_PROFILES_ACTIVE=e2e`, so the double is live **inside the running application** — every other dependency stays real, only the AI is faked. Stub AI keys in `application-e2e.properties` are never used to make a real call.
+
+### Two run modes (D5) — clean vs soak
+The **same** feature files run both ways; the switch is the env var `MEALPREP_E2E_CLEANUP`, enforced by the `@After` hook in `Hooks.java`:
+
+| Mode | Invocation | Cleanup |
+|---|---|---|
+| **Clean** (gate, default) | `MEALPREP_E2E_CLEANUP=true` (or unset) | `@After` tears down per scenario |
+| **Soak** | `MEALPREP_E2E_CLEANUP=false` | `@After` skipped; state accumulates |
+
+Additionally, any scenario tagged `@soak` always skips cleanup regardless of the flag. Scenarios are self-contained (random handles) + self-scoped (assert on *this* user), so both modes are safe.
+
+### Running it
+The harness runs against an **already-running** app (it is not a `@SpringBootTest`). Bring the stack up first, then run the suite.
+
+```bash
+# 1. Bring up the prod-parity stack (CI does this; locally only if Docker memory is raised — see D3).
+docker compose -f e2e/docker-compose.yml up -d --build
+# wait for http://localhost:8080/actuator/health to report {"status":"UP"}
+
+# 2a. CLEAN mode (the gating run):
+MEALPREP_E2E_BASE_URL=http://localhost:8080 MEALPREP_E2E_CLEANUP=true \
+  ./mvnw -Pe2e verify -Dcucumber.filter.tags="@smoke"
+
+# 2b. SOAK mode (state accumulates across scenarios):
+MEALPREP_E2E_BASE_URL=http://localhost:8080 MEALPREP_E2E_CLEANUP=false \
+  ./mvnw -Pe2e verify -Dcucumber.filter.tags="@smoke"
+
+# 3. Tear down.
+docker compose -f e2e/docker-compose.yml down -v
+```
+
+**CI smoke invocation** (`.github/workflows/e2e.yml`): `./mvnw --batch-mode --no-transfer-progress -Pe2e verify -Dcucumber.filter.tags="@smoke"` with `MEALPREP_E2E_BASE_URL=http://localhost:8080` and `MEALPREP_E2E_CLEANUP=true`, after `docker compose -f e2e/docker-compose.yml up -d --build` + a health poll.
+
+> **Do NOT bring the full stack up on a memory-constrained local VM** (D3) — CI is the gating run.
