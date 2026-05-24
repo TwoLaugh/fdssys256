@@ -66,4 +66,34 @@ public interface TasteProfileUpdateService {
    */
   TasteProfileDto triggerRefresh(
       UUID userId, TriggerTasteProfileRefreshRequest request, UUID actorUserId, UUID traceId);
+
+  /**
+   * Reverts to a prior {@code document_version}. Restores the target version's {@code
+   * document_snapshot} as a <b>NEW</b> monotonic version ({@code change_type = ROLLED_BACK}; never
+   * a version decrement — see {@code design/preference-model.md:419-421}). Re-stamps the restored
+   * document's internal {@code version} / {@code lastUpdated} in lock-step with the new entity
+   * version, resets {@code feedbackCursor} to the target version's {@code feedbackRangeStart} (the
+   * deterministic replay anchor) and {@code basedOnFeedbackCount} to the target snapshot's value,
+   * flips {@code tasteVectorStatus = PENDING} (the restored document needs re-embedding), writes a
+   * {@code trigger = MANUAL} version snapshot (with a synthetic {@code {"op":"ROLLBACK",...}}
+   * marker) + a {@code ROLLED_BACK} / {@code actor_type = USER} audit row, and publishes {@code
+   * TasteProfileChangedEvent(ROLLED_BACK)} plus {@code TasteProfileRollbackReplayRequestedEvent}
+   * AFTER_COMMIT. The forward feedback-replay is delegated to the feedback module via the latter
+   * event (the preference module never replays feedback itself). {@code @Transactional} REQUIRED —
+   * the rollback runs on a normal request thread (no {@code REQUIRES_NEW} needed).
+   *
+   * @param userId the owner of the aggregate.
+   * @param targetDocumentVersion the historical version whose snapshot is restored.
+   * @param expectedVersion the entity's current optimistic {@code @Version} (mismatch → 409).
+   * @param actorUserId who performed the rollback (equals {@code userId} for self-rollback).
+   * @return the post-rollback DTO (the restored document at the new monotonic version).
+   * @throws com.example.mealprep.preference.exception.TasteProfileNotFoundException if no profile
+   *     exists for {@code userId} (404).
+   * @throws com.example.mealprep.preference.exception.TasteProfileVersionNotFoundException if no
+   *     snapshot exists for {@code targetDocumentVersion} (404).
+   * @throws org.springframework.orm.ObjectOptimisticLockingFailureException if {@code
+   *     expectedVersion} does not match the current optimistic version (409).
+   */
+  TasteProfileDto rollbackTasteProfile(
+      UUID userId, int targetDocumentVersion, long expectedVersion, UUID actorUserId);
 }

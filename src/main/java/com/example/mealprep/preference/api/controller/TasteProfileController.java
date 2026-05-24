@@ -1,6 +1,7 @@
 package com.example.mealprep.preference.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.preference.api.dto.RollbackTasteProfileRequest;
 import com.example.mealprep.preference.api.dto.TasteProfileAuditEntryDto;
 import com.example.mealprep.preference.api.dto.TasteProfileDto;
 import com.example.mealprep.preference.api.dto.TasteProfileVersionDto;
@@ -93,6 +94,20 @@ public class TasteProfileController {
         request == null ? new TriggerTasteProfileRefreshRequest(null, null) : request;
     TasteProfileDto dto = updateService.triggerRefresh(userId, body, userId, traceId);
     return ResponseEntity.status(HttpStatus.ACCEPTED).body(dto);
+  }
+
+  @PostMapping(
+      path = "/rollback",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Roll the calling user's taste profile back to a prior version (restored as a new"
+              + " monotonic version) and replay feedback from that version's cursor forward.")
+  public TasteProfileDto rollback(@Valid @RequestBody RollbackTasteProfileRequest request) {
+    UUID userId = requireCurrentUserId();
+    return updateService.rollbackTasteProfile(
+        userId, request.targetDocumentVersion(), request.expectedVersion(), userId);
   }
 
   @GetMapping(path = "/versions", produces = MediaType.APPLICATION_JSON_VALUE)

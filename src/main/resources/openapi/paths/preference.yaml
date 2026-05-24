@@ -314,6 +314,46 @@ tasteProfileRefreshNow:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+tasteProfileRollback:
+  post:
+    tags: [Preferences]
+    operationId: rollbackTasteProfile
+    summary: >-
+      Roll the calling user's taste profile back to a prior version (restored as a new monotonic
+      version) and replay feedback from that version's cursor forward.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/preference.yaml#/RollbackTasteProfileRequest' }
+    responses:
+      '200':
+        description: The rolled-back taste profile (restored document at the new monotonic version).
+        content:
+          application/json:
+            schema: { $ref: '../schemas/preference.yaml#/TasteProfileDto' }
+      '400':
+        description: Validation or syntactic error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Profile not initialised, or the target version has no snapshot.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedVersion (profile was concurrently edited).
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 tasteProfileVersions:
   get:
     tags: [Preferences]
