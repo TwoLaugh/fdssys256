@@ -1,0 +1,84 @@
+name: E2E (smoke)
+
+# Stage-3 gating run for the E2E harness (decision D3: CI is the source of truth).
+# Builds the app image, brings up the prod-parity docker-compose stack
+# (Postgres 16 + pgvector + the real app on the `e2e` Spring profile, AI faked
+# in-process by TestAiService), runs the @smoke Cucumber suite against it over
+# real HTTP, then tears the stack down.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  e2e-smoke:
+    name: E2E smoke (docker-compose)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Bring up prod-parity stack (build app image + Postgres/pgvector)
+        run: docker compose -f e2e/docker-compose.yml up -d --build
+
+      - name: Wait for app health
+        # /actuator/health is permit-all (AuthSecurityConfig). Poll the published
+        # host port until Spring Boot reports UP, or fail after ~3 minutes.
+        run: |
+          echo "Waiting for app at http://localhost:8080/actuator/health ..."
+          for i in $(seq 1 36); do
+            if curl -fsS http://localhost:8080/actuator/health | grep -q '"status":"UP"'; then
+              echo "App is UP."
+              exit 0
+            fi
+            echo "  not ready yet (attempt $i/36); sleeping 5s"
+            sleep 5
+          done
+          echo "::error::App did not become healthy in time. Dumping app logs:"
+          docker compose -f e2e/docker-compose.yml logs app
+          exit 1
+
+      - name: Run @smoke E2E suite
+        # -Pe2e activates the harness source set + cucumber/rest-assured deps and
+        # runs the Cucumber suite under Failsafe. Clean mode (cleanup ON) is the
+        # gating default; soak mode would set MEALPREP_E2E_CLEANUP=false.
+        env:
+          MEALPREP_E2E_BASE_URL: http://localhost:8080
+          MEALPREP_E2E_CLEANUP: 'true'
+        run: ./mvnw --batch-mode --no-transfer-progress -Pe2e verify -Dcucumber.filter.tags="@smoke"
+
+      - name: Dump app logs on failure
+        if: failure()
+        run: docker compose -f e2e/docker-compose.yml logs
+
+      - name: Upload Cucumber report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cucumber-report
+          path: |
+            target/cucumber-report.html
+            target/cucumber-report.json
+          if-no-files-found: ignore
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose -f e2e/docker-compose.yml down -v

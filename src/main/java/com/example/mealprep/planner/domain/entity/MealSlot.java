@@ -1,7 +1,6 @@
 package com.example.mealprep.planner.domain.entity;
 
 import com.example.mealprep.core.types.SlotKind;
-import io.hypersistence.utils.hibernate.type.array.ListArrayType;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -24,16 +23,20 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.hibernate.annotations.Type;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Per-meal slot inside a {@link Day}. Carries a denormalised {@code plan_id} so the {@code
  * idx_planner_meal_slots_plan_state} index hits without joining through days; 01j's re-opt scope
  * scan reads on that index.
  *
- * <p>{@code eaters} is {@code uuid[]} (Postgres array), mapped via hypersistence-utils' {@link
- * ListArrayType}. {@code text[]} variants have a known runtime trap in this stack (caught by
- * preference-01a); {@code uuid[]} is fine.
+ * <p>{@code eaters} is {@code uuid[]} (Postgres array), mapped via Hibernate 6's native array
+ * support ({@code @JdbcTypeCode(SqlTypes.ARRAY)}). Hypersistence-utils' {@code ListArrayType}
+ * reports JDBC type {@code OTHER}, which the schema validator rejects against Postgres' reported
+ * {@code _uuid (Types#ARRAY)} under {@code ddl-auto=validate}; native ARRAY mapping reports {@code
+ * Types#ARRAY}, so {@code validate} passes (see {@code SchemaValidationIT}) while array read/write
+ * is unchanged.
  */
 @Entity
 @Table(
@@ -90,7 +93,7 @@ public class MealSlot {
   @Column(name = "shared", nullable = false)
   private boolean shared;
 
-  @Type(ListArrayType.class)
+  @JdbcTypeCode(SqlTypes.ARRAY)
   @Column(name = "eaters", nullable = false, columnDefinition = "uuid[]")
   @Builder.Default
   private List<UUID> eaters = new ArrayList<>();

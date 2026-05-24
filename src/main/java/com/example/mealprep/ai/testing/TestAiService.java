@@ -36,9 +36,17 @@ import org.springframework.transaction.annotation.Transactional;
  * {@code AiServiceImpl}. The {@code model_id} stored on the audit row is a synthetic prefix ({@link
  * #TEST_MODEL_ID_PREFIX}) so an IT can assert that no row was ever recorded against a real
  * Anthropic model id.
+ *
+ * <p><b>Also active under the {@code e2e} profile</b> (decision D4): the prod-parity docker-compose
+ * stack boots the <i>real</i> application on {@code SPRING_PROFILES_ACTIVE=e2e}, and this bean is
+ * the deterministic AI double <i>inside that running app</i> — every external dependency stays
+ * real, only the AI is faked. Because {@code AiServiceImpl} is unconditional, the {@code @Primary}
+ * here makes this double win in both profiles. The canned-response map starts empty; AI-touching
+ * E2E scenarios must register a canned response before exercising the flow (the auth smoke slice
+ * touches no AI, so an empty map is correct for it).
  */
 @Service
-@Profile("test")
+@Profile({"test", "e2e"})
 @Primary
 public class TestAiService implements AiService {
 

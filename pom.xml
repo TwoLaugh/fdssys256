@@ -35,6 +35,11 @@
         <archunit.version>1.3.0</archunit.version>
         <networknt-json-schema.version>1.4.0</networknt-json-schema.version>
 
+        <!-- E2E harness (only used under the `e2e` profile; see <profiles> below).
+             rest-assured is Spring-Boot-managed (5.3.2); cucumber + build-helper are pinned here. -->
+        <cucumber.version>7.18.1</cucumber.version>
+        <build-helper.version>3.6.0</build-helper.version>
+
         <!-- Plugin versions -->
         <spotless.version>2.43.0</spotless.version>
         <jacoco.version>0.8.12</jacoco.version>
@@ -354,6 +359,7 @@
                         <includes>
                             <include>src/main/java/**/*.java</include>
                             <include>src/test/java/**/*.java</include>
+                            <include>src/e2e/java/**/*.java</include>
                         </includes>
                         <googleJavaFormat>
                             <version>${google-java-format.version}</version>
@@ -518,4 +524,155 @@
             </plugin>
         </plugins>
     </build>
+
+    <!-- ============================================================
+         E2E profile — Stage-2 Cucumber-JVM + REST-assured harness.
+
+         ACTIVATION IS OPT-IN: `-Pe2e`. A plain `mvn test` / `mvn verify`
+         does NOT activate this profile, so:
+           * the cucumber + rest-assured deps below are NOT on the classpath,
+           * src/e2e/java is NOT registered as a source dir (build-helper only
+             runs under this profile), so the runner + step defs are never even
+             compiled, and
+           * the e2e Failsafe execution never runs.
+         This is the "does NOT pollute existing unit/IT runs" guarantee (D3) —
+         the E2E suite lives in its own source set, reachable only via -Pe2e.
+
+         The runner (E2eSmokeE2ETest) drives Cucumber against an ALREADY-RUNNING
+         app (the docker-compose stack), reading the base URL from MEALPREP_E2E_BASE_URL.
+         It is NOT a @SpringBootTest — it makes real HTTP calls via REST-assured.
+         ============================================================ -->
+    <profiles>
+        <profile>
+            <id>e2e</id>
+
+            <dependencies>
+                <!-- Cucumber-JVM (Gherkin) on the JUnit Platform (D2). -->
+                <dependency>
+                    <groupId>io.cucumber</groupId>
+                    <artifactId>cucumber-java</artifactId>
+                    <version>${cucumber.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>io.cucumber</groupId>
+                    <artifactId>cucumber-junit-platform-engine</artifactId>
+                    <version>${cucumber.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <!-- PicoContainer: Cucumber's DI so step + hook classes share a per-scenario
+                     ScenarioContext via constructor injection (idiomatic state sharing). -->
+                <dependency>
+                    <groupId>io.cucumber</groupId>
+                    <artifactId>cucumber-picocontainer</artifactId>
+                    <version>${cucumber.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <!-- JUnit Platform Suite — lets a single @Suite class launch Cucumber under Failsafe. -->
+                <dependency>
+                    <groupId>org.junit.platform</groupId>
+                    <artifactId>junit-platform-suite</artifactId>
+                    <scope>test</scope>
+                </dependency>
+                <!-- REST-assured: the only layer that knows HTTP/JSON (D2). Version Spring-Boot-managed. -->
+                <dependency>
+                    <groupId>io.rest-assured</groupId>
+                    <artifactId>rest-assured</artifactId>
+                    <scope>test</scope>
+                </dependency>
+                <!-- AssertJ comes transitively via spring-boot-starter-test (already a base test dep). -->
+            </dependencies>
+
+            <build>
+                <plugins>
+                    <!-- Register src/e2e/{java,resources} as a SEPARATE test source set, active
+                         ONLY under -Pe2e. Keeps the harness out of the normal compile path. -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>${build-helper.version}</version>
+                        <executions>
+                            <execution>
+                                <id>add-e2e-test-source</id>
+                                <phase>generate-test-sources</phase>
+                                <goals>
+                                    <goal>add-test-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>src/e2e/java</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>add-e2e-test-resources</id>
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>add-test-resource</goal>
+                                </goals>
+                                <configuration>
+                                    <resources>
+                                        <resource>
+                                            <directory>src/e2e/resources</directory>
+                                        </resource>
+                                    </resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- Surefire: under -Pe2e we do NOT want unit tests re-run; the e2e run is a
+                         standalone activity. Skip surefire so `-Pe2e test-compile` / `-Pe2e verify`
+                         only compiles + runs the harness. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </plugin>
+
+                    <!-- Failsafe: under -Pe2e, run ONLY the Cucumber suite launcher
+                         (E2eSmokeE2ETest). The default-profile Failsafe globs
+                         **/*IT.java + **/*E2ETest.java; we override includes here so the
+                         e2e run never drags in the *IT testcontainer suite. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/*E2ETest.java</include>
+                            </includes>
+                            <excludes>
+                                <exclude>**/*IT.java</exclude>
+                            </excludes>
+                            <!-- The forked JVM inherits the parent process environment, so step
+                                 defs read MEALPREP_E2E_BASE_URL / MEALPREP_E2E_CLEANUP straight
+                                 from System.getenv() (see E2eConfig). No Maven-side substitution
+                                 (which would leave a literal "${env.…}" when the var is unset). -->
+                            <environmentVariables/>
+                        </configuration>
+                    </plugin>
+
+                    <!-- JaCoCo / Pitest gates are meaningless for a black-box HTTP suite that runs
+                         against a separate JVM — disable them under -Pe2e so the harness build is
+                         a clean compile + run. -->
+                    <plugin>
+                        <groupId>org.jacoco</groupId>
+                        <artifactId>jacoco-maven-plugin</artifactId>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.pitest</groupId>
+                        <artifactId>pitest-maven</artifactId>
+                        <configuration>
+                            <skipPitest>true</skipPitest>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
