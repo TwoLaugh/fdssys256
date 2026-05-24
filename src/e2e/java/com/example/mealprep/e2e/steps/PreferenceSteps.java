@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.example.mealprep.e2e.support.ApiClient;
 import com.example.mealprep.e2e.support.ScenarioContext;
 import io.cucumber.java.en.And;
+import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
 import io.restassured.response.Response;
@@ -49,6 +50,16 @@ public class PreferenceSteps {
   private static final String LIFESTYLE_CONFIG = "/api/v1/preferences/lifestyle-config";
   private static final String ARCHIVE = "/api/v1/preferences/archive";
 
+  /** E2E-only seeders (E2ePreferenceSeedController / E2eFeedbackSeedController, @Profile e2e). */
+  private static final String SEED_HARD_CONSTRAINTS =
+      "/test-support/preference/hard-constraints/seed";
+
+  private static final String SEED_TASTE_PROFILE = "/test-support/preference/taste-profile/seed";
+  private static final String SEED_LIFESTYLE_CONFIG =
+      "/test-support/preference/lifestyle-config/seed";
+  private static final String SEED_PREFERENCE_FEEDBACK =
+      "/test-support/feedback/preference-routed/seed";
+
   /** The allergen this scenario's hard-constraints write adds (self-scoped assertion key). */
   private static final String ALLERGEN = "peanuts";
 
@@ -68,6 +79,46 @@ public class PreferenceSteps {
     this.context = context;
   }
 
+  // ---------------- e2e setup (seeders) ----------------
+  // Seed the REALISTIC initial state via the e2e-only test-support endpoints, which invoke the
+  // REAL initialise services (the same calls the product's onboarding / directive-apply path uses).
+  // The seeders run on THIS scenario's authenticated session; assert a 2xx so a wiring failure
+  // fails
+  // the setup loudly rather than surfacing as a confusing 404 in the action step.
+
+  @Given("the user has initialised hard constraints")
+  public void theUserHasInitialisedHardConstraints() {
+    seed(SEED_HARD_CONSTRAINTS, "hard constraints");
+  }
+
+  @Given("the user has an initialised taste profile")
+  public void theUserHasAnInitialisedTasteProfile() {
+    seed(SEED_TASTE_PROFILE, "taste profile");
+  }
+
+  @Given("the user has an initialised lifestyle config")
+  public void theUserHasAnInitialisedLifestyleConfig() {
+    seed(SEED_LIFESTYLE_CONFIG, "lifestyle config");
+  }
+
+  @Given("the user has a PREFERENCE-routed feedback entry to process")
+  public void theUserHasAPreferenceRoutedFeedbackEntryToProcess() {
+    // The MANUAL refresh-now only calls the AI + bumps documentVersion when there is a non-empty
+    // PREFERENCE-routed feedback batch to process (else the orchestrator returns
+    // SKIPPED_EMPTY_BATCH
+    // — no AI call, no version). This seeds the one real FeedbackEntry + PREFERENCE RoutingLogEntry
+    // the batch gatherer reads, so the delta run exercises the genuine pipeline end-to-end.
+    seed(SEED_PREFERENCE_FEEDBACK, "PREFERENCE-routed feedback");
+  }
+
+  private void seed(String path, String what) {
+    Response response = context.api().request().when().post(path);
+    context.setLastResponse(response);
+    assertThat(response.statusCode())
+        .as("seeding " + what + " should return a 2xx (e2e seeder)")
+        .isBetween(200, 299);
+  }
+
   // ---------------- Tier-1 hard constraints ----------------
 
   @When("they read their hard constraints")
@@ -82,10 +133,9 @@ public class PreferenceSteps {
 
   @When("they set an allergy on their hard constraints")
   public void theySetAnAllergyOnTheirHardConstraints() {
-    // A full-replacement PUT with a single allergy; expectedVersion 0 is what the first write would
-    // use if the aggregate existed. For a fresh user the aggregate does NOT exist, so this 404s
-    // (the load-bearing finding) — the happy-path assertion below only runs once a seed path
-    // exists.
+    // A full-replacement PUT with a single allergy at expectedVersion 0 (a freshly-seeded
+    // aggregate's @Version). Shared by two scenarios: the negative path (no seed → 404) and PREF-06
+    // (seeded first → 200 + audit). The seeding precondition decides which behaviour applies.
     context.setLastResponse(putHardConstraints(hardConstraintsBody(List.of(ALLERGEN), 0L)));
   }
 
@@ -246,17 +296,24 @@ public class PreferenceSteps {
     assertThat(after.jsonPath().getMap("document").toString().toLowerCase()).contains("prawns");
   }
 
+  /**
+   * The marker a manual override writes into the document (self-scoped reflection assertion key).
+   */
+  private static final String OVERRIDE_INSIGHT = "e2e manual override marker";
+
   @When("they manually override a taste-profile item")
   public void theyManuallyOverrideATasteProfileItem() {
-    // A manual override PUT replaces the document; expectedVersion echoes the profile's optimistic
-    // version. For a fresh user the profile does not exist, so this 404s. The real body is built
-    // from the current profile once a seed path exists; here we send a minimal shape so the glue is
-    // exercised end-to-end the moment that happens.
+    // A manual override PUT replaces the document verbatim and bumps documentVersion
+    // (MANUAL_OVERRIDE). Read the seeded profile, override an item (append a learnedInsights entry
+    // — a string-list section, robust over the JSON round-trip), and echo the optimistic version so
+    // the service's 409 pre-check passes.
     Response current = context.api().get(TASTE_PROFILE);
-    long expected =
-        current.statusCode() == 200 ? current.jsonPath().getLong("optimisticVersion") : 0L;
-    Map<String, Object> document =
-        current.statusCode() == 200 ? current.jsonPath().getMap("document") : Map.of();
+    assertThat(current.statusCode())
+        .as("taste profile must be seeded before a manual override")
+        .isEqualTo(200);
+    long expected = current.jsonPath().getLong("optimisticVersion");
+    Map<String, Object> document = new java.util.HashMap<>(current.jsonPath().getMap("document"));
+    document.put("learnedInsights", List.of(OVERRIDE_INSIGHT));
     Map<String, Object> body = new java.util.HashMap<>();
     body.put("document", document);
     body.put("expectedVersion", expected);
@@ -267,7 +324,15 @@ public class PreferenceSteps {
   public void theOverrideCreatesANewTasteProfileVersionForThisUser() {
     Response response = context.lastResponse();
     assertThat(response.statusCode()).as("manual override PUT should return 200 OK").isEqualTo(200);
+    // MANUAL_OVERRIDE bumps documentVersion in lock-step (seeded at 1 → 2).
     assertThat(response.jsonPath().getInt("documentVersion")).isGreaterThan(1);
+
+    // The override is reflected on a fresh read for THIS user (self-scoped).
+    Response read = context.api().get(TASTE_PROFILE);
+    context.setLastResponse(read);
+    assertThat(read.statusCode()).as("taste-profile GET should return 200 OK").isEqualTo(200);
+    assertThat(read.jsonPath().getList("document.learnedInsights", String.class))
+        .contains(OVERRIDE_INSIGHT);
   }
 
   @When("they roll their taste profile back to version {int}")
@@ -326,11 +391,15 @@ public class PreferenceSteps {
 
   @When("they edit a lifestyle config setting")
   public void theyEditALifestyleConfigSetting() {
-    // A lifestyle PUT 404s until initialise() has run (initialise is the onboarding wizard's
-    // in-process call, never on the REST surface). We send a minimal valid full-replacement
-    // document.
+    // Full-replacement PUT that POPULATES one section (pantryTracking.enabled=true) so the
+    // section-diff fires and an audit row is written — versus the seeded all-null document. Used by
+    // BOTH the negative-path scenario (no seed → 404) and PREF-26 (seeded → 200 + audit row);
+    // expectedVersion 0 matches a freshly-seeded config's @Version.
+    Map<String, Object> document = lifestyleDocument();
+    document.put("pantryTracking", new java.util.HashMap<>(Map.of("enabled", true)));
     Map<String, Object> body = new java.util.HashMap<>();
-    body.put("document", lifestyleDocument());
+    body.put("document", document);
+    body.put("expectedVersion", 0L);
     context.setLastResponse(context.api().request().body(body).when().put(LIFESTYLE_CONFIG));
   }
 
@@ -350,6 +419,8 @@ public class PreferenceSteps {
     context.setLastResponse(read);
     assertThat(read.statusCode()).as("lifestyle GET should return 200 OK").isEqualTo(200);
     assertThat(read.jsonPath().getString("userId")).isEqualTo(context.userId());
+    // The edited section is reflected on the read (self-scoped).
+    assertThat(read.jsonPath().getBoolean("document.pantryTracking.enabled")).isTrue();
   }
 
   @And("the lifestyle-config audit log records the change for this user")
@@ -372,6 +443,12 @@ public class PreferenceSteps {
     Response response = context.lastResponse();
     assertThat(response.statusCode()).as("mark-reviewed should return 200 OK").isEqualTo(200);
     assertThat(response.jsonPath().getString("userId")).isEqualTo(context.userId());
+    // The reset is observable on the DTO: lastReviewPromptAt is cleared to null (the nudge is
+    // acknowledged). A freshly-seeded config also starts null, so this asserts the field is absent/
+    // null in the mark-reviewed response for THIS user.
+    assertThat(response.jsonPath().getString("lastReviewPromptAt"))
+        .as("mark-reviewed should clear lastReviewPromptAt")
+        .isNull();
   }
 
   @When("they read their lifestyle-config audit log")
