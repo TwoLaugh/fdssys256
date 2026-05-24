@@ -2,7 +2,6 @@ package com.example.mealprep.household;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.closeTo;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -142,11 +141,13 @@ class HouseholdMergeFlowIT {
                 .content("{}"))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.contributingUserIds.length()").value(1))
-        // closeTo compares numerically regardless of int/decimal JSON representation of the merged
-        // BigDecimal like-score (1 vs 1.0 etc.).
-        .andExpect(
-            jsonPath("$.mergedTasteProfile.ingredientLikes.salmon").value(closeTo(1.0, 1e-6)))
-        .andExpect(jsonPath("$.mergedTasteProfile.ingredientLikes.kale").value(closeTo(-1.0, 1e-6)))
+        // A favourite projects to +1 and a disliked to -1 (single primary member → the
+        // weighted-mean merge passes the value through unchanged). The merged BigDecimal
+        // like-scores
+        // are whole numbers (scale 0), so Jackson serialises them as JSON integers — assert the
+        // integer literals (Hamcrest closeTo only matches Double, not the Integer JsonPath yields).
+        .andExpect(jsonPath("$.mergedTasteProfile.ingredientLikes.salmon").value(1))
+        .andExpect(jsonPath("$.mergedTasteProfile.ingredientLikes.kale").value(-1))
         .andExpect(jsonPath("$.mergedTasteProfile.avoidList[0]").value("kale"))
         .andExpect(openApi().isValid(openApiValidator));
   }
