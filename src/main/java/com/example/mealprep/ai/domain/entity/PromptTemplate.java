@@ -12,7 +12,9 @@ import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Type;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Append-only prompt template row. The {@code PromptTemplateLoader} INSERTs a new {@code (name,
@@ -61,6 +63,12 @@ public class PromptTemplate {
   @Column(name = "source_file", updatable = false, nullable = false, length = 255)
   private String sourceFile;
 
+  // sha256 hex is always exactly 64 chars; the migration deliberately uses fixed-length char(64)
+  // (Postgres bpchar). A plain String column maps to JDBC VARCHAR, which Hibernate's
+  // ddl-auto=validate (prod/dev/e2e) rejects against the bpchar/Types#CHAR the DB reports. Pinning
+  // the JDBC type to CHAR keeps validate in agreement with the deployed column (caught by
+  // SchemaValidationIT). The value is exactly length chars, so there is no CHAR space-padding.
+  @JdbcTypeCode(SqlTypes.CHAR)
   @Column(name = "source_hash", updatable = false, nullable = false, length = 64)
   private String sourceHash;
 

@@ -1,6 +1,5 @@
 package com.example.mealprep.auth.domain.entity;
 
-import io.hypersistence.utils.hibernate.type.array.StringArrayType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -14,7 +13,8 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.hibernate.annotations.Type;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Hashed opaque service token used by scheduled jobs and other non-user callers under origin
@@ -50,7 +50,7 @@ public class ServiceToken {
   @Column(name = "name", nullable = false, length = 128)
   private String name;
 
-  @Type(StringArrayType.class)
+  @JdbcTypeCode(SqlTypes.ARRAY)
   @Column(name = "permitted_origins", nullable = false, columnDefinition = "text[]")
   private String[] permittedOrigins;
 

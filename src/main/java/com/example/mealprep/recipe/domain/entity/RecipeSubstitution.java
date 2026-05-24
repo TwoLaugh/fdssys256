@@ -2,7 +2,6 @@ package com.example.mealprep.recipe.domain.entity;
 
 import com.example.mealprep.recipe.api.dto.SubstitutionReason;
 import com.example.mealprep.recipe.api.dto.SubstitutionState;
-import io.hypersistence.utils.hibernate.type.array.UUIDArrayType;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -22,7 +21,9 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Type;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Standalone aggregate root per LLD §Entities line 280. Overlays an ingredient swap on top of a
@@ -99,7 +100,7 @@ public class RecipeSubstitution {
   @Column(name = "temporary", nullable = false)
   private boolean temporary;
 
-  @Type(UUIDArrayType.class)
+  @JdbcTypeCode(SqlTypes.ARRAY)
   @Column(name = "applied_in_plan_ids", nullable = false, columnDefinition = "uuid[]")
   private UUID[] appliedInPlanIds;
 

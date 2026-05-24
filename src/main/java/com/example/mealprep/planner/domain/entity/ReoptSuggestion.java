@@ -1,6 +1,5 @@
 package com.example.mealprep.planner.domain.entity;
 
-import io.hypersistence.utils.hibernate.type.array.ListArrayType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -20,7 +19,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.Type;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Standalone aggregate root — a pending or resolved re-opt prompt. Idempotent on {@code
@@ -56,7 +56,7 @@ public class ReoptSuggestion {
   @Column(name = "trigger_event_id")
   private UUID triggerEventId;
 
-  @Type(ListArrayType.class)
+  @JdbcTypeCode(SqlTypes.ARRAY)
   @Column(name = "affected_slot_ids", nullable = false, columnDefinition = "uuid[]")
   @Builder.Default
   private List<UUID> affectedSlotIds = new ArrayList<>();
