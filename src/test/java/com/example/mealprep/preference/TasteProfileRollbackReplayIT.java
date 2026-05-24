@@ -28,7 +28,6 @@ import org.springframework.context.annotation.Import;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Component;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
@@ -41,9 +40,10 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *
  * <p>The replay re-derivation itself (the 01g orchestrator re-run on the published event) is
  * covered by the feedback module's listener unit test + its own ITs; here we assert the delegation
- * event is published AFTER_COMMIT with the correct from-cursor. The capturer's {@code REQUIRES_NEW}
- * listener mirrors the production feedback-side write-path contract (a plain {@code @Transactional}
- * would not commit in the AFTER_COMMIT phase — decision-log 0010).
+ * event is published AFTER_COMMIT with the correct from-cursor. The capturer is a pure in-memory
+ * spy with no {@code @Transactional} (which would CGLIB-proxy the bean and make the test's direct
+ * field reads hit the proxy's uninitialised null lists); the real REQUIRES_NEW write-path contract
+ * lives on the production {@code TasteProfileRollbackReplayListener}.
  *
  * <p>DB-state is asserted via repository reads on the test thread (the document is an eager JSONB
  * column, so no lazy-collection access escapes a closed session). Cleanup deletes children
@@ -189,9 +189,12 @@ class TasteProfileRollbackReplayIT {
       changedEvents.add(ev);
     }
 
+    // No @Transactional here: this capturer is a pure in-memory test spy. Adding @Transactional
+    // makes Spring CGLIB-proxy the bean, so the test's direct field reads (capturer.changedEvents /
+    // .replayEvents) would hit the proxy's uninitialised null fields instead of the target's lists.
+    // The production listener (TasteProfileRollbackReplayListener) carries the real REQUIRES_NEW
+    // transaction contract; this spy only needs to record the AFTER_COMMIT event.
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Transactional(
-        propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     void onReplay(TasteProfileRollbackReplayRequestedEvent ev) {
       replayEvents.add(ev);
     }
