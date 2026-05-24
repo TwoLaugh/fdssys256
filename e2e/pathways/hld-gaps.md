@@ -257,3 +257,22 @@
 | GAP-86 | Product-decision | Recommend shipping a **minimal** notification-preferences surface in v1 (per-category mute + quiet-hours), because it's acute for time-bound defrost/prep alerts (a 2am defrost reminder is a real harm). Default quiet hours 22:00–07:00. Your call on how granular (per-channel can wait). | you |
 | GAP-87 | Defer-to-backlog | Ship **dismiss + mark-read-idempotent** now (cheap, expected); defer "clear all" + delete to backlog. Mark-read must be idempotent (re-marking a read notification is a no-op 200). Partial-defer: the read/dismiss split matters for v1 UX, bulk-clear doesn't. | eng |
 | GAP-88 | Defer-to-backlog | Defer rich deep-link/act-on semantics, but include a simple `deepLink` string field on notifications now (GAP-38 already lists it) so the frontend can route; the richer "act inline" affordances are backlog. Matters when notifications grow action types. | eng |
+
+---
+
+## Final rulings (2026-05-24)
+
+**Product decisions (user-ruled):**
+
+| GAP | Ruling |
+|---|---|
+| GAP-04 | **Build** — removing a Tier-1 hard constraint (e.g. an allergy) requires a confirmation / safety interstitial. |
+| GAP-08 | **Defer (both)** — GDPR data export AND erasure deferred to backlog; revisit pre-launch (legal). No erasure cascade in v1. |
+| GAP-22 | **Server-side session cookie** (not JWT). |
+| GAP-37 | **Build** — exporting health/nutrition data to an external platform requires explicit consent. |
+| GAP-80 | **Build** — logout flow is in v1. |
+| GAP-82 | **Defer** — account recovery (forgot-password) out of v1; documented limitation. |
+| GAP-84 | **Handshake invite** — adding a household member is an invite the member accepts (they own their account), not a direct add. |
+| GAP-86 | **Minimal v1** — per-category mute + a single quiet-hours window (default 22:00–07:00); per-channel granularity deferred. |
+
+**Eng-owned dispositions (the other 80 — 68 HLD-clarify, 7 fix-contradiction, 5 defer):** accepted as recommended. Follow-up task: write each clarified rule / chosen contradiction-resolution back into the relevant `design/*.md` HLD so the HLDs and this catalogue stay consistent.
