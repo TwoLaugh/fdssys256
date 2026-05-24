@@ -56,14 +56,14 @@ jobs:
           docker compose -f e2e/docker-compose.yml logs app
           exit 1
 
-      - name: Run @smoke E2E suite
+      - name: Run E2E suite (all buildable scenarios; @pending excluded)
         # -Pe2e activates the harness source set + cucumber/rest-assured deps and
         # runs the Cucumber suite under Failsafe. Clean mode (cleanup ON) is the
         # gating default; soak mode would set MEALPREP_E2E_CLEANUP=false.
         env:
           MEALPREP_E2E_BASE_URL: http://localhost:8080
           MEALPREP_E2E_CLEANUP: 'true'
-        run: ./mvnw --batch-mode --no-transfer-progress -Pe2e verify -Dcucumber.filter.tags="@smoke"
+        run: ./mvnw --batch-mode --no-transfer-progress -Pe2e verify -Dcucumber.filter.tags="not @pending"
 
       - name: Dump app logs on failure
         if: failure()
