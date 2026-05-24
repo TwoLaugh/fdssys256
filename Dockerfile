@@ -16,6 +16,11 @@
 FROM eclipse-temurin:17-jdk AS build
 WORKDIR /workspace
 
+# The committed Maven wrapper downloads + unzips Maven on first use; the JDK
+# base image ships no `unzip`, so install it (clearing apt lists to stay slim).
+RUN apt-get update && apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/*
+
 # Warm the dependency cache on its own layer so source-only changes don't
 # re-download the world.
 COPY .mvn/ .mvn/
