@@ -325,10 +325,11 @@ public class NutritionServiceImpl
    * org.springframework.orm.ObjectOptimisticLockingFailureException} (→ 409) the update-leg uses,
    * never silently coerced into a create.
    *
-   * <p>The first {@code saveAndFlush} persists the row and Hibernate bumps {@code @Version} 0 → 1,
-   * so the GET-after-PUT (and the response) reflects version 1 — exactly as a seed-then-update
-   * would have. The create itself is audited (every field is a genuine user edit from "unset") and
-   * publishes a {@link NutritionTargetsChangedEvent}, consistent with the update-leg.
+   * <p>The {@code saveAndFlush} inserts the row at {@code @Version} 0 (a JPA insert sets the
+   * initial version to 0; only a subsequent UPDATE increments it), so the response — and a
+   * GET-after-PUT — reflect version 0; the caller's next update PUTs with {@code expectedVersion 0}
+   * and bumps it to 1. The create itself is audited (every field is a genuine user edit from
+   * "unset") and publishes a {@link NutritionTargetsChangedEvent}, consistent with the update-leg.
    */
   private TargetsDto createTargets(UUID userId, UpdateTargetsRequest request, UUID actorUserId) {
     if (request.expectedVersion() != 0L) {
