@@ -334,6 +334,15 @@ public final class PlanTestData {
     return new PlannerProperties.Materiality(new BigDecimal("0.15"), 3, 10);
   }
 
+  /**
+   * Default cold-start sub-config (recipe-pool Tier-2): enabled, 3× distinct-slot-kind threshold,
+   * 50 recipe quota, PT20S timeout, empty source-keys (all enabled) — matches
+   * application.properties.
+   */
+  public static PlannerProperties.ColdStart defaultColdStart() {
+    return new PlannerProperties.ColdStart(true, 3, 50, Duration.ofSeconds(20), List.of());
+  }
+
   /** Full {@link PlannerProperties} wired with the v1-uniform scoring block for unit tests. */
   public static PlannerProperties scoringProperties() {
     return new PlannerProperties(
@@ -351,7 +360,8 @@ public final class PlanTestData {
         5,
         2,
         defaultMidWeek(),
-        defaultMateriality());
+        defaultMateriality(),
+        defaultColdStart());
   }
 
   /**

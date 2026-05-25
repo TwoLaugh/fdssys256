@@ -214,7 +214,8 @@ class ProvisionsSubScoreTest {
             5,
             2,
             PlanTestData.defaultMidWeek(),
-            PlanTestData.defaultMateriality());
+            PlanTestData.defaultMateriality(),
+            PlanTestData.defaultColdStart());
     ProvisionsSubScore zeroTierCalc = new ProvisionsSubScore(props);
     UUID id = UUID.randomUUID();
     RecipeDto recipe = PlanTestData.scoredRecipe(id, 20, "Thai", "tofu", "fry", List.of("rice"));

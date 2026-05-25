@@ -59,6 +59,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 @SpringBootTest
 @Import(TestContainersConfig.class)
 @ActiveProfiles("test")
+// This IT mocks the context builder (empty pool) to exercise Stage A→D orchestration in isolation;
+// the recipe-pool Tier-2 cold-start gate is out of scope here and would otherwise fire on the empty
+// pool and invoke the discovery runner. Disabling it keeps this IT focused (the gate has its own
+// unit + IT coverage in ColdStartGateTest / PlannerColdStartIT).
+@org.springframework.test.context.TestPropertySource(
+    properties = "mealprep.planner.cold-start.enabled=false")
 class PlanComposerIT {
 
   private static final LocalDate WEEK =

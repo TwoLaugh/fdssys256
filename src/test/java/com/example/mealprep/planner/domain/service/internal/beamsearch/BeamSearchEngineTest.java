@@ -375,6 +375,7 @@ class BeamSearchEngineTest {
         5,
         2,
         null,
+        null,
         null);
   }
 

@@ -79,6 +79,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 @AutoConfigureMockMvc
 @Import({TestContainersConfig.class, OpenApiValidatorConfig.class})
 @ActiveProfiles("test")
+// Generate path mocks the context builder (empty pool) → disable the recipe-pool Tier-2 cold-start
+// gate so it does not fire on the empty pool and invoke the discovery runner (out of scope for the
+// controller-surface tests; the gate has its own coverage in ColdStartGateTest /
+// PlannerColdStartIT).
+@org.springframework.test.context.TestPropertySource(
+    properties = "mealprep.planner.cold-start.enabled=false")
 class PlansControllerIT {
 
   @Autowired private MockMvc mvc;

@@ -84,6 +84,13 @@ public class PlanComposer {
       "Stage D adaptation unavailable; using original recipe selections";
 
   private final PlanCompositionContextBuilder contextBuilder;
+  private final ColdStartGate coldStartGate;
+  // Self-reference through the Spring proxy so the public (non-transactional) compose() can invoke
+  // the @Transactional composeTransactional() WITH proxy advice. Required because the cold-start
+  // gate must run BEFORE the composition transaction opens: the gate's runJobSync persists +
+  // publishes the discovery-runner event AFTER_COMMIT, so it has to commit on its own (it would
+  // never fire while the composer's outer tx stayed open). @Lazy breaks the construction cycle.
+  private final PlanComposer self;
   private final BeamSearchEngine beamSearchEngine;
   private final RollupBuilder rollupBuilder;
   private final StageCInvoker stageCInvoker;
@@ -103,6 +110,8 @@ public class PlanComposer {
 
   PlanComposer(
       PlanCompositionContextBuilder contextBuilder,
+      ColdStartGate coldStartGate,
+      @org.springframework.context.annotation.Lazy PlanComposer self,
       BeamSearchEngine beamSearchEngine,
       RollupBuilder rollupBuilder,
       StageCInvoker stageCInvoker,
@@ -116,6 +125,8 @@ public class PlanComposer {
       ObjectMapper objectMapper,
       Clock clock) {
     this.contextBuilder = contextBuilder;
+    this.coldStartGate = coldStartGate;
+    this.self = self;
     this.beamSearchEngine = beamSearchEngine;
     this.rollupBuilder = rollupBuilder;
     this.stageCInvoker = stageCInvoker;
@@ -142,17 +153,61 @@ public class PlanComposer {
   }
 
   /**
-   * Compose + persist a plan for {@code request}. Single transaction (REQUIRED). Returns the
-   * persisted {@code GENERATED} plan's id (the controller maps it to a {@code PlanDto} via the read
-   * service — the {@code Plan} entity must not cross the {@code api} boundary, ArchUnit).
+   * Compose + persist a plan for {@code request}. Returns the persisted {@code GENERATED} plan's id
+   * (the controller maps it to a {@code PlanDto} via the read service — the {@code Plan} entity
+   * must not cross the {@code api} boundary, ArchUnit).
+   *
+   * <p><b>Not {@code @Transactional}.</b> The recipe-pool Tier-2 cold-start gate (LLD §Flow-1 step
+   * 5) MUST run BEFORE the composition transaction opens: its {@code DiscoveryService.runJobSync}
+   * persists the discovery job and publishes the runner's {@code AFTER_COMMIT} event, which only
+   * fires once that write commits. If the gate ran inside the composer's transaction the runner
+   * would never start (the event would wait for the outer commit) and the synchronous wait would
+   * always time out. So this method: (1) builds a read-only pre-context to size the catalogue, (2)
+   * runs the gate (its discovery work commits independently), then (3) delegates the actual
+   * composition + persist to {@link #composeTransactional} through the Spring proxy ({@link #self})
+   * so the {@code @Transactional} advice applies.
    *
    * @param request the generate request
    * @param requestUserId resolved server-side caller id
    * @param idempotencyKey optional client de-dupe key (cached on success)
    */
-  @Transactional(propagation = Propagation.REQUIRED)
   public UUID compose(
       GeneratePlanRequest request, UUID requestUserId, @Nullable String idempotencyKey) {
+    boolean coldStart = false;
+    if (properties.coldStart().enabled()) {
+      // Lightweight read-only pre-context purely to feed the cold-start gate (slot kinds + current
+      // pool size). Built outside any planner transaction — the cross-module reads each manage
+      // their own readOnly tx. The composition transaction re-reads a fresh context downstream.
+      // Only
+      // paid for when the gate is enabled (the common steady-state config disables it once the
+      // catalogue is mature).
+      UUID gateTraceId = UUID.randomUUID();
+      PlanCompositionContext preContext =
+          contextBuilder.build(request, requestUserId, gateTraceId, null);
+      coldStart =
+          coldStartGate.fillIfCold(
+              requestUserId,
+              preContext.slotSkeletons(),
+              preContext.recipePool().recipes().size(),
+              gateTraceId);
+    }
+    return self.composeTransactional(request, requestUserId, idempotencyKey, coldStart);
+  }
+
+  /**
+   * The transactional composition body (Stage A&rarr;D + persist), single transaction (REQUIRED).
+   * Re-reads a fresh {@link PlanCompositionContext} so Stage A sees any SYSTEM recipes the
+   * cold-start gate just imported. Package-visible (not private) so the {@link #self} proxy can
+   * invoke it with transactional advice.
+   *
+   * @param coldStart whether the cold-start gate fired (threaded onto the persisted plan)
+   */
+  @Transactional(propagation = Propagation.REQUIRED)
+  UUID composeTransactional(
+      GeneratePlanRequest request,
+      UUID requestUserId,
+      @Nullable String idempotencyKey,
+      boolean coldStart) {
     UUID traceId = UUID.randomUUID();
     UUID planId = UUID.randomUUID();
     long startNanos = System.nanoTime();
@@ -171,7 +226,8 @@ public class PlanComposer {
                 "Composer entry",
                 "user"));
 
-    // Stage A context.
+    // Stage A context — re-read inside the tx so it reflects any cold-start-imported SYSTEM
+    // recipes.
     PlanCompositionContext context =
         contextBuilder.build(request, requestUserId, traceId, decisionId);
 
@@ -205,7 +261,8 @@ public class PlanComposer {
       CandidatePlan empty =
           new CandidatePlan(UUID.randomUUID(), request.weekStartDate(), List.of(), null);
       Plan plan =
-          planPersister.persist(empty, request, context, planId, emptyRollup(), false, true);
+          planPersister.persist(
+              empty, request, context, planId, emptyRollup(), false, true, coldStart);
       finishDecisionLog(
           traceId, stageADecision, planId, requestUserId, plan, startNanos, "no-candidates");
       publishGenerated(plan, traceId);
@@ -366,7 +423,14 @@ public class PlanComposer {
 
     Plan plan =
         planPersister.persist(
-            mutated, request, context, planId, chosenRollup, aiAugmented, qualityWarning);
+            mutated,
+            request,
+            context,
+            planId,
+            chosenRollup,
+            aiAugmented,
+            qualityWarning,
+            coldStart);
 
     finishDecisionLog(traceId, phase2Decision, planId, requestUserId, plan, startNanos, "ok");
     publishGenerated(plan, traceId);

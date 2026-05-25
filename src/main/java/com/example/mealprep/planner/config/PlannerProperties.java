@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.Duration;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -49,7 +50,44 @@ public record PlannerProperties(
     @Min(1) int maxAugmentations,
     @Min(0) int maxRefineDirectives,
     @NotNull MidWeek midWeek,
-    @NotNull Materiality materiality) {
+    @NotNull Materiality materiality,
+    @NotNull ColdStart coldStart) {
+
+  /**
+   * Cold-start gate tunables (planner recipe-pool Tier-2). Bound under {@code
+   * mealprep.planner.cold-start.*}. The gate runs in the composer BEFORE Stage A: when the
+   * candidate catalogue is below {@code slotKindMultiplier × distinct-slot-kinds} it invokes {@code
+   * DiscoveryService.runJobSync} (bounded) to fill the SYSTEM catalogue, then re-reads the pool and
+   * flags the plan {@code coldStart = true}. Per meal-planner.md §Cold start + lld/planner.md
+   * §Flow-1 step 5.
+   *
+   * <p>Every key MUST exist in the main AND test {@code application.properties} — the test file
+   * shadows the main one, and {@code @Validated} fails context load on a missing {@code @NotNull}
+   * otherwise.
+   *
+   * <ul>
+   *   <li>{@code enabled} — master switch. {@code false} skips the gate entirely (plans behave
+   *       exactly as Tier-1: an empty catalogue yields a quality-warning plan, never a discovery
+   *       call). Default {@code true}.
+   *   <li>{@code slotKindMultiplier} — the per-distinct-slot-kind candidate floor. The threshold is
+   *       {@code slotKindMultiplier × distinctSlotKinds} (meal-planner.md heuristic "≥3× slot
+   *       count"). Default {@code 3}.
+   *   <li>{@code requestedCount} — the discovery job quota (recipes to import in one cold-start
+   *       run). Default {@code 50} (meal-planner.md "adds up to 50 recipes per cold-start run").
+   *   <li>{@code timeout} — the bounded {@code runJobSync} deadline. On timeout the gate degrades
+   *       (keeps whatever the runner committed so far). Default {@code PT20S}.
+   *   <li>{@code sourceKeys} — the discovery sources the gate requests. Empty (the prod default) ⇒
+   *       "all currently-enabled sources". The {@code e2e} profile overrides this to the single
+   *       deterministic {@code e2e_curated_seed} source so cold-start is fast + repeatable in the
+   *       stack and the non-deterministic web/Google sources never run there.
+   * </ul>
+   */
+  public record ColdStart(
+      boolean enabled,
+      @Min(1) int slotKindMultiplier,
+      @Min(1) @jakarta.validation.constraints.Max(50) int requestedCount,
+      @NotNull Duration timeout,
+      @NotNull List<String> sourceKeys) {}
 
   /**
    * Mid-week re-optimisation tunables (planner-01i). Bound under {@code
