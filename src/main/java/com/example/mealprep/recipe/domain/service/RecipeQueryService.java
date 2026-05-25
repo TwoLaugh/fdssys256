@@ -30,6 +30,22 @@ public interface RecipeQueryService {
   Optional<RecipeDto> getById(UUID recipeId);
 
   /**
+   * Planner pre-filter read (planner Stage A, per planner.md §BeamSearchEngine). Returns the
+   * un-archived, un-deleted recipes {@code userId} may schedule — the caller's own {@code USER}
+   * catalogue rows plus the global {@code SYSTEM} catalogue — each fully hydrated to the same
+   * {@link RecipeDto} shape {@link #getById} produces (current-version body + branches[]), so the
+   * planner's {@code HardFilterRunner} can read {@code
+   * currentVersionBody().metadata().mealTypes()}, {@code totalTimeMins()}, {@code
+   * equipmentRequired()}, the ingredient {@code ingredientMappingKey}s, and the {@code
+   * currentVersionBody().id()} + {@code currentBranchId()} it schedules.
+   *
+   * <p>Bounded by {@code limit} (the candidate ceiling the planner asks for); kind / time-budget
+   * filtering is the planner's job downstream — this read is deliberately narrow (recipe.md G6/G7:
+   * the full filterable index is unspecified, so no broad filter surface is built here).
+   */
+  List<RecipeDto> findPlannableCandidates(UUID userId, int limit);
+
+  /**
    * Returns the branches for a recipe sorted by {@code createdAt ASC} (so 'main' is first). Throws
    * {@code RecipeNotFoundException} if the recipe doesn't exist or is soft-deleted.
    */

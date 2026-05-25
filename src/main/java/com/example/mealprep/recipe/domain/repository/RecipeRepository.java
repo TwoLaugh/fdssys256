@@ -70,4 +70,32 @@ public interface RecipeRepository extends JpaRepository<Recipe, UUID> {
   @Modifying
   @Query("update Recipe r set r.lastUsedInPlanAt = :now where r.id in :ids")
   int touchLastUsedInPlan(@Param("ids") Collection<UUID> ids, @Param("now") Instant now);
+
+  /**
+   * Planner pre-filter query — the un-archived, un-deleted recipes the planner may schedule for
+   * {@code userId}. Scope is the caller's own {@code USER} catalogue rows <b>plus</b> the global
+   * {@code SYSTEM} catalogue (SYSTEM rows have no owning user, so they are visible to everyone; per
+   * {@code RecipeServiceImpl} they carry the nil-UUID sentinel user-id). Ordered by {@code
+   * createdAt} ascending for a stable candidate order and bounded by the supplied {@link Pageable}
+   * (the planner pool source passes {@code PageRequest.of(0, limit)}).
+   *
+   * <p>Deliberately narrow: kind / time-budget filtering happens downstream in the planner's {@code
+   * HardFilterRunner} (the full filterable catalogue index is unspecified — recipe.md G6/G7 — so we
+   * do not build a broad filter surface here, just enough to feed planning). Per planner.md
+   * §BeamSearchEngine Stage A ("ask {@code RecipeQueryService.search(...)} for recipes matching the
+   * slot kind + time budget").
+   */
+  @Query(
+      """
+      select r from Recipe r
+      where r.archivedAt is null
+        and r.deletedAt is null
+        and (
+          r.catalogue = com.example.mealprep.recipe.domain.entity.Catalogue.SYSTEM
+          or (r.catalogue = com.example.mealprep.recipe.domain.entity.Catalogue.USER
+              and r.userId = :userId)
+        )
+      order by r.createdAt asc
+      """)
+  List<Recipe> findPlannableForUser(@Param("userId") UUID userId, Pageable page);
 }
