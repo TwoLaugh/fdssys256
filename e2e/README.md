@@ -183,3 +183,17 @@ docker compose -f e2e/docker-compose.yml down -v
 **CI smoke invocation** (`.github/workflows/e2e.yml`): `./mvnw --batch-mode --no-transfer-progress -Pe2e verify -Dcucumber.filter.tags="@smoke"` with `MEALPREP_E2E_BASE_URL=http://localhost:8080` and `MEALPREP_E2E_CLEANUP=true`, after `docker compose -f e2e/docker-compose.yml up -d --build` + a health poll.
 
 > **Do NOT bring the full stack up on a memory-constrained local VM** (D3) — CI is the gating run.
+
+### Local runs (host-jar override — optional dev convenience)
+The E2E stack itself (Postgres + app, ~1.5 GB) fits the default Docker VM fine — it's the *full IT suite* that OOMs (D3), not this. The actual local blockers were elsewhere, and are handled:
+- **`mvnw` CRLF:** a Windows checkout (`core.autocrlf=true`) rewrote `mvnw` to CRLF, breaking it in the Linux build container (`exit 127`). Fixed by `.gitattributes` pinning `mvnw`/`*.sh` to LF.
+- **BuildKit build-network:** on some Docker Desktop setups the *build* container can't reach Maven Central (`./mvnw dependency:go-offline` → `exit 3`) even though runtime containers have internet. Work around it by building the jar on the **host** and feeding it into a runtime-only image:
+
+```bash
+./mvnw -DskipTests clean package && cp target/*.jar app.jar
+docker compose -f e2e/docker-compose.yml -f e2e/docker-compose.local.yml up -d --build
+# ... health poll + run the suite (tags "not @pending") ...
+docker compose -f e2e/docker-compose.yml -f e2e/docker-compose.local.yml down -v
+```
+
+`docker-compose.local.yml` + `Dockerfile.local` override only the app build (runtime stage identical to prod-parity); CI is unaffected and keeps using the committed multi-stage `Dockerfile`. This makes the local stack a faithful pre-CI gate.
