@@ -166,7 +166,8 @@ public class PreferenceSteps {
     // Self-scoped: the allergies field change appears in THIS user's audit log (never a global
     // count).
     assertThat(audit.jsonPath().getList("content")).isNotEmpty();
-    assertThat(audit.jsonPath().getList("content.field", String.class)).contains("allergies");
+    assertThat(audit.jsonPath().getList("content.fieldChanged", String.class))
+        .contains("allergies");
   }
 
   @When("they set a structured dietary identity on their hard constraints")
