@@ -113,24 +113,35 @@ Feature: Notification — inbox reads, preference read/update, mark-read/dismiss
     When they read that notification's delivery log
     Then the notification delivery log is empty for this notification
 
-  # ----- @pending: scanners + event-driven emission need time-travel / cross-module state -----
+  # ----- Scheduled scanner (green via an e2e on-demand scan trigger) -----
 
-  @pending
-  # NOTIF-09 (expiry-warning scan). PENDING: the expiry scanner is @Scheduled and reads
-  # Provisions inventory at a wall-clock threshold; producing a notification deterministically
-  # needs time-travel of the scheduler + seeded near-expiry inventory, which the black-box
-  # suite cannot drive. Un-pend when a scanner-trigger test hook + a clock control land.
+  # NOTIF-09 (expiry-warning scan). The expiry scanner is @Scheduled (daily 06:00) and reads
+  # Provisions inventory at a wall-clock threshold, so the black-box suite cannot wait for the
+  # cron. An e2e-profile-only trigger (E2eNotificationScanController, POST
+  # /test-support/notification/run-expiry-scan) invokes the SAME scan() the @Scheduled method
+  # delegates to. The scenario sets up the REAL precondition over HTTP — a fridge inventory item
+  # expiring within the 2-day fridge threshold via POST /api/v1/provisions/inventory — fires the
+  # scan, then POLLS the inbox: the scan publishes ItemNearingExpiryEvent which the notification
+  # listener turns into a PROVISION_ITEM_NEAR_EXPIRY notification AFTER_COMMIT (async).
   Scenario: An expiry-warning notification appears after the scan
     Given a fresh registered and logged-in user
-    When they list their notifications
-    Then the notification list is empty for this user
+    And the user has a fridge inventory item expiring within the expiry-warning window
+    When the expiry-warning scan is triggered
+    Then an expiry-warning notification eventually appears for this user
+
+  # ----- @pending: event-driven feedback-confirmation has no notification consumer in the product -----
 
   @pending
-  # NOTIF-16 (feedback-confirmation notification). PENDING: this is event-driven off a
-  # FeedbackProcessedEvent that the feedback module publishes AFTER an async classify+route
-  # completes; observing the resulting notification needs cross-module async orchestration
-  # + an AFTER_COMMIT settle the inbox fixture does not own. Covered indirectly by the
-  # feedback suite's routed-state assertions; the notification leg is deferred.
+  # NOTIF-16 (feedback-confirmation notification). PENDING — and CANNOT be un-pended with a test
+  # hook: the product has NO consumer for FeedbackProcessedEvent in the notification module.
+  # NotificationKindResolver maps 9 producer events (provisions/nutrition/health/planner/staple)
+  # but has no resolve(FeedbackProcessedEvent), there is no FEEDBACK_CONFIRMATION NotificationKind,
+  # and the only AFTER_COMMIT listener of that event (feedback's PreferenceDeltaBatchTrigger) drives
+  # the preference batch-delta pipeline, NOT a notification. So no feedback-confirmation notification
+  # is ever produced — the HLD's NOTIF-16 is an unimplemented design-gap (e2e/pathways: notification.md
+  # action #13 / appendix), not a timing/orchestration limitation. Un-pend ONLY when the product wires
+  # a FeedbackProcessedEvent->notification listener. The feedback routing itself is covered by the
+  # feedback suite's routed-state assertions.
   Scenario: A feedback-confirmation notification is produced after routing
     Given a fresh registered and logged-in user
     When they read their notification summary
