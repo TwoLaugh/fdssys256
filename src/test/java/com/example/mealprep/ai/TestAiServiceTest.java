@@ -19,6 +19,7 @@ import com.example.mealprep.ai.spi.ModelTier;
 import com.example.mealprep.ai.spi.TaskType;
 import com.example.mealprep.ai.testdata.AiTestData;
 import com.example.mealprep.ai.testing.TestAiService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -39,8 +40,10 @@ class TestAiServiceTest {
   private final ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
   private final Clock clock = Clock.fixed(Instant.parse("2026-05-08T12:00:00Z"), ZoneOffset.UTC);
 
+  private final ObjectMapper objectMapper = new ObjectMapper();
+
   private TestAiService svc() {
-    return new TestAiService(repository, publisher, clock);
+    return new TestAiService(repository, publisher, clock, objectMapper);
   }
 
   // ---------------- execute() ----------------
@@ -81,6 +84,51 @@ class TestAiServiceTest {
         .isInstanceOf(AiInvalidResponseException.class)
         .hasMessageContaining("expected")
         .hasMessageContaining("String");
+  }
+
+  /**
+   * JSON-canned mode: a registered raw JSON string is deserialised through the ObjectMapper into
+   * the task's output type, then proceeds down the normal audit/event path (row saved + event
+   * published) and the deserialised object is returned.
+   */
+  @Test
+  void execute_jsonCanned_deserialisesAndReturns() {
+    TestAiService s = svc();
+    s.registerJson(TaskType.FEEDBACK_CLASSIFICATION, "\"hello-from-json\"");
+    AiTask<String> task =
+        AiTestData.task(String.class).ofType(TaskType.FEEDBACK_CLASSIFICATION).build();
+
+    String result = s.execute(task);
+    assertThat(result).isEqualTo("hello-from-json");
+    verify(repository).save(any(AiCallLog.class));
+    verify(publisher).publishEvent(any(AiCallSucceededEvent.class));
+    assertThat(s.recordedCalls()).hasSize(1);
+  }
+
+  /** JSON-canned mode takes precedence over a typed registration for the same task type. */
+  @Test
+  void execute_jsonCanned_winsOverTypedRegistration() {
+    TestAiService s = svc();
+    s.register(TaskType.FEEDBACK_CLASSIFICATION, "from-typed");
+    s.registerJson(TaskType.FEEDBACK_CLASSIFICATION, "\"from-json\"");
+    AiTask<String> task =
+        AiTestData.task(String.class).ofType(TaskType.FEEDBACK_CLASSIFICATION).build();
+    assertThat(s.execute(task)).isEqualTo("from-json");
+  }
+
+  /**
+   * Malformed JSON in the JSON registry surfaces as AiInvalidResponseException (prod semantics).
+   */
+  @Test
+  void execute_jsonCanned_parseFailure_throwsInvalidResponse() {
+    TestAiService s = svc();
+    // Not a JSON string literal for a String output type — the readValue fails.
+    s.registerJson(TaskType.FEEDBACK_CLASSIFICATION, "{ this is : not valid json ]");
+    AiTask<String> task =
+        AiTestData.task(String.class).ofType(TaskType.FEEDBACK_CLASSIFICATION).build();
+    assertThatThrownBy(() -> s.execute(task))
+        .isInstanceOf(AiInvalidResponseException.class)
+        .hasMessageContaining("Failed to deserialise canned JSON");
   }
 
   /**

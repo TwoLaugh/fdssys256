@@ -49,7 +49,15 @@ class ModuleBoundaryTest {
               // request/response handling, and the HandlerExceptionResolver delegation that routes
               // filter-thrown rejections back through @ExceptionHandler all legitimately depend on
               // Spring Web / Servlet types. Same sanctioned carve-out as the SPI exceptions above.
-              "com.example.mealprep.core.origin..")
+              "com.example.mealprep.core.origin..",
+              // E2E test-support (e2e-profile only): the stub/seed controllers
+              // (E2eAiStubController, E2ePreferenceSeedController, E2eFeedbackSeedController) are
+              // HTTP scaffolding for the black-box E2E harness — NOT product API surface — so they
+              // live in `<module>.testing` (the same convention as the TestAiService double) rather
+              // than `.api`, and legitimately depend on Spring Web. They are `@Profile("e2e")` and
+              // never load in prod/dev/test. Sanctioned carve-out, same pattern as the exceptions
+              // above; forward-compatible with later domains' e2e seeders under `<module>.testing`.
+              "..testing..")
           .should()
           .dependOnClassesThat()
           .resideInAnyPackage(

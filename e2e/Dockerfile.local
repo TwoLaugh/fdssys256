@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+#
+# LOCAL-ONLY app image. Byte-for-byte identical to the RUNTIME stage of
+# ../Dockerfile, but skips the in-container Maven build stage.
+#
+# Why: on some local Docker Desktop setups the BuildKit/legacy *build* container
+# cannot reach the network (Maven Central), so `./mvnw ... dependency:go-offline`
+# dies with "exit code: 3" even though runtime containers have full internet and
+# CI builds fine. This image instead consumes a fat jar built on the HOST, so the
+# image build performs no network I/O beyond the base-image pull.
+#
+# Usage (from repo root):
+#   ./mvnw -DskipTests clean package && cp target/*.jar app.jar
+#   docker compose -f e2e/docker-compose.yml -f e2e/docker-compose.local.yml up -d
+#
+# Prod-parity of the RUNNING app is preserved: same JRE base, same non-root user,
+# same writable data dir, same jar, same `e2e` profile. Only the *compile location*
+# differs (host vs build container), which the jar artefact is agnostic to.
+FROM eclipse-temurin:17-jre AS runtime
+WORKDIR /app
+
+RUN groupadd --system mealprep && useradd --system --gid mealprep --no-create-home mealprep \
+    && mkdir -p /app/data/recipe-images \
+    && chown -R mealprep:mealprep /app
+USER mealprep
+
+# Host-built fat jar (see header). Lives at the repo root; copied from the compose
+# build context (.. -> repo root).
+COPY --chown=mealprep:mealprep app.jar /app/app.jar
+
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

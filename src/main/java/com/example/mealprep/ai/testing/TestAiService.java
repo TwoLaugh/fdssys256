@@ -11,6 +11,7 @@ import com.example.mealprep.ai.spi.EmbeddingTask;
 import com.example.mealprep.ai.spi.EmbeddingTaskType;
 import com.example.mealprep.ai.spi.ModelTier;
 import com.example.mealprep.ai.spi.TaskType;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.EnumMap;
@@ -44,6 +45,24 @@ import org.springframework.transaction.annotation.Transactional;
  * here makes this double win in both profiles. The canned-response map starts empty; AI-touching
  * E2E scenarios must register a canned response before exercising the flow (the auth smoke slice
  * touches no AI, so an empty map is correct for it).
+ *
+ * <p><b>Two registration modes.</b> There are two parallel canned-response registries:
+ *
+ * <ul>
+ *   <li>{@link #register(TaskType, Object)} — a pre-built typed object. Used by the 40+ in-process
+ *       ITs that have direct Java access to this bean.
+ *   <li>{@link #registerJson(TaskType, String)} — a raw JSON string that is deserialised, on each
+ *       {@link #execute} call, through the Spring-managed {@link ObjectMapper} into {@code
+ *       task.outputType()}. This is the seam the BLACK-BOX E2E suite drives (it cannot make a Java
+ *       call into this container): a scenario seeds realistic model-shaped JSON over HTTP via
+ *       {@code E2eAiStubController}, and the dispatch then exercises the REAL JSON→domain
+ *       wire-contract — exactly the path {@code AiServiceImpl#deserialise} runs in prod — rather
+ *       than a hand-built object.
+ * </ul>
+ *
+ * <p>When both registries hold an entry for a task type, the JSON registry wins (it is the more
+ * realistic, wire-exercising path). A parse failure on the seeded JSON throws {@link
+ * AiInvalidResponseException}, mirroring prod's {@code AiServiceImpl} semantics.
  */
 @Service
 @Profile({"test", "e2e"})
@@ -59,6 +78,7 @@ public class TestAiService implements AiService {
   public static final int DEFAULT_EMBEDDING_DIM = 1536;
 
   private final Map<TaskType, Object> cannedResponses = new EnumMap<>(TaskType.class);
+  private final Map<TaskType, String> cannedJson = new EnumMap<>(TaskType.class);
   private final Map<EmbeddingTaskType, float[]> cannedEmbeddings =
       new EnumMap<>(EmbeddingTaskType.class);
   private final CopyOnWriteArrayList<RecordedCall> recordedCalls = new CopyOnWriteArrayList<>();
@@ -67,17 +87,36 @@ public class TestAiService implements AiService {
   private final AiCallLogRepository repository;
   private final ApplicationEventPublisher eventPublisher;
   private final Clock clock;
+  private final ObjectMapper objectMapper;
 
   public TestAiService(
-      AiCallLogRepository repository, ApplicationEventPublisher eventPublisher, Clock clock) {
+      AiCallLogRepository repository,
+      ApplicationEventPublisher eventPublisher,
+      Clock clock,
+      ObjectMapper objectMapper) {
     this.repository = repository;
     this.eventPublisher = eventPublisher;
     this.clock = clock;
+    this.objectMapper = objectMapper;
   }
 
   /** Register a canned response for a task type. Subsequent calls for that type return this. */
   public <T> TestAiService register(TaskType taskType, T response) {
     cannedResponses.put(taskType, response);
+    return this;
+  }
+
+  /**
+   * Register a raw JSON canned response for a task type. On each {@link #execute} call for that
+   * type, the JSON is deserialised through the Spring-managed {@link ObjectMapper} into {@code
+   * task.outputType()} — exercising the real JSON→domain wire-contract. This is the seam the
+   * black-box E2E suite drives over HTTP (see {@code E2eAiStubController}); the in-process ITs use
+   * the typed {@link #register(TaskType, Object)} instead.
+   *
+   * <p>Takes precedence over a typed registration for the same task type.
+   */
+  public TestAiService registerJson(TaskType taskType, String json) {
+    cannedJson.put(taskType, json);
     return this;
   }
 
@@ -97,6 +136,7 @@ public class TestAiService implements AiService {
   /** Forget all registrations and recorded calls — call from {@code @AfterEach} in ITs. */
   public void clear() {
     cannedResponses.clear();
+    cannedJson.clear();
     cannedEmbeddings.clear();
     recordedCalls.clear();
   }
@@ -112,19 +152,37 @@ public class TestAiService implements AiService {
     if (task == null) {
       throw new IllegalArgumentException("task must not be null");
     }
-    Object canned = cannedResponses.get(task.type());
-    if (canned == null) {
-      throw new AiInvalidResponseException(
-          "No canned response registered for TaskType " + task.type());
-    }
-    if (!task.outputType().isInstance(canned)) {
-      throw new AiInvalidResponseException(
-          "Canned response for "
-              + task.type()
-              + " is "
-              + canned.getClass().getName()
-              + " but task expected "
-              + task.outputType().getName());
+    // JSON-canned mode (the black-box E2E seam) takes precedence: deserialise the seeded JSON
+    // through the real ObjectMapper into the task's declared output type, mirroring prod's
+    // AiServiceImpl#deserialise. A parse failure is an AiInvalidResponseException, exactly as prod.
+    String json = cannedJson.get(task.type());
+    Object canned;
+    if (json != null) {
+      try {
+        canned = objectMapper.readValue(json, task.outputType());
+      } catch (Exception ex) {
+        throw new AiInvalidResponseException(
+            "Failed to deserialise canned JSON for "
+                + task.type()
+                + " into "
+                + task.outputType().getName(),
+            ex);
+      }
+    } else {
+      canned = cannedResponses.get(task.type());
+      if (canned == null) {
+        throw new AiInvalidResponseException(
+            "No canned response registered for TaskType " + task.type());
+      }
+      if (!task.outputType().isInstance(canned)) {
+        throw new AiInvalidResponseException(
+            "Canned response for "
+                + task.type()
+                + " is "
+                + canned.getClass().getName()
+                + " but task expected "
+                + task.outputType().getName());
+      }
     }
 
     UUID callId = UUID.randomUUID();

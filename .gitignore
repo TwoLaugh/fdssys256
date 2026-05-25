@@ -32,6 +32,8 @@ node_modules/
 .env.local
 .env.*.local
 *.local
+# Committed on purpose: optional local E2E-stack override (see e2e/README "Local runs").
+!e2e/Dockerfile.local
 
 # Maven wrapper download cache (the wrapper itself is committed)
 .mvn/wrapper/maven-wrapper.jar

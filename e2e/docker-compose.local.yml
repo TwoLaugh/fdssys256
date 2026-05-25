@@ -1,0 +1,18 @@
+# LOCAL-ONLY override for e2e/docker-compose.yml.
+#
+# Builds the app image from a HOST-built jar via Dockerfile.local instead of the
+# in-container Maven build, to dodge a broken BuildKit build-network on some local
+# Docker Desktop setups (see e2e/Dockerfile.local for the full rationale). CI keeps
+# using the committed multi-stage ../Dockerfile unchanged.
+#
+# Usage (from repo root):
+#   ./mvnw -DskipTests clean package && cp target/*.jar app.jar
+#   docker compose -f e2e/docker-compose.yml -f e2e/docker-compose.local.yml up -d --build
+#   # ... run the suite against http://localhost:8080 ...
+#   docker compose -f e2e/docker-compose.yml -f e2e/docker-compose.local.yml down -v
+#
+# Only the app build is overridden; postgres and all wiring come from the base file.
+services:
+  app:
+    build:
+      dockerfile: e2e/Dockerfile.local
