@@ -5,14 +5,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.example.mealprep.e2e.support.ApiClient;
 import com.example.mealprep.e2e.support.ScenarioContext;
 import com.example.mealprep.notification.domain.entity.NotificationKind;
+import io.cucumber.java.en.And;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
 import io.restassured.response.Response;
+import java.time.Duration;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 /**
  * Notification step definitions (notification.md): the in-app inbox + per-user preferences read /
@@ -46,14 +51,26 @@ public class NotificationSteps {
   private static final String NOTIFICATIONS = "/api/v1/notifications";
   private static final String PREFERENCES = NOTIFICATIONS + "/preferences";
   private static final String SUMMARY = NOTIFICATIONS + "/summary";
+  private static final String INVENTORY = "/api/v1/provisions/inventory";
 
   /** E2E-only seeder (E2eNotificationSeedController, @Profile e2e). */
   private static final String SEED_NOTIFICATION = "/test-support/notification/seed";
+
+  /** E2E-only on-demand expiry scan trigger (E2eNotificationScanController, @Profile e2e). */
+  private static final String RUN_EXPIRY_SCAN = "/test-support/notification/run-expiry-scan";
 
   /** Cross-step keys (domain-namespaced — see ScenarioContext javadoc). */
   private static final String NOTIFICATION_ID = "notification.notificationId";
 
   private static final String PREF_VERSION = "notification.prefVersion";
+
+  /**
+   * Polling budget for the AFTER_COMMIT scan→listener notification create (matches the feedback
+   * suite's 30s/250ms async settle window).
+   */
+  private static final Duration ASYNC_TIMEOUT = Duration.ofSeconds(30);
+
+  private static final long POLL_INTERVAL_MS = 250L;
 
   private final ScenarioContext context;
 
@@ -257,7 +274,102 @@ public class NotificationSteps {
     assertThat(log.jsonPath().getLong("totalElements")).as("delivery-log totalElements").isZero();
   }
 
+  // ---------------- expiry-warning scan (NOTIF-09, via the e2e scan trigger) ----------------
+
+  @And("the user has a fridge inventory item expiring within the expiry-warning window")
+  public void theUserHasAFridgeInventoryItemExpiringWithinTheExpiryWarningWindow() {
+    // Real precondition over the product API: a FRIDGE (QUANTITY-tracked) item whose expiryDate is
+    // tomorrow — inside the 2-day fridge threshold the ExpiryWarningScanner applies — so the scan
+    // finds exactly this item for this user. Self-contained: a fresh user, one item, this run only.
+    Map<String, Object> body = new HashMap<>();
+    body.put("name", "E2E Near-Expiry Milk " + shortId());
+    body.put("category", "dairy");
+    body.put("storageLocation", "FRIDGE");
+    body.put("trackingMode", "QUANTITY");
+    body.put("quantity", 1);
+    body.put("unit", "l");
+    body.put("costPaid", 1.20);
+    body.put("status", null);
+    body.put("isStaple", false);
+    body.put("expiryDate", LocalDate.now().plusDays(1).toString());
+    body.put("ingredientMappingKey", "milk");
+    body.put("notes", "for the expiry-warning scan");
+    body.put("source", "MANUAL_ADD");
+    body.put("sourceRef", null);
+    body.put("freezerExtension", null);
+
+    Response created = context.api().post(INVENTORY, body);
+    context.setLastResponse(created);
+    assertThat(created.statusCode())
+        .as("creating the near-expiry inventory item should return 201 Created")
+        .isEqualTo(201);
+    assertThat(created.jsonPath().getString("userId")).isEqualTo(context.userId());
+  }
+
+  @When("the expiry-warning scan is triggered")
+  public void theExpiryWarningScanIsTriggered() {
+    // Fire the SAME scan() the daily @Scheduled trigger delegates to, synchronously, via the
+    // e2e-only trigger. The notification itself is created on the AFTER_COMMIT listener once this
+    // request's transaction commits, so the assertion step polls the inbox afterwards.
+    Response triggered = context.api().request().when().post(RUN_EXPIRY_SCAN);
+    context.setLastResponse(triggered);
+    assertThat(triggered.statusCode())
+        .as("the expiry-scan trigger should return 200 OK")
+        .isEqualTo(200);
+  }
+
+  @Then("an expiry-warning notification eventually appears for this user")
+  public void anExpiryWarningNotificationEventuallyAppearsForThisUser() {
+    // The scan published ItemNearingExpiryEvent; the notification listener creates a
+    // PROVISION_ITEM_NEAR_EXPIRY notification AFTER_COMMIT. Poll THIS user's inbox until it lists a
+    // notification of that kind (self-scoped — the list is per-session, never a global count).
+    awaitCondition(
+        () -> {
+          Response list = context.api().get(NOTIFICATIONS);
+          return list.statusCode() == 200
+              && list.jsonPath()
+                  .getList("content.kind", String.class)
+                  .contains(NotificationKind.PROVISION_ITEM_NEAR_EXPIRY.name());
+        },
+        ASYNC_TIMEOUT);
+
+    Response list = context.api().get(NOTIFICATIONS);
+    context.setLastResponse(list);
+    assertThat(list.statusCode()).as("notification list should return 200 OK").isEqualTo(200);
+    assertThat(list.jsonPath().getList("content.kind", String.class))
+        .as("this user's inbox carries an expiry-warning notification after the scan")
+        .contains(NotificationKind.PROVISION_ITEM_NEAR_EXPIRY.name());
+  }
+
   // ---------------- helpers ----------------
+
+  private static String shortId() {
+    return UUID.randomUUID().toString().substring(0, 8);
+  }
+
+  /**
+   * Poll {@code check} until it is true or {@code timeout} elapses — the AFTER_COMMIT scan→listener
+   * notification create must not be asserted synchronously after the trigger (mirrors {@code
+   * FeedbackSteps.awaitCondition}).
+   */
+  private static void awaitCondition(BooleanSupplier check, Duration timeout) {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    while (System.nanoTime() < deadline) {
+      if (check.getAsBoolean()) {
+        return;
+      }
+      try {
+        TimeUnit.MILLISECONDS.sleep(POLL_INTERVAL_MS);
+      } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("Interrupted while awaiting a notification", ie);
+      }
+    }
+    if (!check.getAsBoolean()) {
+      throw new AssertionError(
+          "Timed out waiting for the expiry-warning notification after " + timeout);
+    }
+  }
 
   private Response putPreferences(boolean quietHoursEnabled, long expectedVersion) {
     Map<String, Object> body = new HashMap<>();
