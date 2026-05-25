@@ -198,7 +198,10 @@ class TargetsFlowIT {
   }
 
   @Test
-  void put_returns404_whenNotInitialised() throws Exception {
+  void put_createsFromRequest_whenNotInitialised_andGetReflects() throws Exception {
+    // Upsert-on-PUT: a fresh user has NO targets row. A PUT with expectedVersion 0 CREATES the
+    // aggregate from the user-supplied values (not generic defaults), so the contract is
+    // "create at version 0 succeeds". The save bumps @Version 0 -> 1.
     AuthedUser user = registerUser();
 
     mvc.perform(
@@ -207,10 +210,52 @@ class TargetsFlowIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
                     objectMapper.writeValueAsString(NutritionTestData.defaultUpdateRequest(0L))))
-        .andExpect(status().isNotFound())
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.userId").value(user.userId().toString()))
+        .andExpect(jsonPath("$.version").value(1))
+        // The created row carries the REQUEST's values, not invented generic defaults.
+        .andExpect(jsonPath("$.protein.targetG").value(120.0))
+        .andExpect(jsonPath("$.perMealDistribution.length()").value(4))
+        .andExpect(jsonPath("$.microTargets.length()").value(2))
+        .andExpect(jsonPath("$.activityAdjustments.length()").value(2))
+        .andExpect(jsonPath("$.notes").value("Default notes"))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // GET reflects the created row.
+    mvc.perform(get("/api/v1/nutrition/targets").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(1))
+        .andExpect(jsonPath("$.notes").value("Default notes"))
+        .andExpect(jsonPath("$.protein.targetG").value(120.0));
+
+    // A second PUT (now expectedVersion 1) UPDATES the just-created row, bumping 1 -> 2.
+    UpdateTargetsRequest second = NutritionTestData.defaultUpdateRequest(1L);
+    mvc.perform(
+            put("/api/v1/nutrition/targets")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(second)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(2))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void put_returns409_whenNotInitialised_andExpectedVersionNonZero() throws Exception {
+    // Create contract: a non-existent row can only be created at version 0. A non-zero
+    // expectedVersion against a missing row is an optimistic-lock mismatch -> 409, NOT a create.
+    AuthedUser user = registerUser();
+
+    mvc.perform(
+            put("/api/v1/nutrition/targets")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(NutritionTestData.defaultUpdateRequest(5L))))
+        .andExpect(status().isConflict())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
         .andExpect(
-            jsonPath("$.type")
-                .value("https://mealprep.example.com/problems/nutrition-targets-not-found"));
+            jsonPath("$.type").value("https://mealprep.example.com/problems/concurrent-update"));
   }
 
   @Test

@@ -302,11 +302,97 @@ public class NutritionServiceImpl
   @Override
   @Transactional
   public TargetsDto updateTargets(UUID userId, UpdateTargetsRequest request, UUID actorUserId) {
-    NutritionTargets aggregate =
-        targetsRepository
-            .findByUserId(userId)
-            .orElseThrow(() -> new NutritionTargetsNotFoundException(userId));
+    Optional<NutritionTargets> existing = targetsRepository.findByUserId(userId);
+    if (existing.isEmpty()) {
+      // Upsert create-leg: a user who has never PUT has NO targets row (the planner keeps adapting
+      // via Optional.empty until then — "empty until configured" per the LLD). A PUT now CREATES
+      // the aggregate from the USER-supplied request values (no generic defaults are invented).
+      return createTargets(userId, request, actorUserId);
+    }
+    return updateExistingTargets(existing.get(), userId, request, actorUserId);
+  }
 
+  /**
+   * Create-leg of the {@code PUT} upsert: build a brand-new {@link NutritionTargets} for {@code
+   * userId} populated entirely from the user-supplied {@link UpdateTargetsRequest}.
+   *
+   * <p><b>expectedVersion-on-create contract.</b> A non-existent row can only be created at the
+   * initial {@code @Version} 0, so the request's {@code expectedVersion} must be {@code 0} (the "no
+   * row yet" sentinel — the request shape constrains it to {@code @Min(0)} and the E2E NUT-01 step
+   * PUTs with {@code expectedVersion = 0}). A non-zero {@code expectedVersion} against a missing
+   * row is a genuine optimistic-lock mismatch (the caller believes a row exists at some later
+   * version) and is rejected with the same {@link
+   * org.springframework.orm.ObjectOptimisticLockingFailureException} (→ 409) the update-leg uses,
+   * never silently coerced into a create.
+   *
+   * <p>The first {@code saveAndFlush} persists the row and Hibernate bumps {@code @Version} 0 → 1,
+   * so the GET-after-PUT (and the response) reflects version 1 — exactly as a seed-then-update
+   * would have. The create itself is audited (every field is a genuine user edit from "unset") and
+   * publishes a {@link NutritionTargetsChangedEvent}, consistent with the update-leg.
+   */
+  private TargetsDto createTargets(UUID userId, UpdateTargetsRequest request, UUID actorUserId) {
+    if (request.expectedVersion() != 0L) {
+      // The row does not exist yet; only version 0 ("create") is valid here.
+      throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
+          NutritionTargets.class, userId);
+    }
+
+    NutritionTargets aggregate = newAggregateFromRequest(userId, request);
+
+    Instant now = Instant.now(clock);
+    // Audit every field as a change from the empty baseline so the create is fully traceable.
+    Snapshot before = Snapshot.empty();
+    Snapshot after = Snapshot.fromRequest(request);
+    Set<String> changedFields = before.diff(after);
+    NutritionTargets saved = targetsRepository.saveAndFlush(aggregate);
+    writeAuditRows(saved.getId(), actorUserId, changedFields, before, after, now);
+    eventPublisher.publishEvent(
+        new NutritionTargetsChangedEvent(
+            userId, saved.getId(), changedFields, UUID.randomUUID(), now));
+    log.info(
+        "nutrition targets created via PUT userId={} targetsId={} version={}",
+        userId,
+        saved.getId(),
+        saved.getVersion());
+    return mapper.toDto(saved);
+  }
+
+  /**
+   * Build a fresh {@link NutritionTargets} for {@code userId} from the request's values. Scalars
+   * are set directly; the four child collections + eating window are populated via the same
+   * entity-construction helpers the update-leg uses, so the create path invents nothing.
+   */
+  private static NutritionTargets newAggregateFromRequest(
+      UUID userId, UpdateTargetsRequest request) {
+    NutritionTargets aggregate =
+        NutritionTargets.builder()
+            .id(UUID.randomUUID())
+            .userId(userId)
+            .userOverriddenDirections(new ArrayList<>())
+            .perMealDistribution(new ArrayList<>())
+            .microTargets(new ArrayList<>())
+            .activityAdjustments(new ArrayList<>())
+            .eatingWindow(null)
+            .build();
+    aggregate.setGoal(request.goal());
+    applyCalories(aggregate, request.calories());
+    applyMacro(aggregate, "protein", request.protein());
+    applyMacro(aggregate, "carbs", request.carbs());
+    applyMacro(aggregate, "fat", request.fat());
+    applyMacro(aggregate, "fibre", request.fibre());
+    aggregate.setSatFatTargetG(request.satFat().targetG());
+    aggregate.setSatFatDirection(request.satFat().direction());
+    aggregate.setNotes(request.notes());
+    aggregate.replacePerMealDistribution(toPerMealEntities(request.perMealDistribution()));
+    aggregate.replaceMicroTargets(toMicroTargetEntities(request.microTargets()));
+    aggregate.replaceActivityAdjustments(toActivityEntities(request.activityAdjustments()));
+    aggregate.replaceEatingWindow(toEatingWindowEntity(request.eatingWindow()));
+    return aggregate;
+  }
+
+  /** Update-leg of the {@code PUT} upsert: mutate an existing aggregate (unchanged behaviour). */
+  private TargetsDto updateExistingTargets(
+      NutritionTargets aggregate, UUID userId, UpdateTargetsRequest request, UUID actorUserId) {
     // Force lazy-load before snapshotting — diffs on collections need the full child set.
     aggregate.getPerMealDistribution().size();
     aggregate.getMicroTargets().size();
@@ -714,6 +800,45 @@ public class NutritionServiceImpl
           microsAsDtos(a),
           eatingWindowAsDto(a),
           activitiesAsDtos(a));
+    }
+
+    /**
+     * The empty baseline a create-via-PUT diffs against, so every value the user supplies is
+     * recorded as a change from "unset". Scalars are null / 0; collections are empty (an empty
+     * collection in the request is therefore NOT an audited change). Used only by the upsert
+     * create-leg.
+     */
+    static Snapshot empty() {
+      return new Snapshot(
+          null,
+          0,
+          0,
+          0,
+          null,
+          null, // goal + calories
+          null,
+          null,
+          null,
+          null, // protein
+          null,
+          null,
+          null,
+          null, // carbs
+          null,
+          null,
+          null,
+          null, // fat
+          null,
+          null,
+          null,
+          null, // fibre
+          null,
+          null, // sat fat target + direction
+          null, // notes
+          Collections.emptyList(),
+          Collections.emptyList(),
+          null,
+          Collections.emptyList());
     }
 
     /**

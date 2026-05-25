@@ -202,18 +202,20 @@ Feature: Cross-domain journeys — the integration capstone (XJ-01..06)
   # ============================================================================
 
   @xj06
-  # XJ-06 buildable onboarding spine (AUTH-01/05 -> PREF-01 hard constraints -> HH-01 household ->
-  # PLAN-06/07 -> PLAN-13): the "fresh user with a random handle" spine every other journey folds
-  # into its Authenticated precondition. Register, set safety-critical hard constraints, create the
-  # household, then generate (cold-start; the empty pool still yields a plan) and accept it.
-  # NOTE: the NUT-01 nutrition-targets leg is intentionally omitted — PUT /nutrition/targets is
-  # update-only and 404s for a fresh user (initialiseTargets ships in nutrition-01c; no HTTP create
-  # path), the same limitation nutrition.feature NUT-01 is @pending on. Generate reads nutrition via
-  # an .ifPresent fallback, so its absence does not block this spine. A later nutrition e2e seeder
-  # un-pends NUT-01 and restores the targets leg here.
+  # XJ-06 buildable onboarding spine (AUTH-01/05 -> PREF-01 hard constraints -> NUT-01 targets ->
+  # HH-01 household -> PLAN-06/07 -> PLAN-13): the "fresh user with a random handle" spine every
+  # other journey folds into its Authenticated precondition. Register, set safety-critical hard
+  # constraints, set nutrition targets, create the household, then generate (cold-start; the empty
+  # pool still yields a plan) and accept it.
+  # NOTE: the NUT-01 nutrition-targets leg is GREEN since nutrition-01c — PUT /nutrition/targets is
+  # an UPSERT, so a fresh user's first PUT (expectedVersion 0) CREATES the row from the supplied
+  # values instead of 404ing. Generate also reads nutrition via an .ifPresent fallback, so the
+  # targets exist either way.
   Scenario: A new user onboards models and a household, then generates and accepts a first plan
     Given a fresh registered and logged-in user
     And the user has initialised hard constraints
+    When they set their nutrition targets
+    Then the targets are stored and returned for this user
     And the user has a household
     When they generate a plan for a week
     Then a generated plan is created for this household

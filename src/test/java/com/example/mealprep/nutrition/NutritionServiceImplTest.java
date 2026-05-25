@@ -28,7 +28,6 @@ import com.example.mealprep.nutrition.domain.repository.NutritionTargetsReposito
 import com.example.mealprep.nutrition.domain.service.internal.IntakeKeyNormaliser;
 import com.example.mealprep.nutrition.domain.service.internal.NutritionServiceImpl;
 import com.example.mealprep.nutrition.event.NutritionTargetsChangedEvent;
-import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
 import com.example.mealprep.nutrition.testdata.NutritionTestData;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
@@ -173,18 +172,67 @@ class NutritionServiceImplTest {
     assertThat(service().getUserIdsWithTargets()).containsExactly(u1, u2);
   }
 
-  // ---------------- updateTargets ----------------
+  // ---------------- updateTargets (upsert: create-leg) ----------------
 
   @Test
-  void updateTargets_whenTargetsMissing_throwsNotFound() {
+  void updateTargets_whenAbsentAndVersionZero_createsRowFromRequestValues() {
+    UUID userId = UUID.randomUUID();
+    when(targetsRepository.findByUserId(userId)).thenReturn(Optional.empty());
+    when(targetsRepository.saveAndFlush(any(NutritionTargets.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    UpdateTargetsRequest request = NutritionTestData.defaultUpdateRequest(0L);
+
+    TargetsDto result = service().updateTargets(userId, request, userId);
+
+    ArgumentCaptor<NutritionTargets> createdCaptor =
+        ArgumentCaptor.forClass(NutritionTargets.class);
+    verify(targetsRepository).saveAndFlush(createdCaptor.capture());
+    NutritionTargets created = createdCaptor.getValue();
+    assertThat(created.getUserId()).isEqualTo(userId);
+    assertThat(created.getId()).isNotNull();
+    // The created row carries the USER's request values — NOT invented generic defaults
+    // (the prior auto-seed used 150 g protein; the request supplies 120 g).
+    assertThat(created.getGoal().name()).isEqualTo("MAINTAIN");
+    assertThat(created.getDailyCalorieTarget()).isEqualTo(2000);
+    assertThat(created.getProteinTargetG()).isEqualByComparingTo("120.0");
+    assertThat(created.getCarbsTargetG()).isEqualByComparingTo("250.0");
+    assertThat(created.getFatTargetG()).isEqualByComparingTo("70.0");
+    assertThat(created.getFibreTargetG()).isEqualByComparingTo("30.0");
+    assertThat(created.getSatFatTargetG()).isEqualByComparingTo("20.0");
+    assertThat(created.getNotes()).isEqualTo("Default notes");
+    // The user-supplied children are persisted (not empty defaults).
+    assertThat(created.getPerMealDistribution()).hasSize(4);
+    assertThat(created.getMicroTargets()).hasSize(2);
+    assertThat(created.getActivityAdjustments()).hasSize(2);
+
+    assertThat(result).isNotNull();
+    assertThat(result.userId()).isEqualTo(userId);
+
+    // A create IS a genuine user write: it is audited and publishes a change event.
+    verify(auditRepository, org.mockito.Mockito.atLeastOnce())
+        .save(any(NutritionTargetsAuditLog.class));
+    verify(eventPublisher).publishEvent(any(NutritionTargetsChangedEvent.class));
+  }
+
+  @Test
+  void updateTargets_whenAbsentAndVersionNonZero_throwsOptimisticLockFailure() {
+    // expectedVersion-on-create contract: a non-existent row can only be created at version 0.
+    // A non-zero expectedVersion against a missing row is an optimistic-lock mismatch, never a
+    // silent create.
     UUID userId = UUID.randomUUID();
     when(targetsRepository.findByUserId(userId)).thenReturn(Optional.empty());
 
     assertThatThrownBy(
             () ->
-                service().updateTargets(userId, NutritionTestData.defaultUpdateRequest(0L), userId))
-        .isInstanceOf(NutritionTargetsNotFoundException.class);
+                service().updateTargets(userId, NutritionTestData.defaultUpdateRequest(3L), userId))
+        .isInstanceOf(ObjectOptimisticLockingFailureException.class);
+
+    verify(targetsRepository, never()).saveAndFlush(any());
+    verifyNoInteractions(auditRepository, eventPublisher);
   }
+
+  // ---------------- updateTargets (upsert: update-leg) ----------------
 
   @Test
   void updateTargets_whenVersionStale_throwsOptimisticLockFailure() {
