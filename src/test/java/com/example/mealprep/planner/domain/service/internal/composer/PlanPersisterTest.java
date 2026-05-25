@@ -139,7 +139,8 @@ class PlanPersisterTest {
     when(planRepository.findFirstByHouseholdIdAndWeekStartDateAndStatus(any(), any(), any()))
         .thenReturn(Optional.empty());
 
-    // PlanPersister groups by SlotAssignment.dayId(); slots sharing a day must share a dayId.
+    // PlanPersister groups by SlotAssignment.onDate(); slots sharing a date collapse to one Day
+    // regardless of dayId. (Here same-date slots also share a dayId, which still groups correctly.)
     UUID day1Id = UUID.randomUUID();
     UUID day2Id = UUID.randomUUID();
     SlotAssignment d2s1 =
@@ -201,6 +202,63 @@ class PlanPersisterTest {
     assertThat(day1.getSlots().get(0).getSlotIndex()).isEqualTo(0);
     assertThat(day1.getSlots().get(1).getSlotIndex()).isEqualTo(1);
     assertThat(result.getDays().get(1).getOnDate()).isEqualTo(WEEK.plusDays(1));
+  }
+
+  @Test
+  void persist_multiKindSlotsOnSameDateWithDistinctDayIds_collapseToOneDay() {
+    // Regression (recipe-pool live find): the slot skeleton mints a DISTINCT dayId per slot kind,
+    // so a real multi-kind day (breakfast + dinner on the SAME date) arrives as assignments sharing
+    // an onDate but with different dayIds. They MUST collapse into ONE Day — planner_days is
+    // UNIQUE(plan_id, on_date); grouping by dayId produced duplicate (plan_id, on_date) rows and a
+    // 23505 violation, masked for the project's life while NoOpRecipePoolSource kept plans empty.
+    UUID householdId = UUID.randomUUID();
+    when(planRepository.countByHouseholdIdAndWeekStartDate(householdId, WEEK)).thenReturn(0);
+    when(planRepository.findFirstByHouseholdIdAndWeekStartDateAndStatus(any(), any(), any()))
+        .thenReturn(Optional.empty());
+
+    SlotAssignment breakfast =
+        new SlotAssignment(
+            UUID.randomUUID(), // distinct dayId
+            UUID.randomUUID(),
+            0,
+            WEEK,
+            SlotKind.BREAKFAST,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            2,
+            false);
+    SlotAssignment dinner =
+        new SlotAssignment(
+            UUID.randomUUID(), // different dayId, SAME date
+            UUID.randomUUID(),
+            2,
+            WEEK,
+            SlotKind.DINNER,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            2,
+            false);
+    CandidatePlan chosen =
+        new CandidatePlan(
+            UUID.randomUUID(), WEEK, List.of(breakfast, dinner), new ScoreResult(null, null));
+
+    Plan result =
+        persister.persist(
+            chosen,
+            req(householdId),
+            ctx(),
+            UUID.randomUUID(),
+            PlanTestData.emptyRollup(),
+            false,
+            false,
+            false);
+
+    assertThat(result.getDays()).hasSize(1);
+    Day only = result.getDays().get(0);
+    assertThat(only.getOnDate()).isEqualTo(WEEK);
+    assertThat(only.getSlots()).hasSize(2);
   }
 
   @Test
