@@ -129,16 +129,19 @@ Feature: Planner — plan generation, accept/reject/abandon/revert lifecycle, em
     When an anonymous client generates a plan with no session
     Then the request is rejected as unauthenticated
 
-  # ----- @pending: need a recipe pool that cannot be assembled over HTTP -----
+  # ----- Recipe-pool driven (green via the real catalogue pool — Tier-1 CatalogueRecipePoolSource) -----
+  # The planner now plans from the recipe catalogue (caller's USER recipes ∪ SYSTEM). Seeding ≥3
+  # plannable recipes per default-household slot kind over the real POST /api/v1/recipes create path
+  # gives Stage A candidates, so a generated plan carries real scheduled-recipe slots — un-pending
+  # the two paths that were waiting on a recipe-pool surface.
 
-  @pending
-  # PLAN-18 (slot-state lifecycle). PENDING: needs a generated plan with real slots, which requires
-  # a non-empty recipe pool. In the running app NoOpRecipePoolSource always returns an empty pool
-  # (no catalogue-wide recipe-search HTTP surface exists yet), so a generated plan has no slots to
-  # transition. Un-pend once a recipe-pool/search surface lands.
+  # PLAN-18 (slot-state lifecycle): a generated plan with real slots, then PATCH its first slot
+  # PLANNED -> COOKING and assert the transition. The seeded catalogue (≥3 recipes per slot kind)
+  # gives Stage A candidates so the plan has slots to transition.
   Scenario: A user marks a planned slot as cooking
     Given a fresh registered and logged-in user
     And the user has a household
+    And the user has plannable recipes in their catalogue
     When they generate a plan for a week
     Then a generated plan is created for this household
     When they accept that plan
@@ -146,15 +149,13 @@ Feature: Planner — plan generation, accept/reject/abandon/revert lifecycle, em
     When they mark the first slot of that plan cooking
     Then the slot is marked cooking for this household
 
-  @pending
-  # PLAN-40 flagship (cold-start → generate → AI Stage-C pick → scheduled recipes). PENDING: needs a
-  # non-empty recipe pool so Stage A produces candidates and Stage C (the AI pick, TaskType
-  # PLANNER_STAGE_C) actually runs; with the empty pool Stage C is SKIPPED and the plan has no
-  # scheduled recipes. The AI seed + assertions are authored and ready — un-pend once an HTTP
-  # recipe-pool surface gives Stage A candidates to choose from.
+  # PLAN-40 flagship (generate -> AI Stage-C pick -> scheduled recipes): the seeded catalogue makes
+  # Stage A produce candidates so Stage C (the AI pick, TaskType PLANNER_STAGE_C) runs and the plan
+  # carries scheduled recipes in its slots.
   Scenario: The AI picks a candidate and the plan carries scheduled recipes
     Given a fresh registered and logged-in user
     And the user has a household
+    And the user has plannable recipes in their catalogue
     And the AI will pick the recommended plan candidate
     When they generate a plan for a week
     Then the generated plan has scheduled recipes in its slots for this household

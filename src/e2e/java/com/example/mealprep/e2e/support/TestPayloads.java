@@ -37,6 +37,56 @@ public final class TestPayloads {
   }
 
   /**
+   * A valid {@code POST /api/v1/recipes} body tuned to survive the planner's Stage-A hard filters
+   * so the seeded recipe becomes a plannable candidate for a slot of {@code mealType}
+   * (breakfast/lunch/dinner/snack — case-insensitive; the {@code HardFilterRunner} lower-cases both
+   * sides). The two filter pitfalls a plain {@link #manualRecipe} body trips are corrected here:
+   *
+   * <ul>
+   *   <li><b>Kind:</b> {@code metadata.mealTypes} is set to the single {@code mealType} so {@code
+   *       HardFilterRunner.matchesKind} matches the slot.
+   *   <li><b>Time budget:</b> {@code totalTimeMins == 25} — well under the default-household slot's
+   *       30-min budget × the 1.5 overshoot ratio (cap 45), so {@code withinTimeBudget} passes.
+   *   <li><b>Equipment:</b> {@code equipmentRequired} is EMPTY. A fresh household has no
+   *       provisions, so any non-empty equipment list would be filtered out (no available equipment
+   *       to match).
+   * </ul>
+   *
+   * <p>A single ingredient with a valid {@code ingredientMappingKey} passes the hard-constraint
+   * filter for a fresh user (no hard constraints). The {@code name} must be unique per recipe so
+   * the content fingerprint stays distinct (each seed is a separate catalogue row, not a dedup
+   * collapse).
+   */
+  public static Map<String, Object> plannableRecipe(String name, String mealType) {
+    Map<String, Object> metadata = new java.util.HashMap<>();
+    metadata.put("servings", 2);
+    metadata.put("prepTimeMins", 10);
+    metadata.put("cookTimeMins", 15);
+    metadata.put("totalTimeMins", 25);
+    metadata.put("equipmentRequired", List.of());
+    metadata.put("fridgeDays", 3);
+    metadata.put("freezerWeeks", 2);
+    metadata.put("packable", true);
+    metadata.put("cuisine", "Generic");
+    metadata.put("mealTypes", List.of(mealType));
+
+    List<Map<String, Object>> ingredients = new ArrayList<>();
+    ingredients.add(ingredient(0, "chicken.breast", "Chicken breast", "300.000", "g"));
+
+    List<Map<String, Object>> method = new ArrayList<>();
+    method.add(methodStep(1, "Prepare and cook the " + name + ".", 25));
+
+    return new java.util.HashMap<>(
+        Map.of(
+            "name", name,
+            "description", "An E2E-authored plannable recipe.",
+            "ingredients", ingredients,
+            "method", method,
+            "metadata", metadata,
+            "tags", defaultTags()));
+  }
+
+  /**
    * A valid {@code PUT /api/v1/recipes/{id}} (manual edit) body — same shape as a create body plus
    * a {@code changeReason} and the caller-supplied {@code expectedOptimisticVersion}. The second
    * method step's duration is bumped so the computed diff is non-empty (a no-op edit is rejected
