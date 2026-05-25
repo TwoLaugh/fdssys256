@@ -105,8 +105,14 @@ class PlanPersister {
             .days(new ArrayList<>())
             .build();
 
-    // Group assignments by day, preserving week order.
-    Map<UUID, Day> daysByDayId = new LinkedHashMap<>();
+    // Group assignments by calendar date. planner_days is UNIQUE on (plan_id, on_date), so exactly
+    // ONE Day row may exist per date — a multi-kind day (breakfast/lunch/dinner/snack on the same
+    // date) yields several SlotAssignments sharing that onDate and they MUST collapse into one Day.
+    // (Keying by a.dayId() was a latent bug: the slot skeleton mints a distinct dayId per slot
+    // kind,
+    // so a real multi-kind plan produced duplicate (plan_id, on_date) rows -> 23505. It went
+    // unnoticed while NoOpRecipePoolSource kept every plan empty — no slots, no day rows.)
+    Map<java.time.LocalDate, Day> daysByDate = new LinkedHashMap<>();
     List<SlotAssignment> assignments =
         chosen.assignments() == null ? List.of() : chosen.assignments();
     List<SlotAssignment> ordered = new ArrayList<>(assignments);
@@ -116,14 +122,14 @@ class PlanPersister {
 
     for (SlotAssignment a : ordered) {
       Day day =
-          daysByDayId.computeIfAbsent(
-              a.dayId(),
-              dayId -> {
+          daysByDate.computeIfAbsent(
+              a.onDate(),
+              onDate -> {
                 Day d =
                     Day.builder()
                         .id(UUID.randomUUID())
                         .plan(plan)
-                        .onDate(a.onDate())
+                        .onDate(onDate)
                         .slots(new ArrayList<>())
                         .build();
                 plan.getDays().add(d);

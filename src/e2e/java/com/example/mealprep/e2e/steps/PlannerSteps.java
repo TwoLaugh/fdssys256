@@ -5,12 +5,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.example.mealprep.ai.spi.TaskType;
 import com.example.mealprep.e2e.support.ApiClient;
 import com.example.mealprep.e2e.support.ScenarioContext;
+import com.example.mealprep.e2e.support.TestPayloads;
 import io.cucumber.java.en.And;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
 import io.restassured.response.Response;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -48,9 +50,11 @@ import java.util.UUID;
  * ACTIVE), reject (-> REJECTED), abandon (-> ABANDONED), revert (-> 201 new GENERATED gen2 + prior
  * SUPERSEDED), the empty-state reads (active 404 / history empty / list empty / suggestions empty),
  * 404 on an unknown plan id, the cross-household 403, and the illegal-transition 409/400 errors.
- * {@code @pending} (in the feature, with a one-line reason): the slot-state transitions and the
- * recipe-driven flagship — both assert on scheduled-recipe slots whose exact shape depends on a
- * real recipe pool (no recipe-search surface wired), so they are deferred to a later batch.
+ * Also green now that the planner plans from the recipe catalogue (Tier-1 {@code
+ * CatalogueRecipePoolSource}): the slot-state lifecycle (PLAN-18) and the recipe-driven flagship
+ * (PLAN-40) — both seed plannable recipes over the real {@code POST /api/v1/recipes} create path
+ * (see {@link #theUserHasPlannableRecipesInTheirCatalogue()}) so Stage A produces candidates and a
+ * generated plan carries real scheduled-recipe slots.
  *
  * <p>Self-contained (D5): every scenario mints its OWN fresh user, creates its OWN household, and
  * plans a per-scenario-random week, asserting only on THIS plan's id / status / generation
@@ -64,6 +68,21 @@ public class PlannerSteps {
   private static final String HOUSEHOLD_ID = "planner.householdId";
   private static final String WEEK_START = "planner.weekStart";
   private static final String PLAN_ID = "planner.planId";
+
+  /**
+   * The four built-in slot kinds {@code POST /api/v1/households} seeds by default
+   * (breakfast/lunch/dinner/snack — see {@code HouseholdServiceImpl.buildDefaultSettings}). The
+   * generated week has one slot per kind per day, so the seeded pool must cover every kind.
+   */
+  private static final List<String> DEFAULT_SLOT_KINDS =
+      List.of("breakfast", "lunch", "dinner", "snack");
+
+  /**
+   * Recipes seeded per slot kind. 3 matches the planner's {@code min-pool-per-slot}; 3 × 4 kinds =
+   * 12 total stays at/above the cold-start threshold ({@code 3 × 4 distinct kinds}), so the
+   * cold-start gate does not fire and the plan fills from the seeded USER catalogue alone.
+   */
+  private static final int RECIPES_PER_KIND = 3;
 
   private final ScenarioContext context;
   private final AiStubSteps aiStub;
@@ -90,6 +109,32 @@ public class PlannerSteps {
     String householdId = response.jsonPath().getString("id");
     assertThat(householdId).as("create must mint a household id").isNotBlank();
     context.put(HOUSEHOLD_ID, householdId);
+  }
+
+  /**
+   * Seed a plannable recipe pool over the real HTTP create path ({@code POST /api/v1/recipes}) so
+   * Stage A produces candidates for every default-household slot kind. The default household
+   * (created by {@link #theUserHasAHousehold()}) seeds all four built-in slot kinds —
+   * breakfast/lunch/dinner/snack — so the generated week has 4 slots per day. Seed {@code
+   * RECIPES_PER_KIND} (= 3) recipes per kind = 12 total, which clears both the planner's {@code
+   * min-pool-per-slot} (3) AND the cold-start threshold ({@code 3 × distinct-slot-kinds} = 12), so
+   * the cold-start gate does NOT fire — the plan is filled from THIS user's seeded USER catalogue
+   * alone (deterministic, self-scoped). Each recipe carries an empty {@code equipmentRequired} and
+   * a small {@code totalTimeMins} so it survives the Stage-A hard filters for a fresh household
+   * with no provisions (see {@link TestPayloads#plannableRecipe}).
+   */
+  @Given("the user has plannable recipes in their catalogue")
+  public void theUserHasPlannableRecipesInTheirCatalogue() {
+    for (String mealType : DEFAULT_SLOT_KINDS) {
+      for (int i = 0; i < RECIPES_PER_KIND; i++) {
+        String name = "E2E " + mealType + " " + (i + 1) + " " + shortId();
+        Response response =
+            context.api().post("/api/v1/recipes", TestPayloads.plannableRecipe(name, mealType));
+        assertThat(response.statusCode())
+            .as("seeding a plannable %s recipe should return 201 Created", mealType)
+            .isEqualTo(201);
+      }
+    }
   }
 
   // ---------------- generate + lifecycle ----------------
@@ -299,17 +344,15 @@ public class PlannerSteps {
     context.setLastResponse(new ApiClient().post(PLANS + "/generate", body));
   }
 
-  // ---------------- @pending glue (ready for when a recipe-pool surface lands) ----------------
-  // These steps are exercised only by @pending scenarios (dry-run runs `not @pending`). They are
-  // authored now so the moment an HTTP recipe-pool/recipe-search surface exists — giving a
-  // generated
-  // plan real slots — the slot-state lifecycle and the AI flagship become green by un-pending them.
+  // ---------------- recipe-pool-driven glue (green; the catalogue now feeds Stage A) ----------
+  // These steps assert on scheduled-recipe slots. They are reached after seeding plannable recipes
+  // over POST /api/v1/recipes (theUserHasPlannableRecipesInTheirCatalogue), so a generated plan has
+  // real slots — the slot-state lifecycle (PLAN-18) and the AI flagship (PLAN-40) are now green.
 
   @When("they mark the first slot of that plan cooking")
   public void theyMarkTheFirstSlotOfThatPlanCooking() {
-    // Needs a plan with slots, which requires a non-empty recipe pool (no HTTP path today). Read
-    // the
-    // active plan and PATCH its first slot PLANNED -> COOKING.
+    // Read the plan and PATCH its first slot PLANNED -> COOKING. The seeded catalogue gave Stage A
+    // candidates, so days[0].slots[0] (slotIndex 0 = breakfast) is a filled, transitionable slot.
     Response plan = context.api().get(PLANS + "/" + planId());
     String slotId = plan.jsonPath().getString("days[0].slots[0].id");
     context.setLastResponse(
@@ -331,10 +374,8 @@ public class PlannerSteps {
   @And("the AI will pick the recommended plan candidate")
   public void theAiWillPickTheRecommendedPlanCandidate() {
     // The Stage-C pick task (TaskType PLANNER_STAGE_C, output {chosenIndex, reasoning}). Stage C
-    // only
-    // runs when the recipe pool yields candidates — with the empty pool it is skipped, so this seed
-    // is unused until a recipe-pool surface lands. Stashed here so the flagship is one un-pend
-    // away.
+    // runs once the seeded catalogue gives Stage A candidates to choose from; pick candidate 0
+    // deterministically (an out-of-range index falls back deterministically).
     aiStub.primeAi(
         com.example.mealprep.ai.spi.TaskType.PLANNER_STAGE_C,
         "{ \"chosenIndex\": 0, \"reasoning\": \"balanced macros and good variety\" }");
@@ -344,9 +385,36 @@ public class PlannerSteps {
   public void theGeneratedPlanHasScheduledRecipesInItsSlotsForThisHousehold() {
     Response response = context.lastResponse();
     assertThat(response.statusCode()).as("generate should return 201 Created").isEqualTo(201);
+    assertThat(response.jsonPath().getString("status")).isEqualTo("GENERATED");
+    assertThat(response.jsonPath().getString("householdId"))
+        .isEqualTo(context.<String>get(HOUSEHOLD_ID));
     assertThat(response.jsonPath().getList("days")).as("the plan should have days").isNotEmpty();
     assertThat(response.jsonPath().getString("days[0].slots[0].scheduledRecipe.recipeId"))
         .as("a slot should carry a scheduled recipe")
+        .isNotBlank();
+    rememberPlan(response);
+  }
+
+  @Then("the first plan is a cold-start plan with scheduled recipes for this household")
+  public void theFirstPlanIsAColdStartPlanWithScheduledRecipesForThisHousehold() {
+    // XJ-06: the empty catalogue tripped the Tier-2 cold-start gate, which ran discovery
+    // (E2eSeedDiscoverySource in the e2e profile) to fill the SYSTEM catalogue; the re-read pool
+    // then filled the plan's slots. Assert the gate fired (coldStart = true, exposed on PlanDto)
+    // and
+    // the plan carries scheduled recipes — the cold-start DoD over HTTP. The deterministic seed
+    // covers breakfast/lunch/dinner, so the first day's first slot (slotIndex 0 = breakfast) is
+    // filled; the snack slot has no seed and is simply omitted (unfilled slots are not persisted).
+    Response response = context.lastResponse();
+    assertThat(response.statusCode()).as("generate should return 201 Created").isEqualTo(201);
+    assertThat(response.jsonPath().getString("status")).isEqualTo("GENERATED");
+    assertThat(response.jsonPath().getString("householdId"))
+        .isEqualTo(context.<String>get(HOUSEHOLD_ID));
+    assertThat(response.jsonPath().getBoolean("coldStart"))
+        .as("an empty-catalogue first plan should be flagged cold-start")
+        .isTrue();
+    assertThat(response.jsonPath().getList("days")).as("the plan should have days").isNotEmpty();
+    assertThat(response.jsonPath().getString("days[0].slots[0].scheduledRecipe.recipeId"))
+        .as("a cold-start-imported recipe should fill the first slot")
         .isNotBlank();
     rememberPlan(response);
   }

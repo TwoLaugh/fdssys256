@@ -102,15 +102,24 @@ Feature: Cross-domain journeys — the integration capstone (XJ-01..06)
     When they log a standalone snack for today
     Then the snack is recorded on today's intake for this user
 
-  @xj03 @pending
-  # XJ-03 full critical path. BLOCKING LEG: PLAN-18 (mark slots cooking -> cooked -> eaten) and
-  # the NUT-22 -> PLAN-22 -> PLAN-21 mid-week re-opt cascade assert on SCHEDULED-RECIPE slots,
-  # whose shape needs a real recipe POOL (NoOpRecipePoolSource is wired; no catalogue-wide recipe
-  # -search surface exists), so a generated plan has no slots to transition. Un-pend when an HTTP
-  # recipe-pool/recipe-search surface lands and a plan generates with real slots.
-  Scenario: The week plan is cooked, eaten, and mid-week re-optimised from nutrition actuals
+  @xj03
+  # XJ-03 cook-leg critical path (now GREEN): the seeded catalogue (≥3 plannable recipes per
+  # default-household slot kind, created over the real POST /api/v1/recipes path) gives Stage A
+  # candidates, so generate yields a plan with SCHEDULED-RECIPE slots — accept it (-> ACTIVE) and
+  # mark the first slot cooking (PLAN-18 PLANNED -> COOKING). This is the cook portion of the full
+  # critical path.
+  #
+  # SCOPED DOWN: the mid-week re-optimisation tail (NUT-22 -> PLAN-22 -> PLAN-21: log diverging
+  # nutrition actuals -> materiality filter raises a re-opt suggestion -> accept it into a fresh
+  # generation) is NOT exercised here. That cascade is driven by asynchronous event listeners with a
+  # materiality threshold (15% macro divergence + ≥3 redistributable meals) and is not reliably
+  # reachable / assertable over the black-box HTTP surface in one synchronous scenario; the re-opt
+  # tail stays deferred (its empty-state slice is covered green by planner.feature PLAN-22). Un-pend
+  # the re-opt tail when an HTTP-drivable re-opt trigger + deterministic suggestion read lands.
+  Scenario: The week plan is cooked and a slot is marked cooking from real scheduled recipes
     Given a fresh registered and logged-in user
     And the user has a household
+    And the user has plannable recipes in their catalogue
     And the AI will pick the recommended plan candidate
     When they generate a plan for a week
     Then the generated plan has scheduled recipes in its slots for this household
@@ -211,16 +220,24 @@ Feature: Cross-domain journeys — the integration capstone (XJ-01..06)
     When they accept that plan
     Then the plan becomes active for this household
 
-  @xj06 @pending
-  # XJ-06 cold-start catalogue bootstrap. BLOCKING LEG: RCP-10/RCP-09 (the planner's discovery +
-  # AI generation pre-step that fills the system catalogue up to 50 USDA-mapped recipes when below
-  # the cold-start minimum) needs a real Recipe discovery/generation surface + recipe pool to
-  # produce a plan with SCHEDULED recipes in its slots; with NoOpRecipePoolSource the plan has no
-  # slots to assert against. Un-pend when the discovery/generation + recipe-pool surfaces land.
+  @xj06
+  # XJ-06 cold-start catalogue bootstrap (now GREEN via the planner's Tier-2 cold-start gate). A
+  # fresh user with an EMPTY catalogue generates: the catalogue is below the cold-start threshold
+  # (3 × distinct-slot-kinds), so the gate fires and runs DiscoveryService.runJobSync, which in the
+  # e2e profile imports recipes from the deterministic E2eSeedDiscoverySource (breakfast/lunch/dinner
+  # seeds — NOT the real web/Google sources). The discovery runner gates every candidate through a
+  # DISCOVERY_FILTERING AI call, so an accept-all canned response is primed first; without it the
+  # unprimed stub would drop all candidates and the catalogue would stay empty. The re-read pool then
+  # fills the plan's slots, the plan is flagged coldStart = true. We do NOT seed recipes here — the
+  # empty catalogue is precisely what triggers the gate.
   Scenario: Cold start bootstraps the catalogue so the first plan has scheduled recipes
     Given a fresh registered and logged-in user
     And the user has initialised hard constraints
     Given the user has a household
     And the AI will pick the recommended plan candidate
+    And the AI will return this DISCOVERY_FILTERING response:
+      """
+      { "relevant": true, "confidence": 0.95, "reason": "relevant e2e cold-start seed" }
+      """
     When they generate a plan for a week
-    Then the generated plan has scheduled recipes in its slots for this household
+    Then the first plan is a cold-start plan with scheduled recipes for this household
