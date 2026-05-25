@@ -223,27 +223,53 @@ public class RecipeServiceImpl
   @Override
   @Transactional(readOnly = true)
   public Optional<RecipeDto> getById(UUID recipeId) {
-    return recipeRepository
-        .findByIdAndDeletedAtIsNull(recipeId)
-        .map(
-            recipe -> {
-              List<RecipeBranchDto> branches =
-                  branchMapper.toDtoList(branchRepository.findAllByRecipeId(recipe.getId()));
-              if (recipe.getCurrentBranchId() == null) {
-                // Should never happen for a created-via-API recipe; defensive.
-                return recipeMapper.toDto(recipe, null, branches);
-              }
-              Optional<RecipeVersion> versionOpt =
-                  versionRepository.findFirstByRecipeIdAndBranchIdAndVersionNumber(
-                      recipe.getId(), recipe.getCurrentBranchId(), recipe.getCurrentVersion());
-              if (versionOpt.isEmpty()) {
-                return recipeMapper.toDto(recipe, null, branches);
-              }
-              RecipeVersion version = versionOpt.get();
-              touchLazyChildren(version);
-              RecipeVersionDto versionDto = versionMapper.toDto(version);
-              return recipeMapper.toDto(recipe, versionDto, branches);
-            });
+    return recipeRepository.findByIdAndDeletedAtIsNull(recipeId).map(this::hydrate);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<RecipeDto> findPlannableCandidates(UUID userId, int limit) {
+    if (userId == null || limit <= 0) {
+      return List.of();
+    }
+    List<Recipe> recipes =
+        recipeRepository.findPlannableForUser(
+            userId, org.springframework.data.domain.PageRequest.of(0, limit));
+    List<RecipeDto> dtos = new ArrayList<>(recipes.size());
+    for (Recipe recipe : recipes) {
+      dtos.add(hydrate(recipe));
+    }
+    return dtos;
+  }
+
+  /**
+   * Hydrate a loaded {@link Recipe} root to a full {@link RecipeDto} — branches[] + the
+   * current-version body with its lazy children forced. SAME mapping the GET-by-id read path uses;
+   * extracted so {@link #findPlannableCandidates} produces candidates identical in shape to {@link
+   * #getById} (the planner's Stage-A hard filters read metadata + ingredient mapping keys, and the
+   * beam search schedules {@code currentVersionBody().id()} + {@code currentBranchId()}).
+   *
+   * <p>Must run inside the read transaction (callers are {@code @Transactional(readOnly = true)})
+   * so {@link #touchLazyChildren} can force-load the {@code @OneToMany} children before the session
+   * closes (OSIV is off).
+   */
+  private RecipeDto hydrate(Recipe recipe) {
+    List<RecipeBranchDto> branches =
+        branchMapper.toDtoList(branchRepository.findAllByRecipeId(recipe.getId()));
+    if (recipe.getCurrentBranchId() == null) {
+      // Should never happen for a created-via-API recipe; defensive.
+      return recipeMapper.toDto(recipe, null, branches);
+    }
+    Optional<RecipeVersion> versionOpt =
+        versionRepository.findFirstByRecipeIdAndBranchIdAndVersionNumber(
+            recipe.getId(), recipe.getCurrentBranchId(), recipe.getCurrentVersion());
+    if (versionOpt.isEmpty()) {
+      return recipeMapper.toDto(recipe, null, branches);
+    }
+    RecipeVersion version = versionOpt.get();
+    touchLazyChildren(version);
+    RecipeVersionDto versionDto = versionMapper.toDto(version);
+    return recipeMapper.toDto(recipe, versionDto, branches);
   }
 
   @Override

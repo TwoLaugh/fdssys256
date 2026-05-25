@@ -170,6 +170,81 @@ class RecipeServiceImplTest {
     assertThat(dto.currentVersionBody().tags().dietaryFlags()).isEmpty();
   }
 
+  // ---------------- findPlannableCandidates (planner Stage-A read) ----------------
+
+  @Test
+  void findPlannableCandidates_nullUserId_returnsEmpty_withoutQuerying() {
+    List<RecipeDto> result = service().findPlannableCandidates(null, 10);
+
+    assertThat(result).isEmpty();
+    verify(recipeRepository, org.mockito.Mockito.never())
+        .findPlannableForUser(any(), any(org.springframework.data.domain.Pageable.class));
+  }
+
+  @Test
+  void findPlannableCandidates_zeroLimit_returnsEmpty_withoutQuerying() {
+    List<RecipeDto> result = service().findPlannableCandidates(UUID.randomUUID(), 0);
+
+    assertThat(result).isEmpty();
+    verify(recipeRepository, org.mockito.Mockito.never())
+        .findPlannableForUser(any(), any(org.springframework.data.domain.Pageable.class));
+  }
+
+  @Test
+  void findPlannableCandidates_negativeLimit_returnsEmpty_withoutQuerying() {
+    List<RecipeDto> result = service().findPlannableCandidates(UUID.randomUUID(), -5);
+
+    assertThat(result).isEmpty();
+    verify(recipeRepository, org.mockito.Mockito.never())
+        .findPlannableForUser(any(), any(org.springframework.data.domain.Pageable.class));
+  }
+
+  @Test
+  void findPlannableCandidates_emptyCatalogue_returnsEmpty_butQueriesWithPageRequest() {
+    UUID userId = UUID.randomUUID();
+    when(recipeRepository.findPlannableForUser(
+            org.mockito.ArgumentMatchers.eq(userId),
+            any(org.springframework.data.domain.Pageable.class)))
+        .thenReturn(List.of());
+
+    List<RecipeDto> result = service().findPlannableCandidates(userId, 25);
+
+    assertThat(result).isEmpty();
+    ArgumentCaptor<org.springframework.data.domain.Pageable> pageCaptor =
+        ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+    verify(recipeRepository)
+        .findPlannableForUser(org.mockito.ArgumentMatchers.eq(userId), pageCaptor.capture());
+    assertThat(pageCaptor.getValue().getPageNumber()).isZero();
+    assertThat(pageCaptor.getValue().getPageSize()).isEqualTo(25);
+  }
+
+  @Test
+  void findPlannableCandidates_hydratesEachRow_defensiveNullBranchYieldsNullBody() {
+    UUID userId = UUID.randomUUID();
+    // A recipe whose currentBranchId is null exercises hydrate()'s defensive branch (null body) and
+    // proves the loop maps every returned row. Two rows -> two DTOs.
+    Recipe r1 =
+        Recipe.builder().id(UUID.randomUUID()).currentBranchId(null).currentVersion(1).build();
+    Recipe r2 =
+        Recipe.builder().id(UUID.randomUUID()).currentBranchId(null).currentVersion(1).build();
+    when(recipeRepository.findPlannableForUser(
+            org.mockito.ArgumentMatchers.eq(userId),
+            any(org.springframework.data.domain.Pageable.class)))
+        .thenReturn(List.of(r1, r2));
+    when(branchRepository.findAllByRecipeId(any())).thenReturn(List.of());
+
+    List<RecipeDto> result = service().findPlannableCandidates(userId, 10);
+
+    assertThat(result).hasSize(2);
+    assertThat(result).allSatisfy(dto -> assertThat(dto.currentVersionBody()).isNull());
+    assertThat(result.stream().map(RecipeDto::id))
+        .containsExactlyInAnyOrder(r1.getId(), r2.getId());
+    // versionRepository is never consulted when currentBranchId is null (defensive short-circuit).
+    verify(versionRepository, org.mockito.Mockito.never())
+        .findFirstByRecipeIdAndBranchIdAndVersionNumber(
+            any(), any(), org.mockito.ArgumentMatchers.anyInt());
+  }
+
   @Test
   void importFromUrl_orchestratesFetch_parse_persist_andWritesProvenance() {
     UUID userId = UUID.randomUUID();
