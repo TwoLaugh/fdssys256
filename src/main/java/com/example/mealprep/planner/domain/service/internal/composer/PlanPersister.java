@@ -56,6 +56,8 @@ class PlanPersister {
    * @param aiAugmented whether Phase 2 applied any augmentation
    * @param qualityWarning whether a degradation occurred (empty pool, Stage-A greedy, Stage-D
    *     unavailable)
+   * @param coldStart whether the cold-start gate fired (catalogue below the planning minimum, a
+   *     discovery fill was attempted before Stage A) — surfaced to the UI per meal-planner.md
    * @return the persisted, flushed {@code Plan}
    */
   Plan persist(
@@ -65,7 +67,8 @@ class PlanPersister {
       UUID planId,
       RollupSummaryDocument rollupSummary,
       boolean aiAugmented,
-      boolean qualityWarning) {
+      boolean qualityWarning,
+      boolean coldStart) {
 
     int generation =
         1
@@ -93,7 +96,7 @@ class PlanPersister {
             .status(PlanStatus.DRAFT)
             .triggerKind(TriggerKind.USER_INITIATED)
             .qualityWarning(qualityWarning)
-            .coldStart(false)
+            .coldStart(coldStart)
             .aiAugmented(aiAugmented)
             .traceId(context.traceId())
             .decisionId(context.decisionId() != null ? context.decisionId() : context.traceId())

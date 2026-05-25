@@ -95,7 +95,8 @@ class WeeklyCostConfidenceTest {
         5,
         2,
         PlanTestData.defaultMidWeek(),
-        PlanTestData.defaultMateriality());
+        PlanTestData.defaultMateriality(),
+        PlanTestData.defaultColdStart());
   }
 
   /**

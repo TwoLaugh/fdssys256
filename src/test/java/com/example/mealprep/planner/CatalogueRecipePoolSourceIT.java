@@ -78,6 +78,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 @SpringBootTest
 @Import(TestContainersConfig.class)
 @ActiveProfiles("test")
+// Tier-1 test: asserts the catalogue-backed pool feeds the composer from the *seeded* recipes. The
+// recipe-pool Tier-2 cold-start gate is disabled here so it never imports extra SYSTEM recipes that
+// would break the "scheduled recipe is one of the seeded ids" assertions (the gate has its own
+// coverage in ColdStartGateTest / PlannerColdStartIT).
+@org.springframework.test.context.TestPropertySource(
+    properties = "mealprep.planner.cold-start.enabled=false")
 class CatalogueRecipePoolSourceIT {
 
   private static final LocalDate WEEK =

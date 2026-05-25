@@ -110,7 +110,8 @@ class VarietySubScoreTest {
             5,
             2,
             PlanTestData.defaultMidWeek(),
-            PlanTestData.defaultMateriality());
+            PlanTestData.defaultMateriality(),
+            PlanTestData.defaultColdStart());
     VarietySubScore tuned = new VarietySubScore(props);
     UUID id = UUID.randomUUID();
     RecipeDto recipe = PlanTestData.scoredRecipe(id, 20, "Thai", "tofu", "fry", List.of());
@@ -142,7 +143,8 @@ class VarietySubScoreTest {
             5,
             2,
             PlanTestData.defaultMidWeek(),
-            PlanTestData.defaultMateriality());
+            PlanTestData.defaultMateriality(),
+            PlanTestData.defaultColdStart());
     VarietySubScore tuned = new VarietySubScore(props);
     UUID a = UUID.randomUUID();
     UUID b = UUID.randomUUID();

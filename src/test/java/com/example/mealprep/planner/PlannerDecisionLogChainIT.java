@@ -68,6 +68,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 @SpringBootTest
 @Import(TestContainersConfig.class)
 @ActiveProfiles("test")
+// Mocked context builder (empty pool) → disable the recipe-pool Tier-2 cold-start gate so it does
+// not fire on the empty pool and invoke the discovery runner (out of scope for this decision-log
+// smoke test; the gate has its own coverage in ColdStartGateTest / PlannerColdStartIT).
+@org.springframework.test.context.TestPropertySource(
+    properties = "mealprep.planner.cold-start.enabled=false")
 class PlannerDecisionLogChainIT {
 
   private static final LocalDate WEEK =

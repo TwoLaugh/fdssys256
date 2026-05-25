@@ -84,7 +84,14 @@ class PlanPersisterTest {
 
     Plan result =
         persister.persist(
-            chosen, req(householdId), ctx(), planId, PlanTestData.emptyRollup(), true, false);
+            chosen,
+            req(householdId),
+            ctx(),
+            planId,
+            PlanTestData.emptyRollup(),
+            true,
+            false,
+            false);
 
     assertThat(result.getId()).isEqualTo(planId);
     assertThat(result.getGeneration()).isEqualTo(3); // 1 + count(2)
@@ -113,7 +120,8 @@ class PlanPersisterTest {
             UUID.randomUUID(),
             PlanTestData.emptyRollup(),
             false,
-            true);
+            true,
+            false);
 
     assertThat(result.getGeneration()).isEqualTo(1);
     assertThat(result.getReplacesPlanId()).isNull();
@@ -183,6 +191,7 @@ class PlanPersisterTest {
             UUID.randomUUID(),
             PlanTestData.emptyRollup(),
             false,
+            false,
             false);
 
     assertThat(result.getDays()).hasSize(2);
@@ -226,6 +235,7 @@ class PlanPersisterTest {
             UUID.randomUUID(),
             PlanTestData.emptyRollup(),
             false,
+            false,
             false);
 
     ScheduledRecipe sr = result.getDays().get(0).getSlots().get(0).getScheduledRecipe();
@@ -265,6 +275,7 @@ class PlanPersisterTest {
             UUID.randomUUID(),
             PlanTestData.emptyRollup(),
             false,
+            false,
             false);
 
     assertThat(result.getDays().get(0).getSlots().get(0).getScheduledRecipe()).isNull();
@@ -288,6 +299,7 @@ class PlanPersisterTest {
             ctx(),
             UUID.randomUUID(),
             PlanTestData.emptyRollup(),
+            false,
             false,
             false);
 

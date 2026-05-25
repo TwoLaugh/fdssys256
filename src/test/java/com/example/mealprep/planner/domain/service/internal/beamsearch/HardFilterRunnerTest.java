@@ -69,6 +69,7 @@ class HardFilterRunnerTest {
             5,
             2,
             null,
+            null,
             null);
     runner = new HardFilterRunner(filterService, properties);
     when(filterService.check(any(UUID.class), anyList()))
@@ -205,6 +206,7 @@ class HardFilterRunnerTest {
             3,
             5,
             2,
+            null,
             null,
             null);
     runner = new HardFilterRunner(filterService, properties);
