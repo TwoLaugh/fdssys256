@@ -7,7 +7,9 @@ import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeImportDto;
 import com.example.mealprep.recipe.api.dto.RecipeSubstitutionDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -116,4 +118,39 @@ public interface RecipeQueryService {
    * rather than throwing {@code RecipeVersionNotFoundException}.
    */
   Optional<float[]> getEmbedding(UUID versionId);
+
+  /**
+   * Cross-module raw-data read for the adaptation module's affected-recipe filters (Trigger 3
+   * data-model adaptation). For each of {@code userId}'s <b>active</b> recipes, returns the list of
+   * {@code ingredient_mapping_key} strings on that recipe's <b>current</b> version.
+   *
+   * <p>"Active" = {@code catalogue = USER AND userId = :userId AND archivedAt IS NULL AND deletedAt
+   * IS NULL} (SYSTEM-catalogue, archived, and soft-deleted recipes are excluded). "Current version"
+   * = the {@code RecipeVersion} whose {@code (recipe.id, branch.id, versionNumber)} matches the
+   * recipe's {@code (id, currentBranchId, currentVersion)} pointers — old versions are never
+   * returned.
+   *
+   * <p>Recipes with zero ingredients on their current version are omitted from the map (a recipe
+   * with no ingredients cannot violate an ingredient constraint). The recipe module is a pure
+   * raw-data provider here: it returns the keys verbatim and does NOT interpret them. Empty map
+   * (never null) when the user has no active recipes.
+   */
+  Map<UUID, List<String>> findUserRecipeIngredientKeys(UUID userId);
+
+  /**
+   * Cross-module raw-data read for the adaptation module's affected-recipe filters (Trigger 3
+   * data-model adaptation). For each of {@code userId}'s <b>active</b> recipes whose <b>current</b>
+   * version has a non-null {@code nutrition_per_serving} jsonb, returns {@code recipeId ->} that
+   * {@link JsonNode} verbatim.
+   *
+   * <p>Same "active" + "current version" scoping as {@link #findUserRecipeIngredientKeys(UUID)}.
+   * Recipes whose current version has a null {@code nutrition_per_serving} are omitted.
+   *
+   * <p>Returning {@link JsonNode} from the recipe layer is intentional and correct: the recipe
+   * module stores nutrition <b>opaquely</b> (the JSON is written through an SPI from a nutrition
+   * DTO; see {@code RecipeWriteApi#updateNutritionStatus}). The recipe module does NOT parse or
+   * interpret the payload — its shape is owned by the nutrition module, which is the sole authority
+   * on reading it. Empty map (never null) when no active recipe has nutrition populated.
+   */
+  Map<UUID, JsonNode> findUserRecipeNutrition(UUID userId);
 }
