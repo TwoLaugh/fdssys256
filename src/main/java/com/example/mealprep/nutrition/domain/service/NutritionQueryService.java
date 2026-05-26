@@ -14,10 +14,13 @@ import com.example.mealprep.nutrition.api.dto.IntakeSlotSearchResultDto;
 import com.example.mealprep.nutrition.api.dto.NutritionTargetsAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -148,4 +151,45 @@ public interface NutritionQueryService {
    * a different user — collapsed to 404 at the controller boundary so we don't leak existence.
    */
   Optional<HealthDirectiveDto> getDirective(UUID actorUserId, UUID directiveId);
+
+  /**
+   * Coarse <b>v1 pre-filter</b> for the adaptation pipeline: decide which of {@code
+   * perRecipeNutrition}'s recipes VIOLATE the user's nutrition targets at the per-serving /
+   * per-meal level. The downstream LLM adaptation job — NOT this method — performs the actual
+   * nutrition adaptation; this only narrows the candidate set so we don't spend an LLM call on a
+   * recipe that is plainly fine. By design it MAY slightly over-select (the LLM makes the real
+   * decision); it must NOT under-select obvious cases (e.g. clearly-over calories).
+   *
+   * <p><b>Heuristic (v1):</b>
+   *
+   * <ul>
+   *   <li>If the user has no {@code NutritionTargets} row → empty set (nothing to violate). If
+   *       {@code perRecipeNutrition} is null/empty → empty set.
+   *   <li>A recipe is ONE meal but targets are DAILY, so each daily allowance is scaled to a
+   *       per-meal allowance: {@code perMeal = dailyOrTarget * mealShare}, where {@code mealShare}
+   *       is the LARGEST per-meal calorie fraction in the user's {@code perMealDistribution} (the
+   *       slot's {@code calorieTarget / dailyCalorieTarget}) when that list is populated, else the
+   *       conservative {@link
+   *       com.example.mealprep.nutrition.domain.service.internal.RecipeTargetViolationEvaluator#DEFAULT_MEAL_SHARE
+   *       DEFAULT_MEAL_SHARE} constant.
+   *   <li>Per macro, the rule is direction-aware ({@link
+   *       com.example.mealprep.nutrition.domain.entity.EnforcementDirection}) and tolerance-banded:
+   *       a {@code UPPER_LIMIT} (ceiling) macro violates when {@code perServing > perMealAllowance
+   *       + tolerance}; a {@code LOWER_FLOOR} macro violates when {@code perServing < perMealFloor
+   *       - tolerance} (only when a {@code *FloorG} is configured); {@code BOTH_BOUNDED} checks the
+   *       ceiling side only (under-eating a single meal is not a per-recipe violation). Calories
+   *       use the per-meal-scaled over/under tolerance; macros without a tolerance field use 0.
+   *   <li>A macro whose value is absent / unparseable in the recipe JSON is skipped (graceful — not
+   *       flagged). A null or unparseable {@code JsonNode} value for a recipe skips that recipe
+   *       entirely (logged at debug; never throws). A recipe violates if ANY enforced macro
+   *       violates.
+   * </ul>
+   *
+   * @param userId the user whose targets the recipes are checked against
+   * @param perRecipeNutrition recipeId → the recipe's stored {@code nutrition_per_serving} JSON
+   *     (the serialised {@link com.example.mealprep.nutrition.api.dto.RecipeNutritionResultDto}
+   *     shape)
+   * @return the subset of recipeIds whose per-serving nutrition violates the user's targets
+   */
+  Set<UUID> findRecipeIdsViolatingTargets(UUID userId, Map<UUID, JsonNode> perRecipeNutrition);
 }
