@@ -65,6 +65,12 @@ older than `staleThresholdDays` → `isStale = true` and confidence is dampened.
 
 ## Decision baked in — ReferencePriceSource = Open Food Facts "Open Prices" snapshot
 
+> **RESOLVED (owner):** Bundle the Open Prices snapshot **with ODbL attribution** — point 3's licence
+> check is approved. Carry the attribution (NOTICE/attribution string in the seed-file header + an app
+> "about" surface) and accept ODbL share-alike for v1 (the price data is not treated as a proprietary
+> moat). If MealPrep later commercialises the reference-price database as a core asset, revisit
+> share-alike then. Bundling may proceed.
+
 The owner approved **Open Food Facts "Open Prices"** as the seed dataset (real, open, has an API +
 downloadable dumps). Key facts baked in:
 

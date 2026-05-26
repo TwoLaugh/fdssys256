@@ -55,6 +55,12 @@ publishes `SubstitutionResolvedEvent` (accepted/rejected) and provisions keeps i
 vs `provisions.event.ProvisionChangedEvent.SubstitutionAcceptedEvent`) so they're distinct types, and
 document the seam loudly. The owner should confirm the naming before build.
 
+> **RESOLVED (owner): distinct names.** Grocery publishes a NEW **`grocery.event.SubstitutionResolvedEvent`**
+> (carrying accepted/rejected) for the user-decision; provisions keeps its existing
+> `provisions.event.ProvisionChangedEvent.SubstitutionAcceptedEvent` state-change (the planner's
+> listener is unaffected). This supersedes 01f's package-qualify alternative — distinct names, no
+> reliance on package disambiguation. Build to `SubstitutionResolvedEvent` for the grocery side.
+
 ## LLD-divergence notes
 
 ### Inventory add: at confirmation or at reconciliation? (the load-bearing seam from 01e)
