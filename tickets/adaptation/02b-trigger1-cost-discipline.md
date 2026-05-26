@@ -1,10 +1,20 @@
 # Ticket: adaptation — 02b Trigger-1 cost discipline (STUB — design decision, needs product input)
 
-> **STATUS: DESIGN STUB / NEEDS PRODUCT DECISION.** Not a blocker. Captures a real design refinement
-> surfaced during E2E stabilisation (see [02a](02a-async-robustness-and-event-enrichment.md)). The
-> mechanics are fixed in 02a; this ticket is about *whether adapt-on-create should fire so eagerly*.
-> It changes intended behaviour (LLD-level) and needs cross-module query helpers that don't exist yet,
-> so it must not be implemented without owner sign-off.
+> **STATUS: DECIDED — GATE IT (deferred build).** Owner approved the "Candidate design" below:
+> adapt-on-create gets a deterministic pre-filter before the LLM call (only adapt a USER recipe when
+> it plausibly conflicts with the owner's hard constraints / soft prefs / budget), a quality gate for
+> SYSTEM/discovery recipes, and bulk-origin creates route through BATCH. **Implementation is deferred**
+> until the cross-module affected-set query helpers exist (the same ones Trigger 3's filters need —
+> currently stubbed `emptySet`); build this together with that work. 02a already removed the
+> operational harm (terminal-state leak, unbounded threads, wrong userId, supersession races). The
+> three open questions below are answered: (1) a clean manual `USER_VERIFIED` create should NOT auto-
+> fire adaptation — only on a later data-model change or a low-quality import; (2) bulk discovery
+> seeding must NOT fire per-recipe LLM calls — gate/BATCH it; (3) silent pending-change for v1 (no
+> dedicated "we adapted your import" surface yet).
+>
+> Original framing (kept for context): captured during E2E stabilisation; mechanics fixed in 02a; XJ-02
+> later confirmed the eager firing's cost — its per-create pending change collided with feedback's,
+> forcing the supersession hardening.
 
 ## The observation
 
