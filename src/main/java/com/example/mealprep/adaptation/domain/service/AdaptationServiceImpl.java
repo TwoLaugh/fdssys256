@@ -59,6 +59,7 @@ import com.example.mealprep.adaptation.event.AdaptationJobCompletedEvent;
 import com.example.mealprep.adaptation.event.AdaptationJobFailedEvent;
 import com.example.mealprep.adaptation.event.PendingChangeAcceptedEvent;
 import com.example.mealprep.adaptation.event.PendingChangeRejectedEvent;
+import com.example.mealprep.adaptation.exception.AdaptationAiResponseInvalidException;
 import com.example.mealprep.adaptation.exception.AdaptationAiUnavailableException;
 import com.example.mealprep.adaptation.exception.AdaptationCharacterBreakException;
 import com.example.mealprep.adaptation.exception.AdaptationException;
@@ -620,7 +621,15 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         try {
           response = llmInvoker.invoke(job, withCandidates);
         } catch (AdaptationAiUnavailableException e) {
+          // Deferrable AI failure (upstream-down / cost-cap) — graceful-degrade reason.
           handleFailure(job, JobFailureReason.AI_UNAVAILABLE, e.getMessage(), startMillis);
+          throw e;
+        } catch (AdaptationAiResponseInvalidException e) {
+          // Terminal AI failure (malformed/unparseable output or 4xx caller-bug). Previously these
+          // bare ai.exception.* escaped processJob's adaptation-only catches and left the job stuck
+          // RUNNING forever; route to a terminal LLM_ERROR so the job reaches FAILED + one
+          // AdaptationJobFailedEvent.
+          handleFailure(job, JobFailureReason.LLM_ERROR, e.getMessage(), startMillis);
           throw e;
         }
       }

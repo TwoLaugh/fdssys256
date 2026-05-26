@@ -804,7 +804,13 @@ public class RecipeServiceImpl
     Recipe savedRecipe = recipeRepository.saveAndFlush(recipe);
 
     eventPublisher.publishEvent(
-        new RecipeCreatedEvent(savedRecipe.getId(), savedRecipe.getCatalogue(), traceId, now));
+        new RecipeCreatedEvent(
+            savedRecipe.getId(),
+            savedRecipe.getCatalogue(),
+            savedRecipe.getUserId(),
+            savedRecipe.getDataQuality(),
+            traceId,
+            now));
     eventPublisher.publishEvent(
         new RecipeVersionCreatedEvent(
             savedVersion.getId(),
@@ -987,7 +993,13 @@ public class RecipeServiceImpl
 
     // Step 7: events.
     eventPublisher.publishEvent(
-        new RecipeCreatedEvent(savedRecipe.getId(), savedRecipe.getCatalogue(), traceId, now));
+        new RecipeCreatedEvent(
+            savedRecipe.getId(),
+            savedRecipe.getCatalogue(),
+            savedRecipe.getUserId(),
+            savedRecipe.getDataQuality(),
+            traceId,
+            now));
     eventPublisher.publishEvent(
         new RecipeVersionCreatedEvent(
             savedVersion.getId(),
