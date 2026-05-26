@@ -287,6 +287,42 @@ public class NutritionServiceImpl
 
   @Override
   @Transactional(readOnly = true)
+  public Set<UUID> findRecipeIdsViolatingTargets(
+      UUID userId, Map<UUID, JsonNode> perRecipeNutrition) {
+    if (perRecipeNutrition == null || perRecipeNutrition.isEmpty()) {
+      return Set.of();
+    }
+    Optional<NutritionTargets> targetsOpt = targetsRepository.findByUserId(userId);
+    if (targetsOpt.isEmpty()) {
+      return Set.of(); // no targets row → nothing to violate (v1 pre-filter convention)
+    }
+    NutritionTargets targets = targetsOpt.get();
+    // Force lazy-load of the per-meal distribution inside the read-only tx — mealShare reads it.
+    targets.getPerMealDistribution().size();
+
+    Set<UUID> violating = new LinkedHashSet<>();
+    for (Map.Entry<UUID, JsonNode> e : perRecipeNutrition.entrySet()) {
+      UUID recipeId = e.getKey();
+      JsonNode perServing = e.getValue();
+      if (recipeId == null) {
+        continue;
+      }
+      if (perServing == null || perServing.isNull() || !perServing.isObject()) {
+        // Unparseable / missing per-serving JSON → skip this recipe (do not flag, do not throw).
+        log.debug(
+            "skipping recipe {} in violation pre-filter — null/unparseable per-serving JSON",
+            recipeId);
+        continue;
+      }
+      if (RecipeTargetViolationEvaluator.violates(targets, perServing)) {
+        violating.add(recipeId);
+      }
+    }
+    return violating;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
   public Page<NutritionTargetsAuditEntryDto> getTargetsAuditLog(UUID userId, Pageable pageable) {
     Optional<NutritionTargets> aggregate = targetsRepository.findByUserId(userId);
     if (aggregate.isEmpty()) {
