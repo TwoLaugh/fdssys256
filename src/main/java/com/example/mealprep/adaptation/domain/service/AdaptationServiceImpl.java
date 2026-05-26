@@ -171,6 +171,14 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   // in the older skeleton ctors — those wirings never exercise the lock-acquire path.
   private final AdaptationLockAcquirer lockAcquirer;
 
+  // Self-proxy so the two sync trigger entries can invoke their job-row inserts THROUGH the Spring
+  // proxy (a plain this.* call bypasses the proxy, so the @Transactional advice never fires). @Lazy
+  // breaks the self-referential injection cycle. Mirrors the pre-extraction AdaptationLockAcquirer
+  // workaround. NOT constructor-injected: that would be a hard cycle even with @Lazy on the field.
+  @org.springframework.beans.factory.annotation.Autowired
+  @org.springframework.context.annotation.Lazy
+  private AdaptationServiceImpl self;
+
   /** Skeleton constructor — retained for backwards-compatibility with 01b unit tests. */
   public AdaptationServiceImpl(
       AdaptationJobRepository jobRepository,
@@ -308,16 +316,23 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
 
   @Override
   public AdaptationResultDto enqueueFeedbackJob(FeedbackJobRequest request) {
-    UUID jobId = enqueueFeedbackJobRow(request);
+    UUID jobId = self.enqueueFeedbackJobRow(request);
     AdaptationJob job = jobRepository.findById(jobId).orElseThrow();
     return processSyncJob(job);
   }
 
   /**
-   * Inserts the FEEDBACK job row in its own tx so the row is visible before the worker pipeline
-   * orchestrates outside the tx. Split per ticket §Trigger-2 step 8.
+   * Inserts the FEEDBACK job row in its own tx so the row is visible before the synchronous worker
+   * pipeline (which writes FK-referencing children: {@code adaptation_traces} + {@code
+   * adaptation_pending_changes}, both {@code job_id -> adaptation_jobs(id)}). Invoked via the
+   * {@link #self} proxy and annotated {@code REQUIRES_NEW} so the insert genuinely commits in its
+   * own transaction — a plain self-call (or {@code REQUIRED}, which would merely join the caller's
+   * active dispatch tx) would leave the row uncommitted and invisible to the worker's sub-tx
+   * writes, causing intermittent {@code ..._job_id_fkey} violations. The async IMPORT /
+   * DATA_MODEL_CHANGE paths don't need this — their job row commits via the listener / orchestrator
+   * tx before the worker runs. Split per ticket §Trigger-2 step 8.
    */
-  @Transactional
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
   public UUID enqueueFeedbackJobRow(FeedbackJobRequest request) {
     UUID jobId = UUID.randomUUID();
     AdaptationJob job =
@@ -370,13 +385,23 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
 
   @Override
   public AdaptationResultDto runPlanTimeRefineJob(PlanTimeRefineDirectiveRequest request) {
-    UUID jobId = enqueuePlanTimeJobRow(request);
+    UUID jobId = self.enqueuePlanTimeJobRow(request);
     AdaptationJob job = jobRepository.findById(jobId).orElseThrow();
     return processSyncJob(job);
   }
 
-  /** Insert the PLAN_TIME job row in its own tx. */
-  @Transactional
+  /**
+   * Inserts the PLAN_TIME job row in its own tx so the row is visible before the synchronous worker
+   * pipeline (which writes FK-referencing children: {@code adaptation_traces} + {@code
+   * adaptation_pending_changes}, both {@code job_id -> adaptation_jobs(id)}). Invoked via the
+   * {@link #self} proxy and annotated {@code REQUIRES_NEW} so the insert genuinely commits in its
+   * own transaction — a plain self-call (or {@code REQUIRED}, which would merely join the caller's
+   * active dispatch tx) would leave the row uncommitted and invisible to the worker's sub-tx
+   * writes, causing intermittent {@code ..._job_id_fkey} violations. The async IMPORT /
+   * DATA_MODEL_CHANGE paths don't need this — their job row commits via the listener / orchestrator
+   * tx before the worker runs.
+   */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
   public UUID enqueuePlanTimeJobRow(PlanTimeRefineDirectiveRequest request) {
     UUID jobId = UUID.randomUUID();
     AdaptationJob job =
