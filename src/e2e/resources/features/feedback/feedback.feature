@@ -157,7 +157,8 @@ Feature: Feedback — submit, async classify, route/clarify/store, recent-histor
     Given a fresh registered and logged-in user
     And the AI will classify the next feedback at low confidence
     When they submit feedback "it was a bit much"
-    Then the feedback entry eventually awaits clarification for this user
+    Then the feedback submission is accepted for processing
+    And the feedback entry eventually awaits clarification for this user
     And the AI will reclassify the answered clarification to provisions at high confidence
     When they answer that clarification choosing provisions
     Then the feedback entry eventually reaches a routed state for this user
