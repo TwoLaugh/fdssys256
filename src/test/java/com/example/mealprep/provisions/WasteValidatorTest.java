@@ -105,7 +105,27 @@ class WasteValidatorTest {
   }
 
   @Test
-  void invalid_occurredOnInFuture_fails() {
+  void invalid_occurredOnTooFarInFuture_fails() {
+    // @PastOrNextDay accepts up to server-today+1 (TZ-skew band, provisions/02a); today+2 is past
+    // the band and must still fail. This raw factory has no Spring clock, so it uses systemUTC.
+    LogWasteRequest req =
+        new LogWasteRequest(
+            null,
+            "celery",
+            null,
+            null,
+            WasteReason.EXPIRED,
+            null,
+            LocalDate.now().plusDays(2),
+            null);
+    Set<ConstraintViolation<LogWasteRequest>> violations = VALIDATOR.validate(req);
+    assertThat(violations).anyMatch(v -> v.getPropertyPath().toString().contains("occurredOn"));
+  }
+
+  @Test
+  void valid_occurredOnNextDay_passesSkewBand() {
+    // The fix: a client east of a UTC server submitting "their today" can look like
+    // server-tomorrow.
     LogWasteRequest req =
         new LogWasteRequest(
             null,
@@ -117,7 +137,7 @@ class WasteValidatorTest {
             LocalDate.now().plusDays(1),
             null);
     Set<ConstraintViolation<LogWasteRequest>> violations = VALIDATOR.validate(req);
-    assertThat(violations).anyMatch(v -> v.getPropertyPath().toString().contains("occurredOn"));
+    assertThat(violations).noneMatch(v -> v.getPropertyPath().toString().contains("occurredOn"));
   }
 
   // ---------------- @ValidWasteDateRange ----------------

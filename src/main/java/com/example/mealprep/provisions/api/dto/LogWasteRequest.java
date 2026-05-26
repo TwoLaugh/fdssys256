@@ -1,11 +1,11 @@
 package com.example.mealprep.provisions.api.dto;
 
+import com.example.mealprep.provisions.validation.PastOrNextDay;
 import com.example.mealprep.provisions.validation.ValidWasteQuantity;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.PastOrPresent;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -27,5 +27,5 @@ public record LogWasteRequest(
     @NotNull WasteReason reason,
     @DecimalMin(value = "0.0", inclusive = true) @Digits(integer = 6, fraction = 2)
         BigDecimal costEstimate,
-    @NotNull @PastOrPresent LocalDate occurredOn,
+    @NotNull @PastOrNextDay LocalDate occurredOn,
     @Size(max = 255) String notes) {}
