@@ -3,6 +3,7 @@ package com.example.mealprep.adaptation.domain.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.mealprep.adaptation.ai.RecipeAdaptationResponse;
 import com.example.mealprep.adaptation.domain.entity.AdaptationJob;
 import com.example.mealprep.adaptation.domain.entity.PendingChange;
 import com.example.mealprep.adaptation.domain.enums.AdaptationClassification;
@@ -12,12 +13,14 @@ import com.example.mealprep.adaptation.domain.enums.JobPriority;
 import com.example.mealprep.adaptation.domain.enums.JobSource;
 import com.example.mealprep.adaptation.domain.enums.JobStatus;
 import com.example.mealprep.adaptation.domain.enums.PendingChangeStatus;
+import com.example.mealprep.adaptation.domain.service.internal.PendingChangeStore;
 import com.example.mealprep.recipe.domain.entity.Catalogue;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -43,6 +46,7 @@ class AdaptationPendingChangeIndexIT {
 
   @Autowired private AdaptationJobRepository jobRepository;
   @Autowired private PendingChangeRepository pendingChangeRepository;
+  @Autowired private PendingChangeStore pendingChangeStore;
   @Autowired private ObjectMapper objectMapper;
   @Autowired private JdbcTemplate jdbcTemplate;
 
@@ -100,6 +104,57 @@ class AdaptationPendingChangeIndexIT {
         .isEqualTo(second.getId());
   }
 
+  /**
+   * Regression for XJ-02: a second {@link PendingChangeStore#create} for the SAME {@code (recipe,
+   * dimension)} as an already-PENDING row must succeed (last-writer-wins), NOT throw on the partial
+   * unique index. The mock-based unit test can't catch this because the failure was Hibernate's
+   * default flush order — INSERT-before-UPDATE leaves two PENDING rows momentarily and
+   * self-collides on the index. The fix (flush the supersession UPDATE before the INSERT) only
+   * shows up against a real Postgres + the real index, with {@code create} running in the caller's
+   * transaction ({@code @Transactional} REQUIRED — the {@code job_id} FK references the {@code
+   * adaptation_jobs} row created in that same tx, so a {@code REQUIRES_NEW} tx could not see it).
+   */
+  @Test
+  void recreate_for_same_recipe_dimension_supersedes_old_and_keeps_one_pending() throws Exception {
+    UUID recipeId = UUID.randomUUID();
+
+    // First create: no existing PENDING -> straight insert.
+    AdaptationJob job1 = saveJobForRecipe(recipeId);
+    UUID firstId =
+        pendingChangeStore.create(
+            job1, response(), ChangeDimension.GENERAL, UUID.randomUUID(), UUID.randomUUID(), "v1");
+
+    // Second create for the SAME (recipe, GENERAL): must supersede #1 and insert a new PENDING with
+    // NO DataIntegrityViolationException leaking out.
+    AdaptationJob job2 = saveJobForRecipe(recipeId);
+    UUID secondId =
+        pendingChangeStore.create(
+            job2, response(), ChangeDimension.GENERAL, UUID.randomUUID(), UUID.randomUUID(), "v2");
+
+    assertThat(secondId).isNotEqualTo(firstId);
+
+    // Exactly one PENDING row survives for (recipe, GENERAL): the second one.
+    assertThat(
+            pendingChangeRepository.findByRecipeIdAndChangeDimensionAndStatus(
+                recipeId, ChangeDimension.GENERAL, PendingChangeStatus.PENDING))
+        .get()
+        .extracting(PendingChange::getId)
+        .isEqualTo(secondId);
+
+    // The previous row is SUPERSEDED and points at the new winner.
+    PendingChange first = pendingChangeRepository.findById(firstId).orElseThrow();
+    assertThat(first.getStatus()).isEqualTo(PendingChangeStatus.SUPERSEDED);
+    assertThat(first.getSupersededBy()).isEqualTo(secondId);
+    assertThat(first.getResolvedAt()).isNotNull();
+
+    // Two rows total for the recipe (one PENDING, one SUPERSEDED) — no duplicate / orphaned
+    // PENDING.
+    assertThat(
+            pendingChangeRepository.findByRecipeIdAndChangeDimensionAndStatus(
+                recipeId, ChangeDimension.GENERAL, PendingChangeStatus.SUPERSEDED))
+        .isPresent();
+  }
+
   @Test
   void rejected_does_not_block_a_new_pending() throws Exception {
     UUID recipeId = UUID.randomUUID();
@@ -136,11 +191,15 @@ class AdaptationPendingChangeIndexIT {
   // ---------------- helpers ----------------
 
   private UUID saveJob() throws Exception {
-    UUID id = UUID.randomUUID();
+    return saveJobForRecipe(UUID.randomUUID()).getId();
+  }
+
+  /** Persists a RUNNING FEEDBACK job for {@code recipeId} and returns the managed entity. */
+  private AdaptationJob saveJobForRecipe(UUID recipeId) throws Exception {
     AdaptationJob job =
         AdaptationJob.builder()
-            .id(id)
-            .recipeId(UUID.randomUUID())
+            .id(UUID.randomUUID())
+            .recipeId(recipeId)
             .userId(UUID.randomUUID())
             .catalogue(Catalogue.USER)
             .source(JobSource.FEEDBACK)
@@ -151,8 +210,20 @@ class AdaptationPendingChangeIndexIT {
             .traceId(UUID.randomUUID())
             .enqueuedAt(Instant.now())
             .build();
-    jobRepository.saveAndFlush(job);
-    return id;
+    return jobRepository.saveAndFlush(job);
+  }
+
+  private static RecipeAdaptationResponse response() {
+    return new RecipeAdaptationResponse(
+        0,
+        AdaptationClassification.VERSION,
+        "reasoned",
+        "notes",
+        new BigDecimal("0.800"),
+        new BigDecimal("0.800"),
+        null,
+        null,
+        List.of());
   }
 
   private PendingChange newPending(

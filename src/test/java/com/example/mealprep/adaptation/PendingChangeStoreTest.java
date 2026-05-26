@@ -32,7 +32,6 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.dao.DataIntegrityViolationException;
 
 class PendingChangeStoreTest {
 
@@ -45,6 +44,7 @@ class PendingChangeStoreTest {
     PendingChange existing = pending(UUID.randomUUID());
     when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
         .thenReturn(Optional.of(existing));
+    when(repo.saveAndFlush(any(PendingChange.class))).thenAnswer(inv -> inv.getArgument(0));
 
     PendingChangeStore store = new PendingChangeStore(repo, events, config);
     UUID newId =
@@ -57,9 +57,15 @@ class PendingChangeStoreTest {
             "v1");
 
     assertThat(newId).isNotNull();
-    // existing -> SUPERSEDED save, new INSERT save = 2 save invocations on the repository.
-    verify(repo, times(1)).save(existing);
+    // The supersession status-flip and the supersededBy back-fill are written via plain
+    // repository.flush() on the managed finder entity (routing through save()/merge() would
+    // re-order the UPDATE after the INSERT — leaving two PENDING rows and tripping the partial
+    // unique index / non-deferrable supersededBy FK). Only the new row goes through saveAndFlush.
+    // `save` is never used; two flush() calls (status-flip, back-fill); one saveAndFlush (insert).
+    verify(repo, never()).save(any(PendingChange.class));
+    verify(repo, never()).saveAndFlush(existing);
     verify(repo, times(1)).saveAndFlush(any(PendingChange.class));
+    verify(repo, times(2)).flush();
     assertThat(existing.getStatus()).isEqualTo(PendingChangeStatus.SUPERSEDED);
     assertThat(existing.getSupersededBy()).isEqualTo(newId);
 
@@ -70,36 +76,12 @@ class PendingChangeStoreTest {
   }
 
   @Test
-  void race_retry_on_data_integrity_violation_settles_as_superseded() {
-    PendingChangeRepository repo = mock(PendingChangeRepository.class);
-    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
-
-    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
-        .thenReturn(Optional.empty())
-        .thenReturn(Optional.of(pending(UUID.randomUUID())));
-    when(repo.saveAndFlush(any(PendingChange.class)))
-        .thenThrow(new DataIntegrityViolationException("constraint"))
-        .thenAnswer(inv -> inv.getArgument(0));
-
-    PendingChangeStore store = new PendingChangeStore(repo, events, config());
-    UUID newId =
-        store.create(
-            job(),
-            response(),
-            ChangeDimension.SALT_LEVEL,
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            "v1");
-    assertThat(newId).isNotNull();
-    verify(repo, times(2)).saveAndFlush(any(PendingChange.class));
-  }
-
-  @Test
   void no_existing_pending_just_inserts() {
     PendingChangeRepository repo = mock(PendingChangeRepository.class);
     ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
         .thenReturn(Optional.empty());
+    when(repo.saveAndFlush(any(PendingChange.class))).thenAnswer(inv -> inv.getArgument(0));
     PendingChangeStore store = new PendingChangeStore(repo, events, config());
 
     UUID id =
@@ -126,6 +108,7 @@ class PendingChangeStoreTest {
     assertThat(existing.getResolvedAt()).isNull();
     when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
         .thenReturn(Optional.of(existing));
+    when(repo.saveAndFlush(any(PendingChange.class))).thenAnswer(inv -> inv.getArgument(0));
 
     PendingChangeStore store = new PendingChangeStore(repo, events, config());
     store.create(
@@ -208,28 +191,6 @@ class PendingChangeStoreTest {
     assertThat(saved.getProposedDiff().isEmpty()).isTrue();
     // safe(null) -> BigDecimal.ZERO.
     assertThat(saved.getConfidence()).isEqualByComparingTo("0");
-  }
-
-  @Test
-  void retry_path_inserts_row_flagged_superseded() {
-    PendingChangeRepository repo = mock(PendingChangeRepository.class);
-    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
-    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
-        .thenReturn(Optional.empty())
-        .thenReturn(Optional.of(pending(UUID.randomUUID())));
-    when(repo.saveAndFlush(any(PendingChange.class)))
-        .thenThrow(new DataIntegrityViolationException("constraint"))
-        .thenAnswer(inv -> inv.getArgument(0));
-    PendingChangeStore store = new PendingChangeStore(repo, events, config());
-
-    store.create(
-        job(), response(), ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), "v1");
-
-    ArgumentCaptor<PendingChange> cap = ArgumentCaptor.forClass(PendingChange.class);
-    verify(repo, times(2)).saveAndFlush(cap.capture());
-    // 2nd (retry) insert must be flagged SUPERSEDED — kills the ternary-negation mutant on
-    // the `retryAsSuperseded ? SUPERSEDED : PENDING` status selection.
-    assertThat(cap.getAllValues().get(1).getStatus()).isEqualTo(PendingChangeStatus.SUPERSEDED);
   }
 
   private static AdaptationJob job() {

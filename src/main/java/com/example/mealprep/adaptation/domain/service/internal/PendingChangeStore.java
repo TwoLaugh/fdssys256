@@ -13,12 +13,8 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.Optional;
 import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,14 +25,21 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>Per ticket 01c §Step 7 / LLD lines 157, 759-760.
  *
- * <p>Race retry: on {@link DataIntegrityViolationException} (loser of a concurrent insert race), we
- * retry once — fetch the now-existing PENDING row, mark our row as SUPERSEDED preemptively, insert
- * a SUPERSEDED-flagged row attached to our job.
+ * <p>Transaction: {@link #create} is {@code @Transactional} REQUIRED — it MUST run in the caller's
+ * transaction because {@code adaptation_pending_changes.job_id} FKs the {@code adaptation_jobs} row
+ * created earlier in that SAME, not-yet-committed transaction (the sync feedback path {@code
+ * enqueueFeedbackJob → processSyncJob → processJob → create}). A {@code REQUIRES_NEW} tx could not
+ * see that uncommitted job row and would violate {@code adaptation_pending_changes_job_id_fkey}.
+ *
+ * <p>Concurrency: the partial unique index {@code (recipe_id, change_dimension) WHERE
+ * status='PENDING'} is the source-of-truth serialiser, but same-recipe jobs are already serialised
+ * upstream by the per-recipe advisory lock in {@code processJob}, so {@code create} sees a stable
+ * single PENDING row. A genuine concurrent insert that slipped past the lock violates the partial
+ * unique index and fails the job terminally — it CANNOT be retried in a fresh transaction, because
+ * the {@code job_id} FK still references the original tx's uncommitted job row (see above).
  */
 @Component
 public class PendingChangeStore {
-
-  private static final Logger LOG = LoggerFactory.getLogger(PendingChangeStore.class);
 
   private final PendingChangeRepository repository;
   private final ApplicationEventPublisher events;
@@ -52,8 +55,13 @@ public class PendingChangeStore {
   }
 
   /**
-   * Supersede + insert. Returns the newly-inserted {@link PendingChange} id. Publishes a {@code
-   * PendingChangeCreatedEvent} which downstream listeners filter on {@code AFTER_COMMIT}.
+   * Supersede + insert, in the caller's transaction. Returns the newly-inserted {@link
+   * PendingChange} id. Publishes a {@code PendingChangeCreatedEvent} which downstream listeners
+   * filter on {@code AFTER_COMMIT}.
+   *
+   * <p>{@code @Transactional} REQUIRED: runs in the SAME tx as the {@code adaptation_jobs} row this
+   * change's {@code job_id} FKs (a {@code REQUIRES_NEW} tx can't see that uncommitted row). See the
+   * class javadoc.
    */
   @Transactional
   public UUID create(
@@ -63,31 +71,37 @@ public class PendingChangeStore {
       UUID baseVersionId,
       UUID baseBranchId,
       String promptTemplateVersion) {
-    return createInternal(
-        job, response, dimension, baseVersionId, baseBranchId, promptTemplateVersion, false);
-  }
-
-  private UUID createInternal(
-      AdaptationJob job,
-      RecipeAdaptationResponse response,
-      ChangeDimension dimension,
-      UUID baseVersionId,
-      UUID baseBranchId,
-      String promptTemplateVersion,
-      boolean retryAsSuperseded) {
     Instant now = Instant.now();
-    // Supersede any active PENDING for (recipe, dimension).
-    Optional<PendingChange> existing =
-        repository.findByRecipeIdAndChangeDimensionAndStatus(
-            job.getRecipeId(), dimension, PendingChangeStatus.PENDING);
     UUID newId = UUID.randomUUID();
-    existing.ifPresent(
-        e -> {
-          e.setStatus(PendingChangeStatus.SUPERSEDED);
-          e.setSupersededBy(newId);
-          e.setResolvedAt(now);
-          repository.save(e);
-        });
+    // Supersede any active PENDING for (recipe, dimension). saveAndFlush forces the UPDATE to hit
+    // the DB BEFORE the INSERT below — Hibernate otherwise orders INSERTs before UPDATEs, which
+    // would leave two PENDING rows at insert time and self-collide on the partial unique index
+    // (recipe_id, change_dimension) WHERE status='PENDING'. With the flush, there is only ever one
+    // PENDING row, so the no-race path never self-collides; a genuine concurrent insert still
+    // violates and fails the job terminally.
+    //
+    // The supersededBy pointer is NOT set on this flush: the FK superseded_by -> id is NOT
+    // deferrable, so pointing the superseded row at newId before that row physically exists would
+    // violate the FK here. The partial unique index only cares about status, so we flip status +
+    // resolvedAt now and back-fill the supersededBy pointer AFTER the new row is inserted below.
+    //
+    // We mutate the managed finder entity and call repository.flush() directly rather than
+    // saveAndFlush(e): the finder already returns a managed instance, so a plain flush emits the
+    // UPDATE immediately. Routing through save() would merge() (creating a second managed copy) and
+    // leave the UPDATE queued, which Hibernate then re-orders AFTER the new-row INSERT — exactly
+    // the
+    // INSERT-before-UPDATE trap we are trying to avoid (it would momentarily leave two PENDING rows
+    // and self-collide on the partial unique index).
+    PendingChange superseded =
+        repository
+            .findByRecipeIdAndChangeDimensionAndStatus(
+                job.getRecipeId(), dimension, PendingChangeStatus.PENDING)
+            .orElse(null);
+    if (superseded != null) {
+      superseded.setStatus(PendingChangeStatus.SUPERSEDED);
+      superseded.setResolvedAt(now);
+      repository.flush();
+    }
 
     JsonNode diff = diffNode(response);
     PendingChange entity =
@@ -107,23 +121,18 @@ public class PendingChangeStore {
             .confidence(safe(response.confidence()))
             .impactScore(BigDecimal.valueOf(0.5))
             .promptTemplateVersion(promptTemplateVersion == null ? "v0" : promptTemplateVersion)
-            .status(
-                retryAsSuperseded ? PendingChangeStatus.SUPERSEDED : PendingChangeStatus.PENDING)
+            .status(PendingChangeStatus.PENDING)
             .createdAt(now)
             .expiresAt(now.plus(config.pendingChangeExpiryDays(), ChronoUnit.DAYS))
             .build();
-    try {
-      repository.saveAndFlush(entity);
-    } catch (DataIntegrityViolationException ex) {
-      if (retryAsSuperseded) {
-        LOG.warn("PendingChangeStore.create unique-constraint hit even on retry path", ex);
-        throw ex;
-      }
-      LOG.warn(
-          "PendingChangeStore.create lost supersession race; retrying as SUPERSEDED for job={}",
-          job.getId());
-      return createInternal(
-          job, response, dimension, baseVersionId, baseBranchId, promptTemplateVersion, true);
+    repository.saveAndFlush(entity);
+    // Back-fill the superseded row's pointer now that the new PENDING row physically exists,
+    // satisfying the non-deferrable superseded_by -> id FK. Same tx, so it commits atomically with
+    // the insert. `superseded` is still the managed finder instance, so mutate + flush emits the
+    // UPDATE directly (no merge re-ordering).
+    if (superseded != null) {
+      superseded.setSupersededBy(newId);
+      repository.flush();
     }
     events.publishEvent(
         new PendingChangeCreatedEvent(

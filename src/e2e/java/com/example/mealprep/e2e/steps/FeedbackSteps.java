@@ -63,6 +63,13 @@ public class FeedbackSteps {
 
   private static final String ROUTING_ID = "feedback.routingId";
 
+  /**
+   * The recipe-domain key {@code RecipeSteps} stashes the created recipe id under (shared via the
+   * one PicoContainer {@link ScenarioContext}) — read by the XJ-02 fan-out to target the RECIPE
+   * destination at the real catalogue recipe.
+   */
+  private static final String RECIPE_ID = "recipe.id";
+
   /** Polling budget for the async classify→route apply (matches the IT's 30s). */
   private static final Duration ASYNC_TIMEOUT = Duration.ofSeconds(30);
 
@@ -122,6 +129,57 @@ public class FeedbackSteps {
             + "\"structuredPayload\":{\"note\":\"ambiguous\"}"
             + "}],"
             + "\"overallConfidence\":0.30,"
+            + "\"classifierNotes\":null}");
+  }
+
+  @And("the AI will classify the next feedback to all four destinations")
+  public void theAiWillClassifyTheNextFeedbackToAllFourDestinations() {
+    // XJ-02 fan-out: ONE feedback the classifier splits across all four destinations
+    // (RECIPE/PREFERENCE/NUTRITION/PROVISIONS — the @Size(max = 4) universe). EVERY confidence is
+    // >= 0.8 so each route AUTO_ROUTES (a single classification < 0.5 would pause the WHOLE entry
+    // for clarification). The destination outcomes the downstream bridges produce:
+    //   PROVISIONS — MARK_DEPLETED of an untracked staple → idempotent no-op → APPLIED.
+    //   NUTRITION  — protein_target_g INCREASE/SMALL: a valid FeedbackTargetResolver target on the
+    //                targets the scenario set first (+5% relative) → APPLIED. (A target not on the
+    //                allow-list would FAIL the route and tip the entry to PARTIALLY_FAILED.)
+    //   PREFERENCE — an EMPTY delta batch (trigger BATCH) is a no-op success against the seeded
+    //                taste profile → APPLIED. (A FRESH user with no profile would 404 → FAILED;
+    //                hence the "initialised taste profile" precondition.)
+    //   RECIPE     — recipeId is the real catalogue recipe created earlier; the recipe bridge
+    //                enqueues a synchronous adaptation FEEDBACK job (ApprovalPolicy
+    // PENDING_CHANGE),
+    //                which creates a PendingChange → requiresApproval → AWAITING_USER_APPROVAL (a
+    //                non-failed, non-APPLIED propose/approve outcome). The adaptation Stage-C AI is
+    //                NOT primed here: the e2e stub ships a built-in NO_CHANGE RECIPE_ADAPTATION
+    //                default that clears both validation gates, and a PENDING_CHANGE job stores the
+    //                pending change regardless of the NO_CHANGE classification.
+    // All four routes are non-FAILED, so the entry reconciles to ROUTED (not PARTIALLY_FAILED).
+    String recipeId = context.get(RECIPE_ID);
+    assertThat(recipeId)
+        .as("a recipe must be created (recipe.id stashed) before priming the recipe destination")
+        .isNotBlank();
+    aiStub.primeAi(
+        TaskType.FEEDBACK_CLASSIFICATION,
+        "{"
+            + "\"classifications\":["
+            + "{\"destination\":\"PROVISIONS\",\"confidence\":0.92,"
+            + "\"extractedFeedback\":\"out of soy sauce\","
+            + "\"structuredPayload\":{\"provisionsAction\":\"MARK_DEPLETED\","
+            + "\"ingredientMappingKey\":\"soy-sauce\"}},"
+            + "{\"destination\":\"NUTRITION\",\"confidence\":0.90,"
+            + "\"extractedFeedback\":\"more protein\","
+            + "\"structuredPayload\":{\"target\":\"protein_target_g\",\"direction\":\"INCREASE\","
+            + "\"magnitude\":\"SMALL\"}},"
+            + "{\"destination\":\"PREFERENCE\",\"confidence\":0.88,"
+            + "\"extractedFeedback\":\"love prawns\","
+            + "\"structuredPayload\":{\"deltas\":[],\"trigger\":\"BATCH\"}},"
+            + "{\"destination\":\"RECIPE\",\"confidence\":0.91,"
+            + "\"extractedFeedback\":\"that recipe needed salt\","
+            + "\"structuredPayload\":{\"recipeId\":\""
+            + recipeId
+            + "\",\"ratingDelta\":{\"taste\":-0.2}}}"
+            + "],"
+            + "\"overallConfidence\":0.90,"
             + "\"classifierNotes\":null}");
   }
 
@@ -228,6 +286,31 @@ public class FeedbackSteps {
     assertThat(read.jsonPath().getList("routes.destination", String.class)).contains("PROVISIONS");
     // The provisions MARK_DEPLETED no-op is an APPLIED route for a fresh user.
     assertThat(read.jsonPath().getString("routes[0].status")).isEqualTo("APPLIED");
+  }
+
+  @Then("the feedback entry has four routed destinations for this user")
+  public void theFeedbackEntryHasFourRoutedDestinationsForThisUser() {
+    // The entry has already settled ROUTED (the preceding "eventually reaches a routed state"
+    // step).
+    // Read it and assert the genuine four-way fan-out: every destination is present, the three
+    // update destinations APPLIED, and the propose/approve RECIPE route is AWAITING_USER_APPROVAL.
+    Response read = readById(feedbackId());
+    context.setLastResponse(read);
+    assertThat(read.statusCode()).as("feedback get by id should return 200 OK").isEqualTo(200);
+    assertThat(read.jsonPath().getString("submissionStatus"))
+        .as("a clean four-way fan-out reconciles to ROUTED (all routes non-failed)")
+        .isEqualTo("ROUTED");
+    assertThat(read.jsonPath().getList("routes.destination", String.class))
+        .as("all four destinations are routed")
+        .contains("PROVISIONS", "NUTRITION", "PREFERENCE", "RECIPE");
+    // Per-destination status: the three update destinations applied; RECIPE is a proposed (pending
+    // approval) adaptation, never an applied one (RoutingStatus.AWAITING_USER_APPROVAL).
+    assertThat(routeStatus(read, "PROVISIONS")).as("PROVISIONS route status").isEqualTo("APPLIED");
+    assertThat(routeStatus(read, "NUTRITION")).as("NUTRITION route status").isEqualTo("APPLIED");
+    assertThat(routeStatus(read, "PREFERENCE")).as("PREFERENCE route status").isEqualTo("APPLIED");
+    assertThat(routeStatus(read, "RECIPE"))
+        .as("RECIPE route is a proposed adaptation awaiting user approval")
+        .isEqualTo("AWAITING_USER_APPROVAL");
   }
 
   @Then("the feedback entry has no routing decisions for this user")
@@ -347,6 +430,39 @@ public class FeedbackSteps {
             .post(FEEDBACK + "/" + feedbackId() + "/routes/" + routingId() + "/correct", body));
   }
 
+  @When("they correct the recipe route to nutrition")
+  public void theyCorrectTheRecipeRouteToNutrition() {
+    // XJ-02 reverter leg. Locate the RECIPE route id from the entry read (NOT the seeded PREFERENCE
+    // routingId the sibling correct-step uses) and correct it AWAY from RECIPE to NUTRITION. The
+    // original RECIPE route is AWAITING_USER_APPROVAL (a pending adaptation); correcting it away
+    // fires the REAL RecipeFeedbackReverterImpl, which resolves the adaptation jobId off the
+    // route's
+    // destinationResult and CANCELS the pending change via rejectPendingChange. NUTRITION is a
+    // valid
+    // correction target (not RECIPE — correcting TO RECIPE would need a recipeId; not the
+    // original).
+    // The synthetic NUTRITION replay reuses the RECIPE payload (recipeId/ratingDelta), which the
+    // nutrition bridge cannot parse → the replay route's own outcome may be FAILED, but the
+    // correction GROUND-TRUTH row is recorded regardless (the assertion checks the corrections
+    // audit,
+    // not the replay outcome). Stash the original RECIPE routingId so the shared assertion can
+    // match
+    // it as the original route.
+    Response read = readById(feedbackId());
+    context.setLastResponse(read);
+    String recipeRoutingId = routeId(read, "RECIPE");
+    assertThat(recipeRoutingId)
+        .as("the RECIPE route must be present to locate its routing id for correction")
+        .isNotBlank();
+    context.put(ROUTING_ID, recipeRoutingId);
+    Map<String, Object> body =
+        Map.of("newDestination", "NUTRITION", "userCorrectionNote", "e2e recipe-route correction");
+    context.setLastResponse(
+        context
+            .api()
+            .post(FEEDBACK + "/" + feedbackId() + "/routes/" + recipeRoutingId + "/correct", body));
+  }
+
   @Then("the correction is recorded alongside the original route for this user")
   public void theCorrectionIsRecordedAlongsideTheOriginalRouteForThisUser() {
     Response response = context.lastResponse();
@@ -407,6 +523,22 @@ public class FeedbackSteps {
 
   private Response readById(String id) {
     return context.api().get(FEEDBACK + "/" + id);
+  }
+
+  /**
+   * The {@code status} of the route whose {@code destination} equals {@code destination} on a
+   * {@code GET /feedback/{id}} response, or {@code null} if no such route exists. Uses a
+   * REST-assured GPath find so it is robust to route ordering (the fan-out persists routes in
+   * classification order, which is not the assertion's concern).
+   */
+  private static String routeStatus(Response read, String destination) {
+    return read.jsonPath()
+        .getString("routes.find { it.destination == '" + destination + "' }.status");
+  }
+
+  /** As {@link #routeStatus} but returns the route-log id (used to address the correction). */
+  private static String routeId(Response read, String destination) {
+    return read.jsonPath().getString("routes.find { it.destination == '" + destination + "' }.id");
   }
 
   private String feedbackId() {
