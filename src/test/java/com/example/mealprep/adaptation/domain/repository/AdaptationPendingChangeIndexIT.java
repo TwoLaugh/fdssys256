@@ -109,10 +109,10 @@ class AdaptationPendingChangeIndexIT {
    * dimension)} as an already-PENDING row must succeed (last-writer-wins), NOT throw on the partial
    * unique index. The mock-based unit test can't catch this because the failure was Hibernate's
    * default flush order — INSERT-before-UPDATE leaves two PENDING rows momentarily and
-   * self-collides on the index. The fix (saveAndFlush the supersession UPDATE before the INSERT)
-   * only shows up against a real Postgres + the real index, with {@code create} running through the
-   * actual {@code self}-proxy / {@code @Transactional(REQUIRES_NEW)} wiring. This also proves the
-   * self-proxy is non-null in a real Spring context (a null {@code self} would NPE here).
+   * self-collides on the index. The fix (flush the supersession UPDATE before the INSERT) only
+   * shows up against a real Postgres + the real index, with {@code create} running in the caller's
+   * transaction ({@code @Transactional} REQUIRED — the {@code job_id} FK references the {@code
+   * adaptation_jobs} row created in that same tx, so a {@code REQUIRES_NEW} tx could not see it).
    */
   @Test
   void recreate_for_same_recipe_dimension_supersedes_old_and_keeps_one_pending() throws Exception {

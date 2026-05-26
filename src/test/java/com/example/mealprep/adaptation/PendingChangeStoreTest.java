@@ -32,23 +32,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.test.util.ReflectionTestUtils;
 
 class PendingChangeStoreTest {
-
-  /**
-   * Wire the store's {@code @Autowired @Lazy self} field to {@code store} itself so {@code
-   * create(...)} can delegate to {@code self.attemptCreate(...)} without a Spring context (a null
-   * {@code self} would NPE). {@code REQUIRES_NEW} does nothing under a plain unit test, but the
-   * supersede→insert→retry logic runs exactly as in production and is verifiable on the mock.
-   */
-  private static PendingChangeStore newStore(
-      PendingChangeRepository repo, ApplicationEventPublisher events, AdaptationConfig config) {
-    PendingChangeStore store = new PendingChangeStore(repo, events, config);
-    ReflectionTestUtils.setField(store, "self", store);
-    return store;
-  }
 
   @Test
   void create_supersedes_existing_pending_then_inserts_new() {
@@ -61,7 +46,7 @@ class PendingChangeStoreTest {
         .thenReturn(Optional.of(existing));
     when(repo.saveAndFlush(any(PendingChange.class))).thenAnswer(inv -> inv.getArgument(0));
 
-    PendingChangeStore store = newStore(repo, events, config);
+    PendingChangeStore store = new PendingChangeStore(repo, events, config);
     UUID newId =
         store.create(
             job(),
@@ -91,61 +76,13 @@ class PendingChangeStoreTest {
   }
 
   @Test
-  void race_retry_on_data_integrity_violation_settles_with_one_winning_pending() {
-    PendingChangeRepository repo = mock(PendingChangeRepository.class);
-    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
-
-    // Attempt 1 races the no-existing-PENDING path; its INSERT loses the unique-index race.
-    // Attempt 2 (fresh tx) re-reads and now sees the concurrent winner's committed PENDING.
-    PendingChange winner = pending(UUID.randomUUID());
-    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
-        .thenReturn(Optional.empty())
-        .thenReturn(Optional.of(winner));
-    // saveAndFlush is now ONLY the new-row INSERT (supersession + back-fill use plain flush()).
-    // Call 1 = attempt-1 INSERT -> throws. Call 2 = attempt-2 INSERT -> succeeds.
-    when(repo.saveAndFlush(any(PendingChange.class)))
-        .thenThrow(new DataIntegrityViolationException("constraint"))
-        .thenAnswer(inv -> inv.getArgument(0));
-
-    PendingChangeStore store = newStore(repo, events, config());
-    UUID newId =
-        store.create(
-            job(),
-            response(),
-            ChangeDimension.SALT_LEVEL,
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            "v1");
-    assertThat(newId).isNotNull();
-
-    // 2 saveAndFlush (both new-row INSERT attempts): attempt-1 throws, attempt-2 succeeds.
-    ArgumentCaptor<PendingChange> cap = ArgumentCaptor.forClass(PendingChange.class);
-    verify(repo, times(2)).saveAndFlush(cap.capture());
-    // Last-writer-wins: the concurrent winner is superseded by the retry's new row...
-    assertThat(winner.getStatus()).isEqualTo(PendingChangeStatus.SUPERSEDED);
-    assertThat(winner.getSupersededBy()).isEqualTo(newId);
-    // ...and the newly inserted row settles as PENDING (no more SUPERSEDED-flagged retry insert).
-    PendingChange newRow =
-        cap.getAllValues().stream()
-            .filter(pc -> newId.equals(pc.getId()))
-            .findFirst()
-            .orElseThrow();
-    assertThat(newRow.getStatus()).isEqualTo(PendingChangeStatus.PENDING);
-    // Event is published once, for the surviving PENDING row only.
-    ArgumentCaptor<PendingChangeCreatedEvent> evCap =
-        ArgumentCaptor.forClass(PendingChangeCreatedEvent.class);
-    verify(events).publishEvent(evCap.capture());
-    assertThat(evCap.getValue().pendingChangeId()).isEqualTo(newId);
-  }
-
-  @Test
   void no_existing_pending_just_inserts() {
     PendingChangeRepository repo = mock(PendingChangeRepository.class);
     ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
         .thenReturn(Optional.empty());
     when(repo.saveAndFlush(any(PendingChange.class))).thenAnswer(inv -> inv.getArgument(0));
-    PendingChangeStore store = newStore(repo, events, config());
+    PendingChangeStore store = new PendingChangeStore(repo, events, config());
 
     UUID id =
         store.create(
@@ -173,7 +110,7 @@ class PendingChangeStoreTest {
         .thenReturn(Optional.of(existing));
     when(repo.saveAndFlush(any(PendingChange.class))).thenAnswer(inv -> inv.getArgument(0));
 
-    PendingChangeStore store = newStore(repo, events, config());
+    PendingChangeStore store = new PendingChangeStore(repo, events, config());
     store.create(
         job(), response(), ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), "v1");
 
@@ -187,7 +124,7 @@ class PendingChangeStoreTest {
     ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
         .thenReturn(Optional.empty());
-    PendingChangeStore store = newStore(repo, events, config());
+    PendingChangeStore store = new PendingChangeStore(repo, events, config());
 
     var finalDiff = JsonNodeFactory.instance.objectNode().put("k", "v");
     RecipeAdaptationResponse resp =
@@ -224,7 +161,7 @@ class PendingChangeStoreTest {
     ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
         .thenReturn(Optional.empty());
-    PendingChangeStore store = newStore(repo, events, config());
+    PendingChangeStore store = new PendingChangeStore(repo, events, config());
 
     // null reasoning, null finalDiffJson, null confidence, null promptTemplateVersion.
     RecipeAdaptationResponse resp =
@@ -254,43 +191,6 @@ class PendingChangeStoreTest {
     assertThat(saved.getProposedDiff().isEmpty()).isTrue();
     // safe(null) -> BigDecimal.ZERO.
     assertThat(saved.getConfidence()).isEqualByComparingTo("0");
-  }
-
-  @Test
-  void retry_path_inserts_row_as_pending_not_superseded() {
-    PendingChangeRepository repo = mock(PendingChangeRepository.class);
-    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
-    PendingChange winner = pending(UUID.randomUUID());
-    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
-        .thenReturn(Optional.empty())
-        .thenReturn(Optional.of(winner));
-    when(repo.saveAndFlush(any(PendingChange.class)))
-        .thenThrow(new DataIntegrityViolationException("constraint"))
-        .thenAnswer(inv -> inv.getArgument(0));
-    PendingChangeStore store = newStore(repo, events, config());
-
-    UUID newId =
-        store.create(
-            job(),
-            response(),
-            ChangeDimension.SALT_LEVEL,
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            "v1");
-
-    // Only the new-row INSERTs go through saveAndFlush: attempt-1 (throws) + attempt-2 (succeeds).
-    // The winner's status-flip and back-fill use plain flush().
-    ArgumentCaptor<PendingChange> cap = ArgumentCaptor.forClass(PendingChange.class);
-    verify(repo, times(2)).saveAndFlush(cap.capture());
-    // Last-writer-wins: the retry ALWAYS inserts the new row as PENDING (the old SUPERSEDED-flagged
-    // retry insert is gone). The superseded one is the prior winner, not the freshly inserted row.
-    PendingChange newRow =
-        cap.getAllValues().stream()
-            .filter(pc -> newId.equals(pc.getId()))
-            .findFirst()
-            .orElseThrow();
-    assertThat(newRow.getStatus()).isEqualTo(PendingChangeStatus.PENDING);
-    assertThat(winner.getStatus()).isEqualTo(PendingChangeStatus.SUPERSEDED);
   }
 
   private static AdaptationJob job() {

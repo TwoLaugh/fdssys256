@@ -14,14 +14,8 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -31,21 +25,21 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>Per ticket 01c §Step 7 / LLD lines 157, 759-760.
  *
+ * <p>Transaction: {@link #create} is {@code @Transactional} REQUIRED — it MUST run in the caller's
+ * transaction because {@code adaptation_pending_changes.job_id} FKs the {@code adaptation_jobs} row
+ * created earlier in that SAME, not-yet-committed transaction (the sync feedback path {@code
+ * enqueueFeedbackJob → processSyncJob → processJob → create}). A {@code REQUIRES_NEW} tx could not
+ * see that uncommitted job row and would violate {@code adaptation_pending_changes_job_id_fkey}.
+ *
  * <p>Concurrency: the partial unique index {@code (recipe_id, change_dimension) WHERE
- * status='PENDING'} is the source-of-truth serialiser. Two jobs for the same {@code (recipe,
- * dimension)} can still race past the {@code findBy} (e.g. a recipe's adapt-on-create IMPORT job
- * and a feedback-to-that-recipe FEEDBACK job): the loser's INSERT hits the index. We recover by
- * retrying ONCE in a brand-new transaction — each attempt runs in its own {@code REQUIRES_NEW} tx
- * (via the {@code self} proxy), so on violation it rolls back cleanly and the retry's re-read sees
- * the winner's now-committed PENDING, supersedes it (last-writer-wins, consistent with the no-race
- * path) and inserts. Recovering in the original (already-aborted) transaction is impossible in
- * Postgres, which is why {@link #create} is itself non-transactional and delegates to the {@code
- * REQUIRES_NEW} {@link #attemptCreate}.
+ * status='PENDING'} is the source-of-truth serialiser, but same-recipe jobs are already serialised
+ * upstream by the per-recipe advisory lock in {@code processJob}, so {@code create} sees a stable
+ * single PENDING row. A genuine concurrent insert that slipped past the lock violates the partial
+ * unique index and fails the job terminally — it CANNOT be retried in a fresh transaction, because
+ * the {@code job_id} FK still references the original tx's uncommitted job row (see above).
  */
 @Component
 public class PendingChangeStore {
-
-  private static final Logger LOG = LoggerFactory.getLogger(PendingChangeStore.class);
 
   private final PendingChangeRepository repository;
   private final ApplicationEventPublisher events;
@@ -61,53 +55,16 @@ public class PendingChangeStore {
   }
 
   /**
-   * Self-proxy so {@link #create} invokes the {@code REQUIRES_NEW} {@link #attemptCreate} through
-   * Spring's transactional proxy — a plain {@code this.attemptCreate(...)} would bypass it and the
-   * retry would not get a fresh transaction. Mirrors the {@code @Autowired @Lazy} self-injection
-   * used elsewhere in this module (e.g. {@code AdaptationLockAcquirer}).
-   */
-  @Autowired @Lazy private PendingChangeStore self;
-
-  /**
-   * Supersede + insert. Returns the newly-inserted {@link PendingChange} id. Publishes a {@code
-   * PendingChangeCreatedEvent} which downstream listeners filter on {@code AFTER_COMMIT}.
+   * Supersede + insert, in the caller's transaction. Returns the newly-inserted {@link
+   * PendingChange} id. Publishes a {@code PendingChangeCreatedEvent} which downstream listeners
+   * filter on {@code AFTER_COMMIT}.
    *
-   * <p>Non-transactional orchestrator: delegates to the {@code REQUIRES_NEW} {@link #attemptCreate}
-   * and, if that loses a concurrent {@code (recipe, dimension)} PENDING race (its own tx rolls back
-   * on the unique-index violation), retries exactly ONCE in a brand-new transaction. See the class
-   * javadoc.
+   * <p>{@code @Transactional} REQUIRED: runs in the SAME tx as the {@code adaptation_jobs} row this
+   * change's {@code job_id} FKs (a {@code REQUIRES_NEW} tx can't see that uncommitted row). See the
+   * class javadoc.
    */
+  @Transactional
   public UUID create(
-      AdaptationJob job,
-      RecipeAdaptationResponse response,
-      ChangeDimension dimension,
-      UUID baseVersionId,
-      UUID baseBranchId,
-      String promptTemplateVersion) {
-    try {
-      return self.attemptCreate(
-          job, response, dimension, baseVersionId, baseBranchId, promptTemplateVersion);
-    } catch (DataIntegrityViolationException race) {
-      LOG.warn(
-          "PendingChangeStore lost (recipe={}, dimension={}) PENDING race for job={}; retrying in a"
-              + " fresh transaction",
-          job.getRecipeId(),
-          dimension,
-          job.getId());
-      return self.attemptCreate(
-          job, response, dimension, baseVersionId, baseBranchId, promptTemplateVersion);
-    }
-  }
-
-  /**
-   * One supersede-then-insert attempt in its OWN transaction, so a unique-index violation rolls
-   * back THIS tx cleanly and {@link #create} can retry in a fresh one (Postgres cannot continue an
-   * aborted transaction). MUST be invoked via the {@code self} proxy for the {@code REQUIRES_NEW}
-   * advice to apply. A {@link DataIntegrityViolationException} is allowed to propagate to {@link
-   * #create}.
-   */
-  @Transactional(propagation = Propagation.REQUIRES_NEW)
-  public UUID attemptCreate(
       AdaptationJob job,
       RecipeAdaptationResponse response,
       ChangeDimension dimension,
@@ -120,8 +77,8 @@ public class PendingChangeStore {
     // the DB BEFORE the INSERT below — Hibernate otherwise orders INSERTs before UPDATEs, which
     // would leave two PENDING rows at insert time and self-collide on the partial unique index
     // (recipe_id, change_dimension) WHERE status='PENDING'. With the flush, there is only ever one
-    // PENDING row, so the no-race path (incl. the retry's re-read of a now-committed winner) never
-    // self-collides; a genuine concurrent insert still violates and propagates to create()'s retry.
+    // PENDING row, so the no-race path never self-collides; a genuine concurrent insert still
+    // violates and fails the job terminally.
     //
     // The supersededBy pointer is NOT set on this flush: the FK superseded_by -> id is NOT
     // deferrable, so pointing the superseded row at newId before that row physically exists would
