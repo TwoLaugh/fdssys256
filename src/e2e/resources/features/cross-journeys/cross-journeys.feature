@@ -69,17 +69,33 @@ Feature: Cross-domain journeys — the integration capstone (XJ-01..06)
     And the feedback entry eventually reaches a routed state for this user
     And the feedback entry has a routing decision to provisions for this user
 
-  @xj02 @pending
-  # XJ-02 full fan-out + reverters. BLOCKING LEG: the four-destination split (RCP-32 || PREF-16
-  # || NUT-38 || PROV-32) needs a recipe in the user catalogue routed to a PENDING_APPROVAL
-  # recipe route AND seeded preference/nutrition aggregates so all four routes APPLY (a fresh
-  # user's PREFERENCE route is FAILED not APPLIED, and there is no HTTP path for a recipe-feedback
-  # route); the misclassification reverter (FEED-19 -> FEED-20 -> FEED-21) then needs that
-  # correctable recipe route to undo. Un-pend once a recipe-route + multi-aggregate fixture lands.
-  Scenario: One feedback fans out to four destinations and a correction fires the reverters
+  @xj02
+  # XJ-02 full fan-out + reverter (now GREEN). ONE free-text feedback the cheap AI classifies into
+  # all four destinations (RCP-32 || PREF-16 || NUT-38 || PROV-32 — the @Size(max = 4) universe),
+  # every classification >= 0.8 so each AUTO_ROUTES. The fixtures make all four routes non-FAILED:
+  # a seeded taste profile (PREFERENCE empty-delta no-op APPLIES instead of 404-FAILING for a fresh
+  # user), nutrition targets (NUTRITION protein_target_g +5% APPLIES), the PROVISIONS MARK_DEPLETED
+  # no-op (APPLIED), and a real catalogue recipe so the RECIPE route enqueues a synchronous
+  # adaptation FEEDBACK job that creates a PendingChange -> AWAITING_USER_APPROVAL (a propose/approve
+  # outcome, non-failed but never APPLIED). All non-failed => the entry reconciles to ROUTED. Then
+  # the misclassification reverter (FEED-19 -> FEED-20 -> FEED-21): correcting the RECIPE route away
+  # fires the REAL RecipeFeedbackReverterImpl, which cancels the pending adaptation, and the
+  # correction is recorded in the ground-truth audit. The adaptation Stage-C AI is not primed — the
+  # e2e stub's built-in NO_CHANGE RECIPE_ADAPTATION default clears both validation gates and a
+  # PENDING_CHANGE job stores the pending change regardless of the NO_CHANGE classification.
+  Scenario: One feedback fans out to four destinations and a correction fires the recipe reverter
     Given a fresh registered and logged-in user
-    And the user has a seeded preference-routed feedback entry
-    When they correct that route to nutrition
+    And the user has an initialised taste profile
+    When they set their nutrition targets
+    Then the targets are stored and returned for this user
+    When they create a manual recipe
+    Then the recipe is created in their user catalogue at version 1
+    And the AI will classify the next feedback to all four destinations
+    When they submit feedback "out of soy sauce, more protein, love prawns, that recipe needed salt"
+    Then the feedback submission is accepted for processing
+    And the feedback entry eventually reaches a routed state for this user
+    And the feedback entry has four routed destinations for this user
+    When they correct the recipe route to nutrition
     Then the correction is recorded alongside the original route for this user
 
   # ============================================================================
