@@ -86,7 +86,15 @@ public class PendingChangeStore {
           e.setStatus(PendingChangeStatus.SUPERSEDED);
           e.setSupersededBy(newId);
           e.setResolvedAt(now);
-          repository.save(e);
+          // MUST flush the supersession UPDATE before the new PENDING insert below. Hibernate's
+          // default action ordering flushes INSERTs before UPDATEs, so a plain save(e) would let
+          // the new PENDING row insert while the old row is still PENDING — violating the partial
+          // unique index (recipe_id, change_dimension) WHERE status='PENDING' and aborting the tx
+          // (the same-tx retry below then can't recover). saveAndFlush forces UPDATE-then-INSERT so
+          // there is only ever one PENDING row. Reachable on the common sequential path: a recipe's
+          // adapt-on-create IMPORT job leaves a (recipe, GENERAL) PENDING, then a feedback-to-that-
+          // recipe FEEDBACK job supersedes it.
+          repository.saveAndFlush(e);
         });
 
     JsonNode diff = diffNode(response);
