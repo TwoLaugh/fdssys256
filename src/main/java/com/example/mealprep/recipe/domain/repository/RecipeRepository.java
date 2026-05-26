@@ -98,4 +98,65 @@ public interface RecipeRepository extends JpaRepository<Recipe, UUID> {
       order by r.createdAt asc
       """)
   List<Recipe> findPlannableForUser(@Param("userId") UUID userId, Pageable page);
+
+  /**
+   * Affected-set read for the adaptation module (Trigger 3). Returns one {@code (recipeId,
+   * ingredientMappingKey)} row per ingredient on the <b>current version</b> of each <b>active</b>
+   * {@code USER}-catalogue recipe owned by {@code userId}. The service assembles these into a
+   * {@code Map<UUID, List<String>>}.
+   *
+   * <p>Active = {@code catalogue = USER AND userId = :userId AND archivedAt IS NULL AND deletedAt
+   * IS NULL}. The current version is joined via {@code (v.recipe.id = r.id AND v.branch.id =
+   * r.currentBranchId AND v.versionNumber = r.currentVersion)}; the {@code uq_recipe_versions}
+   * unique constraint backs that lookup. Ingredients are joined by {@code i.version.id = v.id}
+   * (backed by {@code idx_recipe_ingredients_version}). The {@link RecipeIngredient}→version join
+   * is an <b>inner</b> join, so a recipe with no ingredients on its current version contributes no
+   * rows (and is therefore absent from the assembled map — intentional per ticket). Single query,
+   * no N+1.
+   */
+  @Query(
+      """
+      select r.id, i.ingredientMappingKey
+        from Recipe r
+        join com.example.mealprep.recipe.domain.entity.RecipeVersion v
+          on v.recipe.id = r.id
+         and v.branch.id = r.currentBranchId
+         and v.versionNumber = r.currentVersion
+        join com.example.mealprep.recipe.domain.entity.RecipeIngredient i
+          on i.version.id = v.id
+       where r.userId = :userId
+         and r.catalogue = com.example.mealprep.recipe.domain.entity.Catalogue.USER
+         and r.archivedAt is null
+         and r.deletedAt is null
+      """)
+  List<Object[]> findCurrentVersionIngredientKeysForUser(@Param("userId") UUID userId);
+
+  /**
+   * Affected-set read for the adaptation module (Trigger 3). Returns one {@code (recipeId,
+   * nutritionPerServing)} row per <b>active</b> {@code USER}-catalogue recipe owned by {@code
+   * userId} whose <b>current version</b> has a non-null {@code nutrition_per_serving} jsonb. The
+   * service assembles these into a {@code Map<UUID, JsonNode>}.
+   *
+   * <p>Same active + current-version scoping as {@link
+   * #findCurrentVersionIngredientKeysForUser(UUID)}. The {@code nutrition_per_serving} jsonb is
+   * mapped to {@link com.fasterxml.jackson.databind.JsonNode} on the version entity (hypersistence
+   * {@code JsonBinaryType}), so it projects through JPQL verbatim — the recipe module does not
+   * parse it. {@code v.nutritionPerServing is not null} prunes versions with no nutrition. Single
+   * query, no N+1.
+   */
+  @Query(
+      """
+      select r.id, v.nutritionPerServing
+        from Recipe r
+        join com.example.mealprep.recipe.domain.entity.RecipeVersion v
+          on v.recipe.id = r.id
+         and v.branch.id = r.currentBranchId
+         and v.versionNumber = r.currentVersion
+       where r.userId = :userId
+         and r.catalogue = com.example.mealprep.recipe.domain.entity.Catalogue.USER
+         and r.archivedAt is null
+         and r.deletedAt is null
+         and v.nutritionPerServing is not null
+      """)
+  List<Object[]> findCurrentVersionNutritionForUser(@Param("userId") UUID userId);
 }

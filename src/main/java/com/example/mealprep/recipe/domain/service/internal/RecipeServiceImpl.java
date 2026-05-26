@@ -94,7 +94,9 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -2163,6 +2165,44 @@ public class RecipeServiceImpl
         .findById(versionId)
         .map(RecipeVersion::getEmbedding)
         .filter(arr -> arr != null && arr.length > 0);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Map<UUID, List<String>> findUserRecipeIngredientKeys(UUID userId) {
+    if (userId == null) {
+      return Map.of();
+    }
+    // Single projection query (recipeId, ingredientMappingKey) over each active recipe's current
+    // version; an inner join on ingredients means zero-ingredient recipes contribute no rows and
+    // are naturally absent. Assemble row groups into a Map — preserve insertion order for stable
+    // iteration. No N+1: one SELECT regardless of recipe count.
+    List<Object[]> rows = recipeRepository.findCurrentVersionIngredientKeysForUser(userId);
+    Map<UUID, List<String>> result = new LinkedHashMap<>();
+    for (Object[] row : rows) {
+      UUID recipeId = (UUID) row[0];
+      String mappingKey = (String) row[1];
+      result.computeIfAbsent(recipeId, k -> new ArrayList<>()).add(mappingKey);
+    }
+    return result;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Map<UUID, JsonNode> findUserRecipeNutrition(UUID userId) {
+    if (userId == null) {
+      return Map.of();
+    }
+    // Single projection query (recipeId, nutritionPerServing) over each active recipe's current
+    // version, pruning null-nutrition versions in SQL. The jsonb is returned verbatim as a
+    // JsonNode — the recipe module stores nutrition opaquely (written via the nutrition SPI) and
+    // does NOT interpret its shape; that belongs to the nutrition module. No N+1: one SELECT.
+    List<Object[]> rows = recipeRepository.findCurrentVersionNutritionForUser(userId);
+    Map<UUID, JsonNode> result = new LinkedHashMap<>();
+    for (Object[] row : rows) {
+      result.put((UUID) row[0], (JsonNode) row[1]);
+    }
+    return result;
   }
 
   // ---------------- RecipeSubstitutionRecorder SPI ----------------
