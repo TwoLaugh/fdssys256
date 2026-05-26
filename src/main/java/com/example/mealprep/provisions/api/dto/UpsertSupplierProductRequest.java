@@ -1,10 +1,10 @@
 package com.example.mealprep.provisions.api.dto;
 
+import com.example.mealprep.provisions.validation.PastOrNextDay;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.PastOrPresent;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -25,5 +25,5 @@ public record UpsertSupplierProductRequest(
     @Size(max = 16) String packSizeUnit,
     @Size(max = 64) String category,
     @DecimalMin("0.0") @Digits(integer = 6, fraction = 2) BigDecimal clubcardPrice,
-    @NotNull @PastOrPresent LocalDate lastChecked,
+    @NotNull @PastOrNextDay LocalDate lastChecked,
     @Size(max = 128) String ingredientMappingKey) {}

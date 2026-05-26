@@ -286,3 +286,5 @@ mutation testing, k6 baseline.
 
 See lld/core.md for design; tickets/core/01-decision-log.md for spec.
 ```
+
+- Client-supplied LocalDate fields accept up to server-today+1 to absorb client TZ skew (provisions/02a, @PastOrNextDay).
