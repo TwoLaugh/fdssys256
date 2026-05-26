@@ -18,11 +18,20 @@ import java.util.UUID;
  * is null. The feedback bridges, when they call downstream destination services, set {@code
  * AI_FEEDBACK} attribution on those calls (see {@code feedback.bridge..}); the event itself records
  * the source side, which is the user submitting feedback.
+ *
+ * @param destinationsTouched every destination the router <b>attempted</b> (success or failure),
+ *     irrespective of outcome. Consumed by {@code feedback.ai.internal.PreferenceDeltaBatchTrigger}
+ *     to count PREFERENCE-routed feedback — it must stay "all attempted".
+ * @param appliedDestinations the subset of {@code destinationsTouched} that <b>actually applied a
+ *     change</b> (the route did not fail). NOTIF-16 fires only when this is non-empty + not
+ *     clarification-pending, and its "feedback applied" payload lists exactly these. Empty on every
+ *     non-applied path (total failure, clarification-pending, non-actionable).
  */
 public record FeedbackProcessedEvent(
     UUID feedbackId,
     UUID userId,
     Set<Destination> destinationsTouched,
+    Set<Destination> appliedDestinations,
     boolean partialFailure,
     boolean clarificationPending,
     UUID traceId,

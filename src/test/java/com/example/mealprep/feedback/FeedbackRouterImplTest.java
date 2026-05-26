@@ -130,6 +130,8 @@ class FeedbackRouterImplTest {
     verify(events).publishEvent(ec.capture());
     FeedbackProcessedEvent ev = ec.getValue();
     assertThat(ev.destinationsTouched()).containsExactly(Destination.PREFERENCE);
+    // The route succeeded → it is in the applied set too.
+    assertThat(ev.appliedDestinations()).containsExactly(Destination.PREFERENCE);
     assertThat(ev.partialFailure()).isFalse();
     // Two saves on the log row: PENDING insert + APPLIED update.
     verify(routingLogRepository, times(2)).save(any(RoutingLogEntry.class));
@@ -186,6 +188,9 @@ class FeedbackRouterImplTest {
     assertThat(ec.getValue().destinationsTouched())
         .containsExactlyInAnyOrder(
             Destination.RECIPE, Destination.PREFERENCE, Destination.NUTRITION);
+    // Partial success: only the two that did NOT fail are in the applied set (NUTRITION failed).
+    assertThat(ec.getValue().appliedDestinations())
+        .containsExactlyInAnyOrder(Destination.RECIPE, Destination.PREFERENCE);
   }
 
   @Test
@@ -205,6 +210,10 @@ class FeedbackRouterImplTest {
         ArgumentCaptor.forClass(FeedbackProcessedEvent.class);
     verify(events).publishEvent(ec.capture());
     assertThat(ec.getValue().partialFailure()).isTrue();
+    // The route was ATTEMPTED (touched) but FAILED → applied is empty. This is what stops NOTIF-16
+    // from wrongly confirming a "feedback applied" notification when nothing actually applied.
+    assertThat(ec.getValue().destinationsTouched()).containsExactly(Destination.PREFERENCE);
+    assertThat(ec.getValue().appliedDestinations()).isEmpty();
   }
 
   @Test

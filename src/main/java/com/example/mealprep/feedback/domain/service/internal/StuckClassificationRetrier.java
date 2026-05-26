@@ -102,7 +102,14 @@ public class StuckClassificationRetrier {
       // so the AFTER_COMMIT listener fires.
       eventPublisher.publishEvent(
           new FeedbackProcessedEvent(
-              feedbackId, entry.getUserId(), Set.of(), true, false, entry.getTraceId(), now));
+              feedbackId,
+              entry.getUserId(),
+              Set.of(),
+              Set.of(),
+              true,
+              false,
+              entry.getTraceId(),
+              now));
       return true;
     }
 

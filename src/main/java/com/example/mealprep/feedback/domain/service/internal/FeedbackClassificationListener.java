@@ -233,7 +233,8 @@ public class FeedbackClassificationListener {
           // Publish INSIDE the tx so @TransactionalEventListener(AFTER_COMMIT) listeners fire on
           // tx commit. Spring silently drops AFTER_COMMIT events published outside any tx.
           eventPublisher.publishEvent(
-              new FeedbackProcessedEvent(feedbackId, userId, Set.of(), true, false, traceId, now));
+              new FeedbackProcessedEvent(
+                  feedbackId, userId, Set.of(), Set.of(), true, false, traceId, now));
         });
   }
 
@@ -274,7 +275,8 @@ public class FeedbackClassificationListener {
             throw new FeedbackEntryNotFoundException(feedbackId);
           }
           eventPublisher.publishEvent(
-              new FeedbackProcessedEvent(feedbackId, userId, Set.of(), false, true, traceId, now));
+              new FeedbackProcessedEvent(
+                  feedbackId, userId, Set.of(), Set.of(), false, true, traceId, now));
         });
   }
 
@@ -299,7 +301,8 @@ public class FeedbackClassificationListener {
             throw new FeedbackEntryNotFoundException(feedbackId);
           }
           eventPublisher.publishEvent(
-              new FeedbackProcessedEvent(feedbackId, userId, Set.of(), false, false, traceId, now));
+              new FeedbackProcessedEvent(
+                  feedbackId, userId, Set.of(), Set.of(), false, false, traceId, now));
         });
   }
 

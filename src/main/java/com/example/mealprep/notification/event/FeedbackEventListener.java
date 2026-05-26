@@ -17,30 +17,33 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * sibling listeners are synchronous, so this one is too — no {@code @Async}).
  *
  * <p><b>Fire-condition gate (NOTIF-16, locked design).</b> Fire iff the feedback resulted in ≥1
- * destination actually applying a change. The gate reads the event's {@code destinationsTouched}
- * and {@code clarificationPending} fields:
+ * destination actually applying a change. The gate reads the event's {@code appliedDestinations}
+ * (the succeeded subset) and {@code clarificationPending} fields:
  *
- * <pre>{@code !event.destinationsTouched().isEmpty() && !event.clarificationPending()}</pre>
+ * <pre>{@code event.appliedDestinations() != null && !event.appliedDestinations().isEmpty()
+ *     && !event.clarificationPending()}</pre>
  *
- * This positively fires the routed apply paths (all-success and partial-success — something
- * applied) and skips the three negative outcomes, each of which publishes an EMPTY {@code
- * destinationsTouched} (or sets {@code clarificationPending}):
+ * Reading {@code appliedDestinations} (NOT {@code destinationsTouched}) is the correctness point:
+ * {@code destinationsTouched} is every destination the router <b>attempted</b> regardless of
+ * outcome, so a routed-but-all-FAILED feedback has a non-empty {@code destinationsTouched} yet
+ * applied nothing. Gating on the succeeded set fires the routed apply paths (all-success and
+ * partial-success — something applied) and skips the negative outcomes, each of which carries an
+ * EMPTY {@code appliedDestinations} (or sets {@code clarificationPending}):
  *
  * <ul>
- *   <li><b>non-actionable / empty</b> ({@code markRoutedEmpty}): {@code destinationsTouched=∅} →
+ *   <li><b>non-actionable / empty</b> ({@code markRoutedEmpty}): {@code appliedDestinations=∅} →
  *       skip;
  *   <li><b>clarification-pending</b> ({@code queueClarification}): {@code
- *       clarificationPending=true} (and {@code destinationsTouched=∅}) → skip;
- *   <li><b>total failure</b> ({@code markFailed} / {@code StuckClassificationRetrier}, the
- *       pre-route terminal paths): {@code destinationsTouched=∅} → skip.
+ *       clarificationPending=true} (and {@code appliedDestinations=∅}) → skip;
+ *   <li><b>total failure</b> ({@code markFailed} / {@code StuckClassificationRetrier} pre-route
+ *       terminal paths, AND a routed feedback whose every bridge FAILED): {@code
+ *       appliedDestinations=∅} → skip.
  * </ul>
  *
- * Per HLD-clarify GAP-30 the {@code FeedbackProcessedEvent} payload "carries only succeeded
- * destinations + a partialFailure flag" — so a non-empty {@code destinationsTouched} means at least
- * one destination applied. (HLD-GAP G15 — per-destination failure detail on partial success — is
- * deferred; v1 fires plainly when anything applied.) The gate lives HERE in the listener, not the
- * resolver, so the resolver maps unconditionally and the dispatcher never even runs for a
- * non-firing outcome.
+ * (HLD-GAP G15 — per-destination failure detail on partial success — is deferred; v1 fires plainly
+ * when anything applied and the payload lists exactly the succeeded destinations.) The gate lives
+ * HERE in the listener, not the resolver, so the resolver maps unconditionally and the dispatcher
+ * never even runs for a non-firing outcome.
  */
 @Component("notificationFeedbackEventListener")
 public class FeedbackEventListener {
@@ -71,8 +74,8 @@ public class FeedbackEventListener {
 
   /** The NOTIF-16 fire condition — see the class javadoc. */
   private static boolean appliedAtLeastOneDestination(FeedbackProcessedEvent event) {
-    return event.destinationsTouched() != null
-        && !event.destinationsTouched().isEmpty()
+    return event.appliedDestinations() != null
+        && !event.appliedDestinations().isEmpty()
         && !event.clarificationPending();
   }
 

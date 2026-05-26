@@ -98,6 +98,7 @@ public class FeedbackRouterImpl implements FeedbackRouter {
     int attempt = entry.getClassificationAttempts();
 
     Set<Destination> touched = EnumSet.noneOf(Destination.class);
+    Set<Destination> applied = EnumSet.noneOf(Destination.class);
     boolean anyFailed = false;
     boolean anyNonFailed = false;
 
@@ -130,11 +131,13 @@ public class FeedbackRouterImpl implements FeedbackRouter {
       if (outcome == RoutingStatus.FAILED) {
         anyFailed = true;
       } else {
+        // Did NOT fail → this destination actually applied a change. Drives NOTIF-16.
+        applied.add(dest);
         anyNonFailed = true;
       }
     }
 
-    reconcileAndPublish(feedbackId, userId, traceId, touched, anyFailed, anyNonFailed);
+    reconcileAndPublish(feedbackId, userId, traceId, touched, applied, anyFailed, anyNonFailed);
   }
 
   /**
@@ -309,6 +312,7 @@ public class FeedbackRouterImpl implements FeedbackRouter {
       UUID userId,
       UUID traceId,
       Set<Destination> touched,
+      Set<Destination> applied,
       boolean anyFailed,
       boolean anyNonFailed) {
 
@@ -331,7 +335,14 @@ public class FeedbackRouterImpl implements FeedbackRouter {
           }
           eventPublisher.publishEvent(
               new FeedbackProcessedEvent(
-                  feedbackId, userId, Set.copyOf(touched), anyFailed, false, traceId, now));
+                  feedbackId,
+                  userId,
+                  Set.copyOf(touched),
+                  Set.copyOf(applied),
+                  anyFailed,
+                  false,
+                  traceId,
+                  now));
         });
   }
 

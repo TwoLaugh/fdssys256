@@ -267,18 +267,20 @@ public class NotificationKindResolver {
   /**
    * NOTIF-16 feedback-confirmation. Positive-outcome only: by the time this resolver is reached the
    * {@code FeedbackEventListener} has already applied the fire-condition gate (≥1 destination
-   * applied), so we map unconditionally here. Non-householded — the originating feedback is the
-   * submitting user's own (the event's {@code userId} is the author), so we dispatch directly to
-   * them with no household fan-out. Severity INFO (a positive confirmation, not an alert). {@code
-   * bundlingKey = feedbackId} delivers the NOTIF-16 "no storm" guarantee: a re-delivered event for
-   * the same entry collapses onto the one row.
+   * applied), so we map unconditionally here. The payload's "applied" list is built from {@code
+   * appliedDestinations()} — the subset that actually succeeded — NOT {@code destinationsTouched()}
+   * (all attempted), so a partial success lists only the destinations that took. Non-householded —
+   * the originating feedback is the submitting user's own (the event's {@code userId} is the
+   * author), so we dispatch directly to them with no household fan-out. Severity INFO (a positive
+   * confirmation, not an alert). {@code bundlingKey = feedbackId} delivers the NOTIF-16 "no storm"
+   * guarantee: a re-delivered event for the same entry collapses onto the one row.
    */
   public NotificationDraft resolve(FeedbackProcessedEvent event) {
     NotificationKind kind = NotificationKind.FEEDBACK_CONFIRMATION;
     List<String> applied =
-        event.destinationsTouched() == null
+        event.appliedDestinations() == null
             ? List.of()
-            : event.destinationsTouched().stream().sorted().map(Destination::name).toList();
+            : event.appliedDestinations().stream().sorted().map(Destination::name).toList();
     var payload =
         new NotificationPayload.FeedbackConfirmationPayload(kind, event.feedbackId(), applied);
     String body =

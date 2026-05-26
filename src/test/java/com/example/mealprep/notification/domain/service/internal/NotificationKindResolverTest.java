@@ -222,7 +222,14 @@ class NotificationKindResolverTest {
     UUID traceId = UUID.randomUUID();
     var event =
         new FeedbackProcessedEvent(
-            feedbackId, user, Set.of(Destination.PROVISIONS), false, false, traceId, Instant.now());
+            feedbackId,
+            user,
+            Set.of(Destination.PROVISIONS),
+            Set.of(Destination.PROVISIONS),
+            false,
+            false,
+            traceId,
+            Instant.now());
 
     NotificationDraft draft = resolver().resolve(event);
 
@@ -244,16 +251,18 @@ class NotificationKindResolverTest {
   }
 
   @Test
-  void resolve_feedbackProcessed_partialSuccess_listsTheTouchedDestinations() {
+  void resolve_feedbackProcessed_partialSuccess_listsOnlyTheAppliedDestinations() {
     UUID user = UUID.randomUUID();
     UUID feedbackId = UUID.randomUUID();
-    // Partial success: some applied, some failed — partialFailure=true but something applied, so
-    // the resolver still maps (the listener gate has already decided to fire).
+    // Partial success: PROVISIONS and NUTRITION were both attempted (touched) but only PROVISIONS
+    // applied. partialFailure=true; something applied, so the resolver still maps (the listener
+    // gate has already decided to fire). The payload must list ONLY the succeeded destination.
     var event =
         new FeedbackProcessedEvent(
             feedbackId,
             user,
-            Set.of(Destination.PROVISIONS, Destination.NUTRITION),
+            Set.of(Destination.PROVISIONS, Destination.NUTRITION), // attempted
+            Set.of(Destination.PROVISIONS), // succeeded
             true,
             false,
             UUID.randomUUID(),
@@ -262,8 +271,8 @@ class NotificationKindResolverTest {
     NotificationDraft draft = resolver().resolve(event);
 
     var payload = (NotificationPayload.FeedbackConfirmationPayload) draft.payload();
-    // Sorted by Destination enum order (NUTRITION before PROVISIONS).
-    assertThat(payload.appliedDestinations()).containsExactly("NUTRITION", "PROVISIONS");
+    // Only the applied (succeeded) destination, NOT the failed NUTRITION attempt.
+    assertThat(payload.appliedDestinations()).containsExactly("PROVISIONS");
   }
 
   private void stubPrimary(UUID household, UUID primaryUser) {
