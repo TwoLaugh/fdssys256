@@ -128,30 +128,37 @@ Feature: Feedback — submit, async classify, route/clarify/store, recent-histor
     When they list their clarification queue
     Then the clarification queue is empty for this user
 
-  # ----- @pending: need multi-step async / unavailable destination state -----
+  # ----- Correction + clarification answer (green, multi-step over HTTP) -----
 
-  @pending
-  # FEED-19/20 (correct a misrouted route). PENDING: a deterministic correction needs
-  # a real PENDING_APPROVAL recipe route to undo, which requires a recipe in the user
-  # catalogue + the Optimiser pending-change path (no HTTP seed for a recipe-feedback
-  # route, and a fresh-user PREFERENCE route is FAILED not APPLIED so it is not
-  # correctable). Un-pend once a recipe-route fixture lands.
+  # FEED-19/20 (correct a misrouted route). The e2e seeder persists a real APPLIED
+  # PREFERENCE route; per ticket 01f a route is correctable in ANY non-terminal-correction
+  # state (only CORRECTED_AWAY / REPLAYED are rejected, plus the RECIPE structural guard),
+  # so an APPLIED PREFERENCE route corrects cleanly to NUTRITION over HTTP. The correction
+  # row is recorded regardless of the synthetic replay's destination outcome (the replay
+  # runs in its own REQUIRES_NEW tx; a fresh-user NUTRITION replay booking FAILED still
+  # leaves a 200 + a recorded ground-truth correction). The PREFERENCE reverter is a
+  # log-only Noop (01h not wired) — best-effort undo, never blocks the correction.
   Scenario: A user corrects a misrouted route to another destination
     Given a fresh registered and logged-in user
     And the user has a seeded preference-routed feedback entry
     When they correct that route to nutrition
     Then the correction is recorded alongside the original route for this user
 
-  @pending
-  # FEED-11 (answer a clarification -> reclassify -> route). PENDING: the answer fires
-  # a SECOND async re-classification that needs a second primed AI response AND
-  # routing-completion polling on the same entry; the e2e AI stub returns one canned
-  # response per task type, so priming a different second-round result deterministically
-  # is not yet wired. Un-pend when the stub supports per-call queued responses.
+  # FEED-11 (answer a clarification -> reclassify -> route). The answer re-fires the async
+  # classifier on the SAME entry (same traceId), which calls the AI again — the user's
+  # selected destination is only a prompt hint, the route is decided by the second model
+  # response. The e2e AI stub keys one canned response per TaskType, so re-priming
+  # FEEDBACK_CLASSIFICATION (overwrite) between the two classifications gives the second
+  # pass a fresh high-confidence result deterministically — no stub sequencing needed. The
+  # second pass classifies to PROVISIONS MARK_DEPLETED (the clean fresh-user APPLIED path),
+  # so the entry settles ROUTED. (A PREFERENCE re-route would FAIL for a fresh user — no
+  # taste profile — and never reach ROUTED, so the answer chooses provisions to match.)
   Scenario: Answering a clarification reclassifies and routes the entry
     Given a fresh registered and logged-in user
     And the AI will classify the next feedback at low confidence
     When they submit feedback "it was a bit much"
-    Then the feedback entry eventually awaits clarification for this user
-    When they answer that clarification choosing preference
+    Then the feedback submission is accepted for processing
+    And the feedback entry eventually awaits clarification for this user
+    And the AI will reclassify the answered clarification to provisions at high confidence
+    When they answer that clarification choosing provisions
     Then the feedback entry eventually reaches a routed state for this user

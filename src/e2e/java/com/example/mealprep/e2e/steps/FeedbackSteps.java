@@ -125,6 +125,30 @@ public class FeedbackSteps {
             + "\"classifierNotes\":null}");
   }
 
+  @And("the AI will reclassify the answered clarification to provisions at high confidence")
+  public void theAiWillReclassifyTheAnsweredClarificationToProvisionsAtHighConfidence() {
+    // Re-prime (OVERWRITE) the single FEEDBACK_CLASSIFICATION canned response: the clarification
+    // answer re-fires the async classifier on the SAME entry, which calls the AI a SECOND time. The
+    // first (low-confidence RECIPE) response is replaced by this AUTO_ROUTED (>=0.8) PROVISIONS
+    // MARK_DEPLETED result so the second pass routes to the clean fresh-user APPLIED path and the
+    // entry settles ROUTED. The e2e stub keys one canned response per TaskType, so this overwrite
+    // is the deterministic seam (no per-call queue needed). Primed BEFORE the answer so the
+    // response
+    // is already in place when the async re-classification picks the event up.
+    aiStub.primeAi(
+        TaskType.FEEDBACK_CLASSIFICATION,
+        "{"
+            + "\"classifications\":[{"
+            + "\"destination\":\"PROVISIONS\","
+            + "\"confidence\":0.92,"
+            + "\"extractedFeedback\":\"out of soy sauce\","
+            + "\"structuredPayload\":{\"provisionsAction\":\"MARK_DEPLETED\","
+            + "\"ingredientMappingKey\":\"soy-sauce\"}"
+            + "}],"
+            + "\"overallConfidence\":0.92,"
+            + "\"classifierNotes\":null}");
+  }
+
   // ---------------- e2e setup (seeder) ----------------
 
   @Given("the user has a seeded preference-routed feedback entry")
@@ -307,11 +331,14 @@ public class FeedbackSteps {
     assertEmptyPage("clarification queue");
   }
 
-  // ---------------- @pending glue (authored, exercised only by @pending scenarios) -----------
+  // ---------------- correction + clarification-answer glue ----------------
 
   @When("they correct that route to nutrition")
   public void theyCorrectThatRouteToNutrition() {
-    // Needs an APPLIED, correctable route to undo — only deterministic for a recipe route today.
+    // The seeded route is an APPLIED PREFERENCE route; per ticket 01f any route that is not already
+    // CORRECTED_AWAY/REPLAYED is correctable to a different non-RECIPE destination. Correcting to
+    // NUTRITION returns 200 and records the ground-truth row regardless of the synthetic replay's
+    // own (fresh-user) outcome — the replay fires in its own REQUIRES_NEW tx.
     Map<String, Object> body =
         Map.of("newDestination", "NUTRITION", "userCorrectionNote", "e2e correction");
     context.setLastResponse(
@@ -326,17 +353,38 @@ public class FeedbackSteps {
     assertThat(response.statusCode()).as("correct should return 200 OK").isEqualTo(200);
     Response corrections = context.api().get(CORRECTIONS);
     context.setLastResponse(corrections);
-    assertThat(corrections.jsonPath().getList("content")).isNotEmpty();
+    assertThat(corrections.statusCode()).as("corrections list should return 200 OK").isEqualTo(200);
+    // Self-scoped: this user's corrections audit carries exactly the correction for THIS entry,
+    // referencing the original (now corrected-away) routing id and the new destination — i.e. the
+    // correction is recorded alongside the original route, not just "some" correction.
+    assertThat(corrections.jsonPath().getList("content.feedbackEntryId", String.class))
+        .as("the correction references this feedback entry")
+        .contains(feedbackId());
+    assertThat(corrections.jsonPath().getList("content.originalRoutingId", String.class))
+        .as("the correction is recorded alongside the original route")
+        .contains(routingId());
+    assertThat(corrections.jsonPath().getList("content.correctedDestination", String.class))
+        .as("the correction targets the new destination")
+        .contains("NUTRITION");
   }
 
-  @When("they answer that clarification choosing preference")
-  public void theyAnswerThatClarificationChoosingPreference() {
-    // Needs the pending clarification-query id + a primed SECOND-round AI response.
+  @When("they answer that clarification choosing provisions")
+  public void theyAnswerThatClarificationChoosingProvisions() {
+    // Resolve the pending clarification-query id for this entry, then answer choosing PROVISIONS.
+    // selectedDestination is the user's hint to the re-classifier (prompt context only) — the
+    // actual
+    // re-route is driven by the SECOND primed AI response (PROVISIONS, high confidence), so picking
+    // provisions here keeps the scenario semantically coherent. The answer flips the entry back to
+    // RECEIVED and re-publishes FeedbackSubmittedEvent (same traceId) → async re-classification.
     Response queue = context.api().get(CLARIFICATIONS);
     String queryId = queue.jsonPath().getString("content[0].id");
     Map<String, Object> body =
-        Map.of("selectedDestination", "PREFERENCE", "userClarificationText", "about my tastes");
+        Map.of(
+            "selectedDestination", "PROVISIONS", "userClarificationText", "I'm out of soy sauce");
     context.setLastResponse(context.api().post(CLARIFICATIONS + "/" + queryId + "/answer", body));
+    assertThat(context.lastResponse().statusCode())
+        .as("answering a pending clarification should return 200 OK")
+        .isEqualTo(200);
   }
 
   // ---------------- helpers ----------------
