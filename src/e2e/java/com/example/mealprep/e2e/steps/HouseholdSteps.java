@@ -57,6 +57,8 @@ public class HouseholdSteps {
   private static final String HOUSEHOLD_NAME = "household.householdName";
   private static final String SETTINGS_VERSION = "household.settingsVersion";
   private static final String SECOND_USER_ID = "household.secondUserId";
+  private static final String SECOND_CLIENT = "household.secondClient";
+  private static final String INVITE_CODE = "household.inviteCode";
   private static final String SECOND_MEMBER_ID = "household.secondMemberId";
   private static final String SELF_MEMBER_ID = "household.selfMemberId";
   private static final String SELF_MEMBER_VERSION = "household.selfMemberVersion";
@@ -262,26 +264,43 @@ public class HouseholdSteps {
 
   @And("a second user account exists")
   public void aSecondUserAccountExists() {
-    // Register a second account on a SEPARATE ApiClient (its own cookie jar) purely to mint its
-    // userId — the primary's session in context.api() is untouched. The userId is then used as the
-    // ADD target on the primary's session.
+    // Register a second account on a SEPARATE ApiClient (its own cookie jar) to mint its userId.
+    // The
+    // primary's session in context.api() is untouched. Member-admin scenarios use only the userId
+    // as
+    // the ADD target on the primary's session; the invite/accept scenario additionally drives the
+    // accept leg on this SECOND client's own session — register auto-logs-in (sets the AUTH_SESSION
+    // cookie), so this client now carries the second user's session. We therefore KEEP the client
+    // (under SECOND_CLIENT) instead of discarding it — backward-compatible, since the member-admin
+    // steps read only SECOND_USER_ID.
+    ApiClient secondClient = new ApiClient();
     String username = CommonSteps.randomUsername();
     Response response =
-        new ApiClient()
-            .post(
-                "/api/v1/auth/register",
-                Map.of("username", username, "password", CommonSteps.VALID_PASSWORD));
+        secondClient.post(
+            "/api/v1/auth/register",
+            Map.of("username", username, "password", CommonSteps.VALID_PASSWORD));
     assertThat(response.statusCode())
         .as("second-user setup: register should return 201 Created")
         .isEqualTo(201);
     String secondUserId = response.jsonPath().getString("userId");
     assertThat(secondUserId).as("register must mint a canonical user id").isNotBlank();
+    // Register auto-logs-in (AuthController sets AUTH_SESSION on register) — confirm the session
+    // cookie so this client can act as the second user (e.g. accept an invite).
+    assertThat(response.getDetailedCookie("AUTH_SESSION"))
+        .as("second-user register must establish the session cookie (auto-login)")
+        .isNotNull();
     context.put(SECOND_USER_ID, secondUserId);
+    context.put(SECOND_CLIENT, secondClient);
   }
 
   @When("they add the second user as a member")
   public void theyAddTheSecondUserAsAMember() {
-    context.setLastResponse(addSecondMember());
+    Response response = addSecondMember();
+    context.setLastResponse(response);
+    assertThat(response.statusCode())
+        .as("adding a member should return 201 Created")
+        .isEqualTo(201);
+    context.put(SECOND_MEMBER_ID, response.jsonPath().getString("id"));
   }
 
   @And("the primary has added the second user as a member")
@@ -296,10 +315,15 @@ public class HouseholdSteps {
 
   @Then("the household roster includes the second member for this household")
   public void theHouseholdRosterIncludesTheSecondMemberForThisHousehold() {
-    Response add = context.lastResponse();
-    assertThat(add.statusCode()).as("adding a member should return 201 Created").isEqualTo(201);
-    context.put(SECOND_MEMBER_ID, add.jsonPath().getString("id"));
-
+    // Status-agnostic on the prior step's response: this Then is SHARED between the direct
+    // member-add
+    // path (HH-02, prior step asserts its own 201) and the invite/accept handshake (HH-05, the
+    // accept
+    // leg ran on the SECOND user's session and returns 200). Both converge here — the second user
+    // is
+    // now in the roster. We re-read /current on the PRIMARY session (the source of truth) and
+    // assert
+    // both ids are present, rather than coupling to whatever the last response's status was.
     Response roster = context.api().get(CURRENT);
     context.setLastResponse(roster);
     assertThat(roster.statusCode()).as("current-household GET should return 200 OK").isEqualTo(200);
@@ -356,29 +380,54 @@ public class HouseholdSteps {
     assertConflict("demoting the last primary while others remain must be 409");
   }
 
-  // ---------------- @pending glue (authored, exercised only by @pending scenarios) -----------
+  // ---------------- invite / accept handshake (HH-05) ----------------
 
   @When("the primary creates an invite for the second user")
   public void thePrimaryCreatesAnInviteForTheSecondUser() {
-    // Needs the second user's session to accept — see the @pending reason in the feature.
+    // PRIMARY-only create on the primary's session. Pre-target the second user (issuedForUserId)
+    // and
+    // grant the MEMBER role on accept; expiresAt strictly in the future (@Future, capped
+    // server-side
+    // at now + 30 days). The plaintext inviteCode is bearer-only and surfaced ONLY on this create
+    // response (redacted to null on list/accept — see HouseholdInviteDto), so we stash it here.
     Map<String, Object> body =
         new HashMap<>(
             Map.of(
-                "issuedForUserId", context.<String>get(SECOND_USER_ID),
-                "intendedRole", "member",
-                "expiresAt", java.time.Instant.now().plusSeconds(86400).toString()));
-    context.setLastResponse(context.api().post(CURRENT + "/invites", body));
+                "issuedForUserId",
+                context.<String>get(SECOND_USER_ID),
+                "intendedRole",
+                "member",
+                "expiresAt",
+                java.time.Instant.now().plus(java.time.Duration.ofDays(1)).toString()));
+    Response response = context.api().post(CURRENT + "/invites", body);
+    context.setLastResponse(response);
+    assertThat(response.statusCode())
+        .as("creating an invite should return 201 Created")
+        .isEqualTo(201);
+    String inviteCode = response.jsonPath().getString("inviteCode");
+    assertThat(inviteCode)
+        .as("the create-invite response must surface the bearer invite code")
+        .isNotBlank();
+    context.put(INVITE_CODE, inviteCode);
   }
 
   @And("the second user accepts that invite")
   public void theSecondUserAcceptsThatInvite() {
-    // Would require the second user's own authenticated session (a second cookie jar with a logged-
-    // in session) — not assemblable under the single-ApiClient-per-scenario model. @pending.
-    String code = context.lastResponse().jsonPath().getString("inviteCode");
-    context.setLastResponse(
-        context
-            .api()
-            .post("/api/v1/invites/accept", Map.of("inviteCode", code == null ? "x" : code)));
+    // The accept leg runs on the SECOND user's OWN authenticated session (the client kept by the
+    // "a second user account exists" step under SECOND_CLIENT) — accept lands the accepter as a
+    // household member, so it MUST be the invited user's session, not the primary's.
+    ApiClient secondClient = context.get(SECOND_CLIENT);
+    assertThat(secondClient).as("the second user's logged-in client must be available").isNotNull();
+    Response response =
+        secondClient.post(
+            "/api/v1/invites/accept", Map.of("inviteCode", context.<String>get(INVITE_CODE)));
+    context.setLastResponse(response);
+    // Accept returns 200 OK with the new member (HouseholdMemberDto) — see
+    // HouseholdInvitesController.
+    assertThat(response.statusCode()).as("accepting an invite should return 200 OK").isEqualTo(200);
+    assertThat(response.jsonPath().getString("userId"))
+        .as("the accept response should land the second user as a member")
+        .isEqualTo(context.<String>get(SECOND_USER_ID));
   }
 
   // ---------------- helpers ----------------

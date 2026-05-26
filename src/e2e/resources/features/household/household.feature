@@ -135,14 +135,11 @@ Feature: Household — create, roster, settings + audit, slot config, membership
     When an anonymous client creates a household with no session
     Then the request is rejected as unauthenticated
 
-  # ----- @pending: invite handshake + merge need state we cannot assemble cleanly -----
+  # ----- Invite handshake (green: two logged-in sessions) -----
 
-  @pending
-  # HH-05 (invite/accept handshake). PENDING: the accept leg (POST /api/v1/invites/accept)
-  # must run on the INVITED user's session, but a scenario holds one cookie jar at a
-  # time; accepting on a second session and then asserting roster state on the primary's
-  # session needs a two-session orchestration the harness's single-ApiClient-per-scenario
-  # model does not yet express. Un-pend when multi-session scenarios are supported.
+  # HH-05 (invite/accept handshake): the primary issues an invite pre-targeted at a second
+  # registered user; that user accepts it on their OWN session (a second logged-in ApiClient), and
+  # the roster — read on the primary's session — grows to include both members.
   Scenario: A user accepts an invite and joins the household
     Given a fresh registered and logged-in user
     And the user has created a household
@@ -150,6 +147,8 @@ Feature: Household — create, roster, settings + audit, slot config, membership
     When the primary creates an invite for the second user
     And the second user accepts that invite
     Then the household roster includes the second member for this household
+
+  # ----- @pending: soft-preference merge needs state we cannot assemble cleanly -----
 
   @pending
   # HH-20/HH-21 (soft-preference merge / irreconcilable-union split). PENDING: the merge
