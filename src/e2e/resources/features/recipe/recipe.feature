@@ -59,10 +59,10 @@ Feature: Recipe — manual create, read, edit→new version, rating, and key err
     When they import a recipe from an unreachable URL
     Then the import is rejected as an import failure
 
-  @pending
-  # RCP-03 — Happy URL import. PENDING: the import fetches a live web page and runs
-  # deterministic JSON-LD/microdata extraction (NOT the AI double), so a stable public
-  # recipe URL is required; deferred until a fixture/whitelisted URL is provisioned in CI.
+  # RCP-03 — Happy URL import. The import fetches the app's OWN hermetic fixture page
+  # (E2eRecipeFixtureController, e2e-profile only) over a REAL loopback HTTP GET and runs the
+  # REAL deterministic JSON-LD extraction (NOT the AI double), so the fetch + parse + create
+  # path is exercised end-to-end with no external dependency.
   Scenario: A user imports a recipe from a reachable recipe URL
     Given a fresh registered and logged-in user
     When they import a recipe from a reachable recipe URL

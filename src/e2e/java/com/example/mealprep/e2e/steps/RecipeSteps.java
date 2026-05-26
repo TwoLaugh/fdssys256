@@ -166,10 +166,15 @@ public class RecipeSteps {
 
   @When("they import a recipe from a reachable recipe URL")
   public void theyImportARecipeFromAReachableRecipeUrl() {
-    // The reachable URL is provisioned per-environment; scenarios using this step are @pending
-    // until a stable whitelisted recipe URL fixture exists in CI (the fetch + JSON-LD extraction
-    // are real, not the AI double). Read from config so a later wave only swaps the value.
-    String url = System.getProperty("mealprep.e2e.recipe-url", "https://example.com/recipe");
+    // The reachable URL is the app's OWN hermetic fixture page (E2eRecipeFixtureController, served
+    // at /test-support/recipe/fixtures/<slug> under the e2e profile): the importer does a REAL
+    // loopback HTTP fetch + REAL JSON-LD extraction of it (NOT the AI double), so the whole
+    // fetch -> parse -> create wire-contract runs deterministically with no external dependency.
+    // Still overridable via -Dmealprep.e2e.recipe-url should a run want a different page.
+    String url =
+        System.getProperty(
+            "mealprep.e2e.recipe-url",
+            "http://localhost:8080/test-support/recipe/fixtures/chicken-and-rice-bowl");
     context.setLastResponse(context.api().post("/api/v1/recipes/imports/url", Map.of("url", url)));
   }
 
@@ -192,6 +197,10 @@ public class RecipeSteps {
 
   private void rememberRecipeFrom(Response response) {
     context.put(RECIPE_ID, response.jsonPath().getString("id"));
+    // Stash the name from the response so a subsequent manual-edit step has a non-blank name even
+    // when the recipe was URL-imported (XJ-01) rather than manually created — the edit DTO's name
+    // is @NotBlank, so reusing the imported name keeps the edit valid without re-asserting content.
+    context.put(RECIPE_NAME, response.jsonPath().getString("name"));
     context.put(RECIPE_BRANCH_ID, response.jsonPath().getString("currentBranchId"));
     context.put(RECIPE_VERSION_BODY_ID, response.jsonPath().getString("currentVersionBody.id"));
     context.put(RECIPE_OPTIMISTIC_VERSION, response.jsonPath().getLong("optimisticVersion"));
