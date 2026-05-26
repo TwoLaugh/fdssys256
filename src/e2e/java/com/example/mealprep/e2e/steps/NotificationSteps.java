@@ -341,6 +341,38 @@ public class NotificationSteps {
         .contains(NotificationKind.PROVISION_ITEM_NEAR_EXPIRY.name());
   }
 
+  // ---------------- feedback-confirmation (NOTIF-16, event-driven) ----------------
+
+  @Then("a feedback-confirmation notification eventually appears for this user")
+  public void aFeedbackConfirmationNotificationEventuallyAppearsForThisUser() {
+    // The submitted feedback was classified to PROVISIONS (high confidence) and routed APPLIED
+    // (MARK_DEPLETED is an idempotent no-op SUCCESS for a fresh user). The router publishes
+    // FeedbackProcessedEvent with the touched destination, and FeedbackEventListener creates a
+    // FEEDBACK_CONFIRMATION notification AFTER_COMMIT. The whole classify->route->publish chain is
+    // async, so poll THIS user's inbox filtered to that kind until exactly one row appears
+    // (self-scoped — the list is per-session, never a global count).
+    String filtered = NOTIFICATIONS + "?kind=" + NotificationKind.FEEDBACK_CONFIRMATION.name();
+    awaitCondition(
+        () -> {
+          Response list = context.api().get(filtered);
+          return list.statusCode() == 200
+              && !list.jsonPath().getList("content.id", String.class).isEmpty();
+        },
+        ASYNC_TIMEOUT);
+
+    Response list = context.api().get(filtered);
+    context.setLastResponse(list);
+    assertThat(list.statusCode()).as("notification list should return 200 OK").isEqualTo(200);
+    // Exactly ONE feedback-confirmation for this entry (the NOTIF-16 "no storm" guarantee:
+    // bundlingKey = feedbackId).
+    assertThat(list.jsonPath().getList("content.kind", String.class))
+        .as("this user's inbox carries exactly one feedback-confirmation notification")
+        .containsExactly(NotificationKind.FEEDBACK_CONFIRMATION.name());
+    assertThat(list.jsonPath().getLong("totalElements"))
+        .as("exactly one feedback-confirmation row for this user")
+        .isEqualTo(1L);
+  }
+
   // ---------------- helpers ----------------
 
   private static String shortId() {
@@ -366,8 +398,7 @@ public class NotificationSteps {
       }
     }
     if (!check.getAsBoolean()) {
-      throw new AssertionError(
-          "Timed out waiting for the expiry-warning notification after " + timeout);
+      throw new AssertionError("Timed out waiting for a notification after " + timeout);
     }
   }
 

@@ -26,6 +26,7 @@ class FeedbackProcessedEventTest {
             UUID.randomUUID(),
             UUID.randomUUID(),
             Set.of(Destination.PREFERENCE),
+            Set.of(Destination.PREFERENCE),
             false,
             false,
             UUID.randomUUID(),

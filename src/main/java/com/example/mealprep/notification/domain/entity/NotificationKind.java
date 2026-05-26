@@ -29,5 +29,12 @@ public enum NotificationKind {
    * {@code StapleReplenishmentNeededEvent} — staple inventory item(s) dropped below their restock
    * threshold (notification/01b {@code StapleReplenishmentScanner}).
    */
-  STAPLE_REPLENISHMENT_NEEDED
+  STAPLE_REPLENISHMENT_NEEDED,
+  /**
+   * {@code FeedbackProcessedEvent} — the user's feedback was processed and at least one destination
+   * actually applied a change (NOTIF-16). Positive-outcome confirmation only: non-actionable,
+   * clarification-pending and total-failure outcomes do NOT emit this kind (gated in {@code
+   * FeedbackEventListener}).
+   */
+  FEEDBACK_CONFIRMATION
 }

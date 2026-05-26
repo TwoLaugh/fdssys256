@@ -47,7 +47,10 @@ import java.util.UUID;
       name = "PLANNER_PLAN_GENERATED"),
   @JsonSubTypes.Type(
       value = NotificationPayload.StapleReplenishmentPayload.class,
-      name = "STAPLE_REPLENISHMENT_NEEDED")
+      name = "STAPLE_REPLENISHMENT_NEEDED"),
+  @JsonSubTypes.Type(
+      value = NotificationPayload.FeedbackConfirmationPayload.class,
+      name = "FEEDBACK_CONFIRMATION")
 })
 public sealed interface NotificationPayload
     permits NotificationPayload.ItemNearExpiryPayload,
@@ -58,7 +61,8 @@ public sealed interface NotificationPayload
         NotificationPayload.PrepReminderPayload,
         NotificationPayload.ReoptSuggestedPayload,
         NotificationPayload.PlanGeneratedPayload,
-        NotificationPayload.StapleReplenishmentPayload {
+        NotificationPayload.StapleReplenishmentPayload,
+        NotificationPayload.FeedbackConfirmationPayload {
 
   /** Discriminator — also the notification kind. Always non-null. */
   NotificationKind kind();
@@ -103,5 +107,16 @@ public sealed interface NotificationPayload
       List<UUID> inventoryItemIds,
       List<String> ingredientMappingKeys,
       BigDecimal lowestStockRatio)
+      implements NotificationPayload {}
+
+  /**
+   * NOTIF-16 feedback-confirmation payload: the originating {@code feedbackId} plus the
+   * destinations that actually applied a change (the {@code appliedDestinations} are {@code
+   * Destination} names, stored as plain strings to keep the notification module off a hard
+   * dependency on the feedback SPI enum). Feeds a future "changes" tab + per-recipe "this feedback
+   * drove this version" history.
+   */
+  record FeedbackConfirmationPayload(
+      NotificationKind kind, UUID feedbackId, List<String> appliedDestinations)
       implements NotificationPayload {}
 }

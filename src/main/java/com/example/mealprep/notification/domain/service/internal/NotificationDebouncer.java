@@ -124,6 +124,7 @@ public class NotificationDebouncer {
       case PLANNER_REOPT_SUGGESTED -> "A re-optimisation is suggested.";
       case PLANNER_PLAN_GENERATED -> bundleCount + " plans were generated.";
       case STAPLE_REPLENISHMENT_NEEDED -> bundleCount + " staple items need replenishing.";
+      case FEEDBACK_CONFIRMATION -> bundleCount + " of your feedback items were applied.";
     };
   }
 }
