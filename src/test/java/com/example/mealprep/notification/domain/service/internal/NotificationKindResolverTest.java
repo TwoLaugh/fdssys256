@@ -3,11 +3,14 @@ package com.example.mealprep.notification.domain.service.internal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.feedback.event.FeedbackProcessedEvent;
+import com.example.mealprep.feedback.spi.Destination;
 import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.api.dto.HouseholdMemberDto;
 import com.example.mealprep.household.domain.entity.HouseholdRole;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.notification.domain.entity.NotificationKind;
+import com.example.mealprep.notification.domain.entity.NotificationPayload;
 import com.example.mealprep.notification.domain.entity.NotificationSeverity;
 import com.example.mealprep.nutrition.api.dto.DirectiveType;
 import com.example.mealprep.nutrition.api.dto.DivergenceSummaryDto;
@@ -210,6 +213,57 @@ class NotificationKindResolverTest {
     assertThat(draft.kind()).isEqualTo(NotificationKind.PLANNER_PLAN_GENERATED);
     assertThat(draft.severity()).isEqualTo(NotificationSeverity.INFO);
     assertThat(draft.userId()).isEqualTo(primaryUser);
+  }
+
+  @Test
+  void resolve_feedbackProcessed_isInfo_directToAuthor_bundlesPerFeedbackId() {
+    UUID user = UUID.randomUUID();
+    UUID feedbackId = UUID.randomUUID();
+    UUID traceId = UUID.randomUUID();
+    var event =
+        new FeedbackProcessedEvent(
+            feedbackId, user, Set.of(Destination.PROVISIONS), false, false, traceId, Instant.now());
+
+    NotificationDraft draft = resolver().resolve(event);
+
+    assertThat(draft.kind()).isEqualTo(NotificationKind.FEEDBACK_CONFIRMATION);
+    assertThat(draft.severity()).isEqualTo(NotificationSeverity.INFO);
+    // Non-householded — dispatched directly to the submitting user (the event author).
+    assertThat(draft.userId()).isEqualTo(user);
+    assertThat(draft.householdId()).isNull();
+    // NOTIF-16 "no storm" guarantee: bundlingKey is the feedbackId.
+    assertThat(draft.bundlingKey()).isEqualTo(feedbackId.toString());
+    assertThat(draft.sourceEventId()).isEqualTo(feedbackId);
+    assertThat(draft.traceId()).isEqualTo(traceId);
+    assertThat(draft.actionTargetUri()).isEqualTo("/app/feedback/" + feedbackId);
+    assertThat(draft.metricTag()).isEqualTo(NotificationKind.FEEDBACK_CONFIRMATION.name());
+    assertThat(draft.payload()).isInstanceOf(NotificationPayload.FeedbackConfirmationPayload.class);
+    var payload = (NotificationPayload.FeedbackConfirmationPayload) draft.payload();
+    assertThat(payload.feedbackId()).isEqualTo(feedbackId);
+    assertThat(payload.appliedDestinations()).containsExactly("PROVISIONS");
+  }
+
+  @Test
+  void resolve_feedbackProcessed_partialSuccess_listsTheTouchedDestinations() {
+    UUID user = UUID.randomUUID();
+    UUID feedbackId = UUID.randomUUID();
+    // Partial success: some applied, some failed — partialFailure=true but something applied, so
+    // the resolver still maps (the listener gate has already decided to fire).
+    var event =
+        new FeedbackProcessedEvent(
+            feedbackId,
+            user,
+            Set.of(Destination.PROVISIONS, Destination.NUTRITION),
+            true,
+            false,
+            UUID.randomUUID(),
+            Instant.now());
+
+    NotificationDraft draft = resolver().resolve(event);
+
+    var payload = (NotificationPayload.FeedbackConfirmationPayload) draft.payload();
+    // Sorted by Destination enum order (NUTRITION before PROVISIONS).
+    assertThat(payload.appliedDestinations()).containsExactly("NUTRITION", "PROVISIONS");
   }
 
   private void stubPrimary(UUID household, UUID primaryUser) {

@@ -1,6 +1,8 @@
 package com.example.mealprep.notification.domain.service.internal;
 
 import com.example.mealprep.core.origin.Origin;
+import com.example.mealprep.feedback.event.FeedbackProcessedEvent;
+import com.example.mealprep.feedback.spi.Destination;
 import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.api.dto.HouseholdMemberDto;
 import com.example.mealprep.household.domain.entity.HouseholdRole;
@@ -258,6 +260,44 @@ public class NotificationKindResolver {
         event.traceId(),
         null,
         Origin.SYSTEM_SCHEDULED,
+        null,
+        kind.name());
+  }
+
+  /**
+   * NOTIF-16 feedback-confirmation. Positive-outcome only: by the time this resolver is reached the
+   * {@code FeedbackEventListener} has already applied the fire-condition gate (≥1 destination
+   * applied), so we map unconditionally here. Non-householded — the originating feedback is the
+   * submitting user's own (the event's {@code userId} is the author), so we dispatch directly to
+   * them with no household fan-out. Severity INFO (a positive confirmation, not an alert). {@code
+   * bundlingKey = feedbackId} delivers the NOTIF-16 "no storm" guarantee: a re-delivered event for
+   * the same entry collapses onto the one row.
+   */
+  public NotificationDraft resolve(FeedbackProcessedEvent event) {
+    NotificationKind kind = NotificationKind.FEEDBACK_CONFIRMATION;
+    List<String> applied =
+        event.destinationsTouched() == null
+            ? List.of()
+            : event.destinationsTouched().stream().sorted().map(Destination::name).toList();
+    var payload =
+        new NotificationPayload.FeedbackConfirmationPayload(kind, event.feedbackId(), applied);
+    String body =
+        applied.isEmpty()
+            ? "Your feedback was applied."
+            : "Your feedback updated " + String.join(", ", applied) + ".";
+    return new NotificationDraft(
+        event.userId(),
+        null,
+        kind,
+        NotificationSeverity.INFO,
+        "Feedback applied",
+        body,
+        payload,
+        "/app/feedback/" + event.feedbackId(),
+        event.feedbackId(),
+        event.traceId(),
+        event.feedbackId().toString(),
+        Origin.USER,
         null,
         kind.name());
   }

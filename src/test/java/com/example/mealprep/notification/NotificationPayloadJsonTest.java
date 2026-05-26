@@ -54,7 +54,11 @@ class NotificationPayloadJsonTest {
             "trigger",
             List.of(UUID.randomUUID())),
         new NotificationPayload.PlanGeneratedPayload(
-            NotificationKind.PLANNER_PLAN_GENERATED, UUID.randomUUID(), 2));
+            NotificationKind.PLANNER_PLAN_GENERATED, UUID.randomUUID(), 2),
+        new NotificationPayload.FeedbackConfirmationPayload(
+            NotificationKind.FEEDBACK_CONFIRMATION,
+            UUID.randomUUID(),
+            List.of("PROVISIONS", "NUTRITION")));
   }
 
   @ParameterizedTest

@@ -129,20 +129,20 @@ Feature: Notification — inbox reads, preference read/update, mark-read/dismiss
     When the expiry-warning scan is triggered
     Then an expiry-warning notification eventually appears for this user
 
-  # ----- @pending: event-driven feedback-confirmation has no notification consumer in the product -----
+  # ----- Event-driven feedback-confirmation (green: NOTIF-16 now wired) -----
 
-  @pending
-  # NOTIF-16 (feedback-confirmation notification). PENDING — and CANNOT be un-pended with a test
-  # hook: the product has NO consumer for FeedbackProcessedEvent in the notification module.
-  # NotificationKindResolver maps 9 producer events (provisions/nutrition/health/planner/staple)
-  # but has no resolve(FeedbackProcessedEvent), there is no FEEDBACK_CONFIRMATION NotificationKind,
-  # and the only AFTER_COMMIT listener of that event (feedback's PreferenceDeltaBatchTrigger) drives
-  # the preference batch-delta pipeline, NOT a notification. So no feedback-confirmation notification
-  # is ever produced — the HLD's NOTIF-16 is an unimplemented design-gap (e2e/pathways: notification.md
-  # action #13 / appendix), not a timing/orchestration limitation. Un-pend ONLY when the product wires
-  # a FeedbackProcessedEvent->notification listener. The feedback routing itself is covered by the
-  # feedback suite's routed-state assertions.
-  Scenario: A feedback-confirmation notification is produced after routing
+  # NOTIF-16 (feedback-confirmation notification). The product now wires a FeedbackProcessedEvent ->
+  # notification listener (FeedbackEventListener), which fires the FEEDBACK_CONFIRMATION notification
+  # AFTER_COMMIT iff at least one destination actually applied a change (positive-outcome only). The
+  # scenario drives the proven clean APPLIED path end-to-end over HTTP: prime the e2e AI stub to
+  # classify the next feedback to PROVISIONS at high confidence (MARK_DEPLETED is an idempotent no-op
+  # SUCCESS for a fresh user with no inventory -> the route lands APPLIED), submit the feedback, then
+  # POLL this user's inbox filtered to kind=FEEDBACK_CONFIRMATION until exactly one appears. The
+  # classify->route->reconcile->publish chain is async, so the assertion polls (mirrors the
+  # expiry-warning scan poll). Self-scoped: asserts only THIS user's notifications.
+  Scenario: A feedback-confirmation notification is produced after an applied route
     Given a fresh registered and logged-in user
-    When they read their notification summary
-    Then the notification summary counts are zero for this user
+    And the AI will classify the next feedback to provisions at high confidence
+    When they submit feedback "I'm out of soy sauce"
+    Then the feedback submission is accepted for processing
+    And a feedback-confirmation notification eventually appears for this user
