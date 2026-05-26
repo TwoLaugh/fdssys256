@@ -38,6 +38,7 @@ import com.example.mealprep.adaptation.domain.service.internal.ScoringEngine;
 import com.example.mealprep.adaptation.event.AdaptationCandidateProducedEvent;
 import com.example.mealprep.adaptation.event.AdaptationJobCompletedEvent;
 import com.example.mealprep.adaptation.event.AdaptationJobFailedEvent;
+import com.example.mealprep.adaptation.exception.AdaptationAiResponseInvalidException;
 import com.example.mealprep.adaptation.exception.AdaptationAiUnavailableException;
 import com.example.mealprep.adaptation.exception.LockTimeoutException;
 import com.example.mealprep.core.audit.domain.service.DecisionLogService;
@@ -82,6 +83,37 @@ class AdaptationServiceImplProcessJobSmokeTest {
         .isInstanceOf(AdaptationAiUnavailableException.class);
     verify(w.events).publishEvent(any(AdaptationCandidateProducedEvent.class));
     verify(w.events).publishEvent(any(AdaptationJobFailedEvent.class));
+  }
+
+  @Test
+  void ai_invalid_response_terminalises_job_failed_with_exactly_one_failed_event() {
+    Wiring w = new Wiring();
+    AdaptationJob job = job(JobSource.FEEDBACK);
+    when(w.jobRepository.findById(job.getId())).thenReturn(Optional.of(job));
+    when(w.lockService.tryAcquire(any(LockKey.class))).thenReturn(true);
+    // The Stage-C dispatch wraps a malformed-model-output ai.exception into the terminal adaptation
+    // exception — previously the raw ai.exception escaped processJob and left the job RUNNING.
+    when(w.llmInvoker.invoke(any(), any()))
+        .thenThrow(
+            new AdaptationAiResponseInvalidException(
+                "ai-invalid-response: malformed tool_use",
+                new com.example.mealprep.ai.exception.AiInvalidResponseException(
+                    "malformed tool_use")));
+
+    assertThatThrownBy(() -> w.service.processJob(job))
+        .isInstanceOf(AdaptationAiResponseInvalidException.class);
+
+    // Job reached the terminal FAILED status with the LLM_ERROR reason (not left RUNNING).
+    verify(w.jobRepository)
+        .saveAndFlush(
+            org.mockito.ArgumentMatchers.argThat(
+                saved ->
+                    saved.getStatus() == JobStatus.FAILED
+                        && saved.getFailureReason()
+                            == com.example.mealprep.adaptation.domain.enums.JobFailureReason
+                                .LLM_ERROR));
+    // Exactly one AdaptationJobFailedEvent published (no double-publish on the terminal path).
+    verify(w.events, times(1)).publishEvent(any(AdaptationJobFailedEvent.class));
   }
 
   @Test

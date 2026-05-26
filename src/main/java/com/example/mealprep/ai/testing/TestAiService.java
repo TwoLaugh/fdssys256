@@ -77,8 +77,47 @@ public class TestAiService implements AiService {
   /** Default deterministic embedding dimension — matches {@code text-embedding-3-small}. */
   public static final int DEFAULT_EMBEDDING_DIM = 1536;
 
+  /**
+   * Built-in NO_CHANGE canned response for {@link TaskType#RECIPE_ADAPTATION}. The adaptation
+   * Trigger-1 job fires automatically on EVERY recipe create (LLD §Trigger 1 — "usually
+   * NO_CHANGE"), so a faithful e2e run that creates a recipe dispatches a {@code RECIPE_ADAPTATION}
+   * task in the background. No scenario can reliably pre-seed that background dispatch, so without
+   * a default the path hard-fails with "No canned response registered". This shape mirrors {@code
+   * com.example.mealprep.adaptation.ai.RecipeAdaptationResponse}: {@code chosenCandidateIndex = -1}
+   * is the NO_CHANGE signal; {@code confidence} clears the low-confidence floor and {@code
+   * characterPreservationScore = 1.0} clears the character gate, so the worker reaches a clean
+   * terminal outcome rather than throwing. It is stored as raw JSON (not a typed object) so this AI
+   * module need not depend on the adaptation module — it is deserialised through the real {@code
+   * ObjectMapper} into {@code task.outputType()} on dispatch, exactly as a seeded e2e response
+   * would be.
+   */
+  static final String DEFAULT_RECIPE_ADAPTATION_NO_CHANGE_JSON =
+      """
+      {
+        "chosenCandidateIndex": -1,
+        "classification": "NO_CHANGE",
+        "reasoning": "default e2e stub: no adaptation proposed on import",
+        "nutritionalNotes": "",
+        "confidence": 0.95,
+        "characterPreservationScore": 1.0,
+        "refinedDiff": null,
+        "finalDiffJson": {},
+        "plannerHints": []
+      }
+      """;
+
   private final Map<TaskType, Object> cannedResponses = new EnumMap<>(TaskType.class);
   private final Map<TaskType, String> cannedJson = new EnumMap<>(TaskType.class);
+
+  /**
+   * Built-in default JSON responses, consulted ONLY when neither explicit registry holds an entry
+   * for the task type. This keeps the always-on adaptation Trigger-1 path from hard-failing while
+   * leaving every explicit {@link #register}/{@link #registerJson} (and the precedence between
+   * them) untouched. Re-seeded on {@link #clear()} so a mid-run reset never strands the background
+   * path.
+   */
+  private final Map<TaskType, String> defaultJson = new EnumMap<>(TaskType.class);
+
   private final Map<EmbeddingTaskType, float[]> cannedEmbeddings =
       new EnumMap<>(EmbeddingTaskType.class);
   private final CopyOnWriteArrayList<RecordedCall> recordedCalls = new CopyOnWriteArrayList<>();
@@ -98,6 +137,14 @@ public class TestAiService implements AiService {
     this.eventPublisher = eventPublisher;
     this.clock = clock;
     this.objectMapper = objectMapper;
+    seedDefaults();
+  }
+
+  /**
+   * Install the built-in default responses. Idempotent; called from the ctor and {@link #clear}.
+   */
+  private void seedDefaults() {
+    defaultJson.put(TaskType.RECIPE_ADAPTATION, DEFAULT_RECIPE_ADAPTATION_NO_CHANGE_JSON);
   }
 
   /** Register a canned response for a task type. Subsequent calls for that type return this. */
@@ -133,12 +180,17 @@ public class TestAiService implements AiService {
     return this;
   }
 
-  /** Forget all registrations and recorded calls — call from {@code @AfterEach} in ITs. */
+  /**
+   * Forget all explicit registrations and recorded calls — call from {@code @AfterEach} in ITs.
+   * Built-in defaults (see {@link #seedDefaults()}) are re-installed so the always-on adaptation
+   * Trigger-1 path keeps a NO_CHANGE response after a reset.
+   */
   public void clear() {
     cannedResponses.clear();
     cannedJson.clear();
     cannedEmbeddings.clear();
     recordedCalls.clear();
+    seedDefaults();
   }
 
   /** What was dispatched. Order is the call order. */
@@ -163,6 +215,21 @@ public class TestAiService implements AiService {
       } catch (Exception ex) {
         throw new AiInvalidResponseException(
             "Failed to deserialise canned JSON for "
+                + task.type()
+                + " into "
+                + task.outputType().getName(),
+            ex);
+      }
+    } else if (cannedResponses.get(task.type()) == null && defaultJson.get(task.type()) != null) {
+      // Neither explicit registry has an entry — fall back to a built-in default (e.g. the
+      // always-on adaptation Trigger-1 NO_CHANGE response). Deserialised through the real
+      // ObjectMapper into the task's output type, exactly like an explicitly-seeded JSON response.
+      String defaultBody = defaultJson.get(task.type());
+      try {
+        canned = objectMapper.readValue(defaultBody, task.outputType());
+      } catch (Exception ex) {
+        throw new AiInvalidResponseException(
+            "Failed to deserialise default JSON for "
                 + task.type()
                 + " into "
                 + task.outputType().getName(),

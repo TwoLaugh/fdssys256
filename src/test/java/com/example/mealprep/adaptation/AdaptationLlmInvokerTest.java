@@ -17,13 +17,18 @@ import com.example.mealprep.adaptation.domain.enums.JobPriority;
 import com.example.mealprep.adaptation.domain.enums.JobSource;
 import com.example.mealprep.adaptation.domain.enums.JobStatus;
 import com.example.mealprep.adaptation.domain.service.internal.AdaptationLlmInvoker;
+import com.example.mealprep.adaptation.exception.AdaptationAiResponseInvalidException;
 import com.example.mealprep.adaptation.exception.AdaptationAiUnavailableException;
 import com.example.mealprep.ai.domain.service.AiService;
+import com.example.mealprep.ai.exception.AiCostBudgetExceededException;
+import com.example.mealprep.ai.exception.AiInvalidRequestException;
+import com.example.mealprep.ai.exception.AiInvalidResponseException;
 import com.example.mealprep.ai.exception.AiUnavailableException;
 import com.example.mealprep.ai.spi.AiTask;
 import com.example.mealprep.recipe.domain.entity.Catalogue;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -44,6 +49,59 @@ class AdaptationLlmInvokerTest {
     assertThatThrownBy(() -> invoker.invoke(stubJob(), stubContext()))
         .isInstanceOf(AdaptationAiUnavailableException.class)
         .hasMessageContaining("ai-unavailable");
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void wraps_cost_budget_exceeded_as_deferrable_unavailable() {
+    AiService aiService = mock(AiService.class);
+    RecipeAdaptationTaskFactory factory = mock(RecipeAdaptationTaskFactory.class);
+    AiTask<RecipeAdaptationResponse> task = mock(AiTask.class);
+    when(factory.build(any(), any())).thenReturn(task);
+    when(aiService.execute(task))
+        .thenThrow(
+            new AiCostBudgetExceededException(
+                UUID.randomUUID(),
+                BigDecimal.TEN,
+                BigDecimal.ONE,
+                Duration.ofHours(1),
+                Duration.ofMinutes(5)));
+
+    AdaptationLlmInvoker invoker = new AdaptationLlmInvoker(aiService, factory);
+    // Cost-cap is a rate concept (deferrable) → AI_UNAVAILABLE, not a terminal LLM_ERROR.
+    assertThatThrownBy(() -> invoker.invoke(stubJob(), stubContext()))
+        .isInstanceOf(AdaptationAiUnavailableException.class);
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void wraps_invalid_response_as_terminal_response_invalid() {
+    AiService aiService = mock(AiService.class);
+    RecipeAdaptationTaskFactory factory = mock(RecipeAdaptationTaskFactory.class);
+    AiTask<RecipeAdaptationResponse> task = mock(AiTask.class);
+    when(factory.build(any(), any())).thenReturn(task);
+    when(aiService.execute(task))
+        .thenThrow(new AiInvalidResponseException("malformed tool_use block"));
+
+    AdaptationLlmInvoker invoker = new AdaptationLlmInvoker(aiService, factory);
+    // Malformed model output is terminal — must NOT escape raw, and must be the terminal subtype.
+    assertThatThrownBy(() -> invoker.invoke(stubJob(), stubContext()))
+        .isInstanceOf(AdaptationAiResponseInvalidException.class)
+        .hasMessageContaining("ai-invalid-response");
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void wraps_invalid_request_as_terminal_response_invalid() {
+    AiService aiService = mock(AiService.class);
+    RecipeAdaptationTaskFactory factory = mock(RecipeAdaptationTaskFactory.class);
+    AiTask<RecipeAdaptationResponse> task = mock(AiTask.class);
+    when(factory.build(any(), any())).thenReturn(task);
+    when(aiService.execute(task)).thenThrow(new AiInvalidRequestException("400 caller bug"));
+
+    AdaptationLlmInvoker invoker = new AdaptationLlmInvoker(aiService, factory);
+    assertThatThrownBy(() -> invoker.invoke(stubJob(), stubContext()))
+        .isInstanceOf(AdaptationAiResponseInvalidException.class);
   }
 
   @Test

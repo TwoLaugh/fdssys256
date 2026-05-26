@@ -1,5 +1,6 @@
 package com.example.mealprep.adaptation.api;
 
+import com.example.mealprep.adaptation.exception.AdaptationAiResponseInvalidException;
 import com.example.mealprep.adaptation.exception.AdaptationAiUnavailableException;
 import com.example.mealprep.adaptation.exception.AdaptationCharacterBreakException;
 import com.example.mealprep.adaptation.exception.AdaptationHardConstraintViolationException;
@@ -162,6 +163,29 @@ public class AdaptationExceptionHandler {
             "AI features paused",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  // ---------------- 502: invalid upstream AI response ----------------
+
+  /**
+   * A terminal Stage-C failure where the upstream produced output we cannot consume (malformed /
+   * unparseable) or rejected the request as a 4xx caller-bug. Mapped to 502 Bad Gateway — the
+   * upstream surfaced something invalid (mirrors {@code AiInvalidResponseException}'s own 502
+   * mapping). Distinct from 503 ({@code AdaptationAiUnavailableException}, a deferrable degrade).
+   */
+  @ExceptionHandler(AdaptationAiResponseInvalidException.class)
+  public ResponseEntity<ProblemDetail> handleAiResponseInvalid(
+      AdaptationAiResponseInvalidException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.BAD_GATEWAY,
+            ex.getMessage(),
+            "adaptation-ai-response-invalid",
+            "AI returned an invalid response",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

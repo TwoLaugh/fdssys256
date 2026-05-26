@@ -2,7 +2,6 @@ package com.example.mealprep.adaptation.domain.service.internal;
 
 import com.example.mealprep.adaptation.api.dto.ImportJobRequest;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
-import com.example.mealprep.recipe.domain.entity.DataQuality;
 import com.example.mealprep.recipe.event.RecipeCreatedEvent;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -20,15 +19,11 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * {@code @Transactional(REQUIRES_NEW)} because the listener body writes an {@code AdaptationJob}
  * row.
  *
- * <p><b>Cross-module rule</b>: the listener cannot inject {@code RecipeRepository} (ArchUnit). The
- * event payload only carries {@code recipeId} + {@code catalogue} + {@code traceId}; the {@code
- * userId} and {@code dataQuality} fields needed to build {@link ImportJobRequest} are not on the
- * event. <b>Worth user review</b>: the recipe-module event payload should grow these fields, OR we
- * sacrifice the v1 fallback (an over-broad userId guess). For 01d we pass a placeholder userId (the
- * recipe scopeId, which is recipeId — fine since {@code AdaptationJob.userId} is opaque to
- * processing in 01d) and a hardcoded {@code AI_GENERATED} data quality. The pipeline's downstream
- * stages don't read userId/dataQuality in 01c, so the placeholder is benign for the worker; the
- * follow-up is to extend {@code RecipeCreatedEvent} with the two fields.
+ * <p><b>Cross-module rule</b>: the listener cannot inject {@code RecipeRepository} (ArchUnit), so
+ * the owning {@code userId} and the recipe's {@code dataQuality} must travel on the event itself.
+ * {@link RecipeCreatedEvent} now carries both, so the {@link ImportJobRequest} is built from the
+ * real values rather than the earlier v1 placeholders (recipeId-as-userId + hardcoded {@code
+ * AI_GENERATED}).
  */
 @org.springframework.stereotype.Component
 public class AdaptationImportListener {
@@ -48,9 +43,9 @@ public class AdaptationImportListener {
         adaptationService.enqueueImportJob(
             new ImportJobRequest(
                 event.recipeId(),
-                event.recipeId(),
+                event.userId(),
                 event.catalogue(),
-                DataQuality.AI_GENERATED,
+                event.dataQuality(),
                 null,
                 event.traceId()));
     LOG.info("enqueued IMPORT job {} for newly-created recipe {}", jobId, event.recipeId());
