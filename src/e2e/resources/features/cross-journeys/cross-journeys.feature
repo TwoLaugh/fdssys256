@@ -7,10 +7,9 @@ Feature: Cross-domain journeys — the integration capstone (XJ-01..06)
   per-domain steps (which share ONE ScenarioContext via PicoContainer) plus a
   couple of distinctly-phrased bridging steps (CrossJourneySteps) where two
   domains use different namespaced context keys. Legs that need an unbuilt
-  surface (a real recipe POOL for plan slots, grocery provider automation, a
-  live import URL, the soft-preference merge / split) are @pending with the
-  blocking leg named — the catalogue is exhaustive; the test set is the
-  buildable subset.
+  surface (a real recipe POOL for plan slots, grocery provider automation, the
+  soft-preference merge / split) are @pending with the blocking leg named — the
+  catalogue is exhaustive; the test set is the buildable subset.
 
   Each scenario mints its OWN fresh user/household (D5 self-contained data) and
   asserts only on THIS user's / household's state (self-scoped) — never global
@@ -36,12 +35,13 @@ Feature: Cross-domain journeys — the integration capstone (XJ-01..06)
     Then a new version 2 is created with the manual-edit trigger and a change reason
     And the recipe's current version body reflects the edit and a recalculated nutrition status
 
-  @xj01 @pending
-  # XJ-01 full happy end-to-end. BLOCKING LEG: step 1 RCP-03 (web URL import) fetches a LIVE
-  # web page and runs deterministic JSON-LD/microdata extraction (the URL fetch is real, NOT
-  # the AI double), so a stable whitelisted recipe URL fixture must be provisioned in CI before
-  # the import + downstream USDA-derive (NUT-26) -> edit -> recalc chain can run green. Un-pend
-  # once a recipe-URL fixture lands (also tracked by cross/xj01_web_import_to_recalc.feature).
+  @xj01
+  # XJ-01 full happy end-to-end (now GREEN). Step 1 RCP-03 (web URL import) fetches the app's OWN
+  # hermetic fixture page (E2eRecipeFixtureController, e2e-profile only) over a REAL loopback HTTP
+  # GET and runs the REAL deterministic JSON-LD extraction (the URL fetch is real, NOT the AI
+  # double). The fixture's realistic whole-food ingredients feed the downstream USDA-derive
+  # (NUT-26); the edit then triggers the Recipe -> Nutrition recalc relay and a new version. Also
+  # tracked by cross/xj01_web_import_to_recalc.feature.
   Scenario: Import a web recipe, derive USDA nutrition, edit an ingredient, and recalculate
     Given a fresh registered and logged-in user
     When they import a recipe from a reachable recipe URL

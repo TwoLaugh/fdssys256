@@ -97,8 +97,12 @@ public class AuthSecurityConfig {
 
   @Bean
   public SecurityFilterChain authSecurityFilterChain(
-      HttpSecurity http, SessionAuthenticationFilter sessionFilter, OriginFilter originFilter)
+      HttpSecurity http,
+      SessionAuthenticationFilter sessionFilter,
+      OriginFilter originFilter,
+      org.springframework.core.env.Environment environment)
       throws Exception {
+    boolean e2e = environment.acceptsProfiles(org.springframework.core.env.Profiles.of("e2e"));
     return http.csrf(csrf -> csrf.disable())
         .formLogin(form -> form.disable())
         .httpBasic(basic -> basic.disable())
@@ -107,36 +111,47 @@ public class AuthSecurityConfig {
         // cookie + DB row.
         .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
         .authorizeHttpRequests(
-            auth ->
-                auth.requestMatchers(
-                        "/api/v1/auth/register",
-                        "/api/v1/auth/login",
-                        // Logout is anonymous-accessible so the idempotent "second call" path
-                        // (cookie still presented, session already revoked) reaches the controller
-                        // and returns 204 + cleared cookie instead of 401.
-                        "/api/v1/auth/logout",
-                        // Actuator: ONLY health + info are publicly reachable. We deliberately
-                        // do NOT permit-all on `/actuator/**` — that would auto-expose any
-                        // endpoint a future contributor accidentally adds to
-                        // `management.endpoints.web.exposure.include`. Exposure-list and
-                        // permit-list must both name the path for a 200 response.
-                        "/actuator/health",
-                        "/actuator/info",
-                        "/v3/api-docs",
-                        "/v3/api-docs/**",
-                        "/swagger-ui",
-                        "/swagger-ui/**",
-                        "/swagger-ui.html",
-                        "/error")
-                    .permitAll()
-                    // recipe-02a: GET /api/v1/recipes/{recipeId}/image is anonymous-readable
-                    // (recipe images are public assets given anyone-can-read on recipes; the URL
-                    // is unguessable but not secret). Only the GET verb is open — POST (upload)
-                    // remains authenticated.
-                    .requestMatchers(HttpMethod.GET, "/api/v1/recipes/*/image")
-                    .permitAll()
-                    .anyRequest()
-                    .authenticated())
+            auth -> {
+              // E2E ONLY: the recipe URL-import flow (RCP-03 / XJ-01) does a REAL loopback HTTP
+              // fetch of E2eRecipeFixtureController via UrlFetcher (a plain RestClient GET). That
+              // self-call carries NO AUTH_SESSION cookie, so the deny-by-default rule below would
+              // 401 it and the import would fail. Permit ONLY this read-only fixture GET, and ONLY
+              // under the e2e profile — the controller is @Profile("e2e") so in prod/dev/test the
+              // path is an unmapped 404 and this matcher is never even registered.
+              if (e2e) {
+                auth.requestMatchers(HttpMethod.GET, "/test-support/recipe/fixtures/**")
+                    .permitAll();
+              }
+              auth.requestMatchers(
+                      "/api/v1/auth/register",
+                      "/api/v1/auth/login",
+                      // Logout is anonymous-accessible so the idempotent "second call" path
+                      // (cookie still presented, session already revoked) reaches the controller
+                      // and returns 204 + cleared cookie instead of 401.
+                      "/api/v1/auth/logout",
+                      // Actuator: ONLY health + info are publicly reachable. We deliberately
+                      // do NOT permit-all on `/actuator/**` — that would auto-expose any
+                      // endpoint a future contributor accidentally adds to
+                      // `management.endpoints.web.exposure.include`. Exposure-list and
+                      // permit-list must both name the path for a 200 response.
+                      "/actuator/health",
+                      "/actuator/info",
+                      "/v3/api-docs",
+                      "/v3/api-docs/**",
+                      "/swagger-ui",
+                      "/swagger-ui/**",
+                      "/swagger-ui.html",
+                      "/error")
+                  .permitAll()
+                  // recipe-02a: GET /api/v1/recipes/{recipeId}/image is anonymous-readable
+                  // (recipe images are public assets given anyone-can-read on recipes; the URL
+                  // is unguessable but not secret). Only the GET verb is open — POST (upload)
+                  // remains authenticated.
+                  .requestMatchers(HttpMethod.GET, "/api/v1/recipes/*/image")
+                  .permitAll()
+                  .anyRequest()
+                  .authenticated();
+            })
         .exceptionHandling(
             ex -> ex.authenticationEntryPoint(AuthSecurityConfig::writeUnauthorizedProblem))
         .addFilterBefore(sessionFilter, UsernamePasswordAuthenticationFilter.class)

@@ -9,11 +9,10 @@ Feature: XJ-01 — web recipe import to internal format, USDA nutrition, edit, r
   Step trace: AUTH-05 -> RCP-03 -> NUT-26 -> RCP-34 -> RCP-19 -> RCP-20 -> NUT-31 -> RCP-15.
   Self-scoped to this user's single imported recipe id.
 
-  @pending
-  # PENDING: step 1 (RCP-03) imports a LIVE web page via deterministic JSON-LD/microdata
-  # extraction (the URL fetch is real, not the AI double), so a stable whitelisted recipe URL
-  # must be provisioned in CI before this can run green. The full step trace + glue is written
-  # so later waves only need to swap in a stable URL fixture and drop the @pending tag.
+  # Step 1 (RCP-03) imports the app's OWN hermetic fixture page (E2eRecipeFixtureController,
+  # e2e-profile only) via a REAL loopback HTTP GET and the REAL deterministic JSON-LD extraction
+  # (the URL fetch is real, not the AI double). The fixture's realistic whole-food ingredients
+  # feed the USDA nutrition derive (NUT-26); the edit then drives the recalc relay and version log.
   Scenario: Import a web recipe, derive USDA nutrition, edit an ingredient, and recalculate
     Given a fresh registered and logged-in user
     When they import a recipe from a reachable recipe URL
