@@ -1,6 +1,7 @@
 package com.example.mealprep.grocery.domain.repository;
 
 import com.example.mealprep.grocery.domain.entity.ShoppingList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -23,6 +24,13 @@ interface ShoppingListRepository extends JpaRepository<ShoppingList, UUID> {
 
   Optional<ShoppingList> findFirstByPlanIdAndSupersededAtIsNullOrderByPlanGenerationDesc(
       UUID planId);
+
+  /**
+   * The user's currently-active (non-superseded) shopping lists — the recalc targets when an
+   * inventory-drift {@code ProvisionChangedEvent} fires (grocery-01b listener). One per active
+   * plan.
+   */
+  List<ShoppingList> findAllByUserIdAndSupersededAtIsNull(UUID userId);
 
   Page<ShoppingList> findAllByUserIdOrderByGeneratedAtDesc(UUID userId, Pageable p);
 

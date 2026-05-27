@@ -14,14 +14,20 @@ import com.example.mealprep.grocery.api.dto.RefreshPricesResultDto;
 import com.example.mealprep.grocery.api.dto.ShoppingListDto;
 import com.example.mealprep.grocery.api.dto.ShoppingListExportDto;
 import com.example.mealprep.grocery.api.mapper.PriceObservationMapper;
+import com.example.mealprep.grocery.api.mapper.ShoppingListMapper;
 import com.example.mealprep.grocery.config.GroceryConfig;
 import com.example.mealprep.grocery.domain.entity.PriceObservation;
 import com.example.mealprep.grocery.domain.entity.PriceSource;
+import com.example.mealprep.grocery.domain.entity.ShoppingList;
 import com.example.mealprep.grocery.domain.service.ManualFulfilmentService;
 import com.example.mealprep.grocery.domain.service.PriceHistoryService;
 import com.example.mealprep.grocery.domain.service.ReferencePriceSource;
 import com.example.mealprep.grocery.domain.service.ReferencePriceSource.ReferencePrice;
 import com.example.mealprep.grocery.domain.service.ShoppingListService;
+import com.example.mealprep.grocery.event.ShoppingListGeneratedEvent;
+import com.example.mealprep.grocery.exception.ShoppingListNotFoundException;
+import com.example.mealprep.planner.api.dto.PlanDto;
+import com.example.mealprep.planner.domain.service.PlanQueryService;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -33,6 +39,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -69,6 +77,14 @@ public class GroceryServiceImpl
   private final GroceryConfig groceryConfig;
   private final Clock clock;
 
+  // Tier-1 collaborators (01b).
+  private final ShoppingListDataGateway shoppingListDataGateway;
+  private final ShoppingListCalculator shoppingListCalculator;
+  private final ShoppingListExporter shoppingListExporter;
+  private final ShoppingListMapper shoppingListMapper;
+  private final PlanQueryService planQueryService;
+  private final ApplicationEventPublisher eventPublisher;
+
   public GroceryServiceImpl(
       PriceDataGateway priceDataGateway,
       PriceAggregator priceAggregator,
@@ -76,7 +92,13 @@ public class GroceryServiceImpl
       ReferencePriceSource referencePriceSource,
       PriceObservationMapper priceObservationMapper,
       GroceryConfig groceryConfig,
-      Clock clock) {
+      Clock clock,
+      ShoppingListDataGateway shoppingListDataGateway,
+      ShoppingListCalculator shoppingListCalculator,
+      ShoppingListExporter shoppingListExporter,
+      ShoppingListMapper shoppingListMapper,
+      PlanQueryService planQueryService,
+      ApplicationEventPublisher eventPublisher) {
     this.priceDataGateway = priceDataGateway;
     this.priceAggregator = priceAggregator;
     this.priceObservationWriter = priceObservationWriter;
@@ -84,6 +106,12 @@ public class GroceryServiceImpl
     this.priceObservationMapper = priceObservationMapper;
     this.groceryConfig = groceryConfig;
     this.clock = clock;
+    this.shoppingListDataGateway = shoppingListDataGateway;
+    this.shoppingListCalculator = shoppingListCalculator;
+    this.shoppingListExporter = shoppingListExporter;
+    this.shoppingListMapper = shoppingListMapper;
+    this.planQueryService = planQueryService;
+    this.eventPublisher = eventPublisher;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -93,37 +121,116 @@ public class GroceryServiceImpl
   @Override
   @Transactional(readOnly = true)
   public Optional<ShoppingListDto> getCurrentByPlanId(UUID planId) {
-    throw new UnsupportedOperationException("implemented in grocery-01b");
+    return shoppingListDataGateway
+        .findActiveByPlanId(planId)
+        .map(this::loadWithLines)
+        .map(shoppingListMapper::toDto);
   }
 
   @Override
   @Transactional(readOnly = true)
   public Optional<ShoppingListDto> getById(UUID shoppingListId) {
-    throw new UnsupportedOperationException("implemented in grocery-01b");
+    return shoppingListDataGateway.findWithLinesById(shoppingListId).map(shoppingListMapper::toDto);
   }
 
   @Override
   @Transactional(readOnly = true)
   public List<ShoppingListDto> getByIds(List<UUID> ids) {
-    throw new UnsupportedOperationException("implemented in grocery-01b");
+    if (ids == null || ids.isEmpty()) {
+      return List.of();
+    }
+    List<ShoppingListDto> out = new ArrayList<>(ids.size());
+    for (UUID id : ids) {
+      shoppingListDataGateway
+          .findWithLinesById(id)
+          .map(shoppingListMapper::toDto)
+          .ifPresent(out::add);
+    }
+    return out;
   }
 
   @Override
   @Transactional(readOnly = true)
   public Page<ShoppingListDto> getHistory(UUID userId, Pageable pageable) {
-    throw new UnsupportedOperationException("implemented in grocery-01b");
+    return shoppingListDataGateway
+        .findHistoryByUserId(userId, pageable)
+        .map(this::loadWithLines)
+        .map(shoppingListMapper::toDto);
   }
 
+  /**
+   * Recalculate from a plan + provisions snapshot. Idempotent on {@code (planId, planGeneration)}:
+   * the same generation returns the existing row; a new generation creates a new list and
+   * supersedes the prior active one ({@code superseded_at = now()}). Concurrent same-generation
+   * calls are serialised by {@code UNIQUE (plan_id, plan_generation)} — the loser catches {@link
+   * DataIntegrityViolationException} and re-fetches. After commit publishes {@link
+   * ShoppingListGeneratedEvent}. A missing plan / generation → 404.
+   */
   @Override
   @Transactional
   public ShoppingListDto recalculate(UUID userId, RecalculateShoppingListRequest request) {
-    throw new UnsupportedOperationException("implemented in grocery-01b");
+    PlanDto plan =
+        planQueryService
+            .getPlanById(request.planId())
+            .orElseThrow(() -> new ShoppingListNotFoundException(request.planId()));
+    int generation =
+        request.planGeneration() != null ? request.planGeneration() : plan.generation();
+
+    Optional<ShoppingList> existing =
+        shoppingListDataGateway.findByPlanIdAndPlanGeneration(request.planId(), generation);
+    if (existing.isPresent()) {
+      return shoppingListMapper.toDto(loadWithLines(existing.get())); // idempotent
+    }
+
+    try {
+      ShoppingList list = shoppingListCalculator.calculate(userId, plan, generation);
+      supersedePrior(request.planId(), generation);
+      ShoppingList saved = shoppingListDataGateway.saveAndFlush(list);
+      eventPublisher.publishEvent(
+          new ShoppingListGeneratedEvent(
+              saved.getUserId(),
+              saved.getHouseholdId(),
+              saved.getId(),
+              saved.getPlanId(),
+              saved.getPlanGeneration(),
+              saved.getLines() == null ? 0 : saved.getLines().size(),
+              saved.getEstimatedTotalPence(),
+              clock.instant()));
+      return shoppingListMapper.toDto(saved);
+    } catch (DataIntegrityViolationException race) {
+      // Lost the UNIQUE (plan_id, plan_generation) race — re-fetch the winner.
+      return shoppingListMapper.toDto(
+          loadWithLines(
+              shoppingListDataGateway
+                  .findByPlanIdAndPlanGeneration(request.planId(), generation)
+                  .orElseThrow(() -> race)));
+    }
   }
 
   @Override
   @Transactional(readOnly = true)
   public ShoppingListExportDto export(UUID shoppingListId, ExportFormat format) {
-    throw new UnsupportedOperationException("implemented in grocery-01b");
+    ShoppingList list =
+        shoppingListDataGateway
+            .findWithLinesById(shoppingListId)
+            .orElseThrow(() -> new ShoppingListNotFoundException(shoppingListId));
+    String content = shoppingListExporter.render(list, format);
+    return new ShoppingListExportDto(shoppingListId, format, content);
+  }
+
+  // ---- Tier-1 helpers ----
+
+  /** Set {@code superseded_at = now()} on the prior active list for a (different) generation. */
+  private void supersedePrior(UUID planId, int newGeneration) {
+    shoppingListDataGateway
+        .findActiveByPlanId(planId)
+        .filter(prior -> prior.getPlanGeneration() != newGeneration)
+        .ifPresent(prior -> prior.setSupersededAt(clock.instant()));
+  }
+
+  /** Re-read with the lines entity-graph so the mapper sees the full aggregate (no N+1). */
+  private ShoppingList loadWithLines(ShoppingList list) {
+    return shoppingListDataGateway.findWithLinesById(list.getId()).orElse(list);
   }
 
   // ---------------------------------------------------------------------------------------------
