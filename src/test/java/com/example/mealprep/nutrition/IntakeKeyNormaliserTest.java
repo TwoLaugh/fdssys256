@@ -2,6 +2,7 @@ package com.example.mealprep.nutrition;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.example.mealprep.core.ingredient.IngredientMappingKeys;
 import com.example.mealprep.nutrition.domain.service.internal.IntakeKeyNormaliser;
 import org.junit.jupiter.api.Test;
 
@@ -36,5 +37,16 @@ class IntakeKeyNormaliserTest {
   void empty_and_whitespace_only_returns_empty() {
     assertThat(normaliser.normalise("")).isEqualTo("");
     assertThat(normaliser.normalise("   \t\n  ")).isEqualTo("");
+  }
+
+  @Test
+  void delegates_to_shared_core_util_with_identical_output() {
+    // core-03: IntakeKeyNormaliser now delegates to IngredientMappingKeys (single source of
+    // truth); its output must be byte-for-byte identical to the shared util — no key-meaning
+    // change.
+    for (String raw :
+        new String[] {null, "", "   ", "  Chicken   Breast  ", "chicken breast", "a\t\tb\n\nc"}) {
+      assertThat(normaliser.normalise(raw)).isEqualTo(IngredientMappingKeys.normalise(raw));
+    }
   }
 }

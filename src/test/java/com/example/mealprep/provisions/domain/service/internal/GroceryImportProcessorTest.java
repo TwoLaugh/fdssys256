@@ -161,6 +161,61 @@ class GroceryImportProcessorTest {
   }
 
   @Test
+  void process_mixedCaseRawLine_normalisesKey_andMergesWithNormalisedExistingRow() {
+    // core-03: a raw "Chicken Breast" import line must normalise to "chicken breast" so it MERGES
+    // with an existing row stored under the normalised key — not create a duplicate inventory row.
+    UUID userId = UUID.randomUUID();
+    GroceryOrderLine rawLine =
+        new GroceryOrderLine(
+            "tesco:chicken-breast",
+            "Chicken Breast 500g",
+            "  Chicken   Breast ", // RAW: mixed case + leading/trailing/internal whitespace
+            new BigDecimal("500.000"),
+            "g",
+            new BigDecimal("4.00"),
+            "fresh",
+            500);
+    GroceryOrderImportCommand cmd =
+        ProvisionsTestData.groceryOrderImportCommand("tesco", "ord-raw", List.of(rawLine));
+
+    InventoryItem existing =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .quantity(new BigDecimal("250.000"))
+            .unit("g")
+            .ingredientMappingKey("chicken breast") // already-normalised stored row
+            .storageLocation(StorageLocation.FRIDGE)
+            .costPaid(new BigDecimal("2.00"))
+            .build();
+
+    when(supplierProductRepository.findBySupplierAndProductId(anyString(), anyString()))
+        .thenReturn(Optional.empty());
+    stubSupplierSaveAndFlushPassthrough();
+    when(expiryInference.inferExpiry(any(), any(), any(LocalDate.class)))
+        .thenReturn(Optional.empty());
+    // Merge-lookup MUST be issued with the NORMALISED key, not the raw value — otherwise no match.
+    when(inventoryItemRepository.findOneActiveByUserIdAndMappingKeyAndStorageLocationAndExpiryDate(
+            eq(userId), eq("chicken breast"), eq(StorageLocation.FRIDGE), eq(null)))
+        .thenReturn(Optional.of(existing));
+    stubInventorySaveAndFlushPassthrough();
+
+    GroceryImportResultDto result = newProcessor().process(userId, cmd, AuditActor.GROCERY_IMPORT);
+
+    // Merged, not added — quantities summed; no duplicate row created.
+    assertThat(result.addedItems()).isEmpty();
+    assertThat(result.mergedItems()).hasSize(1);
+    assertThat(existing.getQuantity()).isEqualByComparingTo("750.000");
+    // The merge-lookup was issued with the normalised key, and the raw value never reached the
+    // repo.
+    verify(inventoryItemRepository, times(1))
+        .findOneActiveByUserIdAndMappingKeyAndStorageLocationAndExpiryDate(
+            eq(userId), eq("chicken breast"), eq(StorageLocation.FRIDGE), eq(null));
+    // The supplier product was upserted with the normalised key too.
+    ArgumentCaptor<SupplierProduct> spCaptor = ArgumentCaptor.forClass(SupplierProduct.class);
+    verify(supplierProductRepository).saveAndFlush(spCaptor.capture());
+    assertThat(spCaptor.getValue().getIngredientMappingKey()).isEqualTo("chicken breast");
+  }
+
+  @Test
   void process_lineWithNullMappingKey_alwaysCreatesNewRow_neverMerges() {
     UUID userId = UUID.randomUUID();
     GroceryOrderLine nullKeyLine =

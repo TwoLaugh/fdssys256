@@ -1,5 +1,6 @@
 package com.example.mealprep.provisions.domain.service.internal;
 
+import com.example.mealprep.core.ingredient.IngredientMappingKeys;
 import com.example.mealprep.provisions.api.dto.GroceryImportResultDto;
 import com.example.mealprep.provisions.api.dto.GroceryOrderImportCommand;
 import com.example.mealprep.provisions.api.dto.GroceryOrderLine;
@@ -114,20 +115,26 @@ class GroceryImportProcessor {
 
     // Step 2 — per-line processing.
     for (GroceryOrderLine line : command.lines()) {
-      supplierUpdates.add(upsertSupplierProduct(command.supplier(), command.deliveredOn(), line));
+      // Normalise the mapping key ONCE (core-03): used for the supplier upsert, the inventory
+      // merge-lookup, and the inventory-row create. A raw lookup against normalised rows would
+      // silently fail to merge → duplicate inventory rows, so the lookup MUST use the same key.
+      String mappingKey = IngredientMappingKeys.normalise(line.ingredientMappingKey());
+
+      supplierUpdates.add(
+          upsertSupplierProduct(command.supplier(), command.deliveredOn(), line, mappingKey));
 
       StorageLocation location = inferLocation(line.category());
       LocalDate expiry =
           expiryInference
-              .inferExpiry(line.ingredientMappingKey(), line.category(), command.deliveredOn())
+              .inferExpiry(mappingKey, line.category(), command.deliveredOn())
               .orElse(null);
 
       Optional<InventoryItem> existing =
-          line.ingredientMappingKey() == null
+          mappingKey == null
               ? Optional.empty()
               : inventoryItemRepository
                   .findOneActiveByUserIdAndMappingKeyAndStorageLocationAndExpiryDate(
-                      userId, line.ingredientMappingKey(), location, expiry);
+                      userId, mappingKey, location, expiry);
 
       Instant now = Instant.now();
       if (existing.isPresent()) {
@@ -146,7 +153,8 @@ class GroceryImportProcessor {
         merged.add(inventoryMapper.toDto(saved));
       } else {
         InventoryItem item =
-            createNewInventoryRow(userId, line, location, expiry, source, command.orderRef());
+            createNewInventoryRow(
+                userId, line, mappingKey, location, expiry, source, command.orderRef());
         InventoryItem saved = inventoryItemRepository.saveAndFlush(item);
         recordAudit(saved.getId(), userId, actor, BigDecimal.ZERO, saved.getQuantity(), now);
         eventBatcher.recordItemAddedFromGrocery(
@@ -180,7 +188,7 @@ class GroceryImportProcessor {
   }
 
   private SupplierProductDto upsertSupplierProduct(
-      String supplier, LocalDate deliveredOn, GroceryOrderLine line) {
+      String supplier, LocalDate deliveredOn, GroceryOrderLine line, String mappingKey) {
     Optional<SupplierProduct> existing =
         supplierProductRepository.findBySupplierAndProductId(supplier, line.productId());
     SupplierProduct sp;
@@ -192,8 +200,8 @@ class GroceryImportProcessor {
       sp.setPackSizeG(line.packSizeG());
       sp.setCategory(line.category());
       sp.setLastChecked(deliveredOn);
-      if (line.ingredientMappingKey() != null) {
-        sp.setIngredientMappingKey(line.ingredientMappingKey());
+      if (mappingKey != null) {
+        sp.setIngredientMappingKey(mappingKey);
       }
       // clubcardPrice left intact — GroceryOrderLine doesn't carry it in v1.
     } else {
@@ -208,7 +216,7 @@ class GroceryImportProcessor {
               .packSizeG(line.packSizeG())
               .category(line.category())
               .lastChecked(deliveredOn)
-              .ingredientMappingKey(line.ingredientMappingKey())
+              .ingredientMappingKey(mappingKey)
               .substitutionHistory(List.of())
               .build();
     }
@@ -233,6 +241,7 @@ class GroceryImportProcessor {
   private InventoryItem createNewInventoryRow(
       UUID userId,
       GroceryOrderLine line,
+      String mappingKey,
       StorageLocation location,
       LocalDate expiry,
       ItemSource source,
@@ -249,7 +258,7 @@ class GroceryImportProcessor {
         .costPaid(line.pricePaid())
         .isStaple(false)
         .expiryDate(expiry)
-        .ingredientMappingKey(line.ingredientMappingKey())
+        .ingredientMappingKey(mappingKey)
         .source(source)
         .sourceRef(orderRef)
         .itemStatus(ItemLifecycleStatus.ACTIVE)

@@ -6,6 +6,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.recipe.api.dto.CreateIngredientRequest;
+import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.ImportRecipeFromUrlRequest;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.mapper.IngredientMapper;
@@ -41,6 +43,7 @@ import com.example.mealprep.recipe.event.RecipeVersionCreatedEvent;
 import com.example.mealprep.recipe.testdata.RecipeTestData;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -168,6 +171,48 @@ class RecipeServiceImplTest {
     assertThat(dto.currentVersionBody().tags().complexity()).isNull();
     assertThat(dto.currentVersionBody().tags().flavourProfile()).isEmpty();
     assertThat(dto.currentVersionBody().tags().dietaryFlags()).isEmpty();
+  }
+
+  @Test
+  void createRecipe_normalisesIngredientMappingKeys_whenPersisting() {
+    // core-03: a raw mixed-case / extra-whitespace mapping key on the create request must be
+    // persisted in normalised form (lowercase, trimmed, internal whitespace collapsed).
+    UUID userId = UUID.randomUUID();
+
+    when(recipeRepository.save(any(Recipe.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(branchRepository.save(any(RecipeBranch.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(versionRepository.saveAndFlush(any(RecipeVersion.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(recipeRepository.saveAndFlush(any(Recipe.class))).thenAnswer(inv -> inv.getArgument(0));
+
+    CreateRecipeRequest request =
+        new CreateRecipeRequest(
+            "Chicken Dinner",
+            "Test",
+            List.of(
+                new CreateIngredientRequest(
+                    0,
+                    "  Chicken   Breast ", // RAW
+                    "Chicken breast",
+                    new BigDecimal("500.000"),
+                    "g",
+                    null,
+                    false)),
+            RecipeTestData.defaultMethod(),
+            RecipeTestData.defaultMetadata(),
+            RecipeTestData.defaultTags());
+
+    RecipeDto dto = service().createRecipe(userId, request);
+
+    assertThat(dto.currentVersionBody().ingredients()).hasSize(1);
+    assertThat(dto.currentVersionBody().ingredients().get(0).ingredientMappingKey())
+        .isEqualTo("chicken breast");
+
+    // Confirm against what was actually flushed to the version repository (not just the DTO).
+    ArgumentCaptor<RecipeVersion> versionCaptor = ArgumentCaptor.forClass(RecipeVersion.class);
+    verify(versionRepository).saveAndFlush(versionCaptor.capture());
+    assertThat(versionCaptor.getValue().getIngredients().get(0).getIngredientMappingKey())
+        .isEqualTo("chicken breast");
   }
 
   // ---------------- findPlannableCandidates (planner Stage-A read) ----------------
