@@ -214,6 +214,66 @@ class GroceryImportFlowIT {
     assertThat(quantity).isEqualTo(150.0);
   }
 
+  // ---------------- core-03: case/whitespace-variant keys normalise + merge into one row --------
+
+  @Test
+  void post_mixedCaseAndWhitespaceVariantKeys_normaliseAndMergeIntoOneRow() throws Exception {
+    AuthedUser user = registerUser();
+    // Two lines whose mapping keys differ ONLY by case + whitespace must normalise to the same
+    // "chicken breast" key and merge into a single inventory row (no duplicate).
+    GroceryOrderLine line1 =
+        ProvisionsTestData.groceryOrderLine(
+            "tesco:chicken-a", "Chicken Breast", "fresh", new BigDecimal("300.000"));
+    GroceryOrderLine line2 =
+        ProvisionsTestData.groceryOrderLine(
+            "tesco:chicken-b", "  chicken   breast ", "fresh", new BigDecimal("200.000"));
+    GroceryOrderImportCommand cmd =
+        new GroceryOrderImportCommand(
+            "tesco",
+            "order-mixedcase-merge",
+            LocalDate.parse("2026-05-10"),
+            List.of(line1, line2),
+            null,
+            null);
+
+    mvc.perform(
+            post("/api/v1/provisions/grocery-import")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(cmd)))
+        .andExpect(status().isOk());
+
+    // Exactly one inventory row, stored under the NORMALISED key.
+    Long rowCount =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM provision_inventory"
+                + " WHERE user_id = ? AND ingredient_mapping_key = ?",
+            Long.class,
+            user.userId(),
+            "chicken breast");
+    assertThat(rowCount).isEqualTo(1L);
+
+    // No row leaked under either raw form.
+    Long rawRowCount =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM provision_inventory"
+                + " WHERE user_id = ? AND ingredient_mapping_key IN (?, ?)",
+            Long.class,
+            user.userId(),
+            "Chicken Breast",
+            "  chicken   breast ");
+    assertThat(rawRowCount).isZero();
+
+    Double quantity =
+        jdbcTemplate.queryForObject(
+            "SELECT quantity FROM provision_inventory"
+                + " WHERE user_id = ? AND ingredient_mapping_key = ?",
+            Double.class,
+            user.userId(),
+            "chicken breast");
+    assertThat(quantity).isEqualTo(500.0);
+  }
+
   // ---------------- validation / auth ----------------
 
   @Test

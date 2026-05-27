@@ -1,5 +1,6 @@
 package com.example.mealprep.recipe.domain.service.internal;
 
+import com.example.mealprep.core.ingredient.IngredientMappingKeys;
 import com.example.mealprep.recipe.api.dto.CharacterFingerprintDto;
 import com.example.mealprep.recipe.api.dto.CreateBranchRequest;
 import com.example.mealprep.recipe.api.dto.CreateIngredientRequest;
@@ -1208,7 +1209,7 @@ public class RecipeServiceImpl
               .id(UUID.randomUUID())
               .version(version)
               .lineOrder(dto.lineOrder())
-              .ingredientMappingKey(dto.ingredientMappingKey())
+              .ingredientMappingKey(IngredientMappingKeys.normalise(dto.ingredientMappingKey()))
               .displayName(dto.displayName())
               .quantity(dto.quantity())
               .unit(dto.unit())
@@ -1439,10 +1440,16 @@ public class RecipeServiceImpl
             .filter(v -> v.getRecipe() != null && v.getRecipe().getId().equals(recipe.getId()))
             .orElseThrow(() -> new RecipeVersionNotFoundException(request.versionId()));
 
+    // core-03: normalise both the lookup value (compared against normalised stored ingredient
+    // keys) and the persisted originalMappingKey / substituteMappingKey (match keys the overlay
+    // applier compares against persisted ingredient keys — see SubstitutionOverlayApplier).
+    String originalKey = IngredientMappingKeys.normalise(request.original().ingredientMappingKey());
+    String substituteKey =
+        IngredientMappingKeys.normalise(request.substitute().ingredientMappingKey());
+
     List<String> mappingKeys = ingredientRepository.findMappingKeysByVersionId(version.getId());
-    if (!mappingKeys.contains(request.original().ingredientMappingKey())) {
-      throw new SubstitutionOriginalNotInVersionException(
-          request.original().ingredientMappingKey());
+    if (!mappingKeys.contains(originalKey)) {
+      throw new SubstitutionOriginalNotInVersionException(originalKey);
     }
 
     UUID branchId = version.getBranch() != null ? version.getBranch().getId() : null;
@@ -1465,10 +1472,10 @@ public class RecipeServiceImpl
             .recipeId(recipe.getId())
             .versionId(version.getId())
             .branchId(branchId)
-            .originalMappingKey(request.original().ingredientMappingKey())
+            .originalMappingKey(originalKey)
             .originalQuantity(request.original().quantity())
             .originalUnit(request.original().unit())
-            .substituteMappingKey(request.substitute().ingredientMappingKey())
+            .substituteMappingKey(substituteKey)
             .substituteQuantity(request.substitute().quantity())
             .substituteUnit(request.substitute().unit())
             .reason(request.reason())
@@ -1936,9 +1943,14 @@ public class RecipeServiceImpl
             .filter(v -> v.getRecipe() != null && v.getRecipe().getId().equals(recipe.getId()))
             .orElseThrow(() -> new RecipeVersionNotFoundException(cmd.versionId()));
 
+    // core-03: normalise the lookup value and both persisted match keys (same rationale as
+    // createSubstitution above).
+    String originalKey = IngredientMappingKeys.normalise(cmd.original().ingredientMappingKey());
+    String substituteKey = IngredientMappingKeys.normalise(cmd.substitute().ingredientMappingKey());
+
     List<String> mappingKeys = ingredientRepository.findMappingKeysByVersionId(version.getId());
-    if (!mappingKeys.contains(cmd.original().ingredientMappingKey())) {
-      throw new SubstitutionOriginalNotInVersionException(cmd.original().ingredientMappingKey());
+    if (!mappingKeys.contains(originalKey)) {
+      throw new SubstitutionOriginalNotInVersionException(originalKey);
     }
 
     UUID branchId = version.getBranch() != null ? version.getBranch().getId() : null;
@@ -1962,10 +1974,10 @@ public class RecipeServiceImpl
             .recipeId(recipe.getId())
             .versionId(version.getId())
             .branchId(branchId)
-            .originalMappingKey(cmd.original().ingredientMappingKey())
+            .originalMappingKey(originalKey)
             .originalQuantity(cmd.original().quantity())
             .originalUnit(cmd.original().unit())
-            .substituteMappingKey(cmd.substitute().ingredientMappingKey())
+            .substituteMappingKey(substituteKey)
             .substituteQuantity(cmd.substitute().quantity())
             .substituteUnit(cmd.substitute().unit())
             .reason(cmd.reason())
