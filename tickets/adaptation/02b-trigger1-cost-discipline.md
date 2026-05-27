@@ -1,16 +1,29 @@
-# Ticket: adaptation — 02b Trigger-1 cost discipline (STUB — design decision, needs product input)
+# Ticket: adaptation — 02b Trigger-1 cost discipline
 
-> **STATUS: DECIDED — GATE IT (deferred build).** Owner approved the "Candidate design" below:
-> adapt-on-create gets a deterministic pre-filter before the LLM call (only adapt a USER recipe when
-> it plausibly conflicts with the owner's hard constraints / soft prefs / budget), a quality gate for
-> SYSTEM/discovery recipes, and bulk-origin creates route through BATCH. **Implementation is deferred**
-> until the cross-module affected-set query helpers exist (the same ones Trigger 3's filters need —
-> currently stubbed `emptySet`); build this together with that work. 02a already removed the
-> operational harm (terminal-state leak, unbounded threads, wrong userId, supersession races). The
-> three open questions below are answered: (1) a clean manual `USER_VERIFIED` create should NOT auto-
-> fire adaptation — only on a later data-model change or a low-quality import; (2) bulk discovery
-> seeding must NOT fire per-recipe LLM calls — gate/BATCH it; (3) silent pending-change for v1 (no
-> dedicated "we adapted your import" surface yet).
+> **STATUS: IMPLEMENTED.** The Trigger-1 adapt-on-create gate now lives in
+> `AdaptationImportListener.decideAndEnqueue(...)`, decided by `RecipeCreatedEvent.dataQuality()`
+> (which already encodes the recipe's origin — so no separate bulk-count / origin signal was needed):
+> - **USER_VERIFIED** (clean manual create) → a deterministic single-recipe pre-filter runs first:
+>   it enqueues an **ASYNC** job ONLY when the recipe plausibly conflicts with the owner's hard
+>   constraints (`HardConstraintFilterService.checkRecipe`) or — if its nutrition is already
+>   computed — their nutrition targets (`NutritionQueryService.findRecipeIdsViolatingTargets`).
+>   Otherwise it **SKIPs** entirely (no job, no LLM spend) — the common "nothing to adapt" case.
+> - **IMPORTED / WEB_DISCOVERED / AI_GENERATED** (bulk / messy origin) → enqueue at **BATCH**
+>   priority. No `JobReadyEvent` is published; the daily `BatchJobOrchestrator` cron processes them,
+>   so bulk discovery/import seeding no longer fans out per-recipe immediate LLM calls.
+>
+> Plumbing: `AdaptationService.enqueueImportJob` gained a priority-aware overload
+> `enqueueImportJob(ImportJobRequest, JobPriority)`; it publishes `JobReadyEvent` only for ASYNC
+> (BATCH mirrors `enqueueDataModelChangeJobs`). The `USER` catalogue → `PENDING_CHANGE` / `SYSTEM` →
+> `DIRECT` approval-policy rule is unchanged. v1 stays a silent pending-change (no new user-facing
+> surface). The reusable cross-module affected-set query helpers this depended on landed separately
+> (the same ones Trigger 3's filters use, and the budget/Trigger-3 affected-set work); this ticket
+> reuses the per-recipe single-check variants of them. 02a already removed the operational harm
+> (terminal-state leak, unbounded threads, wrong userId, supersession races).
+>
+> The three open questions are answered & implemented: (1) a clean manual `USER_VERIFIED` create does
+> NOT auto-fire adaptation unless it actually conflicts; (2) bulk discovery/import seeding routes to
+> BATCH (no per-recipe LLM fan-out); (3) silent pending-change for v1.
 >
 > Original framing (kept for context): captured during E2E stabilisation; mechanics fixed in 02a; XJ-02
 > later confirmed the eager firing's cost — its per-create pending change collided with feedback's,

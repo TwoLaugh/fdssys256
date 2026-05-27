@@ -288,6 +288,12 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   @Override
   @Transactional
   public UUID enqueueImportJob(ImportJobRequest request) {
+    return enqueueImportJob(request, JobPriority.ASYNC);
+  }
+
+  @Override
+  @Transactional
+  public UUID enqueueImportJob(ImportJobRequest request, JobPriority priority) {
     ApprovalPolicy approval =
         request.catalogue() == Catalogue.USER
             ? ApprovalPolicy.PENDING_CHANGE
@@ -301,7 +307,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
             .userId(request.userId())
             .catalogue(request.catalogue())
             .source(JobSource.IMPORT)
-            .priority(JobPriority.ASYNC)
+            .priority(priority)
             .approvalPolicy(approval)
             .status(JobStatus.PENDING)
             .inputs(emptyInputs())
@@ -309,8 +315,12 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
             .enqueuedAt(Instant.now())
             .build();
     jobRepository.saveAndFlush(job);
-    // Publish INSIDE the tx — TransactionalEventListener(AFTER_COMMIT) is robust to that.
-    events.publishEvent(new JobReadyEvent(jobId));
+    // ASYNC: publish INSIDE the tx — TransactionalEventListener(AFTER_COMMIT) is robust to that —
+    // so the worker picks the row up immediately. BATCH jobs are picked up by BatchJobOrchestrator
+    // on its cron, so no JobReadyEvent is published (mirrors enqueueDataModelChangeJobs).
+    if (priority == JobPriority.ASYNC) {
+      events.publishEvent(new JobReadyEvent(jobId));
+    }
     return jobId;
   }
 

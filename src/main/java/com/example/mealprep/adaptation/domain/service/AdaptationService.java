@@ -10,6 +10,7 @@ import com.example.mealprep.adaptation.api.dto.PlanTimeRefineDirectiveRequest;
 import com.example.mealprep.adaptation.api.dto.PlannerHintDto;
 import com.example.mealprep.adaptation.api.dto.PlannerHintRequest;
 import com.example.mealprep.adaptation.api.dto.RejectPendingChangeRequest;
+import com.example.mealprep.adaptation.domain.enums.JobPriority;
 import java.util.List;
 import java.util.UUID;
 
@@ -28,8 +29,23 @@ import java.util.UUID;
  */
 public interface AdaptationService {
 
-  /** Trigger 1: async — returns jobId; worker processes the row. */
+  /**
+   * Trigger 1 (default ASYNC): async — returns jobId; the worker picks the row up via {@code
+   * JobReadyEvent}. Equivalent to {@link #enqueueImportJob(ImportJobRequest, JobPriority)} with
+   * {@link JobPriority#ASYNC}. Retained verbatim per the LLD signature.
+   */
   UUID enqueueImportJob(ImportJobRequest request);
+
+  /**
+   * Trigger 1 (priority-aware): enqueue an IMPORT-source adaptation job at the requested {@code
+   * priority}. {@link JobPriority#ASYNC} publishes a {@code JobReadyEvent} so the worker processes
+   * the row immediately; {@link JobPriority#BATCH} does NOT publish an event — the row is picked up
+   * by the daily {@code BatchJobOrchestrator} cron (mirrors {@link #enqueueDataModelChangeJobs}).
+   * Used by the Trigger-1 cost-discipline gate to route bulk-origin creates (import / discovery /
+   * AI-gen) to BATCH instead of per-recipe ASYNC fan-out. Per {@code
+   * tickets/adaptation/02b-trigger1-cost-discipline.md}.
+   */
+  UUID enqueueImportJob(ImportJobRequest request, JobPriority priority);
 
   /** Trigger 2: sync — enqueues + processes, returns result. Feedback module waits. */
   AdaptationResultDto enqueueFeedbackJob(FeedbackJobRequest request);
