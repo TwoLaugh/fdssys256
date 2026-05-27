@@ -149,6 +149,134 @@ shoppingListExport:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 
+# ===== Tier 2 — manual fulfilment (01d) =====
+
+markBought:
+  post:
+    tags: [Grocery — Manual Fulfilment]
+    operationId: markBought
+    summary: 'Mark a single shopping-list line bought (price/store optional; over-mark allowed with a note).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: listId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: lineId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/grocery.yaml#/MarkBoughtRequest' }
+    responses:
+      '200':
+        description: 'Line marked bought (status BOUGHT); note set when the bought quantity over-marks.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/MarkBoughtResultDto' }
+      '400':
+        description: 'Validation error (bad quantity / unit / price).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such line.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Line already bought, or a concurrent mark-bought collided (optimistic lock).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+bulkMarkBought:
+  post:
+    tags: [Grocery — Manual Fulfilment]
+    operationId: bulkMarkBought
+    summary: 'Mark several lines bought in one operation; optional total-spend distribution.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: listId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/grocery.yaml#/BulkMarkBoughtRequest' }
+    responses:
+      '200':
+        description: 'One result per line (status BOUGHT); single inventory write + single event for the batch.'
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/grocery.yaml#/MarkBoughtResultDto' }
+      '400':
+        description: 'Validation error (empty line set / bad total spend).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'A requested line is missing or not part of the list.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'A requested line is already bought, or a concurrent edit collided.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+undoMarkBought:
+  post:
+    tags: [Grocery — Manual Fulfilment]
+    operationId: undoMarkBought
+    summary: 'Undo a Tier-2 mark-bought (line back to UNFILLED + compensating price note; inventory corrected manually).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: listId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: lineId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '204':
+        description: 'Undone (no body).'
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such line.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Line is not currently bought — nothing to undo.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
 # ===== Tier 4 — price history (01c) =====
 
 priceHistoryAggregates:
