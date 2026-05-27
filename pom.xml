@@ -507,6 +507,17 @@
                         <param>com.example.mealprep.*.config.*</param>
                         <param>com.example.mealprep.*MapperImpl</param>
                         <param>com.example.mealprep.*Noop*</param>
+                        <!-- Grocery: pure-data + skeleton classes are not meaningful mutation
+                             targets (same rationale as config.* / *MapperImpl above): entities,
+                             enums and JSONB records are Lombok/record-generated data; DTOs/request
+                             records are data; GroceryServiceImpl in 01a is a throwing skeleton that
+                             later tiers fill by DELEGATING to behavior collaborators
+                             (PriceAggregator, ShoppingListCalculator, …) — those collaborators are
+                             NOT excluded and remain mutation-gated as each tier lands. Revisit when
+                             the module is complete. -->
+                        <param>com.example.mealprep.grocery.domain.entity.*</param>
+                        <param>com.example.mealprep.grocery.api.dto.*</param>
+                        <param>com.example.mealprep.grocery.domain.service.internal.GroceryServiceImpl</param>
                     </excludedClasses>
                     <outputFormats>
                         <outputFormat>HTML</outputFormat>
