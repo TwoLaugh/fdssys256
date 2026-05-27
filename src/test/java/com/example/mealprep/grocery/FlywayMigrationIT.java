@@ -44,7 +44,7 @@ class FlywayMigrationIT {
                 + "  'shopping_lists', 'shopping_list_lines', 'grocery_orders',"
                 + "  'grocery_order_lines', 'grocery_provider_state',"
                 + "  'grocery_substitution_proposals', 'grocery_price_history',"
-                + "  'grocery_pack_size_heuristics'"
+                + "  'grocery_pack_size_heuristics', 'grocery_reference_prices'"
                 + ") ORDER BY tablename",
             String.class);
     assertThat(tables)
@@ -54,9 +54,45 @@ class FlywayMigrationIT {
             "grocery_pack_size_heuristics",
             "grocery_price_history",
             "grocery_provider_state",
+            "grocery_reference_prices",
             "grocery_substitution_proposals",
             "shopping_list_lines",
             "shopping_lists");
+  }
+
+  @Test
+  void referencePrices_table_andUniqueKeyIndex_exist() {
+    // The 01c reference-price table + its unique-by-key index.
+    Integer table =
+        jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM pg_tables WHERE tablename = 'grocery_reference_prices'",
+            Integer.class);
+    assertThat(table).isEqualTo(1);
+    Integer idx =
+        jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'idx_grocery_ref_prices_key'",
+            Integer.class);
+    assertThat(idx).isEqualTo(1);
+  }
+
+  @Test
+  void referencePricesSeed_hasE2eFixtureKeys_withOdblAttribution() {
+    // The hand-authored starter set covers the chicken-and-rice-bowl e2e fixture keys.
+    List<String> keys =
+        jdbcTemplate.queryForList(
+            "SELECT ingredient_mapping_key FROM grocery_reference_prices"
+                + " WHERE ingredient_mapping_key IN ('chicken breast', 'white rice', 'broccoli',"
+                + " 'olive oil', 'salt') ORDER BY ingredient_mapping_key",
+            String.class);
+    assertThat(keys)
+        .containsExactly("broccoli", "chicken breast", "olive oil", "salt", "white rice");
+    // Every reference row carries the ODbL attribution string.
+    Integer missingAttribution =
+        jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM grocery_reference_prices"
+                + " WHERE attribution IS NULL OR attribution NOT LIKE '%ODbL%'",
+            Integer.class);
+    assertThat(missingAttribution).isZero();
   }
 
   @Test
@@ -181,10 +217,11 @@ class FlywayMigrationIT {
                 + "  'idx_grocery_price_user_observed',"
                 + "  'idx_grocery_price_observed',"
                 + "  'idx_grocery_pack_heur_key',"
-                + "  'idx_grocery_pack_heur_category'"
+                + "  'idx_grocery_pack_heur_category',"
+                + "  'idx_grocery_ref_prices_key'"
                 + ") ORDER BY indexname",
             String.class);
-    assertThat(indexes).hasSize(16);
+    assertThat(indexes).hasSize(17);
   }
 
   private void insertShoppingList(UUID planId, int planGeneration) {

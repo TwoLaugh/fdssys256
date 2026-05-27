@@ -1,0 +1,174 @@
+# Grocery — Tier 4 price history (01c). Six endpoints under /api/v1/grocery/price-history.
+# Per lld/grocery.md lines 729-738. userId resolved server-side from the session cookie.
+
+priceHistoryAggregates:
+  get:
+    tags: [Grocery — Price History]
+    operationId: getPriceAggregate
+    summary: 'Aggregate (estimate, confidence, range) for an ingredient key; optional store filter.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: ingredientKey
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 128 }
+      - in: query
+        name: store
+        required: false
+        schema: { type: string, maxLength: 64 }
+    responses:
+      '200':
+        description: Aggregate estimate resolved (from observations or the reference fallback).
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/PriceAggregateDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No estimate (key unknown to both observations and the reference source).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+priceHistoryCrossStore:
+  get:
+    tags: [Grocery — Price History]
+    operationId: getCrossStorePriceAggregates
+    summary: Per-store aggregates for an ingredient key (one entry per store).
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: ingredientKey
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 128 }
+    responses:
+      '200':
+        description: 'Per-store aggregates (empty list when the key is unknown).'
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/grocery.yaml#/PriceAggregateDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+priceHistoryObservations:
+  get:
+    tags: [Grocery — Price History]
+    operationId: getPriceObservations
+    summary: 'Paginated raw observations for the caller (audit / debug), newest-first.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of observations.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/PriceObservationDtoPage' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+priceHistoryObservationsByKey:
+  get:
+    tags: [Grocery — Price History]
+    operationId: getPriceObservationsByKey
+    summary: 'Paginated observations for one mapping key (household scope), newest-first.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: ingredientKey
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 128 }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of observations for the key.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/PriceObservationDtoPage' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+priceHistoryManual:
+  post:
+    tags: [Grocery — Price History]
+    operationId: recordManualPrice
+    summary: 'Record a one-off manual price observation (source = MANUAL, weight 0.7).'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/grocery.yaml#/RecordManualPriceRequest' }
+    responses:
+      '201':
+        description: Observation recorded.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/PriceObservationDto' }
+      '400':
+        description: 'Validation error (blank key/store, or an invalid price).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+priceHistoryRefresh:
+  post:
+    tags: [Grocery — Price History]
+    operationId: refreshPrices
+    summary: 'On-demand price refresh; 503 if AI features are paused (provider-quote path).'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/grocery.yaml#/RefreshPricesRequest' }
+    responses:
+      '200':
+        description: 'Refresh result (in v1 with no provider configured, observationsWritten = 0).'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/RefreshPricesResultDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '503':
+        description: 'AI features paused (provider-quote path) — enter prices manually.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

@@ -4,6 +4,7 @@ import com.example.mealprep.grocery.config.GroceryConfig;
 import com.example.mealprep.grocery.domain.service.GroceryOrderService;
 import com.example.mealprep.grocery.domain.service.ManualFulfilmentService;
 import com.example.mealprep.grocery.domain.service.PriceHistoryService;
+import com.example.mealprep.grocery.domain.service.ReferencePriceSource;
 import com.example.mealprep.grocery.domain.service.ShoppingListService;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Lazy;
@@ -29,16 +30,19 @@ public class GroceryModule {
   private final ManualFulfilmentService manualFulfilmentService;
   private final GroceryOrderService groceryOrderService;
   private final PriceHistoryService priceHistoryService;
+  private final ReferencePriceSource referencePriceSource;
 
   public GroceryModule(
       @Lazy ShoppingListService shoppingListService,
       @Lazy ManualFulfilmentService manualFulfilmentService,
       @Lazy GroceryOrderService groceryOrderService,
-      @Lazy PriceHistoryService priceHistoryService) {
+      @Lazy PriceHistoryService priceHistoryService,
+      @Lazy ReferencePriceSource referencePriceSource) {
     this.shoppingListService = shoppingListService;
     this.manualFulfilmentService = manualFulfilmentService;
     this.groceryOrderService = groceryOrderService;
     this.priceHistoryService = priceHistoryService;
+    this.referencePriceSource = referencePriceSource;
   }
 
   /** Tier 1 — shopping list. */
@@ -59,5 +63,12 @@ public class GroceryModule {
   /** Tier 4 — price history. */
   public PriceHistoryService priceHistory() {
     return priceHistoryService;
+  }
+
+  /**
+   * Tier 4 — cold-start reference price source (01c). Re-exported SPI; impl lives in the pocket.
+   */
+  public ReferencePriceSource referencePriceSource() {
+    return referencePriceSource;
   }
 }
