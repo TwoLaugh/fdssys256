@@ -5,6 +5,8 @@ import com.example.mealprep.config.ProblemDetailSupport;
 import com.example.mealprep.grocery.exception.GroceryOrderNotFoundException;
 import com.example.mealprep.grocery.exception.GrocerySubstitutionProposalNotFoundException;
 import com.example.mealprep.grocery.exception.IllegalOrderTransitionException;
+import com.example.mealprep.grocery.exception.LineAlreadyBoughtException;
+import com.example.mealprep.grocery.exception.LineNotBoughtException;
 import com.example.mealprep.grocery.exception.OrderConcurrencyConflictException;
 import com.example.mealprep.grocery.exception.OrderHasOutstandingProposalsException;
 import com.example.mealprep.grocery.exception.ProviderNotConfiguredException;
@@ -12,6 +14,7 @@ import com.example.mealprep.grocery.exception.ProviderUnavailableException;
 import com.example.mealprep.grocery.exception.ShoppingListLineNotFoundException;
 import com.example.mealprep.grocery.exception.ShoppingListNotFoundException;
 import com.example.mealprep.grocery.exception.UnknownMappingKeyException;
+import com.example.mealprep.provisions.exception.DuplicateGroceryImportException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -166,6 +169,58 @@ public class GroceryExceptionHandler {
         ex.getMessage(),
         "order-concurrency-conflict",
         "Order concurrency conflict",
+        req);
+  }
+
+  @ExceptionHandler(LineAlreadyBoughtException.class)
+  public ResponseEntity<ProblemDetail> handleLineAlreadyBought(
+      LineAlreadyBoughtException ex, HttpServletRequest req) {
+    ResponseEntity<ProblemDetail> response =
+        problem(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "line-already-bought",
+            "Shopping list line already bought",
+            req);
+    ProblemDetail pd = response.getBody();
+    if (pd != null) {
+      pd.setProperty("shoppingListLineId", ex.shoppingListLineId());
+    }
+    return response;
+  }
+
+  @ExceptionHandler(LineNotBoughtException.class)
+  public ResponseEntity<ProblemDetail> handleLineNotBought(
+      LineNotBoughtException ex, HttpServletRequest req) {
+    ResponseEntity<ProblemDetail> response =
+        problem(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "line-not-bought",
+            "Shopping list line not bought",
+            req);
+    ProblemDetail pd = response.getBody();
+    if (pd != null) {
+      pd.setProperty("shoppingListLineId", ex.shoppingListLineId());
+      pd.setProperty("currentStatus", ex.currentStatus());
+    }
+    return response;
+  }
+
+  /**
+   * The provisions idempotency log rejected a re-applied grocery-import ({@code (userId, source,
+   * sourceRef)} — the shopping-list-line-id used as {@code orderRef} on a mark-bought retry). The
+   * inventory was NOT double-added; surface 409 so the frontend learns the line was already
+   * fulfilled and refreshes.
+   */
+  @ExceptionHandler(DuplicateGroceryImportException.class)
+  public ResponseEntity<ProblemDetail> handleDuplicateGroceryImport(
+      DuplicateGroceryImportException ex, HttpServletRequest req) {
+    return problem(
+        HttpStatus.CONFLICT,
+        ex.getMessage(),
+        "duplicate-grocery-import",
+        "Grocery import already applied",
         req);
   }
 

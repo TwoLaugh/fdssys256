@@ -16,18 +16,29 @@ import com.example.mealprep.grocery.api.dto.ShoppingListExportDto;
 import com.example.mealprep.grocery.api.mapper.PriceObservationMapper;
 import com.example.mealprep.grocery.api.mapper.ShoppingListMapper;
 import com.example.mealprep.grocery.config.GroceryConfig;
+import com.example.mealprep.grocery.domain.entity.BoughtVia;
+import com.example.mealprep.grocery.domain.entity.LineFulfilmentStatus;
 import com.example.mealprep.grocery.domain.entity.PriceObservation;
 import com.example.mealprep.grocery.domain.entity.PriceSource;
 import com.example.mealprep.grocery.domain.entity.ShoppingList;
+import com.example.mealprep.grocery.domain.entity.ShoppingListLine;
 import com.example.mealprep.grocery.domain.service.ManualFulfilmentService;
 import com.example.mealprep.grocery.domain.service.PriceHistoryService;
 import com.example.mealprep.grocery.domain.service.ReferencePriceSource;
 import com.example.mealprep.grocery.domain.service.ReferencePriceSource.ReferencePrice;
 import com.example.mealprep.grocery.domain.service.ShoppingListService;
+import com.example.mealprep.grocery.domain.service.internal.MarkBoughtInventoryBridge.BoughtLine;
+import com.example.mealprep.grocery.event.ShoppingListBulkMarkedBoughtEvent;
 import com.example.mealprep.grocery.event.ShoppingListGeneratedEvent;
+import com.example.mealprep.grocery.event.ShoppingListItemMarkedBoughtEvent;
+import com.example.mealprep.grocery.exception.LineAlreadyBoughtException;
+import com.example.mealprep.grocery.exception.LineNotBoughtException;
+import com.example.mealprep.grocery.exception.ShoppingListLineNotFoundException;
 import com.example.mealprep.grocery.exception.ShoppingListNotFoundException;
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.domain.service.PlanQueryService;
+import com.example.mealprep.provisions.api.dto.GroceryImportResultDto;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -39,6 +50,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -68,6 +81,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class GroceryServiceImpl
     implements ShoppingListService, ManualFulfilmentService, PriceHistoryService {
 
+  private static final Logger log = LoggerFactory.getLogger(GroceryServiceImpl.class);
+
   // Tier-4 collaborators (01c). Tier 1/2 fields land with 01b/01d.
   private final PriceDataGateway priceDataGateway;
   private final PriceAggregator priceAggregator;
@@ -85,6 +100,9 @@ public class GroceryServiceImpl
   private final PlanQueryService planQueryService;
   private final ApplicationEventPublisher eventPublisher;
 
+  // Tier-2 collaborators (01d).
+  private final MarkBoughtInventoryBridge markBoughtInventoryBridge;
+
   public GroceryServiceImpl(
       PriceDataGateway priceDataGateway,
       PriceAggregator priceAggregator,
@@ -98,7 +116,8 @@ public class GroceryServiceImpl
       ShoppingListExporter shoppingListExporter,
       ShoppingListMapper shoppingListMapper,
       PlanQueryService planQueryService,
-      ApplicationEventPublisher eventPublisher) {
+      ApplicationEventPublisher eventPublisher,
+      MarkBoughtInventoryBridge markBoughtInventoryBridge) {
     this.priceDataGateway = priceDataGateway;
     this.priceAggregator = priceAggregator;
     this.priceObservationWriter = priceObservationWriter;
@@ -112,6 +131,7 @@ public class GroceryServiceImpl
     this.shoppingListMapper = shoppingListMapper;
     this.planQueryService = planQueryService;
     this.eventPublisher = eventPublisher;
+    this.markBoughtInventoryBridge = markBoughtInventoryBridge;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -237,22 +257,415 @@ public class GroceryServiceImpl
   // Tier 2 — ManualFulfilmentService (implemented in grocery-01d)
   // ---------------------------------------------------------------------------------------------
 
+  /**
+   * Tier-2 single-line mark-bought (lld/grocery.md lines 877-885). Loads the line (404 if missing),
+   * rejects an already-{@code BOUGHT} line (409), flips it to {@code BOUGHT} + {@code bought_*} +
+   * {@code bought_via=MANUAL}, force-bumps the parent {@code @Version} (concurrent edit → 409),
+   * writes a {@code MANUAL} price observation when a price is supplied (weight 0.7), adds inventory
+   * via the canonical {@code applyGroceryOrder} (orderRef = line id → idempotent), and publishes
+   * {@link ShoppingListItemMarkedBoughtEvent} (the writer publishes {@code PriceObservedEvent}
+   * itself — not double-published here). Over-mark ({@code boughtQuantity > requestedQuantity}) is
+   * ALLOWED — a {@code note} is set on the result, not a rejection (GROC-11).
+   */
   @Override
   @Transactional
   public MarkBoughtResultDto markBought(UUID userId, MarkBoughtRequest request) {
-    throw new UnsupportedOperationException("implemented in grocery-01d");
+    ShoppingListLine line =
+        shoppingListDataGateway
+            .findLineById(request.shoppingListLineId())
+            .orElseThrow(() -> new ShoppingListLineNotFoundException(request.shoppingListLineId()));
+    if (line.getFulfilmentStatus() == LineFulfilmentStatus.BOUGHT) {
+      throw new LineAlreadyBoughtException(line.getId());
+    }
+
+    ShoppingList parent = line.getShoppingList();
+    Instant boughtAt = request.boughtAt() != null ? request.boughtAt() : clock.instant();
+    String note = overMarkNote(request.boughtQuantity(), line.getRequestedQuantity());
+
+    applyBought(
+        line,
+        request.boughtQuantity(),
+        request.boughtUnit(),
+        request.boughtPricePence(),
+        boughtAt,
+        BoughtVia.MANUAL);
+    shoppingListDataGateway.saveLine(line);
+    shoppingListDataGateway.touchListVersion(parent);
+
+    UUID priceObservationId = null;
+    if (request.boughtPricePence() != null) {
+      PriceObservation observation =
+          writeManualObservation(
+              userId,
+              parent,
+              line,
+              request.store(),
+              request.boughtQuantity(),
+              request.boughtUnit(),
+              request.boughtPricePence(),
+              boughtAt,
+              PriceSource.MANUAL,
+              note);
+      priceObservationId = observation.getId();
+    }
+
+    GroceryImportResultDto importResult =
+        markBoughtInventoryBridge.applySingle(
+            userId,
+            request.store(),
+            new BoughtLine(
+                line, request.boughtQuantity(), request.boughtUnit(), request.boughtPricePence()),
+            traceId(parent));
+    UUID inventoryItemId =
+        MarkBoughtInventoryBridge.firstInventoryItemId(importResult).orElse(null);
+
+    eventPublisher.publishEvent(
+        new ShoppingListItemMarkedBoughtEvent(
+            userId,
+            parent.getHouseholdId(),
+            parent.getId(),
+            line.getId(),
+            line.getIngredientMappingKey(),
+            request.boughtQuantity(),
+            request.boughtUnit(),
+            request.boughtPricePence(),
+            BoughtVia.MANUAL,
+            clock.instant()));
+
+    return new MarkBoughtResultDto(
+        line.getId(), LineFulfilmentStatus.BOUGHT, priceObservationId, inventoryItemId, note);
   }
 
+  /**
+   * Tier-2 bulk mark-bought (lld/grocery.md lines 889-899). With a {@code totalSpendPence}: split
+   * proportionally by {@code estimated_line_pence} weight (uniform fallback share for no-estimate
+   * lines), with the rounding residual dunned to the last/largest line so the parts sum EXACTLY to
+   * the total; observations are {@code MANUAL_ESTIMATED} (weight 0.4). Without a total: each line
+   * uses its own {@code estimated_unit_pence} if known, else no observation. ONE {@code
+   * applyGroceryOrder} call (one provisions event) and ONE {@link
+   * ShoppingListBulkMarkedBoughtEvent} — never per-line events. All lines must belong to {@code
+   * request.shoppingListId()}; an unknown / cross-list / already-BOUGHT line → 404 / 409.
+   */
   @Override
   @Transactional
   public List<MarkBoughtResultDto> bulkMarkBought(UUID userId, BulkMarkBoughtRequest request) {
-    throw new UnsupportedOperationException("implemented in grocery-01d");
+    List<ShoppingListLine> lines = loadBulkLines(request);
+    ShoppingList parent = lines.get(0).getShoppingList();
+    Instant boughtAt = request.boughtAt() != null ? request.boughtAt() : clock.instant();
+
+    Map<UUID, Integer> allocation =
+        request.totalSpendPence() != null
+            ? distribute(lines, request.totalSpendPence())
+            : ownEstimate(lines);
+
+    List<MarkBoughtResultDto> results = new ArrayList<>(lines.size());
+    List<BoughtLine> boughtLines = new ArrayList<>(lines.size());
+    PriceSource source =
+        request.totalSpendPence() != null ? PriceSource.MANUAL_ESTIMATED : PriceSource.MANUAL;
+
+    for (ShoppingListLine line : lines) {
+      Integer pricePence = allocation.get(line.getId());
+      BigDecimal quantity = effectiveBulkQuantity(line);
+      String unit = effectiveBulkUnit(line);
+      String note = overMarkNote(quantity, line.getRequestedQuantity());
+
+      applyBought(line, quantity, unit, pricePence, boughtAt, BoughtVia.BULK_TOTAL);
+      shoppingListDataGateway.saveLine(line);
+
+      UUID priceObservationId = null;
+      if (pricePence != null) {
+        PriceObservation observation =
+            writeManualObservation(
+                userId,
+                parent,
+                line,
+                request.store(),
+                quantity,
+                unit,
+                pricePence,
+                boughtAt,
+                source,
+                note);
+        priceObservationId = observation.getId();
+      }
+      boughtLines.add(new BoughtLine(line, quantity, unit, pricePence));
+      results.add(
+          new MarkBoughtResultDto(
+              line.getId(), LineFulfilmentStatus.BOUGHT, priceObservationId, null, note));
+    }
+
+    // One version bump on the aggregate root for the whole batch.
+    shoppingListDataGateway.touchListVersion(parent);
+
+    // ONE inventory call (one provisions event).
+    GroceryImportResultDto importResult =
+        markBoughtInventoryBridge.applyBulk(userId, request.store(), boughtLines, traceId(parent));
+    // Best-effort: stamp the (single, when present) inventory id back onto each result.
+    UUID inventoryItemId =
+        MarkBoughtInventoryBridge.firstInventoryItemId(importResult).orElse(null);
+    if (inventoryItemId != null) {
+      for (int i = 0; i < results.size(); i++) {
+        MarkBoughtResultDto r = results.get(i);
+        results.set(
+            i,
+            new MarkBoughtResultDto(
+                r.shoppingListLineId(),
+                r.newStatus(),
+                r.priceObservationId(),
+                inventoryItemId,
+                r.note()));
+      }
+    }
+
+    // ONE bulk event (NOT per-line).
+    eventPublisher.publishEvent(
+        new ShoppingListBulkMarkedBoughtEvent(
+            userId,
+            parent.getHouseholdId(),
+            parent.getId(),
+            lines.stream().map(ShoppingListLine::getId).toList(),
+            request.totalSpendPence(),
+            clock.instant()));
+
+    return results;
   }
 
+  /**
+   * Tier-2 undo (lld/grocery.md line 587 + 01d divergence). Reverses the GROCERY-side state only:
+   * line → {@code UNFILLED}, {@code bought_*} cleared, and a COMPENSATING price note appended (the
+   * append-only observation is NEVER deleted). There is no {@code reverseGroceryOrder} on the
+   * shipped {@code ProvisionUpdateService} — undo therefore CANNOT cleanly reverse the inventory
+   * add; it logs a WARN and the result carries the manual-correction caveat (the missing provisions
+   * reverse API is flagged as a provisions follow-up). 404 missing / 409 not-{@code BOUGHT}.
+   */
   @Override
   @Transactional
   public void undoMarkBought(UUID shoppingListLineId, UUID actorUserId) {
-    throw new UnsupportedOperationException("implemented in grocery-01d");
+    ShoppingListLine line =
+        shoppingListDataGateway
+            .findLineById(shoppingListLineId)
+            .orElseThrow(() -> new ShoppingListLineNotFoundException(shoppingListLineId));
+    if (line.getFulfilmentStatus() != LineFulfilmentStatus.BOUGHT) {
+      throw new LineNotBoughtException(shoppingListLineId, line.getFulfilmentStatus());
+    }
+
+    ShoppingList parent = line.getShoppingList();
+    Instant now = clock.instant();
+
+    // Compensating observation (append-only): a superseding MANUAL row with zero/null price and a
+    // note that the prior mark-bought was undone. Never delete the original.
+    if (line.getBoughtPricePence() != null) {
+      writeManualObservation(
+          actorUserId,
+          parent,
+          line,
+          DEFAULT_MANUAL_STORE,
+          line.getBoughtQuantity(),
+          line.getBoughtUnit(),
+          null, // no price on the compensating row
+          now,
+          PriceSource.MANUAL,
+          "mark-bought undone for line " + line.getId() + "; supersedes the prior observation");
+    }
+
+    // Reverse grocery-side line state.
+    line.setFulfilmentStatus(LineFulfilmentStatus.UNFILLED);
+    line.setBoughtQuantity(null);
+    line.setBoughtUnit(null);
+    line.setBoughtPricePence(null);
+    line.setBoughtAt(null);
+    line.setBoughtVia(null);
+    shoppingListDataGateway.saveLine(line);
+    shoppingListDataGateway.touchListVersion(parent);
+
+    // No provisions inventory-reverse API exists (verified against provisions-01h: there is no
+    // reverseGroceryOrder / un-apply on ProvisionUpdateService). FLAG as a provisions follow-up;
+    // inventory must be corrected manually.
+    log.warn(
+        "undoMarkBought reversed grocery-side state for line {} but the inventory add via"
+            + " applyGroceryOrder CANNOT be reversed — no reverseGroceryOrder API on"
+            + " ProvisionUpdateService (provisions follow-up). Inventory must be corrected manually.",
+        line.getId());
+  }
+
+  // ---- Tier-2 helpers ----
+
+  /** Store sentinel used by the compensating undo observation (matches the MANUAL default). */
+  private static final String DEFAULT_MANUAL_STORE = "manual";
+
+  /** Apply the bought-* mutation on a line (shared by single + bulk). */
+  private void applyBought(
+      ShoppingListLine line,
+      BigDecimal boughtQuantity,
+      String boughtUnit,
+      Integer boughtPricePence,
+      Instant boughtAt,
+      BoughtVia via) {
+    line.setFulfilmentStatus(LineFulfilmentStatus.BOUGHT);
+    line.setBoughtQuantity(boughtQuantity);
+    line.setBoughtUnit(boughtUnit);
+    line.setBoughtPricePence(boughtPricePence);
+    line.setBoughtAt(boughtAt);
+    line.setBoughtVia(via);
+  }
+
+  /** A warning note when the bought quantity exceeds the requested one (over-mark, GROC-11). */
+  private static String overMarkNote(BigDecimal bought, BigDecimal requested) {
+    if (bought == null || requested == null) {
+      return null;
+    }
+    if (bought.compareTo(requested) > 0) {
+      return "bought quantity ("
+          + bought.stripTrailingZeros().toPlainString()
+          + ") exceeds requested ("
+          + requested.stripTrailingZeros().toPlainString()
+          + "); ad-hoc inventory recorded";
+    }
+    return null;
+  }
+
+  /** Write a MANUAL / MANUAL_ESTIMATED observation through the append-only writer. */
+  private PriceObservation writeManualObservation(
+      UUID userId,
+      ShoppingList parent,
+      ShoppingListLine line,
+      String store,
+      BigDecimal quantity,
+      String unit,
+      Integer pricePence,
+      Instant observedAt,
+      PriceSource source,
+      String note) {
+    UUID householdId = parent.getHouseholdId() != null ? parent.getHouseholdId() : userId;
+    String resolvedStore = store != null && !store.isBlank() ? store : DEFAULT_MANUAL_STORE;
+    return priceObservationWriter.write(
+        new PriceObservationWriter.WriteCommand(
+            userId,
+            householdId,
+            line.getIngredientMappingKey(),
+            resolvedStore,
+            null, // providerProductId
+            line.getSuggestedPackSizeG(),
+            null, // packCount
+            quantity,
+            unit,
+            pricePence,
+            "GBP",
+            source,
+            null, // groceryOrderId
+            line.getId(),
+            observedAt,
+            note));
+  }
+
+  /**
+   * Resolve + validate the lines for a bulk mark-bought (404 missing/cross-list; 409
+   * already-bought).
+   */
+  private List<ShoppingListLine> loadBulkLines(BulkMarkBoughtRequest request) {
+    List<UUID> ids = request.shoppingListLineIds();
+    Map<UUID, ShoppingListLine> byId = new LinkedHashMap<>();
+    for (ShoppingListLine l : shoppingListDataGateway.findLinesByIds(ids)) {
+      byId.put(l.getId(), l);
+    }
+    List<ShoppingListLine> ordered = new ArrayList<>(ids.size());
+    for (UUID id : ids) {
+      ShoppingListLine l = byId.get(id);
+      if (l == null || !request.shoppingListId().equals(l.getShoppingList().getId())) {
+        throw new ShoppingListLineNotFoundException(id);
+      }
+      if (l.getFulfilmentStatus() == LineFulfilmentStatus.BOUGHT) {
+        throw new LineAlreadyBoughtException(id);
+      }
+      ordered.add(l);
+    }
+    return ordered;
+  }
+
+  /**
+   * Proportional total-spend distribution (lld/grocery.md line 892-893). Weight by {@code
+   * estimated_line_pence}; lines with no estimate get a uniform fallback share of the residual; the
+   * rounding residual is dunned to the last (largest-total) line so the parts sum EXACTLY to the
+   * total.
+   */
+  private Map<UUID, Integer> distribute(List<ShoppingListLine> lines, int totalSpendPence) {
+    long anchoredSum = 0L;
+    int noEstimateCount = 0;
+    for (ShoppingListLine l : lines) {
+      Integer est = l.getEstimatedLinePence();
+      if (est != null && est > 0) {
+        anchoredSum += est;
+      } else {
+        noEstimateCount++;
+      }
+    }
+
+    Map<UUID, Integer> allocation = new LinkedHashMap<>();
+    long allocated = 0L;
+
+    if (anchoredSum == 0L) {
+      // No anchors at all (GG7 / GROC-10) — pure uniform split across all lines.
+      int n = lines.size();
+      for (int i = 0; i < n; i++) {
+        int share = (int) (((long) totalSpendPence * (i + 1)) / n - allocated);
+        allocation.put(lines.get(i).getId(), share);
+        allocated += share;
+      }
+      return allocation;
+    }
+
+    // Reserve a uniform fallback pool for no-estimate lines: each gets the average anchored share.
+    long fallbackEach =
+        noEstimateCount == 0 ? 0L : Math.round((double) totalSpendPence / lines.size());
+    long fallbackPool = fallbackEach * noEstimateCount;
+    long anchoredBudget = Math.max(0L, (long) totalSpendPence - fallbackPool);
+
+    UUID largestId = null;
+    long largestWeight = -1L;
+    for (ShoppingListLine l : lines) {
+      Integer est = l.getEstimatedLinePence();
+      int share;
+      if (est != null && est > 0) {
+        share = (int) Math.round((double) anchoredBudget * est / anchoredSum);
+        if (est > largestWeight) {
+          largestWeight = est;
+          largestId = l.getId();
+        }
+      } else {
+        share = (int) fallbackEach;
+      }
+      allocation.put(l.getId(), share);
+      allocated += share;
+    }
+
+    // Dun the rounding residual to the largest anchored line (or the last line if all-fallback).
+    UUID dunTarget = largestId != null ? largestId : lines.get(lines.size() - 1).getId();
+    int residual = (int) (totalSpendPence - allocated);
+    allocation.merge(dunTarget, residual, Integer::sum);
+    return allocation;
+  }
+
+  /** No-total bulk: each line uses its own {@code estimated_unit_pence} if known, else no price. */
+  private Map<UUID, Integer> ownEstimate(List<ShoppingListLine> lines) {
+    Map<UUID, Integer> allocation = new LinkedHashMap<>();
+    for (ShoppingListLine l : lines) {
+      allocation.put(l.getId(), l.getEstimatedLinePence());
+    }
+    return allocation;
+  }
+
+  /** Bulk uses each line's requested quantity (the user marks the planned amount as bought). */
+  private static BigDecimal effectiveBulkQuantity(ShoppingListLine line) {
+    return line.getRequestedQuantity();
+  }
+
+  private static String effectiveBulkUnit(ShoppingListLine line) {
+    return line.getRequestedUnit();
+  }
+
+  /** Reuse the list id as a deterministic trace id for the import (stable across retries). */
+  private static UUID traceId(ShoppingList parent) {
+    return parent.getId();
   }
 
   // ---------------------------------------------------------------------------------------------

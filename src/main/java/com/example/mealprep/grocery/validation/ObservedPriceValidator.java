@@ -4,15 +4,26 @@ import jakarta.validation.ConstraintValidator;
 import jakarta.validation.ConstraintValidatorContext;
 
 /**
- * PERMISSIVE validator for {@link ValidObservedPrice}. 01a accepts any value, including null (the
- * annotated price fields are optional). grocery-01d replaces the body with the real rule
- * (non-negative integer pence, &le; 1,000,000) per lld/grocery.md line 777.
+ * Validator for {@link ValidObservedPrice} (grocery-01d ships the real body). A sane observed price
+ * is a non-negative integer pence value, &le; 1,000,000 (£10,000) — the upper bound catches a £/p
+ * mix-up (e.g. £4.50 entered as 450,000 pence). Per lld/grocery.md line 777.
+ *
+ * <p>{@code null} is accepted — the annotated price fields ({@code boughtPricePence}, {@code
+ * totalSpendPence}) are optional; presence (when required) is enforced by a sibling
+ * {@code @NotNull}.
  */
 public class ObservedPriceValidator implements ConstraintValidator<ValidObservedPrice, Integer> {
 
+  /**
+   * Inclusive upper bound (£10,000 in pence) — anything larger is almost certainly a £/p mix-up.
+   */
+  static final int MAX_PENCE = 1_000_000;
+
   @Override
   public boolean isValid(Integer value, ConstraintValidatorContext context) {
-    // 01a: permissive. grocery-01d tightens.
-    return true;
+    if (value == null) {
+      return true; // optional field; @NotNull enforces presence where required
+    }
+    return value >= 0 && value <= MAX_PENCE;
   }
 }

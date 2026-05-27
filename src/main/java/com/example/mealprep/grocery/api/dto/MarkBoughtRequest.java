@@ -11,7 +11,7 @@ import java.util.UUID;
 public record MarkBoughtRequest(
     @NotNull UUID shoppingListLineId,
     @NotNull @ValidQuantityUnit BigDecimal boughtQuantity,
-    @NotNull String boughtUnit,
+    @NotNull @ValidQuantityUnit String boughtUnit,
     @ValidObservedPrice Integer boughtPricePence,
     String store,
     Instant boughtAt) {}

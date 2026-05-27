@@ -2,6 +2,8 @@ package com.example.mealprep.grocery.domain.service.internal;
 
 import com.example.mealprep.grocery.domain.entity.PackSizeHeuristic;
 import com.example.mealprep.grocery.domain.entity.ShoppingList;
+import com.example.mealprep.grocery.domain.entity.ShoppingListLine;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -30,9 +32,28 @@ public interface ShoppingListDataGateway {
 
   Optional<ShoppingList> findWithLinesById(UUID id);
 
+  // ---- shopping-list-line reads (Tier 2 mark-bought, grocery-01d) ----
+
+  /** Fetch a single line (its parent {@code ShoppingList} is reachable for the aggregate scope). */
+  Optional<ShoppingListLine> findLineById(UUID lineId);
+
+  /** Batch fetch lines for a bulk mark-bought, insertion-order irrelevant (caller re-orders). */
+  List<ShoppingListLine> findLinesByIds(Collection<UUID> lineIds);
+
   // ---- shopping-list write ----
 
   ShoppingList saveAndFlush(ShoppingList list);
+
+  /** Persist a mutated line (Tier 2 mark-bought / undo). */
+  ShoppingListLine saveLine(ShoppingListLine line);
+
+  /**
+   * Force-increment the parent {@code ShoppingList} {@code @Version} so two concurrent line edits
+   * collide on the aggregate root (lld/grocery.md line 982 — second commit gets 409). A child-line
+   * mutation does NOT bump the parent version on its own; this applies {@code
+   * OPTIMISTIC_FORCE_INCREMENT} on the root.
+   */
+  void touchListVersion(ShoppingList list);
 
   // ---- pack-size heuristic reads ----
 

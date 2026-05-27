@@ -66,6 +66,7 @@ class ShoppingListServiceImplTest {
   @Mock private ShoppingListMapper shoppingListMapper;
   @Mock private PlanQueryService planQueryService;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private MarkBoughtInventoryBridge markBoughtInventoryBridge;
 
   private GroceryServiceImpl service;
 
@@ -93,7 +94,8 @@ class ShoppingListServiceImplTest {
             shoppingListExporter,
             shoppingListMapper,
             planQueryService,
-            eventPublisher);
+            eventPublisher,
+            markBoughtInventoryBridge);
     lenient().when(shoppingListMapper.toDto(any())).thenReturn(dto());
     lenient()
         .when(shoppingListDataGateway.findWithLinesById(any()))

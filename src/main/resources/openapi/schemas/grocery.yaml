@@ -147,6 +147,69 @@ ShoppingListExportDto:
     format: { $ref: '#/ExportFormat' }
     content: { type: string }
 
+# ===== Tier 2 — manual fulfilment (01d) =====
+
+MarkBoughtRequest:
+  type: object
+  required: [shoppingListLineId, boughtQuantity, boughtUnit]
+  properties:
+    shoppingListLineId: { type: string, format: uuid }
+    boughtQuantity: { type: number }
+    boughtUnit:
+      type: string
+      enum: [g, kg, ml, l, items, pt, tsp, tbsp, cup]
+    boughtPricePence:
+      type: integer
+      nullable: true
+    store:
+      type: string
+      maxLength: 64
+      nullable: true
+    boughtAt:
+      type: string
+      format: date-time
+      nullable: true
+
+BulkMarkBoughtRequest:
+  type: object
+  required: [shoppingListId, shoppingListLineIds]
+  properties:
+    shoppingListId: { type: string, format: uuid }
+    shoppingListLineIds:
+      type: array
+      minItems: 1
+      items: { type: string, format: uuid }
+    totalSpendPence:
+      type: integer
+      nullable: true
+    store:
+      type: string
+      maxLength: 64
+      nullable: true
+    boughtAt:
+      type: string
+      format: date-time
+      nullable: true
+
+MarkBoughtResultDto:
+  type: object
+  required: [shoppingListLineId, newStatus]
+  properties:
+    shoppingListLineId: { type: string, format: uuid }
+    newStatus: { $ref: '#/LineFulfilmentStatus' }
+    priceObservationId:
+      type: string
+      format: uuid
+      nullable: true
+    inventoryItemId:
+      type: string
+      format: uuid
+      nullable: true
+    note:
+      type: string
+      maxLength: 255
+      nullable: true
+
 # ===== Tier 4 — price history (01c) =====
 
 PriceSource:

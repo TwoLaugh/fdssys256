@@ -368,6 +368,13 @@ paths:
     $ref: 'paths/grocery.yaml#/shoppingListById'
   /api/v1/grocery/shopping-lists/{shoppingListId}/export:
     $ref: 'paths/grocery.yaml#/shoppingListExport'
+  # ===== grocery — manual fulfilment (01d) =====
+  /api/v1/grocery/shopping-lists/{listId}/lines/{lineId}/mark-bought:
+    $ref: 'paths/grocery.yaml#/markBought'
+  /api/v1/grocery/shopping-lists/{listId}/bulk-mark-bought:
+    $ref: 'paths/grocery.yaml#/bulkMarkBought'
+  /api/v1/grocery/shopping-lists/{listId}/lines/{lineId}/undo-mark-bought:
+    $ref: 'paths/grocery.yaml#/undoMarkBought'
   # ===== grocery — price history (01c) =====
   /api/v1/grocery/price-history/aggregates:
     $ref: 'paths/grocery.yaml#/priceHistoryAggregates'
@@ -818,6 +825,10 @@ components:
     ShoppingListDtoPage: { $ref: 'schemas/grocery.yaml#/ShoppingListDtoPage' }
     RecalculateShoppingListRequest: { $ref: 'schemas/grocery.yaml#/RecalculateShoppingListRequest' }
     ShoppingListExportDto: { $ref: 'schemas/grocery.yaml#/ShoppingListExportDto' }
+    # grocery — manual fulfilment (01d)
+    MarkBoughtRequest: { $ref: 'schemas/grocery.yaml#/MarkBoughtRequest' }
+    BulkMarkBoughtRequest: { $ref: 'schemas/grocery.yaml#/BulkMarkBoughtRequest' }
+    MarkBoughtResultDto: { $ref: 'schemas/grocery.yaml#/MarkBoughtResultDto' }
     # grocery — price history (01c)
     PriceSource: { $ref: 'schemas/grocery.yaml#/PriceSource' }
     PriceAggregateDto: { $ref: 'schemas/grocery.yaml#/PriceAggregateDto' }
