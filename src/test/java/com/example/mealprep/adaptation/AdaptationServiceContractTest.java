@@ -40,10 +40,19 @@ import org.springframework.data.domain.Pageable;
 class AdaptationServiceContractTest {
 
   @Test
-  void adaptation_service_has_all_nine_methods() throws NoSuchMethodException {
+  void adaptation_service_has_all_ten_methods() throws NoSuchMethodException {
     Method enqueueImportJob =
         AdaptationService.class.getMethod("enqueueImportJob", ImportJobRequest.class);
     assertThat(enqueueImportJob.getReturnType()).isEqualTo(UUID.class);
+
+    // 02b Trigger-1 cost-discipline gate adds the priority-aware overload so the import listener
+    // can route bulk-origin creates (import / discovery / AI-gen) to BATCH instead of ASYNC.
+    Method enqueueImportJobWithPriority =
+        AdaptationService.class.getMethod(
+            "enqueueImportJob",
+            ImportJobRequest.class,
+            com.example.mealprep.adaptation.domain.enums.JobPriority.class);
+    assertThat(enqueueImportJobWithPriority.getReturnType()).isEqualTo(UUID.class);
 
     Method enqueueFeedbackJob =
         AdaptationService.class.getMethod("enqueueFeedbackJob", FeedbackJobRequest.class);
@@ -81,9 +90,10 @@ class AdaptationServiceContractTest {
     assertThat(retryFailedJob.getReturnType())
         .isEqualTo(com.example.mealprep.adaptation.api.dto.AdaptationJobDto.class);
 
-    // Sanity: the interface declares exactly the nine verbs above (no accidental extras).
+    // Sanity: the interface declares exactly the ten verbs above (no accidental extras). The
+    // count went 9 -> 10 with the 02b priority-aware enqueueImportJob overload.
     long declared = AdaptationService.class.getDeclaredMethods().length;
-    assertThat(declared).isEqualTo(9);
+    assertThat(declared).isEqualTo(10);
   }
 
   @Test
