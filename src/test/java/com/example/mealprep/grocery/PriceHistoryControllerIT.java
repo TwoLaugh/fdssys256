@@ -209,7 +209,9 @@ class PriceHistoryControllerIT {
             post(BASE + "/refresh")
                 .cookie(user.cookie())
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(new RefreshPricesRequest(false))))
+                .content(
+                    objectMapper.writeValueAsString(
+                        new RefreshPricesRequest(user.userId(), java.util.List.of(), false))))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.observationsWritten").value(0))
         .andExpect(jsonPath("$.aiUnavailableFallbackUsed").value(false));
