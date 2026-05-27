@@ -1,0 +1,157 @@
+# Grocery — Tier 4 price-history schemas (01c). Shapes mirror the api.dto records exactly.
+# Conventions: inline `nullable: true` (never $ref + nullable sibling); Page schemas use
+# additionalProperties: true; description strings with , : ' are single-quoted.
+
+PriceSource:
+  type: string
+  enum: [PAID, QUOTE, MANUAL, MANUAL_ESTIMATED, INFLATION_INDEXED]
+
+PriceAggregateDto:
+  type: object
+  required: [ingredientMappingKey, sampleCount, isStale]
+  properties:
+    ingredientMappingKey: { type: string, maxLength: 128 }
+    store:
+      type: string
+      maxLength: 64
+      nullable: true
+    pointEstimatePence:
+      type: integer
+      nullable: true
+    confidence:
+      type: number
+      format: double
+      nullable: true
+    minPence:
+      type: integer
+      nullable: true
+    maxPence:
+      type: integer
+      nullable: true
+    minObservedAt:
+      type: string
+      format: date-time
+      nullable: true
+    maxObservedAt:
+      type: string
+      format: date-time
+      nullable: true
+    lastSeenAt:
+      type: string
+      format: date-time
+      nullable: true
+    sampleCount: { type: integer }
+    isStale: { type: boolean }
+
+PriceObservationDto:
+  type: object
+  required: [id, userId, ingredientMappingKey, store, currency, source, confidenceWeight, observedAt]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    householdId:
+      type: string
+      format: uuid
+      nullable: true
+    ingredientMappingKey: { type: string, maxLength: 128 }
+    store: { type: string, maxLength: 64 }
+    providerProductId:
+      type: string
+      maxLength: 128
+      nullable: true
+    packSizeG:
+      type: integer
+      nullable: true
+    packCount:
+      type: integer
+      nullable: true
+    quantity:
+      type: number
+      nullable: true
+    quantityUnit:
+      type: string
+      maxLength: 16
+      nullable: true
+    paidUnitPence:
+      type: integer
+      nullable: true
+    paidTotalPence:
+      type: integer
+      nullable: true
+    currency: { type: string, maxLength: 3 }
+    source: { $ref: '#/PriceSource' }
+    confidenceWeight: { type: number, format: double }
+    groceryOrderId:
+      type: string
+      format: uuid
+      nullable: true
+    shoppingListLineId:
+      type: string
+      format: uuid
+      nullable: true
+    observedAt: { type: string, format: date-time }
+    note:
+      type: string
+      maxLength: 255
+      nullable: true
+
+PriceObservationDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/PriceObservationDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+
+RecordManualPriceRequest:
+  type: object
+  required: [ingredientMappingKey, store]
+  properties:
+    ingredientMappingKey: { type: string, minLength: 1, maxLength: 128 }
+    store: { type: string, minLength: 1, maxLength: 64 }
+    paidTotalPence:
+      type: integer
+      nullable: true
+    quantity:
+      type: number
+      nullable: true
+    quantityUnit:
+      type: string
+      maxLength: 16
+      nullable: true
+    observedAt:
+      type: string
+      format: date-time
+      nullable: true
+
+RefreshPricesRequest:
+  type: object
+  required: [userId]
+  properties:
+    userId: { type: string, format: uuid }
+    ingredientMappingKeys:
+      type: array
+      maxItems: 200
+      items: { type: string, minLength: 1 }
+      nullable: true
+    useProviderQuote: { type: boolean }
+
+RefreshPricesResultDto:
+  type: object
+  required: [observationsWritten, ingredientsRefreshed, aiUnavailableFallbackUsed]
+  properties:
+    observationsWritten: { type: integer }
+    ingredientsRefreshed: { type: integer }
+    aiUnavailableFallbackUsed: { type: boolean }
+    fallbackMessage:
+      type: string
+      nullable: true

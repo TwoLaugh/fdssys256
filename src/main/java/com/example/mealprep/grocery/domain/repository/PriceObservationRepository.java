@@ -48,4 +48,17 @@ interface PriceObservationRepository extends JpaRepository<PriceObservation, UUI
       @Param("householdId") UUID householdId, @Param("key") String key);
 
   Page<PriceObservation> findAllByUserIdOrderByObservedAtDesc(UUID userId, Pageable p);
+
+  Page<PriceObservation> findAllByHouseholdIdAndIngredientMappingKeyOrderByObservedAtDesc(
+      UUID householdId, String ingredientMappingKey, Pageable p);
+
+  @Query(
+      """
+      select p from PriceObservation p
+      where p.householdId = :householdId and p.ingredientMappingKey = :key
+        and p.observedAt >= :since""")
+  List<PriceObservation> findRecentByKeyAcrossStores(
+      @Param("householdId") UUID householdId,
+      @Param("key") String key,
+      @Param("since") Instant since);
 }

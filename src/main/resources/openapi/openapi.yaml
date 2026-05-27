@@ -357,6 +357,19 @@ paths:
     $ref: 'paths/notification.yaml#/notificationAction'
   /api/v1/notifications/{id}/delivery-log:
     $ref: 'paths/notification.yaml#/notificationDeliveryLog'
+  # ===== grocery — price history (01c) =====
+  /api/v1/grocery/price-history/aggregates:
+    $ref: 'paths/grocery.yaml#/priceHistoryAggregates'
+  /api/v1/grocery/price-history/aggregates/cross-store:
+    $ref: 'paths/grocery.yaml#/priceHistoryCrossStore'
+  /api/v1/grocery/price-history/observations:
+    $ref: 'paths/grocery.yaml#/priceHistoryObservations'
+  /api/v1/grocery/price-history/observations/by-key:
+    $ref: 'paths/grocery.yaml#/priceHistoryObservationsByKey'
+  /api/v1/grocery/price-history/observations/manual:
+    $ref: 'paths/grocery.yaml#/priceHistoryManual'
+  /api/v1/grocery/price-history/refresh:
+    $ref: 'paths/grocery.yaml#/priceHistoryRefresh'
 components:
   securitySchemes:
     cookieAuth:
@@ -785,6 +798,14 @@ components:
     DeliveryLogEntryDtoPage: { $ref: 'schemas/notification.yaml#/DeliveryLogEntryDtoPage' }
     BulkReadRequest: { $ref: 'schemas/notification.yaml#/BulkReadRequest' }
     BulkReadResponse: { $ref: 'schemas/notification.yaml#/BulkReadResponse' }
+    # grocery — price history (01c)
+    PriceSource: { $ref: 'schemas/grocery.yaml#/PriceSource' }
+    PriceAggregateDto: { $ref: 'schemas/grocery.yaml#/PriceAggregateDto' }
+    PriceObservationDto: { $ref: 'schemas/grocery.yaml#/PriceObservationDto' }
+    PriceObservationDtoPage: { $ref: 'schemas/grocery.yaml#/PriceObservationDtoPage' }
+    RecordManualPriceRequest: { $ref: 'schemas/grocery.yaml#/RecordManualPriceRequest' }
+    RefreshPricesRequest: { $ref: 'schemas/grocery.yaml#/RefreshPricesRequest' }
+    RefreshPricesResultDto: { $ref: 'schemas/grocery.yaml#/RefreshPricesResultDto' }
     # common (cross-module)
     ProblemDetail: { $ref: 'schemas/common.yaml#/ProblemDetail' }
     PageEnvelope: { $ref: 'schemas/common.yaml#/PageEnvelope' }

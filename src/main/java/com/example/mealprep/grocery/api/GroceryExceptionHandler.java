@@ -11,6 +11,7 @@ import com.example.mealprep.grocery.exception.ProviderNotConfiguredException;
 import com.example.mealprep.grocery.exception.ProviderUnavailableException;
 import com.example.mealprep.grocery.exception.ShoppingListLineNotFoundException;
 import com.example.mealprep.grocery.exception.ShoppingListNotFoundException;
+import com.example.mealprep.grocery.exception.UnknownMappingKeyException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -173,6 +174,23 @@ public class GroceryExceptionHandler {
       AiUnavailableException ex, HttpServletRequest req) {
     return problem(
         HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), "ai-unavailable", "AI unavailable", req);
+  }
+
+  @ExceptionHandler(UnknownMappingKeyException.class)
+  public ResponseEntity<ProblemDetail> handleUnknownMappingKey(
+      UnknownMappingKeyException ex, HttpServletRequest req) {
+    ResponseEntity<ProblemDetail> response =
+        problem(
+            HttpStatus.BAD_REQUEST,
+            ex.getMessage(),
+            "unknown-mapping-key",
+            "Unknown ingredient mapping key",
+            req);
+    ProblemDetail pd = response.getBody();
+    if (pd != null) {
+      pd.setProperty("ingredientMappingKey", ex.ingredientMappingKey());
+    }
+    return response;
   }
 
   private static ResponseEntity<ProblemDetail> problem(
