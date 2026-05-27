@@ -1,6 +1,7 @@
 package com.example.mealprep.grocery.testdata;
 
 import com.example.mealprep.grocery.domain.entity.LineFulfilmentStatus;
+import com.example.mealprep.grocery.domain.entity.PackSizeHeuristic;
 import com.example.mealprep.grocery.domain.entity.PriceObservation;
 import com.example.mealprep.grocery.domain.entity.PriceSource;
 import com.example.mealprep.grocery.domain.entity.ReferencePriceRow;
@@ -72,6 +73,42 @@ public final class GroceryTestData {
         .confidenceWeight(new BigDecimal("1.000"))
         .observedAt(now)
         .createdAt(now);
+  }
+
+  /**
+   * A weight/volume pack-size heuristic (01b) matched by mapping key: {@code packSizeG} grams/ml at
+   * the given rank (1 = smallest). {@code packUnit} defaults to "g".
+   */
+  public static PackSizeHeuristic packByKeySize(String key, int packSizeG, int rank) {
+    return PackSizeHeuristic.builder()
+        .id(UUID.randomUUID())
+        .ingredientMappingKey(key)
+        .packSizeG(packSizeG)
+        .packUnit("g")
+        .rank(rank)
+        .build();
+  }
+
+  /** A count-based pack-size heuristic (01b) matched by mapping key: {@code packCount} items. */
+  public static PackSizeHeuristic packByKeyCount(String key, int packCount, int rank) {
+    return PackSizeHeuristic.builder()
+        .id(UUID.randomUUID())
+        .ingredientMappingKey(key)
+        .packCount(packCount)
+        .packUnit("items")
+        .rank(rank)
+        .build();
+  }
+
+  /** A weight pack-size heuristic (01b) matched by category fallback. */
+  public static PackSizeHeuristic packByCategorySize(String category, int packSizeG, int rank) {
+    return PackSizeHeuristic.builder()
+        .id(UUID.randomUUID())
+        .category(category)
+        .packSizeG(packSizeG)
+        .packUnit("g")
+        .rank(rank)
+        .build();
   }
 
   /** A persisted-shape {@link ReferencePriceRow} (01c) with the e2e chicken-breast defaults. */

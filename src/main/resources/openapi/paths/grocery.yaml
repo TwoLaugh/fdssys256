@@ -1,5 +1,155 @@
-# Grocery — Tier 4 price history (01c). Six endpoints under /api/v1/grocery/price-history.
-# Per lld/grocery.md lines 729-738. userId resolved server-side from the session cookie.
+# Grocery — Tier 1 shopping list (01b) + Tier 4 price history (01c).
+# Per lld/grocery.md lines 689-697 / 729-738. userId resolved server-side from the session cookie.
+
+# ===== Tier 1 — shopping list (01b) =====
+
+shoppingListById:
+  get:
+    tags: [Grocery — Shopping List]
+    operationId: getShoppingListById
+    summary: 'Fetch a shopping list by id, with its lines.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: shoppingListId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The shopping list.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/ShoppingListDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such shopping list.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+shoppingListCurrent:
+  get:
+    tags: [Grocery — Shopping List]
+    operationId: getCurrentShoppingList
+    summary: 'The current (non-superseded) shopping list for a plan.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: planId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The current shopping list for the plan.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/ShoppingListDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No current shopping list for that plan.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+shoppingListHistory:
+  get:
+    tags: [Grocery — Shopping List]
+    operationId: getShoppingListHistory
+    summary: 'Paginated shopping-list history for the caller, newest-first.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of shopping lists.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/ShoppingListDtoPage' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+shoppingListRecalculate:
+  post:
+    tags: [Grocery — Shopping List]
+    operationId: recalculateShoppingList
+    summary: 'Recalculate the shopping list from a plan + provisions snapshot (idempotent per generation).'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/grocery.yaml#/RecalculateShoppingListRequest' }
+    responses:
+      '200':
+        description: The recalculated (or existing, idempotent) shopping list.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/ShoppingListDto' }
+      '400':
+        description: 'Validation error (missing planId).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such plan / no active generation.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+shoppingListExport:
+  get:
+    tags: [Grocery — Shopping List]
+    operationId: exportShoppingList
+    summary: 'Render a shopping list (PRINTABLE_HTML | PLAIN_TEXT | MARKDOWN | CSV).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: shoppingListId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: format
+        required: false
+        schema: { $ref: '../schemas/grocery.yaml#/ExportFormat' }
+    responses:
+      '200':
+        description: The rendered export.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/ShoppingListExportDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such shopping list.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+# ===== Tier 4 — price history (01c) =====
 
 priceHistoryAggregates:
   get:

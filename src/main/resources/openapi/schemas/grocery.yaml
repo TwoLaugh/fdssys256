@@ -1,6 +1,153 @@
-# Grocery — Tier 4 price-history schemas (01c). Shapes mirror the api.dto records exactly.
-# Conventions: inline `nullable: true` (never $ref + nullable sibling); Page schemas use
-# additionalProperties: true; description strings with , : ' are single-quoted.
+# Grocery — Tier 1 shopping-list (01b) + Tier 4 price-history (01c) schemas. Shapes mirror the
+# api.dto records exactly. Conventions: inline `nullable: true` (never $ref + nullable sibling);
+# Page schemas use additionalProperties: true; description strings with , : ' are single-quoted.
+
+# ===== Tier 1 — shopping list (01b) =====
+
+ExportFormat:
+  type: string
+  enum: [PRINTABLE_HTML, PLAIN_TEXT, MARKDOWN, CSV]
+
+ShoppingListLineType:
+  type: string
+  enum: [PLANNED_DEMAND, STAPLE_REPLENISHMENT]
+
+LineFulfilmentStatus:
+  type: string
+  enum: [UNFILLED, PARTIAL, BOUGHT, SUBSTITUTED, DROPPED]
+
+ShoppingListLineDto:
+  type: object
+  required:
+    [id, ingredientMappingKey, displayName, requestedQuantity, requestedUnit, lineType,
+     isStaleEstimate, fulfilmentStatus]
+  properties:
+    id: { type: string, format: uuid }
+    ingredientMappingKey: { type: string, maxLength: 128 }
+    displayName: { type: string, maxLength: 128 }
+    requestedQuantity: { type: number }
+    requestedUnit: { type: string, maxLength: 16 }
+    suggestedPackSizeG:
+      type: integer
+      nullable: true
+    suggestedPackCount:
+      type: integer
+      nullable: true
+    suggestedPackUnit:
+      type: string
+      maxLength: 16
+      nullable: true
+    lineType: { $ref: '#/ShoppingListLineType' }
+    qualityNotes:
+      type: string
+      maxLength: 255
+      nullable: true
+    estimatedUnitPence:
+      type: integer
+      nullable: true
+    estimatedLinePence:
+      type: integer
+      nullable: true
+    estimatedConfidence:
+      type: number
+      nullable: true
+    isStaleEstimate: { type: boolean }
+    fulfilmentStatus: { $ref: '#/LineFulfilmentStatus' }
+    boughtQuantity:
+      type: number
+      nullable: true
+    boughtUnit:
+      type: string
+      maxLength: 16
+      nullable: true
+    boughtPricePence:
+      type: integer
+      nullable: true
+    boughtAt:
+      type: string
+      format: date-time
+      nullable: true
+    boughtVia:
+      type: string
+      enum: [MANUAL, ORDER, BULK_TOTAL]
+      nullable: true
+    groceryOrderId:
+      type: string
+      format: uuid
+      nullable: true
+
+ShoppingListDto:
+  type: object
+  required:
+    [id, userId, planId, planGeneration, generatedAt, estimatedTotalCurrency,
+     staleIngredientCount, pantryTrackingEnabled, lines, version]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    householdId:
+      type: string
+      format: uuid
+      nullable: true
+    planId: { type: string, format: uuid }
+    planGeneration: { type: integer }
+    generatedAt: { type: string, format: date-time }
+    supersededAt:
+      type: string
+      format: date-time
+      nullable: true
+    estimatedTotalPence:
+      type: integer
+      nullable: true
+    estimatedTotalCurrency: { type: string, maxLength: 3 }
+    costConfidence:
+      type: number
+      nullable: true
+    staleIngredientCount: { type: integer }
+    pantryTrackingEnabled: { type: boolean }
+    notes:
+      type: string
+      maxLength: 255
+      nullable: true
+    lines:
+      type: array
+      items: { $ref: '#/ShoppingListLineDto' }
+    version: { type: integer, format: int64 }
+
+ShoppingListDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/ShoppingListDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+
+RecalculateShoppingListRequest:
+  type: object
+  required: [planId]
+  properties:
+    planId: { type: string, format: uuid }
+    planGeneration:
+      type: integer
+      nullable: true
+
+ShoppingListExportDto:
+  type: object
+  required: [shoppingListId, format, content]
+  properties:
+    shoppingListId: { type: string, format: uuid }
+    format: { $ref: '#/ExportFormat' }
+    content: { type: string }
+
+# ===== Tier 4 — price history (01c) =====
 
 PriceSource:
   type: string

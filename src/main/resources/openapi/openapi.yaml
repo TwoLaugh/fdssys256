@@ -357,6 +357,17 @@ paths:
     $ref: 'paths/notification.yaml#/notificationAction'
   /api/v1/notifications/{id}/delivery-log:
     $ref: 'paths/notification.yaml#/notificationDeliveryLog'
+  # ===== grocery — shopping list (01b) =====
+  /api/v1/grocery/shopping-lists/current:
+    $ref: 'paths/grocery.yaml#/shoppingListCurrent'
+  /api/v1/grocery/shopping-lists/history:
+    $ref: 'paths/grocery.yaml#/shoppingListHistory'
+  /api/v1/grocery/shopping-lists/recalculate:
+    $ref: 'paths/grocery.yaml#/shoppingListRecalculate'
+  /api/v1/grocery/shopping-lists/{shoppingListId}:
+    $ref: 'paths/grocery.yaml#/shoppingListById'
+  /api/v1/grocery/shopping-lists/{shoppingListId}/export:
+    $ref: 'paths/grocery.yaml#/shoppingListExport'
   # ===== grocery — price history (01c) =====
   /api/v1/grocery/price-history/aggregates:
     $ref: 'paths/grocery.yaml#/priceHistoryAggregates'
@@ -798,6 +809,15 @@ components:
     DeliveryLogEntryDtoPage: { $ref: 'schemas/notification.yaml#/DeliveryLogEntryDtoPage' }
     BulkReadRequest: { $ref: 'schemas/notification.yaml#/BulkReadRequest' }
     BulkReadResponse: { $ref: 'schemas/notification.yaml#/BulkReadResponse' }
+    # grocery — shopping list (01b)
+    ExportFormat: { $ref: 'schemas/grocery.yaml#/ExportFormat' }
+    ShoppingListLineType: { $ref: 'schemas/grocery.yaml#/ShoppingListLineType' }
+    LineFulfilmentStatus: { $ref: 'schemas/grocery.yaml#/LineFulfilmentStatus' }
+    ShoppingListLineDto: { $ref: 'schemas/grocery.yaml#/ShoppingListLineDto' }
+    ShoppingListDto: { $ref: 'schemas/grocery.yaml#/ShoppingListDto' }
+    ShoppingListDtoPage: { $ref: 'schemas/grocery.yaml#/ShoppingListDtoPage' }
+    RecalculateShoppingListRequest: { $ref: 'schemas/grocery.yaml#/RecalculateShoppingListRequest' }
+    ShoppingListExportDto: { $ref: 'schemas/grocery.yaml#/ShoppingListExportDto' }
     # grocery — price history (01c)
     PriceSource: { $ref: 'schemas/grocery.yaml#/PriceSource' }
     PriceAggregateDto: { $ref: 'schemas/grocery.yaml#/PriceAggregateDto' }
