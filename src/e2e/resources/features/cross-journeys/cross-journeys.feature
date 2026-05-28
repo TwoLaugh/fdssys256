@@ -199,19 +199,33 @@ Feature: Cross-domain journeys — the integration capstone (XJ-01..06)
     Then the order lands in their inventory and price cache for this user
     And their planner bundle reflects the fulfilled grocery inventory for this user
 
-  @xj05 @pending
-  # XJ-05 full provider loop. BLOCKING LEG: the Tier-3 provider automation legs (GROC-15 quote ->
-  # GROC-16/17 place/confirm -> GROC-19 substitution review -> GROC-18 reconcile) + the PROV-37
-  # depleted-staple auto-add to the next list + NOTIF-09 expiry warning all target a grocery
-  # module that is designed-but-not-yet-built (no shopping-list/order-lifecycle/substitution/price
-  # HTTP surface exists). Un-pend when the grocery module lands.
+  @xj05
+  # XJ-05 full provider loop (now GREEN via the FakeGroceryProvider promotion: it ships under the
+  # e2e profile as a @Component @Primary in the providers pocket, and the /test-support/grocery/
+  # provider control plane drives the delivered + substitution mutators over HTTP). Chains the full
+  # GROC-15 quote -> GROC-16 place -> GROC-17 confirm -> GROC-19 substitution review -> GROC-18
+  # reconcile cascade with the planner spine (plan + shopping list) on the front and the planner-
+  # facing inventory bundle on the back — the Grocery -> Provisions -> Planner relay end-to-end.
   Scenario: A provider grocery order is quoted, placed, confirmed, and reconciled to inventory
     Given a fresh registered and logged-in user
     And the user has a household
-    When they place a provider grocery order
-    Then the provider order is awaiting user confirmation for this user
-    When they resolve a delivery substitution proposal
-    Then the substitution is applied to inventory for this user
+    And the user has plannable recipes in their catalogue
+    And the AI will pick the recommended plan candidate
+    When they generate a plan for a week
+    Then a generated plan is created for this household
+    When they request the shopping list for that plan
+    Then the shopping list lists the unmet ingredient lines for this user
+    And the user has the fake grocery provider enabled
+    When they draft a provider grocery order from that shopping list
+    And they quote that provider grocery order
+    And they place that provider grocery order
+    And they mark that provider grocery order user-confirmed
+    And the fake provider is armed to deliver with one substitution
+    And they refresh the status of that provider grocery order
+    Then the provider grocery order has one outstanding substitution proposal for this user
+    When they accept the outstanding substitution proposal on that order
+    Then the substitution is accepted and the provider grocery order is reconciled to inventory for this user
+    And their planner bundle reflects the fulfilled grocery inventory for this user
 
   # ============================================================================
   # XJ-06 — Onboarding cold start: register -> seed models + household -> first plan

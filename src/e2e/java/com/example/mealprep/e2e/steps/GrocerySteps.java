@@ -9,6 +9,7 @@ import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
 import io.restassured.response.Response;
 import java.time.LocalDate;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,8 +17,12 @@ import java.util.UUID;
 
 /**
  * Grocery step definitions (grocery.md): the manual-fulfilment → inventory leg PLUS the Tier-1
- * shopping-list read (01b) and the Tier-4 learned-price read (01c) — exercised over the black-box
- * HTTP API (decision D2).
+ * shopping-list read (01b), the Tier-4 learned-price read (01c), and (Batch 2) the Tier-3 provider
+ * order lifecycle + substitution-resolution legs — exercised over the black-box HTTP API (decision
+ * D2). The Tier-3 surfaces are driven against the {@code FakeGroceryProvider} which now ships under
+ * the {@code e2e} profile as a {@code @Component @Primary} bean (the GROC-15..19 un-pend that this
+ * batch landed); the fake's mutators (delivered-flag + substitutions, failure mode, reset) are
+ * reached over the e2e-only {@code /test-support/grocery/provider/...} control plane.
  *
  * <p><b>Surfaces this glue exercises</b> (verified against the controllers + service impl):
  *
@@ -56,8 +61,6 @@ import java.util.UUID;
  *
  * <p>This glue uses grocery-tier wording for its steps so it does not collide with {@code
  * ProvisionsSteps} (which exercises the grocery-import endpoint from the Provisions/PROV-03 angle).
- * The remaining {@code @pending} steps (provider lifecycle / substitution) still target Tier-3
- * surfaces that need the FakeGroceryProvider wired into e2e — a separate batch.
  *
  * <p>Self-contained (D5): every scenario registers its OWN fresh user, plan, and observation;
  * self-scoped: every assertion looks only at THIS scenario's own ids / fields, never a global
@@ -68,6 +71,10 @@ public class GrocerySteps {
   private static final String GROCERY_IMPORT = "/api/v1/provisions/grocery-import";
   private static final String SHOPPING_LISTS = "/api/v1/grocery/shopping-lists";
   private static final String PRICE_HISTORY = "/api/v1/grocery/price-history";
+  private static final String GROCERY_ORDERS = "/api/v1/grocery/orders";
+
+  /** The deterministic e2e provider key — matches {@code FakeGroceryProvider.PROVIDER_KEY}. */
+  private static final String FAKE_PROVIDER = "fake";
 
   /** Cross-step keys (domain-namespaced — see ScenarioContext javadoc). */
   private static final String SUPPLIER = "grocery.supplier";
@@ -79,6 +86,12 @@ public class GrocerySteps {
 
   /** Stashed for the cross-step learned-price flow: the seeded observation's mapping key. */
   private static final String LEARNED_PRICE_KEY = "grocery.learnedPriceKey";
+
+  /** Stashed for the cross-step provider lifecycle flow: the created grocery order's id. */
+  private static final String GROCERY_ORDER_ID = "grocery.orderId";
+
+  /** Stashed for the substitution-resolution flow: the persisted proposal's id. */
+  private static final String SUBSTITUTION_PROPOSAL_ID = "grocery.substitutionProposalId";
 
   /**
    * The {@code PlannerSteps}-stashed plan id (see {@code PlannerSteps.PLAN_ID}); the shopping-list
@@ -328,36 +341,282 @@ public class GrocerySteps {
     assertThat((Object) response.jsonPath().get("maxPence")).isNotNull();
   }
 
-  // ---------------- @pending glue (still targets unbuilt surfaces — Batch 2) ----------
+  // ---------------- Tier 3 — provider order lifecycle (GROC-15..18) + substitution (GROC-19) ----
 
-  @When("they place a provider grocery order")
-  public void theyPlaceAProviderGroceryOrder() {
-    context.setLastResponse(
-        context.api().post("/api/v1/grocery/orders", Map.of("provider", "tesco")));
-  }
+  /**
+   * Tier-3 spine seed (GROC-15..19, XJ-05 full loop). Enable the {@code "fake"} provider for this
+   * user via the public {@code PUT /api/v1/grocery/orders/providers/fake} surface; the provider
+   * bean itself ships under the e2e profile as a {@code @Component @Primary} on the runtime
+   * classpath (the FakeGroceryProvider promotion in this batch). Resetting the fake's mutator state
+   * via the e2e control plane guarantees this scenario starts from the happy path (no leftover
+   * {@code delivered=true} from a prior soak-mode run).
+   */
+  @Given("the user has the fake grocery provider enabled")
+  public void theUserHasTheFakeGroceryProviderEnabled() {
+    // Reset the fake first so per-scenario state is clean (idempotent: a fresh stack resets to
+    // the happy path anyway).
+    Response reset =
+        context.api().post("/test-support/grocery/provider/reset", Collections.emptyMap());
+    assertThat(reset.statusCode())
+        .as("e2e fake-provider reset should return 204 No Content")
+        .isEqualTo(204);
 
-  @Then("the provider order is awaiting user confirmation for this user")
-  public void theProviderOrderIsAwaitingUserConfirmationForThisUser() {
-    Response response = context.lastResponse();
-    assertThat(response.statusCode()).as("place-order should return 201 Created").isEqualTo(201);
-    assertThat(response.jsonPath().getString("status")).isEqualTo("awaiting_user_confirmation");
-  }
-
-  @When("they resolve a delivery substitution proposal")
-  public void theyResolveADeliverySubstitutionProposal() {
-    context.setLastResponse(
+    Map<String, Object> body = new HashMap<>();
+    body.put("providerKey", FAKE_PROVIDER);
+    body.put("enabled", true);
+    body.put("scheduledRefreshEnabled", false);
+    body.put("refreshTopNIngredients", 50);
+    Response response =
         context
             .api()
-            .post("/api/v1/grocery/substitutions/" + UUID.randomUUID() + "/accept", Map.of()));
+            .request()
+            .body(body)
+            .when()
+            .put(GROCERY_ORDERS + "/providers/" + FAKE_PROVIDER);
+    context.setLastResponse(response);
+    assertThat(response.statusCode())
+        .as("enabling the fake provider should return 200 OK")
+        .isEqualTo(200);
+    assertThat(response.jsonPath().getBoolean("enabled")).isTrue();
+    assertThat(response.jsonPath().getString("providerKey")).isEqualTo(FAKE_PROVIDER);
   }
 
-  @Then("the substitution is applied to inventory for this user")
-  public void theSubstitutionIsAppliedToInventoryForThisUser() {
+  /**
+   * GROC-15/16/17/18 — create the draft order from THIS scenario's recalculated shopping list. The
+   * list id was stashed by {@link #theyRequestTheShoppingListForThatPlan()}; the draft clones its
+   * lines so the fake's quote derives line prices from the reference snapshot (or its 100p default
+   * for non-reference keys like {@code chicken.breast}).
+   */
+  @When("they draft a provider grocery order from that shopping list")
+  public void theyDraftAProviderGroceryOrderFromThatShoppingList() {
+    String shoppingListId = context.get(SHOPPING_LIST_ID);
+    assertThat(shoppingListId)
+        .as("a shopping list must have been recalculated before drafting an order")
+        .isNotBlank();
+    Map<String, Object> body =
+        Map.of("shoppingListId", shoppingListId, "providerKey", FAKE_PROVIDER);
+    Response response = context.api().post(GROCERY_ORDERS, body);
+    context.setLastResponse(response);
+    assertThat(response.statusCode()).as("create-draft should return 201 Created").isEqualTo(201);
+    context.put(GROCERY_ORDER_ID, response.jsonPath().getString("id"));
+  }
+
+  @Then("the provider grocery order is in draft for this user")
+  public void theProviderGroceryOrderIsInDraftForThisUser() {
+    Response response = context.lastResponse();
+    assertThat(response.statusCode()).as("create-draft should return 201 Created").isEqualTo(201);
+    assertThat(response.jsonPath().getString("status")).isEqualTo("DRAFT");
+    assertThat(response.jsonPath().getString("userId")).isEqualTo(context.userId());
+    assertThat(response.jsonPath().getString("providerKey")).isEqualTo(FAKE_PROVIDER);
+    assertThat(response.jsonPath().getList("lines"))
+        .as("the draft should clone at least one line from the shopping list")
+        .isNotEmpty();
+  }
+
+  // GROC-15 quote leg.
+  @When("they quote that provider grocery order")
+  public void theyQuoteThatProviderGroceryOrder() {
+    Response response = context.api().post(orderPath("/quote"), Collections.emptyMap());
+    context.setLastResponse(response);
+    assertThat(response.statusCode())
+        .as("quote should return 200 OK on the happy path")
+        .isEqualTo(200);
+  }
+
+  @Then("the provider grocery order is quoted with a quoted total for this user")
+  public void theProviderGroceryOrderIsQuotedWithAQuotedTotalForThisUser() {
+    Response response = context.lastResponse();
+    assertThat(response.statusCode()).as("quote should return 200 OK").isEqualTo(200);
+    assertThat(response.jsonPath().getString("status")).isEqualTo("QUOTED");
+    assertThat(response.jsonPath().getString("userId")).isEqualTo(context.userId());
+    assertThat(response.jsonPath().getString("id"))
+        .isEqualTo(context.<String>get(GROCERY_ORDER_ID));
+    assertThat(response.jsonPath().getString("providerOrderId"))
+        .as("the fake stamps a provider-side order id on quote")
+        .isNotBlank();
+    assertThat(response.jsonPath().getInt("quotedTotalPence"))
+        .as("the fake derives quote prices from the reference snapshot (>0 per line)")
+        .isPositive();
+  }
+
+  // GROC-16 place leg.
+  @When("they place that provider grocery order")
+  public void theyPlaceThatProviderGroceryOrder() {
+    Response response = context.api().post(orderPath("/place"), Collections.emptyMap());
+    context.setLastResponse(response);
+    assertThat(response.statusCode())
+        .as("place should return 200 OK on the happy path")
+        .isEqualTo(200);
+  }
+
+  @Then(
+      "the provider grocery order is awaiting user confirmation with a confirm link for this user")
+  public void theProviderGroceryOrderIsAwaitingUserConfirmationWithAConfirmLinkForThisUser() {
+    Response response = context.lastResponse();
+    assertThat(response.statusCode()).as("place should return 200 OK").isEqualTo(200);
+    // Auto-advance: PLACED -> AWAITING_USER_CONFIRMATION inside the same request (and even from
+    // PLACED_PARTIAL on the partial path, but the happy path stays clean here).
+    assertThat(response.jsonPath().getString("status")).isEqualTo("AWAITING_USER_CONFIRMATION");
+    assertThat(response.jsonPath().getString("userId")).isEqualTo(context.userId());
+    assertThat(response.jsonPath().getString("id"))
+        .isEqualTo(context.<String>get(GROCERY_ORDER_ID));
+    assertThat(response.jsonPath().getString("confirmLink"))
+        .as("the fake stamps a checkout link on place — the user clicks this in the provider UI")
+        .isNotBlank();
+  }
+
+  // GROC-17 confirm leg.
+  @When("they mark that provider grocery order user-confirmed")
+  public void theyMarkThatProviderGroceryOrderUserConfirmed() {
+    Response response =
+        context.api().post(orderPath("/mark-user-confirmed"), Collections.emptyMap());
+    context.setLastResponse(response);
+    assertThat(response.statusCode()).as("mark-user-confirmed should return 200 OK").isEqualTo(200);
+  }
+
+  @Then("the provider grocery order is confirmed for this user")
+  public void theProviderGroceryOrderIsConfirmedForThisUser() {
+    Response response = context.lastResponse();
+    assertThat(response.statusCode()).as("mark-user-confirmed should return 200 OK").isEqualTo(200);
+    assertThat(response.jsonPath().getString("status")).isEqualTo("CONFIRMED");
+    assertThat(response.jsonPath().getString("userId")).isEqualTo(context.userId());
+    assertThat(response.jsonPath().getString("id"))
+        .isEqualTo(context.<String>get(GROCERY_ORDER_ID));
+    assertThat(response.jsonPath().getString("confirmedAt"))
+        .as("confirm stamps the confirmedAt timestamp on the order")
+        .isNotBlank();
+  }
+
+  // GROC-18 deliver + reconcile leg (no-substitution variant). Arm the fake's delivered flag
+  // (no substitutions) over the e2e control plane, then refresh-status: the order transitions
+  // CONFIRMED -> DELIVERED and the inline reconciler runs (no proposals blocking) so it lands
+  // at RECONCILED in one request.
+  @Given("the fake provider is armed to deliver with no substitutions")
+  public void theFakeProviderIsArmedToDeliverWithNoSubstitutions() {
+    Map<String, Object> body = new HashMap<>();
+    body.put("delivered", true);
+    body.put("substitutions", Collections.emptyList());
+    Response response = context.api().post("/test-support/grocery/provider/delivered", body);
+    assertThat(response.statusCode())
+        .as("arming the fake's delivered flag should return 204 No Content")
+        .isEqualTo(204);
+  }
+
+  @When("they refresh the status of that provider grocery order")
+  public void theyRefreshTheStatusOfThatProviderGroceryOrder() {
+    Response response = context.api().post(orderPath("/refresh-status"), Collections.emptyMap());
+    context.setLastResponse(response);
+    assertThat(response.statusCode())
+        .as("refresh-status should return 200 OK on the happy path")
+        .isEqualTo(200);
+  }
+
+  @Then("the provider grocery order is reconciled to inventory for this user")
+  public void theProviderGroceryOrderIsReconciledToInventoryForThisUser() {
+    Response response = context.lastResponse();
+    assertThat(response.statusCode()).as("refresh-status should return 200 OK").isEqualTo(200);
+    assertThat(response.jsonPath().getString("status")).isEqualTo("RECONCILED");
+    assertThat(response.jsonPath().getString("userId")).isEqualTo(context.userId());
+    assertThat(response.jsonPath().getString("id"))
+        .isEqualTo(context.<String>get(GROCERY_ORDER_ID));
+    assertThat(response.jsonPath().getList("outstandingProposals"))
+        .as("a no-substitution delivery lands at RECONCILED with zero outstanding proposals")
+        .isEmpty();
+    assertThat(response.jsonPath().getString("reconciledAt"))
+        .as("reconcile stamps the reconciledAt timestamp on the order")
+        .isNotBlank();
+  }
+
+  // GROC-19 substitution-resolution leg. Arm the fake with ONE substitution, refresh-status
+  // (CONFIRMED -> DELIVERED with PENDING_USER_REVIEW proposal — reconciliation blocked), then
+  // accept the proposal; the inline reconciler runs after resolution and the order lands at
+  // RECONCILED.
+  @Given("the fake provider is armed to deliver with one substitution")
+  public void theFakeProviderIsArmedToDeliverWithOneSubstitution() {
+    Map<String, Object> seed = new HashMap<>();
+    // The substitution's originalKey is mapped to "fake-sku-<key>"; this matches the SKU the
+    // happy-path placeOrder stamped on the order's first line, so the SubstitutionPersister can
+    // attach the proposal to that line. We use a deliberately wide key that the calculator is
+    // very likely to emit — the planner spine's plannable-recipe seed produces a chicken.breast
+    // line at minimum, so picking that key keeps the join deterministic.
+    seed.put("originalKey", "chicken.breast");
+    seed.put("substituteName", "Free-range chicken thighs");
+    seed.put("quantity", "1.000");
+    seed.put("unit", "kg");
+    seed.put("unitPence", 220);
+    seed.put("reason", "out of stock");
+    Map<String, Object> body = new HashMap<>();
+    body.put("delivered", true);
+    body.put("substitutions", List.of(seed));
+    Response response = context.api().post("/test-support/grocery/provider/delivered", body);
+    assertThat(response.statusCode())
+        .as("arming the fake's delivered + substitution should return 204 No Content")
+        .isEqualTo(204);
+  }
+
+  @Then("the provider grocery order has one outstanding substitution proposal for this user")
+  public void theProviderGroceryOrderHasOneOutstandingSubstitutionProposalForThisUser() {
+    Response response = context.lastResponse();
+    assertThat(response.statusCode())
+        .as("refresh-status should return 200 OK even when a proposal is surfaced")
+        .isEqualTo(200);
+    // refresh-status persists the proposals AND transitions to DELIVERED; reconciliation is
+    // blocked while proposals are pending, so the order stays at DELIVERED.
+    assertThat(response.jsonPath().getString("status")).isEqualTo("DELIVERED");
+    assertThat(response.jsonPath().getString("userId")).isEqualTo(context.userId());
+    assertThat(response.jsonPath().getList("outstandingProposals"))
+        .as("a single armed substitution surfaces as exactly one outstanding proposal")
+        .hasSize(1);
+    String proposalId = response.jsonPath().getString("outstandingProposals[0].id");
+    assertThat(proposalId).as("the outstanding proposal carries an id").isNotBlank();
+    context.put(SUBSTITUTION_PROPOSAL_ID, proposalId);
+    assertThat(response.jsonPath().getString("outstandingProposals[0].proposalStatus"))
+        .isEqualTo("PENDING_USER_REVIEW");
+  }
+
+  @When("they accept the outstanding substitution proposal on that order")
+  public void theyAcceptTheOutstandingSubstitutionProposalOnThatOrder() {
+    String orderId = context.get(GROCERY_ORDER_ID);
+    String proposalId = context.get(SUBSTITUTION_PROPOSAL_ID);
+    assertThat(orderId).isNotBlank();
+    assertThat(proposalId).isNotBlank();
+    Map<String, Object> body = new HashMap<>();
+    body.put("proposalId", proposalId);
+    body.put("decision", "ACCEPTED");
+    Response response =
+        context
+            .api()
+            .post(
+                GROCERY_ORDERS + "/" + orderId + "/substitutions/" + proposalId + "/resolve", body);
+    context.setLastResponse(response);
+    assertThat(response.statusCode())
+        .as("resolve-substitution should return 200 OK")
+        .isEqualTo(200);
+  }
+
+  @Then(
+      "the substitution is accepted and the provider grocery order is reconciled to inventory for"
+          + " this user")
+  public void
+      theSubstitutionIsAcceptedAndTheProviderGroceryOrderIsReconciledToInventoryForThisUser() {
     Response response = context.lastResponse();
     assertThat(response.statusCode())
         .as("resolve-substitution should return 200 OK")
         .isEqualTo(200);
-    assertThat(response.jsonPath().getString("status")).isEqualTo("ACCEPTED");
+    // resolve-substitution returns the proposal DTO; assert the ACCEPTED status and then read
+    // the order back to confirm the gate cleared and the inline reconcile ran.
+    assertThat(response.jsonPath().getString("proposalStatus")).isEqualTo("ACCEPTED");
+    String orderId = context.get(GROCERY_ORDER_ID);
+    Response orderRead = context.api().get(GROCERY_ORDERS + "/" + orderId);
+    assertThat(orderRead.statusCode()).as("order GET should return 200 OK").isEqualTo(200);
+    assertThat(orderRead.jsonPath().getString("status")).isEqualTo("RECONCILED");
+    assertThat(orderRead.jsonPath().getList("outstandingProposals"))
+        .as("once all proposals are resolved the outstanding list is empty")
+        .isEmpty();
+    assertThat(orderRead.jsonPath().getString("userId")).isEqualTo(context.userId());
+    assertThat(orderRead.jsonPath().getString("reconciledAt"))
+        .as("reconcile stamps the reconciledAt timestamp on the order")
+        .isNotBlank();
   }
 
   // ---------------- helpers ----------------
@@ -399,5 +658,14 @@ public class GrocerySteps {
 
   private static String shortId() {
     return UUID.randomUUID().toString().substring(0, 8);
+  }
+
+  /** Build {@code /api/v1/grocery/orders/{orderId}{suffix}} from the scenario-stashed order id. */
+  private String orderPath(String suffix) {
+    String orderId = context.get(GROCERY_ORDER_ID);
+    assertThat(orderId)
+        .as("a provider grocery order must have been drafted before driving its lifecycle")
+        .isNotBlank();
+    return GROCERY_ORDERS + "/" + orderId + suffix;
   }
 }

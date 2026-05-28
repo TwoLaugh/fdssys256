@@ -1,12 +1,14 @@
 @grocery
-Feature: Grocery — manual fulfilment to inventory; shopping list / price-history un-pended for 01b/01c
+Feature: Grocery — manual fulfilment to inventory; shopping list / price-history; provider lifecycle + substitution un-pended (Batch 2)
   The Grocery domain is the bridge between the planner's output and a real-world
   shop, designed as four tiers — shopping list, manual fulfilment, provider order,
-  price history (see e2e/pathways/grocery.md). With 01b/01c merged, Tier 1
-  (shopping-list calculation + read) and Tier 4 (price-history aggregate +
-  manual record) are exercised here. Tier 3 (provider order lifecycle) and the
-  substitution flow remain @pending — they need the FakeGroceryProvider wired into
-  e2e, which is a separate batch.
+  price history (see e2e/pathways/grocery.md). With 01b/01c + the e2e fake-provider
+  promotion merged, every tier is exercised here:
+    - Tier 1: shopping-list calculation + cost projection (GROC-01 / GROC-03).
+    - Tier 2: manual fulfilment → Provisions inventory (GROC-08 / GROC-36 manual-only).
+    - Tier 3: provider order lifecycle (GROC-15 quote → GROC-16 place → GROC-17 confirm →
+      GROC-18 deliver/reconcile, plus cancel) + GROC-19 substitution resolution.
+    - Tier 4: learned-price aggregate (GROC-30).
 
   The load-bearing finding that shapes this feature (from reading the controllers
   + service implementation):
@@ -106,25 +108,111 @@ Feature: Grocery — manual fulfilment to inventory; shopping list / price-histo
     When they request the shopping list for that plan
     Then the shopping list carries the cost projection shape for this user
 
-  # ----- @pending: provider lifecycle + substitution (need FakeGroceryProvider wired in e2e) -----
+  # ----- Tier 3 — provider order lifecycle (GROC-15..18) + substitution (GROC-19) -----
+  # The fake provider (deterministic; promoted onto the e2e runtime classpath as
+  # @Component @Profile("e2e") @Primary — boundary-compliant in the providers pocket)
+  # is keyed "fake"; its mutators (failure-mode, delivered, reset) are driven over the
+  # e2e-only HTTP control plane at /test-support/grocery/provider/... .
 
-  @pending
-  # GROC-15/16/17/18 (provider order lifecycle: quote -> place -> confirm -> deliver ->
-  # reconcile). PENDING: Tier-3 provider automation (Tesco via the AI navigator) is
-  # designed-but-unbuilt — there is no GroceryProvider, no order entity, and no order
-  # HTTP surface. Un-pend when the provider order module lands.
-  Scenario: A user places, confirms, and reconciles a provider order
+  # GROC-15 (quote leg). The user enables the provider, assembles a shopping list from a
+  # real plan, drafts an order from the list, and runs a quote pass — the order reaches
+  # QUOTED and the provider's quote prices DERIVE from the reference snapshot.
+  Scenario: A user quotes a provider grocery order from their list
     Given a fresh registered and logged-in user
-    When they place a provider grocery order
-    Then the provider order is awaiting user confirmation for this user
+    And the user has a household
+    And the user has plannable recipes in their catalogue
+    And the AI will pick the recommended plan candidate
+    When they generate a plan for a week
+    Then a generated plan is created for this household
+    When they request the shopping list for that plan
+    Then the shopping list lists the unmet ingredient lines for this user
+    And the user has the fake grocery provider enabled
+    When they draft a provider grocery order from that shopping list
+    Then the provider grocery order is in draft for this user
+    When they quote that provider grocery order
+    Then the provider grocery order is quoted with a quoted total for this user
 
-  @pending
-  # GROC-19 (substitution resolution at delivery). PENDING: substitutions live on the
-  # unbuilt provider-order lifecycle (no SubstitutionProposal entity / endpoint exists).
-  Scenario: A user resolves a substitution proposal at delivery
+  # GROC-16 (place leg). The quoted order is placed: the fake drives the basket and STOPS
+  # at checkout, the order auto-advances to AWAITING_USER_CONFIRMATION, and the confirm
+  # link is surfaced for the user to act on in the provider UI.
+  Scenario: A user places a quoted provider grocery order
     Given a fresh registered and logged-in user
-    When they resolve a delivery substitution proposal
-    Then the substitution is applied to inventory for this user
+    And the user has a household
+    And the user has plannable recipes in their catalogue
+    And the AI will pick the recommended plan candidate
+    When they generate a plan for a week
+    Then a generated plan is created for this household
+    When they request the shopping list for that plan
+    Then the shopping list lists the unmet ingredient lines for this user
+    And the user has the fake grocery provider enabled
+    When they draft a provider grocery order from that shopping list
+    And they quote that provider grocery order
+    And they place that provider grocery order
+    Then the provider grocery order is awaiting user confirmation with a confirm link for this user
+
+  # GROC-17 (confirm leg). The user marks the order user-confirmed (the in-app surface that
+  # mirrors them clicking "confirm" in the provider's UI). Status moves to CONFIRMED.
+  Scenario: A user confirms a placed provider grocery order
+    Given a fresh registered and logged-in user
+    And the user has a household
+    And the user has plannable recipes in their catalogue
+    And the AI will pick the recommended plan candidate
+    When they generate a plan for a week
+    Then a generated plan is created for this household
+    When they request the shopping list for that plan
+    Then the shopping list lists the unmet ingredient lines for this user
+    And the user has the fake grocery provider enabled
+    When they draft a provider grocery order from that shopping list
+    And they quote that provider grocery order
+    And they place that provider grocery order
+    And they mark that provider grocery order user-confirmed
+    Then the provider grocery order is confirmed for this user
+
+  # GROC-18 (deliver / reconcile leg, no-substitution variant). With the fake's delivered
+  # flag armed (no substitutions), a refresh-status call surfaces DELIVERED and the inline
+  # reconcile runs — the order lands at RECONCILED, no outstanding proposals, items in
+  # Provisions inventory.
+  Scenario: A confirmed provider grocery order is delivered and reconciled to inventory
+    Given a fresh registered and logged-in user
+    And the user has a household
+    And the user has plannable recipes in their catalogue
+    And the AI will pick the recommended plan candidate
+    When they generate a plan for a week
+    Then a generated plan is created for this household
+    When they request the shopping list for that plan
+    Then the shopping list lists the unmet ingredient lines for this user
+    And the user has the fake grocery provider enabled
+    When they draft a provider grocery order from that shopping list
+    And they quote that provider grocery order
+    And they place that provider grocery order
+    And they mark that provider grocery order user-confirmed
+    And the fake provider is armed to deliver with no substitutions
+    And they refresh the status of that provider grocery order
+    Then the provider grocery order is reconciled to inventory for this user
+
+  # GROC-19 (substitution resolution at delivery). With the fake armed to deliver WITH a
+  # substitution, a refresh-status persists a PENDING_USER_REVIEW proposal; the order is
+  # DELIVERED, blocked from reconciling until resolved. Accepting the proposal clears the
+  # gate, reconciliation runs, and the order lands at RECONCILED.
+  Scenario: A user resolves a delivery substitution proposal and the order reconciles
+    Given a fresh registered and logged-in user
+    And the user has a household
+    And the user has plannable recipes in their catalogue
+    And the AI will pick the recommended plan candidate
+    When they generate a plan for a week
+    Then a generated plan is created for this household
+    When they request the shopping list for that plan
+    Then the shopping list lists the unmet ingredient lines for this user
+    And the user has the fake grocery provider enabled
+    When they draft a provider grocery order from that shopping list
+    And they quote that provider grocery order
+    And they place that provider grocery order
+    And they mark that provider grocery order user-confirmed
+    And the fake provider is armed to deliver with one substitution
+    And they refresh the status of that provider grocery order
+    Then the provider grocery order has one outstanding substitution proposal for this user
+    When they accept the outstanding substitution proposal on that order
+    Then the substitution is accepted and the provider grocery order is reconciled to inventory for this user
 
   # GROC-30 (learned price view). 01c shipped the Tier-4 aggregate read at
   # GET /api/v1/grocery/price-history/aggregates?ingredientKey=...&store=... — an empty
