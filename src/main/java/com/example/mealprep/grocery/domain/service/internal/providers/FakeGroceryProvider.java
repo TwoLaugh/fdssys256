@@ -13,6 +13,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.context.annotation.Primary;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
 
 /**
  * Deterministic, test-scoped {@link GroceryProvider} (grocery-01e). Lives in the providers pocket
@@ -22,9 +25,22 @@ import java.util.UUID;
  *
  * <p>An injectable failure-mode toggle raises {@link ProviderUnavailableException} / {@link
  * ProviderPartialFailureException} / {@link AiUnavailableException} for the negative-path tests
- * (GROC-22 / 25 / 27 / 28). Registered as a bean via a test {@code @Configuration} (or constructed
- * directly in unit tests); NOT a {@code @Component} so it never ships to production.
+ * (GROC-22 / 25 / 27 / 28).
+ *
+ * <p><b>Bean lifecycle (grocery e2e batch 2).</b> Promoted from {@code src/test/..} to {@code
+ * src/main/..} so the running e2e docker stack (profile {@code e2e}) sees a real {@link
+ * GroceryProvider} bean keyed by {@code "fake"}, and the GROC-15..19 / XJ-05-full scenarios can
+ * drive the Tier-3 lifecycle over the black-box HTTP surface. The class is registered as a
+ * {@code @Component @Profile("e2e") @Primary} so it ONLY ships under the e2e profile and never
+ * under {@code prod} / {@code dev} / {@code test}. Under {@code test} the existing {@code
+ * FakeGroceryProviderConfig} {@code @TestConfiguration} continues to create the bean for the Tier-3
+ * ITs (it has its own {@code @Bean} that does not depend on the profile annotation). The concrete
+ * impl staying in {@code domain.service.internal.providers..} keeps the {@code GroceryBoundaryTest}
+ * provider-pocket rule satisfied — see grocery-01e §package layout.
  */
+@Component
+@Profile("e2e")
+@Primary
 public class FakeGroceryProvider implements GroceryProvider {
 
   /** What the fake should do on the next quote/place call. */
