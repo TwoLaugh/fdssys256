@@ -284,9 +284,16 @@ public class GrocerySteps {
         .as("a manual observation must have been recorded before reading the learned price")
         .isNotBlank();
     // Cross-store aggregate (no store filter) — the single seeded observation rolls up to one
-    // PriceAggregateDto for this household.
+    // PriceAggregateDto for this household. Use rest-assured's queryParam (not string-concat)
+    // so the space in the key is encoded as %20, not the bare '+' that REST-assured's
+    // urlEncodingEnabled would re-encode to a literal %2B — that would mismatch the DB key.
     context.setLastResponse(
-        context.api().get(PRICE_HISTORY + "/aggregates?ingredientKey=" + encode(key)));
+        context
+            .api()
+            .request()
+            .queryParam("ingredientKey", key)
+            .when()
+            .get(PRICE_HISTORY + "/aggregates"));
   }
 
   @Then("the learned price carries an estimate and confidence range for this user")
@@ -392,12 +399,5 @@ public class GrocerySteps {
 
   private static String shortId() {
     return UUID.randomUUID().toString().substring(0, 8);
-  }
-
-  /**
-   * URL-encode a query-parameter value (the random key contains a space, so naive concat fails).
-   */
-  private static String encode(String raw) {
-    return java.net.URLEncoder.encode(raw, java.nio.charset.StandardCharsets.UTF_8);
   }
 }
