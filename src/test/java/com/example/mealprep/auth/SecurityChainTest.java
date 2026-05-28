@@ -17,6 +17,7 @@ import com.example.mealprep.core.origin.OriginContext;
 import com.example.mealprep.core.origin.OriginProperties;
 import com.example.mealprep.core.origin.internal.InMemoryTokenBucketRateLimiter;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -24,6 +25,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -62,6 +64,22 @@ class SecurityChainTest {
   @MockBean private UserRepository userRepository;
   @MockBean private SessionTokenGenerator sessionTokenGenerator;
   @MockBean private ServiceTokenRepository serviceTokenRepository;
+
+  /**
+   * Defensive: clear any {@link SecurityContextHolder} state an earlier test class on the same
+   * fork-thread may have left behind. Surefire runs with {@code forkCount=1C} + {@code
+   * reuseForks=true}, so when {@code OriginFilterTest} (or any other test that populates the
+   * holder) runs first in the fork, its {@code ThreadLocal} principal leaks here unless cleared.
+   * With a leaked principal the chain's {@code .anyRequest().authenticated()} passes, the request
+   * reaches {@link AdminDecisionLogController#getById}, the mocked {@code DecisionLogQueryService}
+   * returns an empty {@code Optional}, and the controller throws {@code
+   * ResponseStatusException(NOT_FOUND)} — surfacing as a 404 where the test expects 401. The
+   * upstream tests now also clear in their {@code @AfterEach}; this hook is belt-and-suspenders.
+   */
+  @BeforeEach
+  void clearLeakedSecurityContext() {
+    SecurityContextHolder.clearContext();
+  }
 
   @Test
   void protectedEndpoint_returns401_whenNoCookiePresent() throws Exception {

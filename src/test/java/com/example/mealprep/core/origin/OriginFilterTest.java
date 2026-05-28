@@ -32,6 +32,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -103,6 +104,22 @@ class OriginFilterTest {
             handlerMappingProvider,
             new ObjectMapper(),
             null);
+    SecurityContextHolder.clearContext();
+  }
+
+  /**
+   * Several tests below populate {@link SecurityContextHolder} (lines 256, 297 via the filter,
+   * 324). The holder's default strategy is a {@code ThreadLocal}, and surefire runs with {@code
+   * forkCount=1C} + {@code reuseForks=true} — so without an explicit per-test cleanup the populated
+   * principal leaked across test classes on the same fork thread. That manifested as {@code
+   * SecurityChainTest.protectedEndpoint_returns401_whenNoCookiePresent} returning 404 (chain passes
+   * the leaked principal through; mocked {@code DecisionLogQueryService} → empty Optional →
+   * controller throws {@code ResponseStatusException(NOT_FOUND)}) instead of 401, but only when
+   * this class happened to run first in the same fork. The {@code @BeforeEach} clear above protects
+   * THIS test; the {@code @AfterEach} clear below protects the NEXT class.
+   */
+  @AfterEach
+  void tearDown() {
     SecurityContextHolder.clearContext();
   }
 
