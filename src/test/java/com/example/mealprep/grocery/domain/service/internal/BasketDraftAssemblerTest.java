@@ -165,4 +165,213 @@ class BasketDraftAssemblerTest {
     Instant now = Instant.now();
     return new LifestyleConfigDto(UUID.randomUUID(), userId, doc, null, 0L, now, now);
   }
+
+  // ============================== boundary / mutation-hardening tests
+  // ==============================
+
+  // GroceryQualityPreferences signature is (organic, freeRangeEggs, freeRangeMeat,
+  // brandedVsOwnLabel, notes).
+  @Test
+  void preferences_explicitNever_treatedAsNoPreference() {
+    UUID userId = UUID.randomUUID();
+    GroceryOrder order = orderWith(userId, line("flour", "Flour", 1));
+    GroceryQualityPreferences quality =
+        new GroceryQualityPreferences("no", "never", "never", "branded", null);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId))
+        .thenReturn(Optional.of(dto(userId, quality)));
+    lenient()
+        .when(dataGateway.findLastPaidProviderProductId(eq(userId), any()))
+        .thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+
+    assertThat(draft.preferences().preferFreeRange()).isFalse(); // both "never"
+    assertThat(draft.preferences().preferOrganic()).isFalse(); // "no"
+    assertThat(draft.preferences().preferOwnBrand()).isFalse(); // "branded" → not own-label
+  }
+
+  @Test
+  void preferences_explicitNone_treatedAsNoPreference() {
+    UUID userId = UUID.randomUUID();
+    GroceryOrder order = orderWith(userId, line("flour", "Flour", 1));
+    GroceryQualityPreferences quality =
+        new GroceryQualityPreferences("none", "none", "none", null, null);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId))
+        .thenReturn(Optional.of(dto(userId, quality)));
+    lenient()
+        .when(dataGateway.findLastPaidProviderProductId(eq(userId), any()))
+        .thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+
+    assertThat(draft.preferences().preferFreeRange()).isFalse();
+    assertThat(draft.preferences().preferOrganic()).isFalse();
+  }
+
+  @Test
+  void preferences_blankString_treatedAsNoPreference() {
+    UUID userId = UUID.randomUUID();
+    GroceryOrder order = orderWith(userId, line("flour", "Flour", 1));
+    GroceryQualityPreferences quality = new GroceryQualityPreferences("   ", "", "  ", "  ", null);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId))
+        .thenReturn(Optional.of(dto(userId, quality)));
+    lenient()
+        .when(dataGateway.findLastPaidProviderProductId(eq(userId), any()))
+        .thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+
+    assertThat(draft.preferences().preferFreeRange()).isFalse(); // blanks
+    assertThat(draft.preferences().preferOrganic()).isFalse(); // blank
+    assertThat(draft.preferences().preferOwnBrand()).isFalse(); // blank
+  }
+
+  @Test
+  void preferences_caseInsensitive_NEVERequivalent() {
+    // Mixed-case "NEVER"/"NoNe" must also negate (toLowerCase branch).
+    UUID userId = UUID.randomUUID();
+    GroceryOrder order = orderWith(userId, line("flour", "Flour", 1));
+    GroceryQualityPreferences quality =
+        new GroceryQualityPreferences("No", "NEVER", "NoNe", null, null);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId))
+        .thenReturn(Optional.of(dto(userId, quality)));
+    lenient()
+        .when(dataGateway.findLastPaidProviderProductId(eq(userId), any()))
+        .thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+
+    assertThat(draft.preferences().preferFreeRange()).isFalse();
+    assertThat(draft.preferences().preferOrganic()).isFalse();
+  }
+
+  @Test
+  void preferences_freeRangeEggsOnly_setsPreferFreeRange() {
+    // Only one of free-range-eggs / free-range-meat needs to be set for preferFreeRange to be true.
+    UUID userId = UUID.randomUUID();
+    GroceryOrder order = orderWith(userId, line("flour", "Flour", 1));
+    GroceryQualityPreferences quality =
+        new GroceryQualityPreferences(null, "always", null, null, null);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId))
+        .thenReturn(Optional.of(dto(userId, quality)));
+    lenient()
+        .when(dataGateway.findLastPaidProviderProductId(eq(userId), any()))
+        .thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+
+    assertThat(draft.preferences().preferFreeRange()).isTrue();
+  }
+
+  @Test
+  void preferences_freeRangeMeatOnly_setsPreferFreeRange() {
+    UUID userId = UUID.randomUUID();
+    GroceryOrder order = orderWith(userId, line("flour", "Flour", 1));
+    GroceryQualityPreferences quality =
+        new GroceryQualityPreferences(null, null, "always", null, null);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId))
+        .thenReturn(Optional.of(dto(userId, quality)));
+    lenient()
+        .when(dataGateway.findLastPaidProviderProductId(eq(userId), any()))
+        .thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+
+    assertThat(draft.preferences().preferFreeRange()).isTrue();
+  }
+
+  @Test
+  void preferences_ownBrand_storeSynonym_recognised() {
+    UUID userId = UUID.randomUUID();
+    GroceryOrder order = orderWith(userId, line("flour", "Flour", 1));
+    GroceryQualityPreferences quality =
+        new GroceryQualityPreferences(null, null, null, "store brand", null);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId))
+        .thenReturn(Optional.of(dto(userId, quality)));
+    lenient()
+        .when(dataGateway.findLastPaidProviderProductId(eq(userId), any()))
+        .thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+    assertThat(draft.preferences().preferOwnBrand()).isTrue();
+  }
+
+  @Test
+  void preferences_ownBrand_valueSynonym_recognised() {
+    UUID userId = UUID.randomUUID();
+    GroceryOrder order = orderWith(userId, line("flour", "Flour", 1));
+    GroceryQualityPreferences quality =
+        new GroceryQualityPreferences(null, null, null, "value range", null);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId))
+        .thenReturn(Optional.of(dto(userId, quality)));
+    lenient()
+        .when(dataGateway.findLastPaidProviderProductId(eq(userId), any()))
+        .thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+    assertThat(draft.preferences().preferOwnBrand()).isTrue();
+  }
+
+  @Test
+  void preferences_ownBrand_budgetSynonym_recognised() {
+    UUID userId = UUID.randomUUID();
+    GroceryOrder order = orderWith(userId, line("flour", "Flour", 1));
+    GroceryQualityPreferences quality =
+        new GroceryQualityPreferences(null, null, null, "budget aisle", null);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId))
+        .thenReturn(Optional.of(dto(userId, quality)));
+    lenient()
+        .when(dataGateway.findLastPaidProviderProductId(eq(userId), any()))
+        .thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+    assertThat(draft.preferences().preferOwnBrand()).isTrue();
+  }
+
+  @Test
+  void preferences_ownBrand_brandedString_isFalse() {
+    UUID userId = UUID.randomUUID();
+    GroceryOrder order = orderWith(userId, line("flour", "Flour", 1));
+    GroceryQualityPreferences quality =
+        new GroceryQualityPreferences(null, null, null, "branded only", null);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId))
+        .thenReturn(Optional.of(dto(userId, quality)));
+    lenient()
+        .when(dataGateway.findLastPaidProviderProductId(eq(userId), any()))
+        .thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+    assertThat(draft.preferences().preferOwnBrand()).isFalse();
+  }
+
+  @Test
+  void preferredSku_blankProviderProductId_treatedAsAbsent() {
+    // The line has a blank providerProductId — falls through to the last-paid lookup.
+    UUID userId = UUID.randomUUID();
+    GroceryOrderLine ln = line("flour", "Flour", 1);
+    // Note: an empty string is still non-null and the production code uses != null only,
+    // so blank STAYS as the preferred SKU. This is asserted explicitly to pin the branch.
+    ln.setProviderProductId("");
+    GroceryOrder order = orderWith(userId, ln);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId)).thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+
+    // The production code's null-check is the only gate — blank is kept as-is.
+    assertThat(draft.lines().get(0).preferredProviderProductId()).isEqualTo("");
+  }
+
+  @Test
+  void preferredSku_emptyLastPaid_returnsNull() {
+    // No providerProductId on the line + empty Optional from data gateway → preferredSku = null.
+    UUID userId = UUID.randomUUID();
+    GroceryOrderLine ln = line("flour", "Flour", 1);
+    ln.setProviderProductId(null);
+    GroceryOrder order = orderWith(userId, ln);
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId)).thenReturn(Optional.empty());
+    when(dataGateway.findLastPaidProviderProductId(userId, "flour")).thenReturn(Optional.empty());
+
+    BasketDraft draft = assembler().assemble(order);
+    assertThat(draft.lines().get(0).preferredProviderProductId()).isNull();
+  }
 }

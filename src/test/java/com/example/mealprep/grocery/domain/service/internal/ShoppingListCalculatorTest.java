@@ -553,6 +553,13 @@ class ShoppingListCalculatorTest {
         key, null, unitPence, new BigDecimal(conf), unitPence, unitPence, NOW, NOW, NOW, 3, stale);
   }
 
+  /** Nullable-pointEstimate overload (the stale-no-estimate case). */
+  private static PriceAggregateDto aggregate(
+      String key, Integer unitPence, String conf, boolean stale) {
+    return new PriceAggregateDto(
+        key, null, unitPence, new BigDecimal(conf), unitPence, unitPence, NOW, NOW, NOW, 3, stale);
+  }
+
   private static ShoppingListLine line(ShoppingList list, String key) {
     return list.getLines().stream()
         .filter(l -> l.getIngredientMappingKey().equals(key))
@@ -570,5 +577,634 @@ class ShoppingListCalculatorTest {
 
   private static Page<InventoryItemDto> page(InventoryItemDto... items) {
     return new PageImpl<>(List.of(items));
+  }
+
+  // ============================== boundary / mutation-hardening tests
+  // ==============================
+
+  @Test
+  void emptyPlanDays_returnsEmptyShoppingList_savesNoLines() {
+    PlanDto plan = planWith(); // no days populated → empty
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    assertThat(list.getLines()).isEmpty();
+    assertThat(list.getEstimatedTotalPence()).isNull();
+    assertThat(list.getCostConfidence()).isNull();
+    assertThat(list.getStaleIngredientCount()).isZero();
+  }
+
+  @Test
+  void emptySlot_isSkipped_eatingOutOrFasting() {
+    // A slot with null scheduledRecipe (eating out / fasting) must not break aggregation.
+    MealSlotDto emptySlot =
+        new MealSlotDto(
+            UUID.randomUUID(),
+            0,
+            SlotKind.DINNER,
+            "Dinner",
+            600,
+            true,
+            List.of(),
+            null,
+            null,
+            null,
+            null,
+            null); // null scheduledRecipe
+    PlanDto plan = planWith(emptySlot);
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(list.getLines()).isEmpty();
+  }
+
+  @Test
+  void slotWithNullRecipeId_isSkipped() {
+    // ScheduledRecipe is non-null but recipeId is null → skip (no recipe to read).
+    ScheduledRecipeDto unscheduled =
+        new ScheduledRecipeDto(UUID.randomUUID(), null, null, null, 2, null, null, null, false);
+    MealSlotDto slot =
+        new MealSlotDto(
+            UUID.randomUUID(),
+            0,
+            SlotKind.DINNER,
+            "Dinner",
+            600,
+            true,
+            List.of(),
+            null,
+            null,
+            null,
+            null,
+            unscheduled);
+    PlanDto plan = planWith(slot);
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(list.getLines()).isEmpty();
+  }
+
+  @Test
+  void scaleAtBoundary_exactBaseServings_isLinear() {
+    // base = 2, slot = 2 → scale = 1.0 → quantity unchanged.
+    RecipeDto recipe = recipe("flour", "200", "g", 2);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slotServings(recipe, 2));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    assertThat(line(list, "flour").getRequestedQuantity()).isEqualByComparingTo("200.000");
+  }
+
+  @Test
+  void scaleWithZeroBaseServings_clampsBaseToOne() {
+    // base = 0 → clamped to 1; slot = 4 → scale = 4 → demand 200×4 = 800 g.
+    RecipeDto recipe = recipe("flour", "200", "g", 0);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slotServings(recipe, 4));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    assertThat(line(list, "flour").getRequestedQuantity()).isEqualByComparingTo("800.000");
+  }
+
+  @Test
+  void scaleWithNegativeBaseServings_clampsBaseToOne() {
+    // base = -1 → clamped to 1; slot = 3 → scale = 3 → demand 100×3 = 300 g.
+    RecipeDto recipe = recipe("flour", "100", "g", -1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slotServings(recipe, 3));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    assertThat(line(list, "flour").getRequestedQuantity()).isEqualByComparingTo("300.000");
+  }
+
+  @Test
+  void scaleWithZeroSlotServings_fallsBackToBaseServings() {
+    // slot = 0 → falls back to base = 4. scale = 4/4 = 1 → demand 200×1 = 200 g.
+    RecipeDto recipe = recipe("flour", "200", "g", 4);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slotServings(recipe, 0));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    assertThat(line(list, "flour").getRequestedQuantity()).isEqualByComparingTo("200.000");
+  }
+
+  @Test
+  void inventoryNullQuantity_isSkipped() {
+    // Inventory rows with null quantity must not crash; just skip them.
+    RecipeDto recipe = recipe("flour", "1000", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    enablePantryTracking();
+    InventoryItemDto noQuantity =
+        new InventoryItemDto(
+            UUID.randomUUID(),
+            USER,
+            "Flour",
+            "pantry",
+            com.example.mealprep.provisions.domain.entity.StorageLocation.CUPBOARD,
+            com.example.mealprep.provisions.domain.entity.TrackingMode.QUANTITY,
+            null, // null quantity
+            "g",
+            null,
+            com.example.mealprep.provisions.domain.entity.StapleStatus.STOCKED,
+            false,
+            null,
+            "flour",
+            null,
+            com.example.mealprep.provisions.domain.entity.ItemSource.MANUAL_ADD,
+            null,
+            com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus.ACTIVE,
+            null,
+            NOW,
+            NOW,
+            0L);
+    when(provisionQueryService.listActiveInventory(eq(USER), any(), any()))
+        .thenReturn(page(noQuantity));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    // The null-quantity row was ignored → demand unchanged.
+    assertThat(line(list, "flour").getRequestedQuantity()).isEqualByComparingTo("1000.000");
+  }
+
+  @Test
+  void inventoryClampedAtZero_doesNotProduceNegativeDemand() {
+    // 5000 g on hand vs 1000 g demand → underflow clamped to 0 → no line generated.
+    RecipeDto recipe = recipe("flour", "1000", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    enablePantryTracking();
+    when(provisionQueryService.listActiveInventory(eq(USER), any(), any()))
+        .thenReturn(page(inventory("flour", "5000", "g", false)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(list.getLines().stream().anyMatch(l -> l.getIngredientMappingKey().equals("flour")))
+        .isFalse();
+  }
+
+  @Test
+  void inventoryAtExactDemand_clampsToZero_noLine() {
+    // 1000 g on hand vs 1000 g demand → remaining = 0 → no line (positive-only filter).
+    RecipeDto recipe = recipe("flour", "1000", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    enablePantryTracking();
+    when(provisionQueryService.listActiveInventory(eq(USER), any(), any()))
+        .thenReturn(page(inventory("flour", "1000", "g", false)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(list.getLines().stream().anyMatch(l -> l.getIngredientMappingKey().equals("flour")))
+        .isFalse();
+  }
+
+  @Test
+  void inventoryOneUnitShort_keepsOneUnitDemand() {
+    // 999 g on hand vs 1000 g demand → 1 g remaining → line kept (off-by-one boundary).
+    RecipeDto recipe = recipe("flour", "1000", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    enablePantryTracking();
+    when(provisionQueryService.listActiveInventory(eq(USER), any(), any()))
+        .thenReturn(page(inventory("flour", "999", "g", false)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(line(list, "flour").getRequestedQuantity()).isEqualByComparingTo("1.000");
+  }
+
+  @Test
+  void ingredientWithBlankKey_isSkipped_byNormaliser() {
+    // An ingredient whose normalised key is blank/empty/null must NOT produce a line.
+    RecipeDto recipe = recipe("", "100", "g", 1); // blank key
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(list.getLines()).isEmpty();
+  }
+
+  @Test
+  void ingredientWithNullQuantity_isSkipped() {
+    // The accumulate() helper skips ingredients without a quantity.
+    UUID rid = UUID.randomUUID();
+    IngredientDto ing =
+        new IngredientDto(
+            UUID.randomUUID(),
+            0,
+            "flour",
+            "Flour",
+            null, // null quantity → skipped
+            "g",
+            null,
+            false,
+            false,
+            null);
+    RecipeDto recipe = recipeWithIngredients(rid, ing, 2);
+    when(recipeQueryService.getById(rid)).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(list.getLines()).isEmpty();
+  }
+
+  @Test
+  void optionalIngredient_isSkipped() {
+    // Optional ingredients are never auto-added to the shopping list.
+    UUID rid = UUID.randomUUID();
+    IngredientDto ing =
+        new IngredientDto(
+            UUID.randomUUID(),
+            0,
+            "garnish",
+            "Garnish",
+            new BigDecimal("10"),
+            "g",
+            null,
+            true, // optional
+            false,
+            null);
+    RecipeDto recipe = recipeWithIngredients(rid, ing, 2);
+    when(recipeQueryService.getById(rid)).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slotServings(recipe, 2));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(
+            list.getLines().stream().anyMatch(l -> l.getIngredientMappingKey().equals("garnish")))
+        .isFalse();
+  }
+
+  @Test
+  void costProjection_zeroLinePence_notWeighted_inConfidenceCalc() {
+    // A line whose linePence == 0 must NOT contribute to the weighted confidence sum
+    // (the `linePence > 0` guard). Confidence ends up the weighted average of the OTHER lines.
+    RecipeDto a = recipe("flour", "1000", "g", 1);
+    RecipeDto b = recipe("rice", "500", "g", 1);
+    when(recipeQueryService.getById(a.id())).thenReturn(Optional.of(a));
+    when(recipeQueryService.getById(b.id())).thenReturn(Optional.of(b));
+    PlanDto plan = planWith(slot(a), slot(b));
+    when(shoppingListDataGateway.findPacksByKey("flour"))
+        .thenReturn(List.of(packKey("flour", 1000, 1)));
+    when(shoppingListDataGateway.findPacksByKey("rice"))
+        .thenReturn(List.of(packKey("rice", 1000, 1)));
+    // Flour: 0 pence (zero-cost), Rice: 100 pence.
+    when(priceHistoryService.getAggregatesByKeys(any(), anyCollection()))
+        .thenReturn(
+            Map.of(
+                "flour", aggregate("flour", 0, "0.100", false),
+                "rice", aggregate("rice", 100, "0.900", false)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    // Total = 0 + 100 = 100; confidence = 0.900 (only rice contributed because flour's
+    // linePence=0).
+    assertThat(list.getEstimatedTotalPence()).isEqualTo(100);
+    assertThat(list.getCostConfidence()).isEqualByComparingTo("0.900");
+  }
+
+  @Test
+  void costProjection_lineWithNullPointEstimate_treatedAsStale() {
+    // A line whose aggregate has null pointEstimatePence must be marked stale + counted.
+    RecipeDto recipe = recipe("flour", "1000", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    when(priceHistoryService.getAggregatesByKeys(any(), anyCollection()))
+        .thenReturn(Map.of("flour", aggregate("flour", null, "0.100", false)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(line(list, "flour").isStaleEstimate()).isTrue();
+    assertThat(line(list, "flour").getEstimatedLinePence()).isNull();
+    assertThat(list.getStaleIngredientCount()).isEqualTo(1);
+  }
+
+  @Test
+  void costProjection_staleAggregateButPresentEstimate_lineMarkedStale_butIncludedInTotal() {
+    // A stale aggregate with a known estimate counts toward the total but increments staleCount.
+    RecipeDto recipe = recipe("flour", "1000", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    when(shoppingListDataGateway.findPacksByKey("flour"))
+        .thenReturn(List.of(packKey("flour", 1000, 1)));
+    when(priceHistoryService.getAggregatesByKeys(any(), anyCollection()))
+        .thenReturn(Map.of("flour", aggregate("flour", 80, "0.500", true))); // stale
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    assertThat(line(list, "flour").getEstimatedLinePence()).isEqualTo(80);
+    assertThat(line(list, "flour").isStaleEstimate()).isTrue();
+    assertThat(list.getStaleIngredientCount()).isEqualTo(1);
+    assertThat(list.getEstimatedTotalPence()).isEqualTo(80);
+  }
+
+  @Test
+  void costProjection_lineWithNullPackCount_treatedAsOne() {
+    // A line with null suggestedPackCount falls back to 1 pack.
+    RecipeDto recipe = recipe("flour", "1000", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    // No packs configured → suggestedPackCount stays null on the line.
+    when(priceHistoryService.getAggregatesByKeys(any(), anyCollection()))
+        .thenReturn(Map.of("flour", aggregate("flour", 80, "0.900", false)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    ShoppingListLine ln = line(list, "flour");
+    assertThat(ln.getEstimatedUnitPence()).isEqualTo(80);
+    assertThat(ln.getEstimatedLinePence()).isEqualTo(80); // 80×1 with null pack-count fallback
+  }
+
+  @Test
+  void planWithoutHouseholdId_fallsBackToUserHousehold() {
+    RecipeDto recipe = recipe("flour", "100", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    // Build a plan with null householdId; expect the user-household lookup to be invoked.
+    PlanDto plan = planNoHousehold(slot(recipe));
+    UUID userHousehold = UUID.randomUUID();
+    when(householdQueryService.getByUserId(USER))
+        .thenReturn(
+            Optional.of(
+                new com.example.mealprep.household.api.dto.HouseholdDto(
+                    userHousehold, "Home", USER, List.of(), NOW, 0L)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    assertThat(list.getHouseholdId()).isEqualTo(userHousehold);
+  }
+
+  @Test
+  void planWithoutHouseholdId_andNoUserHousehold_returnsNullHouseholdId() {
+    // Single-user mode with no household configured → null household id (LLD line 94).
+    RecipeDto recipe = recipe("flour", "100", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planNoHousehold(slot(recipe));
+    when(householdQueryService.getByUserId(USER)).thenReturn(Optional.empty());
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(list.getHouseholdId()).isNull();
+  }
+
+  @Test
+  void qualityNote_meatBeef_addsFreeRangeMeatHint() {
+    // The isMeatKey check covers chicken/beef/pork/lamb/meat. Mutators on the OR chain need each.
+    RecipeDto recipe = recipe("beef mince", "500", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    LifestyleConfigDocument doc =
+        baseLifestyle()
+            .toBuilderWith(
+                new LifestyleConfigDocument.GroceryQualityPreferences(
+                    null, null, "always", null, null));
+    when(lifestyleConfigQueryService.getLifestyleConfig(USER))
+        .thenReturn(Optional.of(lifestyleDto(doc)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(line(list, "beef mince").getQualityNotes()).contains("free-range meat");
+  }
+
+  @Test
+  void qualityNote_meatPork_addsFreeRangeMeatHint() {
+    RecipeDto recipe = recipe("pork chops", "500", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    LifestyleConfigDocument doc =
+        baseLifestyle()
+            .toBuilderWith(
+                new LifestyleConfigDocument.GroceryQualityPreferences(
+                    null, null, "always", null, null));
+    when(lifestyleConfigQueryService.getLifestyleConfig(USER))
+        .thenReturn(Optional.of(lifestyleDto(doc)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(line(list, "pork chops").getQualityNotes()).contains("free-range meat");
+  }
+
+  @Test
+  void qualityNote_meatLamb_addsFreeRangeMeatHint() {
+    RecipeDto recipe = recipe("lamb shank", "500", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    LifestyleConfigDocument doc =
+        baseLifestyle()
+            .toBuilderWith(
+                new LifestyleConfigDocument.GroceryQualityPreferences(
+                    null, null, "always", null, null));
+    when(lifestyleConfigQueryService.getLifestyleConfig(USER))
+        .thenReturn(Optional.of(lifestyleDto(doc)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(line(list, "lamb shank").getQualityNotes()).contains("free-range meat");
+  }
+
+  @Test
+  void qualityNote_organicHintAppendedSeparately() {
+    RecipeDto recipe = recipe("apple", "5", "items", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    LifestyleConfigDocument doc =
+        baseLifestyle()
+            .toBuilderWith(
+                new LifestyleConfigDocument.GroceryQualityPreferences(
+                    "always", null, null, null, null));
+    when(lifestyleConfigQueryService.getLifestyleConfig(USER))
+        .thenReturn(Optional.of(lifestyleDto(doc)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(line(list, "apple").getQualityNotes()).contains("organic");
+  }
+
+  @Test
+  void qualityNote_brandedHintAppended() {
+    RecipeDto recipe = recipe("apple", "5", "items", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    LifestyleConfigDocument doc =
+        baseLifestyle()
+            .toBuilderWith(
+                new LifestyleConfigDocument.GroceryQualityPreferences(
+                    null, null, null, "own-label", null));
+    when(lifestyleConfigQueryService.getLifestyleConfig(USER))
+        .thenReturn(Optional.of(lifestyleDto(doc)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(line(list, "apple").getQualityNotes()).contains("brand: own-label");
+  }
+
+  @Test
+  void packSize_categoryFallback_whenNoKeyMatch() {
+    // No packs by key → category fallback consulted (default stub returns empty for both).
+    RecipeDto recipe = recipe("flour", "750", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    // Line still produced even with no packs at all (no suggestedPackSize).
+    assertThat(line(list, "flour")).isNotNull();
+    assertThat(line(list, "flour").getSuggestedPackSizeG()).isNull();
+  }
+
+  @Test
+  void multiplePlannedDays_aggregatesAcrossDays() {
+    // Two separate days both demand the same key → aggregated into one line.
+    RecipeDto recipe = recipe("flour", "200", "g", 2);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+
+    DayDto day1 =
+        new DayDto(UUID.randomUUID(), LocalDate.of(2026, 6, 1), null, List.of(slot(recipe)));
+    DayDto day2 =
+        new DayDto(UUID.randomUUID(), LocalDate.of(2026, 6, 2), null, List.of(slot(recipe)));
+    PlanDto plan = planFromDays(day1, day2);
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    // Each slot demands 200 g (scale 1.0 with slot servings = recipe servings = 2). Two days → 400
+    // g.
+    assertThat(line(list, "flour").getRequestedQuantity()).isEqualByComparingTo("400.000");
+  }
+
+  @Test
+  void dayWithNullSlots_isSkipped() {
+    RecipeDto recipe = recipe("flour", "200", "g", 2);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    DayDto dayWithSlots =
+        new DayDto(UUID.randomUUID(), LocalDate.of(2026, 6, 1), null, List.of(slot(recipe)));
+    DayDto dayNull =
+        new DayDto(UUID.randomUUID(), LocalDate.of(2026, 6, 2), null, null); // null slots
+    PlanDto plan = planFromDays(dayWithSlots, dayNull);
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(line(list, "flour").getRequestedQuantity()).isEqualByComparingTo("200.000");
+  }
+
+  @Test
+  void recipeNotFoundInService_isSkipped() {
+    // The recipeQueryService.getById returns Optional.empty() → recipe not used, no line.
+    UUID rid = UUID.randomUUID();
+    ScheduledRecipeDto scheduled =
+        new ScheduledRecipeDto(UUID.randomUUID(), rid, null, null, 2, null, null, null, false);
+    MealSlotDto slot =
+        new MealSlotDto(
+            UUID.randomUUID(),
+            0,
+            SlotKind.DINNER,
+            "Dinner",
+            600,
+            true,
+            List.of(),
+            null,
+            null,
+            null,
+            null,
+            scheduled);
+    PlanDto plan = planWith(slot);
+    when(recipeQueryService.getById(rid)).thenReturn(Optional.empty());
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+    assertThat(list.getLines()).isEmpty();
+  }
+
+  // ---- Additional fixture helpers ----
+
+  /** Build a plan whose householdId is null (drives the user-household fallback). */
+  private static PlanDto planNoHousehold(MealSlotDto... slots) {
+    DayDto day = new DayDto(UUID.randomUUID(), LocalDate.of(2026, 6, 1), null, List.of(slots));
+    return new PlanDto(
+        PLAN,
+        null, // null householdId — single-user mode
+        LocalDate.of(2026, 6, 1),
+        1,
+        null,
+        PlanStatus.GENERATED,
+        TriggerKind.USER_INITIATED,
+        null,
+        false,
+        false,
+        false,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        List.of(day),
+        0L,
+        NOW,
+        NOW);
+  }
+
+  /** Build a plan with the given list of days (multi-day fixture). */
+  private static PlanDto planFromDays(DayDto... days) {
+    return new PlanDto(
+        PLAN,
+        HOUSEHOLD,
+        LocalDate.of(2026, 6, 1),
+        1,
+        null,
+        PlanStatus.GENERATED,
+        TriggerKind.USER_INITIATED,
+        null,
+        false,
+        false,
+        false,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        List.of(days),
+        0L,
+        NOW,
+        NOW);
+  }
+
+  /** Build a recipe whose ingredients list is the supplied set, with the given base servings. */
+  private RecipeDto recipeWithIngredients(UUID recipeId, IngredientDto ing, int baseServings) {
+    RecipeMetadataDto meta =
+        new RecipeMetadataDto(
+            baseServings, 10, 20, 30, List.of(), null, null, false, "british", List.of("dinner"));
+    RecipeVersionDto body =
+        new RecipeVersionDto(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            1,
+            null,
+            null,
+            null,
+            "ready",
+            NOW,
+            "system",
+            null,
+            List.of(ing),
+            List.of(),
+            meta,
+            null,
+            null);
+    return new RecipeDto(
+        recipeId,
+        USER,
+        null,
+        "Recipe " + ing.ingredientMappingKey(),
+        null,
+        1,
+        body.branchId(),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        0L,
+        NOW,
+        NOW,
+        body,
+        List.of());
   }
 }

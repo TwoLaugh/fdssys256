@@ -167,4 +167,164 @@ class PriceAggregatorTest {
     assertThat(since).isEqualTo(NOW.minus(90, ChronoUnit.DAYS));
     assertThat(since).isNotEqualTo(NOW.minus(540, ChronoUnit.DAYS));
   }
+
+  // ============================== boundary / mutation-hardening tests
+  // ==============================
+
+  @Test
+  void aggregate_observationAtExactlyStaleBoundary_isNotStale() {
+    // Off-by-one: an observation at NOW - staleThresholdDays is BEFORE the window-start? Yes — the
+    // production code does `lastSeenAt.isBefore(windowStart(now))`, so equality is NOT-stale.
+    Instant onBoundary = NOW.minus(90, ChronoUnit.DAYS); // exactly 90 days
+    PriceAggregateDto dto =
+        aggregator()
+            .aggregate(
+                "chicken breast",
+                "tesco_online",
+                List.of(obs(100, PriceSource.PAID, 1.0, onBoundary)))
+            .orElseThrow();
+
+    // onBoundary == windowStart → isBefore(onBoundary, onBoundary) is false → NOT stale.
+    assertThat(dto.isStale()).isFalse();
+  }
+
+  @Test
+  void aggregate_observationOneDayPastBoundary_isStale() {
+    // One day past the boundary → stale.
+    Instant pastBoundary = NOW.minus(91, ChronoUnit.DAYS);
+    PriceAggregateDto dto =
+        aggregator()
+            .aggregate(
+                "chicken breast",
+                "tesco_online",
+                List.of(obs(100, PriceSource.PAID, 1.0, pastBoundary)))
+            .orElseThrow();
+    assertThat(dto.isStale()).isTrue();
+  }
+
+  @Test
+  void aggregate_observationWithNullPaidUnitPence_isSkipped() {
+    // A row without a normalised unit price doesn't contribute (the continue branch).
+    PriceObservation rowWithUnit = obs(100, PriceSource.PAID, 1.0, NOW);
+    PriceObservation rowWithoutUnit =
+        GroceryTestData.priceObservation()
+            .ingredientMappingKey("chicken breast")
+            .store("tesco_online")
+            .paidUnitPence(null) // null
+            .source(PriceSource.MANUAL)
+            .confidenceWeight(BigDecimal.valueOf(0.7))
+            .observedAt(NOW)
+            .build();
+
+    PriceAggregateDto dto =
+        aggregator()
+            .aggregate("chicken breast", "tesco_online", List.of(rowWithUnit, rowWithoutUnit))
+            .orElseThrow();
+
+    // Only the row with unitPence contributed — sampleCount = 1, estimate = 100.
+    assertThat(dto.sampleCount()).isEqualTo(1);
+    assertThat(dto.pointEstimatePence()).isEqualTo(100);
+  }
+
+  @Test
+  void aggregate_observationWithNullConfidenceWeight_treatedAsZeroWeight() {
+    // A row with null confidenceWeight contributes 0 weight + 0 weighted sum but counts toward
+    // sampleCount and min/max. With ONLY a null-weight row → sumWeight = 0 → falls back to
+    // reference.
+    when(referencePriceSource.referencePrice("chicken breast"))
+        .thenReturn(
+            Optional.of(
+                new ReferencePrice(
+                    "chicken breast", 99, "per_100g", new BigDecimal("0.150"), NOW, "ref")));
+    PriceObservation nullWeight =
+        GroceryTestData.priceObservation()
+            .ingredientMappingKey("chicken breast")
+            .paidUnitPence(100)
+            .confidenceWeight(null)
+            .observedAt(NOW)
+            .build();
+
+    PriceAggregateDto dto =
+        aggregator().aggregate("chicken breast", null, List.of(nullWeight)).orElseThrow();
+
+    // sumWeight = 0 → reference fallback used (sampleCount=0 + 99 from reference).
+    assertThat(dto.sampleCount()).isZero();
+    assertThat(dto.pointEstimatePence()).isEqualTo(99);
+  }
+
+  @Test
+  void aggregate_minMaxComputedAcrossObservations_inSelectionOrder() {
+    // Min and max track the same instants on the FIRST observation that hits each extreme.
+    Instant t1 = NOW.minus(3, ChronoUnit.DAYS);
+    Instant t2 = NOW.minus(1, ChronoUnit.DAYS);
+    Instant t3 = NOW;
+
+    PriceObservation low = obs(50, PriceSource.PAID, 1.0, t2);
+    PriceObservation high = obs(300, PriceSource.PAID, 1.0, t1);
+    PriceObservation mid = obs(150, PriceSource.PAID, 1.0, t3);
+
+    PriceAggregateDto dto =
+        aggregator()
+            .aggregate("chicken breast", "tesco_online", List.of(low, high, mid))
+            .orElseThrow();
+    assertThat(dto.minPence()).isEqualTo(50);
+    assertThat(dto.maxPence()).isEqualTo(300);
+    assertThat(dto.minObservedAt()).isEqualTo(t2);
+    assertThat(dto.maxObservedAt()).isEqualTo(t1);
+    assertThat(dto.lastSeenAt()).isEqualTo(t3); // the most recent of the three
+  }
+
+  @Test
+  void aggregate_confidence_cannotExceedOne_evenWithMassiveSumWeight() {
+    // sumWeight = 100 → 100/(100+2) ≈ 0.98 — clamped to ≤1 by Math.min.
+    List<PriceObservation> many =
+        java.util.stream.IntStream.range(0, 100)
+            .mapToObj(i -> obs(100, PriceSource.PAID, 1.0, NOW))
+            .toList();
+
+    PriceAggregateDto dto =
+        aggregator().aggregate("chicken breast", "tesco_online", many).orElseThrow();
+    assertThat(dto.confidence().doubleValue()).isLessThanOrEqualTo(1.0);
+    // Concretely 100/102 ≈ 0.980.
+    assertThat(dto.confidence()).isEqualByComparingTo(new BigDecimal("0.980"));
+  }
+
+  @Test
+  void referenceFallback_storeParameter_carriedThroughDto() {
+    when(referencePriceSource.referencePrice("chicken breast"))
+        .thenReturn(
+            Optional.of(
+                new ReferencePrice(
+                    "chicken breast", 99, "per_100g", new BigDecimal("0.150"), NOW, "ref")));
+
+    PriceAggregateDto dto =
+        aggregator().aggregate("chicken breast", "tesco_online", List.of()).orElseThrow();
+
+    // store should be the supplied "tesco_online", not null.
+    assertThat(dto.store()).isEqualTo("tesco_online");
+    assertThat(dto.pointEstimatePence()).isEqualTo(99);
+    assertThat(dto.sampleCount()).isZero();
+    assertThat(dto.isStale()).isTrue();
+  }
+
+  @Test
+  void toAggregate_withNullReferencePrice_returnsEmpty() {
+    Optional<PriceAggregateDto> result = aggregator().toAggregate("k", "store", null, NOW);
+    assertThat(result).isEmpty();
+  }
+
+  @Test
+  void toAggregate_withReferencePrice_carriesAllFields() {
+    ReferencePrice ref =
+        new ReferencePrice("k", 110, "per_100g", new BigDecimal("0.200"), NOW, "ref");
+    PriceAggregateDto dto = aggregator().toAggregate("k", "store", ref, NOW).orElseThrow();
+    assertThat(dto.ingredientMappingKey()).isEqualTo("k");
+    assertThat(dto.store()).isEqualTo("store");
+    assertThat(dto.pointEstimatePence()).isEqualTo(110);
+    assertThat(dto.minPence()).isEqualTo(110);
+    assertThat(dto.maxPence()).isEqualTo(110);
+    assertThat(dto.sampleCount()).isZero();
+    assertThat(dto.isStale()).isTrue();
+    assertThat(dto.confidence()).isEqualByComparingTo(new BigDecimal("0.200"));
+  }
 }

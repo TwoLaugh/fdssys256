@@ -127,4 +127,119 @@ class PackSizeOptimiserTest {
     PackSizeOptimiser.PackChoice choice = optimiser.choose(demand("0"), packs, false);
     assertThat(choice.isEmpty()).isTrue();
   }
+
+  // ============================== boundary / mutation-hardening tests
+  // ==============================
+
+  @Test
+  void nullPacks_returnsEmptyChoice() {
+    PackSizeOptimiser.PackChoice choice = optimiser.choose(demand("500"), null, false);
+    assertThat(choice.isEmpty()).isTrue();
+    assertThat(choice.packsToBuy()).isZero();
+  }
+
+  @Test
+  void nullDemand_returnsEmptyChoice() {
+    List<PackSizeHeuristic> packs = List.of(GroceryTestData.packByKeySize("flour", 500, 1));
+    PackSizeOptimiser.PackChoice choice = optimiser.choose(null, packs, false);
+    assertThat(choice.isEmpty()).isTrue();
+  }
+
+  @Test
+  void negativeDemand_returnsEmptyChoice() {
+    // Boundary: demand <= 0 → empty. Negative just below zero must also return empty (off-by-one
+    // pinning on the `needed <= 0` branch).
+    List<PackSizeHeuristic> packs = List.of(GroceryTestData.packByKeySize("flour", 500, 1));
+    IngredientDemand neg =
+        PackSizeOptimiser.demand("flour", "Flour", new java.math.BigDecimal("-1"), "g");
+    PackSizeOptimiser.PackChoice choice = optimiser.choose(neg, packs, false);
+    assertThat(choice.isEmpty()).isTrue();
+  }
+
+  @Test
+  void onePackMatchingExactly_buysOne() {
+    // Demand 1000 g over a single 1 kg pack → 1×1 kg exactly (ceiling = 1).
+    List<PackSizeHeuristic> packs = List.of(GroceryTestData.packByKeySize("flour", 1000, 1));
+    PackSizeOptimiser.PackChoice choice = optimiser.choose(demand("1000"), packs, false);
+    assertThat(choice.packSizeG()).isEqualTo(1000);
+    assertThat(choice.packsToBuy()).isEqualTo(1);
+  }
+
+  @Test
+  void demandJustAboveOnePackSize_requiresTwoPacks() {
+    // 1001 g over a 1 kg pack → ceil(1001/1000) = 2 (off-by-one boundary on the ceil computation).
+    List<PackSizeHeuristic> packs = List.of(GroceryTestData.packByKeySize("flour", 1000, 1));
+    PackSizeOptimiser.PackChoice choice = optimiser.choose(demand("1001"), packs, false);
+    assertThat(choice.packSizeG()).isEqualTo(1000);
+    assertThat(choice.packsToBuy()).isEqualTo(2);
+  }
+
+  @Test
+  void demandJustBelowOnePackSize_requiresOnePack() {
+    // 999 g over a 1 kg pack → ceil(999/1000) = 1.
+    List<PackSizeHeuristic> packs = List.of(GroceryTestData.packByKeySize("flour", 1000, 1));
+    PackSizeOptimiser.PackChoice choice = optimiser.choose(demand("999"), packs, false);
+    assertThat(choice.packSizeG()).isEqualTo(1000);
+    assertThat(choice.packsToBuy()).isEqualTo(1);
+  }
+
+  @Test
+  void packWithBothSizeAndCountNull_isSkipped() {
+    // A pack that has neither size nor count contributes magnitude 0 — should be skipped entirely.
+    // Build by skipping both setters; left as null in builder.
+    PackSizeHeuristic empty =
+        PackSizeHeuristic.builder()
+            .id(java.util.UUID.randomUUID())
+            .ingredientMappingKey("flour")
+            .packUnit("g")
+            .rank(1)
+            .build();
+    PackSizeHeuristic real = GroceryTestData.packByKeySize("flour", 500, 2);
+    PackSizeOptimiser.PackChoice choice =
+        optimiser.choose(demand("500"), List.of(empty, real), false);
+    assertThat(choice.packSizeG()).isEqualTo(500);
+    assertThat(choice.packsToBuy()).isEqualTo(1);
+  }
+
+  @Test
+  void allPacksZeroMagnitude_returnsEmptyChoice() {
+    // Every candidate has zero magnitude → no candidate sets `best`, returns empty.
+    PackSizeHeuristic empty =
+        PackSizeHeuristic.builder()
+            .id(java.util.UUID.randomUUID())
+            .ingredientMappingKey("flour")
+            .packUnit("g")
+            .rank(1)
+            .build();
+    PackSizeOptimiser.PackChoice choice = optimiser.choose(demand("500"), List.of(empty), false);
+    assertThat(choice.isEmpty()).isTrue();
+  }
+
+  @Test
+  void perishable_largerPackHasSameTotal_smallerStillChosen() {
+    // 1000 g of a perishable with {500 g, 1000 g} → both total 1000 g. Perishable prefers SMALLER
+    // unit pack (smaller-up): 2×500 g over 1×1 kg. The non-perishable variant of this prefers the
+    // 1×1 kg pack (the larger one) — already covered above.
+    List<PackSizeHeuristic> packs =
+        List.of(
+            GroceryTestData.packByKeySize("spinach", 500, 1),
+            GroceryTestData.packByKeySize("spinach", 1000, 2));
+    IngredientDemand d =
+        PackSizeOptimiser.demand("spinach", "Spinach", new java.math.BigDecimal("1000"), "g");
+    PackSizeOptimiser.PackChoice choice = optimiser.choose(d, packs, true);
+    assertThat(choice.packSizeG()).isEqualTo(500);
+    assertThat(choice.packsToBuy()).isEqualTo(2);
+  }
+
+  @Test
+  void candidateWithStrictlyLessTotal_alwaysWins() {
+    // Demand 750 g with {500 g, 600 g}: 2×500=1000, 2×600=1200 → 500 wins (least total purchased).
+    List<PackSizeHeuristic> packs =
+        List.of(
+            GroceryTestData.packByKeySize("flour", 500, 1),
+            GroceryTestData.packByKeySize("flour", 600, 2));
+    PackSizeOptimiser.PackChoice choice = optimiser.choose(demand("750"), packs, false);
+    assertThat(choice.packSizeG()).isEqualTo(500); // 2×500=1000 beats 2×600=1200
+    assertThat(choice.packsToBuy()).isEqualTo(2);
+  }
 }
