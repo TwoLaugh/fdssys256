@@ -15,4 +15,7 @@ interface GroceryProviderStateRepository extends JpaRepository<GroceryProviderSt
   Optional<GroceryProviderState> findByUserIdAndProviderKey(UUID userId, String providerKey);
 
   List<GroceryProviderState> findAllByScheduledRefreshEnabledTrue();
+
+  /** All provider states for a user (one row per connected provider; usually 0 or 1 in v1). */
+  List<GroceryProviderState> findAllByUserId(UUID userId);
 }

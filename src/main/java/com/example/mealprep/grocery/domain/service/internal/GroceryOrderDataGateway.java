@@ -35,6 +35,16 @@ public interface GroceryOrderDataGateway {
 
   List<GroceryOrder> findActiveOrdersByShoppingListId(UUID shoppingListId);
 
+  /** All orders in {@code status} — used by 01g's hourly status / retry sweep. */
+  List<GroceryOrder> findOrdersByStatus(GroceryOrderStatus status);
+
+  /**
+   * RECONCILED orders whose {@code reconciledAt} is at or before {@code threshold} — the daily
+   * archival sweep target set (01g, GROC-35). The {@code reconciledAt} comparison is inclusive on
+   * the 12-month boundary so "exactly 12 months ago" archives.
+   */
+  List<GroceryOrder> findReconciledOlderThan(Instant threshold);
+
   GroceryOrder saveOrder(GroceryOrder order);
 
   GroceryOrder saveAndFlushOrder(GroceryOrder order);
@@ -74,6 +84,19 @@ public interface GroceryOrderDataGateway {
   Optional<GroceryProviderState> findProviderState(UUID userId, String providerKey);
 
   GroceryProviderState saveProviderState(GroceryProviderState state);
+
+  /**
+   * All {@link GroceryProviderState} rows with {@code scheduled_refresh_enabled = true} — the
+   * candidate set for 01g's weekly refresh fan-out.
+   */
+  List<GroceryProviderState> findProviderStatesWithScheduledRefreshEnabled();
+
+  /**
+   * All {@link GroceryProviderState} rows for {@code userId}. Used by the {@code
+   * CostBudgetExceededEvent} listener to pause scheduled refresh across every provider the user has
+   * connected. Empty list when the user has no provider state.
+   */
+  List<GroceryProviderState> findProviderStatesByUserId(UUID userId);
 
   /**
    * The most-recently-paid provider product id for {@code (userId, ingredientMappingKey)} across

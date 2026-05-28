@@ -1,5 +1,6 @@
 package com.example.mealprep.grocery.domain.service.internal;
 
+import com.example.mealprep.ai.exception.AiUnavailableException;
 import com.example.mealprep.core.ingredient.IngredientMappingKeys;
 import com.example.mealprep.grocery.api.dto.BulkMarkBoughtRequest;
 import com.example.mealprep.grocery.api.dto.ExportFormat;
@@ -17,6 +18,7 @@ import com.example.mealprep.grocery.api.mapper.PriceObservationMapper;
 import com.example.mealprep.grocery.api.mapper.ShoppingListMapper;
 import com.example.mealprep.grocery.config.GroceryConfig;
 import com.example.mealprep.grocery.domain.entity.BoughtVia;
+import com.example.mealprep.grocery.domain.entity.GroceryProviderState;
 import com.example.mealprep.grocery.domain.entity.LineFulfilmentStatus;
 import com.example.mealprep.grocery.domain.entity.PriceObservation;
 import com.example.mealprep.grocery.domain.entity.PriceSource;
@@ -28,6 +30,13 @@ import com.example.mealprep.grocery.domain.service.ReferencePriceSource;
 import com.example.mealprep.grocery.domain.service.ReferencePriceSource.ReferencePrice;
 import com.example.mealprep.grocery.domain.service.ShoppingListService;
 import com.example.mealprep.grocery.domain.service.internal.MarkBoughtInventoryBridge.BoughtLine;
+import com.example.mealprep.grocery.domain.service.internal.providers.BasketDraft;
+import com.example.mealprep.grocery.domain.service.internal.providers.BasketDraftLine;
+import com.example.mealprep.grocery.domain.service.internal.providers.BasketDraftPreferences;
+import com.example.mealprep.grocery.domain.service.internal.providers.GroceryProvider;
+import com.example.mealprep.grocery.domain.service.internal.providers.ProviderUnavailableException;
+import com.example.mealprep.grocery.domain.service.internal.providers.QuoteLineResult;
+import com.example.mealprep.grocery.domain.service.internal.providers.QuoteResult;
 import com.example.mealprep.grocery.event.ShoppingListBulkMarkedBoughtEvent;
 import com.example.mealprep.grocery.event.ShoppingListGeneratedEvent;
 import com.example.mealprep.grocery.event.ShoppingListItemMarkedBoughtEvent;
@@ -38,6 +47,7 @@ import com.example.mealprep.grocery.exception.ShoppingListNotFoundException;
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.domain.service.PlanQueryService;
 import com.example.mealprep.provisions.api.dto.GroceryImportResultDto;
+import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -52,6 +62,7 @@ import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -103,6 +114,13 @@ public class GroceryServiceImpl
   // Tier-2 collaborators (01d).
   private final MarkBoughtInventoryBridge markBoughtInventoryBridge;
 
+  // Tier-4 scheduled-refresh collaborators (01g). All injected as ObjectProvider so the service
+  // still constructs in unit / minimal-context scenarios that don't pull the full module graph.
+  private final ObjectProvider<GroceryProvider> providers;
+  private final ObjectProvider<RecipeQueryService> recipeQueryServiceProvider;
+  private final ObjectProvider<PriceFreshnessGuardrails> guardrailsProvider;
+  private final ObjectProvider<GroceryOrderDataGateway> orderGatewayProvider;
+
   public GroceryServiceImpl(
       PriceDataGateway priceDataGateway,
       PriceAggregator priceAggregator,
@@ -117,7 +135,11 @@ public class GroceryServiceImpl
       ShoppingListMapper shoppingListMapper,
       PlanQueryService planQueryService,
       ApplicationEventPublisher eventPublisher,
-      MarkBoughtInventoryBridge markBoughtInventoryBridge) {
+      MarkBoughtInventoryBridge markBoughtInventoryBridge,
+      ObjectProvider<GroceryProvider> providers,
+      ObjectProvider<RecipeQueryService> recipeQueryServiceProvider,
+      ObjectProvider<PriceFreshnessGuardrails> guardrailsProvider,
+      ObjectProvider<GroceryOrderDataGateway> orderGatewayProvider) {
     this.priceDataGateway = priceDataGateway;
     this.priceAggregator = priceAggregator;
     this.priceObservationWriter = priceObservationWriter;
@@ -132,6 +154,10 @@ public class GroceryServiceImpl
     this.planQueryService = planQueryService;
     this.eventPublisher = eventPublisher;
     this.markBoughtInventoryBridge = markBoughtInventoryBridge;
+    this.providers = providers;
+    this.recipeQueryServiceProvider = recipeQueryServiceProvider;
+    this.guardrailsProvider = guardrailsProvider;
+    this.orderGatewayProvider = orderGatewayProvider;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -828,10 +854,239 @@ public class GroceryServiceImpl
     return new RefreshPricesResultDto(0, refreshed, false, null);
   }
 
+  /**
+   * Body filled by grocery-01g (was a throwing stub from 01c). Per LLD §Flow 6 (lines 947-952).
+   * Sequence for {@code userId}:
+   *
+   * <ol>
+   *   <li>{@link PriceFreshnessGuardrails#preflight} with {@link
+   *       PriceFreshnessGuardrails.RefreshKind#SCHEDULED}. {@code SKIP} / {@code BLOCK} → log INFO
+   *       and return (the HLD's "scheduled refresh is the FIRST thing skipped when the cap is
+   *       approached" — see lld/grocery.md line 953).
+   *   <li>Resolve the user's provider connection ({@link
+   *       GroceryOrderDataGateway#findProviderStatesByUserId}); skip silently when no provider
+   *       state row exists or when {@code enabled = false} (a user with scheduled-refresh enabled
+   *       but no live connection is a no-op rather than an error).
+   *   <li>Resolve the top-N most-used ingredient keys via {@link
+   *       RecipeQueryService#findUserRecipeIngredientKeys} — the LLD's {@code
+   *       getTopUsedIngredientKeys(userId, lookbackWeeks=12, n)} is NOT shipped on the recipe
+   *       module today, so this method falls back to "count occurrences across every active
+   *       recipe's current version" with no lookback window. Documented as a divergence in the 01g
+   *       PR body. Empty key set → no-op return.
+   *   <li>Build a synthetic {@link BasketDraft} from the keys and call {@code provider.quote}.
+   *       Write one {@link PriceSource#QUOTE} observation per quoted line via {@link
+   *       PriceObservationWriter}. Failures degrade per the standard provider-exception contract:
+   *       {@link ProviderUnavailableException} → log + return (a probe failure is not a placement
+   *       failure); {@link AiUnavailableException} → log + return (the cap will already have
+   *       skipped scheduled work via the listener path on the next cap-exceeded event).
+   * </ol>
+   *
+   * <p>This is the {@code @Async}-per-user worker the {@code GroceryScheduledJobs} weekly driver
+   * dispatches into. Each call is its own bounded transaction (LLD line 981) — the surrounding
+   * driver catches any propagated runtime to keep the fan-out going.
+   */
   @Override
   @Transactional
   public void runScheduledBackgroundRefresh(UUID userId) {
-    throw new UnsupportedOperationException("implemented in grocery-01g");
+    if (userId == null) {
+      return;
+    }
+
+    PriceFreshnessGuardrails guardrails = guardrailsProvider.getIfAvailable();
+    if (guardrails != null) {
+      PriceFreshnessGuardrails.Decision decision =
+          guardrails.preflight(userId, PriceFreshnessGuardrails.RefreshKind.SCHEDULED);
+      if (decision != PriceFreshnessGuardrails.Decision.ALLOW) {
+        log.info("scheduled refresh: {} for user {} (AI cost-cap guardrail)", decision, userId);
+        return;
+      }
+    }
+
+    GroceryOrderDataGateway orderGateway = orderGatewayProvider.getIfAvailable();
+    if (orderGateway == null) {
+      log.debug("scheduled refresh: order gateway unavailable for user {} — nothing to do", userId);
+      return;
+    }
+
+    Optional<GroceryProviderState> activeState =
+        orderGateway.findProviderStatesByUserId(userId).stream()
+            .filter(GroceryProviderState::isEnabled)
+            .filter(GroceryProviderState::isScheduledRefreshEnabled)
+            .findFirst();
+    if (activeState.isEmpty()) {
+      log.debug(
+          "scheduled refresh: no enabled+scheduled provider state for user {} — skipping", userId);
+      return;
+    }
+    GroceryProviderState providerState = activeState.get();
+
+    GroceryProvider provider = providerFor(providerState.getProviderKey());
+    if (provider == null) {
+      log.debug(
+          "scheduled refresh: no GroceryProvider bean for key '{}' (user {}) — skipping",
+          providerState.getProviderKey(),
+          userId);
+      return;
+    }
+
+    int topN =
+        providerState.getRefreshTopNIngredients() > 0
+            ? providerState.getRefreshTopNIngredients()
+            : groceryConfig.freshness().defaultRefreshTopN();
+    List<String> keys = resolveTopUsedKeys(userId, topN);
+    if (keys.isEmpty()) {
+      log.debug("scheduled refresh: no ingredient keys for user {} — skipping", userId);
+      return;
+    }
+
+    quoteAndWriteObservations(userId, providerState, provider, keys);
+  }
+
+  /**
+   * Resolve the user's top-N most-used ingredient keys for the scheduled refresh.
+   *
+   * <p><b>LLD divergence (grocery-01g).</b> The LLD names a {@code
+   * RecipeQueryService.getTopUsedIngredientKeys(userId, lookbackWeeks, n)} method; the shipped
+   * recipe module exposes only {@link RecipeQueryService#findUserRecipeIngredientKeys} which
+   * returns a {@code recipeId → keys} map across all active recipes (no lookback window). v1
+   * derives the top-N by counting occurrences across that map and taking the most-frequent keys —
+   * adequate for a curated set while the planner-driven lookback isn't shipped. Empty list when the
+   * recipe surface is unavailable or the user has no active recipes.
+   */
+  List<String> resolveTopUsedKeys(UUID userId, int topN) {
+    RecipeQueryService recipeQueryService = recipeQueryServiceProvider.getIfAvailable();
+    if (recipeQueryService == null) {
+      return List.of();
+    }
+    Map<UUID, List<String>> byRecipe = recipeQueryService.findUserRecipeIngredientKeys(userId);
+    if (byRecipe == null || byRecipe.isEmpty()) {
+      return List.of();
+    }
+    // Count occurrences across all current-version ingredient lists. LinkedHashMap preserves
+    // first-seen order to make ties deterministic.
+    Map<String, Integer> counts = new LinkedHashMap<>();
+    for (List<String> keys : byRecipe.values()) {
+      if (keys == null) {
+        continue;
+      }
+      for (String raw : keys) {
+        String key = IngredientMappingKeys.normalise(raw);
+        if (key == null || key.isEmpty()) {
+          continue;
+        }
+        counts.merge(key, 1, Integer::sum);
+      }
+    }
+    if (counts.isEmpty()) {
+      return List.of();
+    }
+    // Sort by count desc, then insertion order (stable sort preserves it) — pick the first N.
+    return counts.entrySet().stream()
+        .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
+        .limit(topN)
+        .map(Map.Entry::getKey)
+        .toList();
+  }
+
+  /**
+   * Issue one provider quote covering {@code keys} and append a {@link PriceSource#QUOTE}
+   * observation per quoted line. Per LLD line 943 the on-demand and scheduled paths share the
+   * "quote → write observations" mechanic; this helper is the common implementation.
+   */
+  void quoteAndWriteObservations(
+      UUID userId,
+      GroceryProviderState providerState,
+      GroceryProvider provider,
+      List<String> keys) {
+    // Synthetic basket — one line per key, pack count 1, no preferred SKU hint.
+    List<BasketDraftLine> lines = new ArrayList<>(keys.size());
+    Map<UUID, String> lineKey = new LinkedHashMap<>();
+    for (String key : keys) {
+      UUID lineId = UUID.randomUUID();
+      lineKey.put(lineId, key);
+      lines.add(new BasketDraftLine(lineId, key, key, BigDecimal.ONE, "pack", null, 1, null));
+    }
+    BasketDraft draft =
+        new BasketDraft(
+            UUID.randomUUID(),
+            userId,
+            lines,
+            new BasketDraftPreferences(false, false, false, null));
+
+    QuoteResult result;
+    try {
+      result = provider.quote(draft);
+    } catch (ProviderUnavailableException ex) {
+      log.info(
+          "scheduled refresh: provider {} unavailable for user {} ({})",
+          providerState.getProviderKey(),
+          userId,
+          ex.getMessage());
+      return;
+    } catch (AiUnavailableException ex) {
+      log.info(
+          "scheduled refresh: AI cap reached during provider quote for user {} ({})",
+          userId,
+          ex.getMessage());
+      return;
+    }
+
+    if (result == null || result.lineResults() == null) {
+      return;
+    }
+    Instant observedAt = clock.instant();
+    int written = 0;
+    for (Map.Entry<UUID, QuoteLineResult> entry : result.lineResults().entrySet()) {
+      QuoteLineResult lineResult = entry.getValue();
+      if (lineResult == null || lineResult.quotedUnitPence() == null) {
+        continue;
+      }
+      String key = lineKey.get(entry.getKey());
+      if (key == null) {
+        continue;
+      }
+      Integer packCount =
+          lineResult.packCountResolved() != null ? lineResult.packCountResolved() : 1;
+      Integer totalPence = lineResult.quotedUnitPence() * Math.max(packCount, 1);
+      priceObservationWriter.write(
+          new PriceObservationWriter.WriteCommand(
+              userId,
+              // single-user mode: userId doubles as the household scope until configured
+              userId,
+              key,
+              providerState.getProviderKey(),
+              lineResult.resolvedProviderProductId(),
+              null,
+              packCount,
+              BigDecimal.ONE,
+              "pack",
+              totalPence,
+              result.currency() != null ? result.currency() : "GBP",
+              PriceSource.QUOTE,
+              null,
+              null,
+              observedAt,
+              "scheduled refresh"));
+      written++;
+    }
+    if (written > 0) {
+      log.info(
+          "scheduled refresh: wrote {} QUOTE observation(s) for user {} via provider {}",
+          written,
+          userId,
+          providerState.getProviderKey());
+    }
+  }
+
+  private GroceryProvider providerFor(String providerKey) {
+    if (providerKey == null) {
+      return null;
+    }
+    return providers
+        .orderedStream()
+        .filter(p -> providerKey.equals(p.providerKey()))
+        .findFirst()
+        .orElse(null);
   }
 
   // ---- Tier-4 helpers ----
