@@ -983,6 +983,423 @@ class GroceryOrderServiceImplTest {
         .isInstanceOf(ProviderNotConfiguredException.class);
   }
 
+  // ============================== mutation-hardening (DTO non-null + side effects)
+  // ==============================
+
+  @Test
+  void createDraft_returnsNonNullDtoFromReload() {
+    ShoppingList list = shoppingList();
+    when(dataGateway.findShoppingListWithLinesById(list.getId())).thenReturn(Optional.of(list));
+    when(dataGateway.findProviderState(USER_ID, "fake"))
+        .thenReturn(Optional.of(providerState(true)));
+    when(dataGateway.saveAndFlushOrder(any()))
+        .thenAnswer(
+            inv -> {
+              GroceryOrder saved = inv.getArgument(0, GroceryOrder.class);
+              when(dataGateway.findOrderWithLinesById(saved.getId()))
+                  .thenReturn(Optional.of(saved));
+              return saved;
+            });
+
+    GroceryOrderDto result =
+        service.createDraft(USER_ID, new CreateOrderRequest(list.getId(), "fake"));
+
+    // Pin NullReturnValsMutator survivors: the returned DTO MUST be non-null with content.
+    assertThat(result).isNotNull();
+    assertThat(result.status()).isEqualTo(GroceryOrderStatus.DRAFT);
+    assertThat(result.providerKey()).isEqualTo("fake");
+  }
+
+  @Test
+  void getById_present_returnsNonEmptyOptional() {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.QUEUED);
+    GroceryOrder order = order(GroceryOrderStatus.DRAFT, ln);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+
+    Optional<GroceryOrderDto> result = service.getById(order.getId());
+
+    // Pin EmptyObjectReturnValsMutator survivor on getById line 153.
+    assertThat(result).isPresent();
+    assertThat(result.get().id()).isEqualTo(order.getId());
+  }
+
+  @Test
+  void getById_missing_returnsEmptyOptional() {
+    UUID id = UUID.randomUUID();
+    when(dataGateway.findOrderWithLinesById(id)).thenReturn(Optional.empty());
+
+    assertThat(service.getById(id)).isEmpty();
+  }
+
+  @Test
+  void getByIds_nonEmpty_returnsAllMappedDtos() {
+    GroceryOrder a = order(GroceryOrderStatus.DRAFT, line("flour", OrderLineStatus.QUEUED));
+    GroceryOrder b = order(GroceryOrderStatus.DRAFT, line("rice", OrderLineStatus.QUEUED));
+    when(dataGateway.findOrdersByIds(List.of(a.getId(), b.getId()))).thenReturn(List.of(a, b));
+
+    List<GroceryOrderDto> result = service.getByIds(List.of(a.getId(), b.getId()));
+
+    // Pin EmptyObjectReturnValsMutator survivor on getByIds line 168 — the result must contain
+    // exactly the mapped DTOs, NOT an empty list.
+    assertThat(result).hasSize(2);
+    assertThat(result).extracting(GroceryOrderDto::id).containsExactly(a.getId(), b.getId());
+  }
+
+  @Test
+  void getByIds_emptyInput_returnsEmptyList_noDataGatewayCall() {
+    List<GroceryOrderDto> result = service.getByIds(List.of());
+    assertThat(result).isEmpty();
+    // No data-gateway invocation.
+    verify(dataGateway, never()).findOrdersByIds(any());
+  }
+
+  @Test
+  void getByIds_nullInput_returnsEmptyList() {
+    // Pin the negated conditional on the `ids == null || ids.isEmpty()` guard.
+    assertThat(service.getByIds(null)).isEmpty();
+  }
+
+  @Test
+  void getOutstandingProposals_emptyOrder_returnsEmptyList_butNotNull() {
+    UUID orderId = UUID.randomUUID();
+    when(dataGateway.findProposalsByOrderIdAndStatus(any(UUID.class), any())).thenReturn(List.of());
+
+    List<com.example.mealprep.grocery.api.dto.GrocerySubstitutionProposalDto> result =
+        service.getOutstandingProposals(orderId);
+    // EmptyObjectReturnValsMutator survivor — must be empty (not null), but specifically the
+    // CONCRETE empty list, not the mutated default.
+    assertThat(result).isNotNull().isEmpty();
+  }
+
+  @Test
+  void cancel_returnsNonNullDto_andSetsAllFields() {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.QUEUED);
+    GroceryOrder order = order(GroceryOrderStatus.DRAFT, ln);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+
+    GroceryOrderDto result =
+        service.cancel(USER_ID, new CancelOrderRequest(order.getId(), "reason"));
+
+    // Pin NullReturnValsMutator survivor on cancel line 554.
+    assertThat(result).isNotNull();
+    assertThat(result.status()).isEqualTo(GroceryOrderStatus.CANCELLED);
+    assertThat(order.getCancelReason()).isEqualTo("reason");
+  }
+
+  @Test
+  void markDelivered_returnsNonNullDto_afterAdvance() {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.DELIVERED);
+    GroceryOrder order = order(GroceryOrderStatus.CONFIRMED, ln);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(substitutionPersister.persistAll(any(), any())).thenReturn(List.of());
+
+    GroceryOrderDto result = service.markDelivered(USER_ID, order.getId());
+    assertThat(result).isNotNull();
+    assertThat(result.status()).isEqualTo(GroceryOrderStatus.DELIVERED);
+  }
+
+  @Test
+  void markUserConfirmed_returnsNonNullDto_afterConfirm() {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.ADDED);
+    GroceryOrder order = order(GroceryOrderStatus.AWAITING_USER_CONFIRMATION, ln);
+    order.setProviderOrderId(null);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+
+    GroceryOrderDto result = service.markUserConfirmed(USER_ID, order.getId());
+    assertThat(result).isNotNull();
+    assertThat(result.status()).isEqualTo(GroceryOrderStatus.CONFIRMED);
+  }
+
+  @Test
+  void refreshStatus_returnsNonNullDto_evenWhenNoProviderOrderId() {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.QUEUED);
+    GroceryOrder order = order(GroceryOrderStatus.PLACED, ln);
+    order.setProviderOrderId(null);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+
+    GroceryOrderDto result = service.refreshStatus(USER_ID, order.getId());
+    assertThat(result).isNotNull();
+  }
+
+  @Test
+  void resolveSubstitution_pendingToAccepted_returnsNonNullDto() {
+    GrocerySubstitutionProposal proposal =
+        GroceryTestData.substitutionProposal()
+            .proposalStatus(SubstitutionProposalStatus.PENDING_USER_REVIEW)
+            .build();
+    when(dataGateway.findProposalById(proposal.getId())).thenReturn(Optional.of(proposal));
+    when(dataGateway.saveAndFlushProposal(any())).thenAnswer(inv -> inv.getArgument(0));
+    com.example.mealprep.grocery.api.dto.GrocerySubstitutionProposalDto mapped =
+        org.mockito.Mockito.mock(
+            com.example.mealprep.grocery.api.dto.GrocerySubstitutionProposalDto.class);
+    when(proposalMapper.toDto(any())).thenReturn(mapped);
+
+    com.example.mealprep.grocery.api.dto.GrocerySubstitutionProposalDto result =
+        service.resolveSubstitution(
+            USER_ID,
+            new ResolveSubstitutionRequest(proposal.getId(), SubstitutionProposalStatus.ACCEPTED));
+
+    // Pin NullReturnValsMutator on resolveSubstitution line 623.
+    assertThat(result).isNotNull();
+  }
+
+  @Test
+  void upsertProviderConnection_returnsNonNullDto() {
+    when(dataGateway.findProviderState(USER_ID, "fake")).thenReturn(Optional.empty());
+    when(dataGateway.saveProviderState(any())).thenAnswer(inv -> inv.getArgument(0));
+    com.example.mealprep.grocery.api.dto.GroceryProviderStateDto mapped =
+        org.mockito.Mockito.mock(
+            com.example.mealprep.grocery.api.dto.GroceryProviderStateDto.class);
+    when(providerStateMapper.toDto(any())).thenReturn(mapped);
+
+    com.example.mealprep.grocery.api.dto.GroceryProviderStateDto result =
+        service.upsertProviderConnection(
+            USER_ID, new ProviderConnectionRequest("fake", true, true, 15));
+    assertThat(result).isNotNull();
+  }
+
+  @Test
+  void getProviderState_returnsNonNullDto() {
+    GroceryProviderState state = providerState(true);
+    when(dataGateway.findProviderState(USER_ID, "fake")).thenReturn(Optional.of(state));
+    com.example.mealprep.grocery.api.dto.GroceryProviderStateDto mapped =
+        org.mockito.Mockito.mock(
+            com.example.mealprep.grocery.api.dto.GroceryProviderStateDto.class);
+    when(providerStateMapper.toDto(state)).thenReturn(mapped);
+
+    com.example.mealprep.grocery.api.dto.GroceryProviderStateDto result =
+        service.getProviderState(USER_ID, "fake");
+    assertThat(result).isNotNull();
+  }
+
+  @Test
+  void quote_returnsNonNullDto_andSaveOrderCalled() throws Exception {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.QUEUED);
+    GroceryOrder order = order(GroceryOrderStatus.DRAFT, ln);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(dataGateway.findProviderState(USER_ID, "fake"))
+        .thenReturn(Optional.of(providerState(true)));
+    when(basketDraftAssembler.assemble(order))
+        .thenReturn(new BasketDraft(order.getId(), USER_ID, List.of(), null));
+    when(provider.quote(any())).thenReturn(new QuoteResult("po-1", Map.of(), 0, "GBP", NOW));
+
+    GroceryOrderDto result = service.quote(USER_ID, new QuoteRequest(order.getId()));
+    assertThat(result).isNotNull();
+    verify(dataGateway).saveOrder(order);
+    verify(dataGateway).saveProviderState(any());
+  }
+
+  @Test
+  void placeOrder_returnsNonNullDto_andSetsConfirmLink_andSavesProviderState() throws Exception {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.ADDED);
+    GroceryOrder order = order(GroceryOrderStatus.QUOTED, ln);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(dataGateway.findProviderState(USER_ID, "fake"))
+        .thenReturn(Optional.of(providerState(true)));
+    when(basketDraftAssembler.assemble(order))
+        .thenReturn(new BasketDraft(order.getId(), USER_ID, List.of(), null));
+    when(provider.placeOrder(any()))
+        .thenReturn(
+            new PlaceOrderResult(
+                "po-1",
+                "https://confirm.example",
+                Map.of(),
+                false,
+                List.of(),
+                NOW.minus(60, java.time.temporal.ChronoUnit.SECONDS)));
+
+    GroceryOrderDto result = service.placeOrder(USER_ID, new PlaceOrderRequest(order.getId()));
+
+    // Pin NullReturnValsMutator + multiple VoidMethodCall survivors on placeOrder.
+    assertThat(result).isNotNull();
+    assertThat(order.getConfirmLink()).isEqualTo("https://confirm.example");
+    assertThat(order.getProviderOrderId()).isEqualTo("po-1");
+    // placedAt uses the result's placedAt when non-null:
+    assertThat(order.getPlacedAt()).isEqualTo(NOW.minus(60, java.time.temporal.ChronoUnit.SECONDS));
+    verify(dataGateway).saveOrder(order);
+    verify(dataGateway).saveProviderState(any());
+  }
+
+  @Test
+  void placeOrder_resultPlacedAtNull_fallsBackToNow() throws Exception {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.ADDED);
+    GroceryOrder order = order(GroceryOrderStatus.QUOTED, ln);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(dataGateway.findProviderState(USER_ID, "fake"))
+        .thenReturn(Optional.of(providerState(true)));
+    when(basketDraftAssembler.assemble(order))
+        .thenReturn(new BasketDraft(order.getId(), USER_ID, List.of(), null));
+    when(provider.placeOrder(any()))
+        .thenReturn(
+            new PlaceOrderResult(
+                "po-1", "https://confirm", Map.of(), false, List.of(), null)); // null placedAt
+
+    service.placeOrder(USER_ID, new PlaceOrderRequest(order.getId()));
+
+    assertThat(order.getPlacedAt()).isEqualTo(NOW);
+  }
+
+  @Test
+  void placeOrder_failureLogEntries_appendedToOrder() throws Exception {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.ADDED);
+    GroceryOrder order = order(GroceryOrderStatus.QUOTED, ln);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(dataGateway.findProviderState(USER_ID, "fake"))
+        .thenReturn(Optional.of(providerState(true)));
+    when(basketDraftAssembler.assemble(order))
+        .thenReturn(new BasketDraft(order.getId(), USER_ID, List.of(), null));
+    com.example.mealprep.grocery.domain.entity.AutomationFailureRecord rec =
+        new com.example.mealprep.grocery.domain.entity.AutomationFailureRecord(
+            "place", "oops", NOW);
+    when(provider.placeOrder(any()))
+        .thenReturn(new PlaceOrderResult("po-1", "url", Map.of(), false, List.of(rec), NOW));
+
+    service.placeOrder(USER_ID, new PlaceOrderRequest(order.getId()));
+
+    assertThat(order.getAutomationFailureLog()).contains(rec);
+  }
+
+  @Test
+  void placeOrder_emptyFailureLog_notAppended_lineStatusesNullTreatedAsEmpty() throws Exception {
+    // The `if (result.failureLog() != null && !result.failureLog().isEmpty())` filter must
+    // suppress appending when empty. And lineStatuses null → Map.of() fallback.
+    GroceryOrderLine ln = line("flour", OrderLineStatus.ADDED);
+    GroceryOrder order = order(GroceryOrderStatus.QUOTED, ln);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(dataGateway.findProviderState(USER_ID, "fake"))
+        .thenReturn(Optional.of(providerState(true)));
+    when(basketDraftAssembler.assemble(order))
+        .thenReturn(new BasketDraft(order.getId(), USER_ID, List.of(), null));
+    when(provider.placeOrder(any()))
+        .thenReturn(new PlaceOrderResult("po-1", "url", null, false, List.of(), NOW));
+
+    service.placeOrder(USER_ID, new PlaceOrderRequest(order.getId()));
+
+    // Line status was NOT changed (no entry for it in null lineStatuses map).
+    assertThat(ln.getLineStatus()).isEqualTo(OrderLineStatus.ADDED);
+    assertThat(order.getAutomationFailureLog()).isEmpty();
+  }
+
+  @Test
+  void applyStatusTotals_allFieldsCopied_whenStatusHasThem() throws Exception {
+    // markUserConfirmed exercises applyStatusTotals via the provider.checkStatus path. Pin each
+    // VoidMethodCallMutator on the setX calls + each NegateConditional on the null guards.
+    GroceryOrderLine ln = line("flour", OrderLineStatus.ADDED);
+    GroceryOrder order = order(GroceryOrderStatus.AWAITING_USER_CONFIRMATION, ln);
+    order.setProviderOrderId("po-1");
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    Instant slotStart = NOW.minus(10, java.time.temporal.ChronoUnit.MINUTES);
+    Instant slotEnd = NOW.plus(50, java.time.temporal.ChronoUnit.MINUTES);
+    when(provider.checkStatus("po-1"))
+        .thenReturn(
+            new OrderStatus(
+                GroceryOrderStatus.CONFIRMED,
+                "ready",
+                slotStart,
+                slotEnd,
+                250,
+                300,
+                List.of(),
+                NOW));
+
+    service.markUserConfirmed(USER_ID, order.getId());
+
+    assertThat(order.getDeliverySlotStart()).isEqualTo(slotStart);
+    assertThat(order.getDeliverySlotEnd()).isEqualTo(slotEnd);
+    assertThat(order.getConfirmedTotalPence()).isEqualTo(250);
+    assertThat(order.getPaidTotalPence()).isEqualTo(300);
+  }
+
+  @Test
+  void applyStatusTotals_allNullFields_doesNotOverrideExistingValues() throws Exception {
+    // When all status fields are null, the order's existing values are preserved (null-check
+    // guards).
+    GroceryOrderLine ln = line("flour", OrderLineStatus.ADDED);
+    GroceryOrder order = order(GroceryOrderStatus.AWAITING_USER_CONFIRMATION, ln);
+    order.setProviderOrderId("po-1");
+    Instant existingStart = NOW.minus(1, java.time.temporal.ChronoUnit.HOURS);
+    order.setDeliverySlotStart(existingStart);
+    order.setConfirmedTotalPence(99);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(provider.checkStatus("po-1"))
+        .thenReturn(
+            new OrderStatus(
+                GroceryOrderStatus.CONFIRMED, "ready", null, null, null, null, List.of(), NOW));
+
+    service.markUserConfirmed(USER_ID, order.getId());
+
+    // Existing values preserved (all setX's were skipped due to null guards).
+    assertThat(order.getDeliverySlotStart()).isEqualTo(existingStart);
+    assertThat(order.getConfirmedTotalPence()).isEqualTo(99);
+  }
+
+  @Test
+  void quote_writesProviderOrderId_andQuotedTotal_explicitly() throws Exception {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.QUEUED);
+    GroceryOrder order = order(GroceryOrderStatus.DRAFT, ln);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(dataGateway.findProviderState(USER_ID, "fake"))
+        .thenReturn(Optional.of(providerState(true)));
+    when(basketDraftAssembler.assemble(order))
+        .thenReturn(new BasketDraft(order.getId(), USER_ID, List.of(), null));
+    when(provider.quote(any()))
+        .thenReturn(new QuoteResult("PROV-XYZ", Map.of(), 12345, "USD", NOW));
+
+    service.quote(USER_ID, new QuoteRequest(order.getId()));
+
+    // Pin VoidMethodCallMutator on the setProviderOrderId / setQuotedTotalPence / setCurrency
+    // calls in quote.
+    assertThat(order.getProviderOrderId()).isEqualTo("PROV-XYZ");
+    assertThat(order.getQuotedTotalPence()).isEqualTo(12345);
+    assertThat(order.getCurrency()).isEqualTo("USD"); // overridden when provider supplied
+  }
+
+  @Test
+  void writeQuoteObservation_householdNull_fallsBackToUserId() throws Exception {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.QUEUED);
+    GroceryOrder order = order(GroceryOrderStatus.DRAFT, ln);
+    order.setHouseholdId(null); // null → falls back to userId on the observation
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(dataGateway.findProviderState(USER_ID, "fake"))
+        .thenReturn(Optional.of(providerState(true)));
+    when(basketDraftAssembler.assemble(order))
+        .thenReturn(new BasketDraft(order.getId(), USER_ID, List.of(), null));
+    QuoteLineResult lr = new QuoteLineResult(OrderLineStatus.ADDED, "resolved-sku", 120, 2, null);
+    when(provider.quote(any()))
+        .thenReturn(new QuoteResult("po-1", Map.of(ln.getId(), lr), 240, null, NOW));
+
+    service.quote(USER_ID, new QuoteRequest(order.getId()));
+
+    ArgumentCaptor<PriceObservationWriter.WriteCommand> cmd =
+        ArgumentCaptor.forClass(PriceObservationWriter.WriteCommand.class);
+    verify(priceObservationWriter).write(cmd.capture());
+    assertThat(cmd.getValue().householdId()).isEqualTo(USER_ID);
+    // packCountResolved supplied → that wins over line.packCountRequested.
+    assertThat(cmd.getValue().packCount()).isEqualTo(2);
+  }
+
+  @Test
+  void writeQuoteObservation_packCountResolvedNull_fallsBackToLinePackCount() throws Exception {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.QUEUED);
+    GroceryOrder order = order(GroceryOrderStatus.DRAFT, ln);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(dataGateway.findProviderState(USER_ID, "fake"))
+        .thenReturn(Optional.of(providerState(true)));
+    when(basketDraftAssembler.assemble(order))
+        .thenReturn(new BasketDraft(order.getId(), USER_ID, List.of(), null));
+    QuoteLineResult lr =
+        new QuoteLineResult(OrderLineStatus.ADDED, "resolved-sku", 120, null, null);
+    when(provider.quote(any()))
+        .thenReturn(new QuoteResult("po-1", Map.of(ln.getId(), lr), 240, "GBP", NOW));
+
+    service.quote(USER_ID, new QuoteRequest(order.getId()));
+
+    ArgumentCaptor<PriceObservationWriter.WriteCommand> cmd =
+        ArgumentCaptor.forClass(PriceObservationWriter.WriteCommand.class);
+    verify(priceObservationWriter).write(cmd.capture());
+    assertThat(cmd.getValue().packCount()).isEqualTo(2); // ln.packCountRequested fallback
+  }
+
   // ============================== helpers ==============================
 
   private ShoppingList shoppingList() {
