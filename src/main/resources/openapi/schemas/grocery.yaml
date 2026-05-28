@@ -365,3 +365,271 @@ RefreshPricesResultDto:
     fallbackMessage:
       type: string
       nullable: true
+
+# ===== Tier 3 — grocery order (01e) =====
+
+GroceryOrderStatus:
+  type: string
+  enum:
+    [DRAFT, QUOTED, PLACED, PLACED_PARTIAL, AWAITING_USER_CONFIRMATION, CONFIRMED, DELIVERED,
+     RECONCILED, CANCELLED, ARCHIVED, PROVIDER_UNAVAILABLE]
+
+OrderLineStatus:
+  type: string
+  enum: [QUEUED, ADDED, ADDED_PARTIAL, UNAVAILABLE, SUBSTITUTED, DELIVERED, REJECTED]
+
+SubstitutionProposalStatus:
+  type: string
+  enum: [PENDING_USER_REVIEW, ACCEPTED, REJECTED, UNPARSED]
+
+GroceryOrderLineDto:
+  type: object
+  required:
+    [id, ingredientMappingKey, displayName, quantityRequested, quantityUnit, lineStatus]
+  properties:
+    id: { type: string, format: uuid }
+    shoppingListLineId:
+      type: string
+      format: uuid
+      nullable: true
+    providerProductId:
+      type: string
+      maxLength: 128
+      nullable: true
+    ingredientMappingKey: { type: string, maxLength: 128 }
+    displayName: { type: string, maxLength: 255 }
+    quantityRequested: { type: number }
+    quantityUnit: { type: string, maxLength: 16 }
+    packSizeG:
+      type: integer
+      nullable: true
+    packCountRequested:
+      type: integer
+      nullable: true
+    packCountDelivered:
+      type: integer
+      nullable: true
+    quotedUnitPence:
+      type: integer
+      nullable: true
+    confirmedUnitPence:
+      type: integer
+      nullable: true
+    paidUnitPence:
+      type: integer
+      nullable: true
+    lineStatus: { $ref: '#/OrderLineStatus' }
+    note:
+      type: string
+      maxLength: 255
+      nullable: true
+
+GrocerySubstitutionProposalDto:
+  type: object
+  required:
+    [id, groceryOrderId, originalProductId, originalDisplayName, substituteProductId,
+     substituteDisplayName, proposalStatus]
+  properties:
+    id: { type: string, format: uuid }
+    groceryOrderId: { type: string, format: uuid }
+    groceryOrderLineId:
+      type: string
+      format: uuid
+      nullable: true
+    originalProductId: { type: string, maxLength: 128 }
+    originalDisplayName: { type: string, maxLength: 255 }
+    originalIngredientMappingKey:
+      type: string
+      maxLength: 128
+      nullable: true
+    substituteProductId: { type: string, maxLength: 128 }
+    substituteDisplayName: { type: string, maxLength: 255 }
+    substituteIngredientMappingKey:
+      type: string
+      maxLength: 128
+      nullable: true
+    substituteQuantity:
+      type: number
+      nullable: true
+    substituteUnit:
+      type: string
+      maxLength: 16
+      nullable: true
+    substituteUnitPence:
+      type: integer
+      nullable: true
+    reason:
+      type: string
+      maxLength: 255
+      nullable: true
+    proposalStatus: { $ref: '#/SubstitutionProposalStatus' }
+    resolvedAt:
+      type: string
+      format: date-time
+      nullable: true
+    resolvedByUserId:
+      type: string
+      format: uuid
+      nullable: true
+
+GroceryOrderDto:
+  type: object
+  required:
+    [id, userId, shoppingListId, providerKey, status, currency, lines, version]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    householdId:
+      type: string
+      format: uuid
+      nullable: true
+    shoppingListId: { type: string, format: uuid }
+    providerKey: { type: string, maxLength: 32 }
+    providerOrderId:
+      type: string
+      maxLength: 128
+      nullable: true
+    status: { $ref: '#/GroceryOrderStatus' }
+    statusReason:
+      type: string
+      maxLength: 255
+      nullable: true
+    quotedTotalPence:
+      type: integer
+      nullable: true
+    confirmedTotalPence:
+      type: integer
+      nullable: true
+    paidTotalPence:
+      type: integer
+      nullable: true
+    currency: { type: string, maxLength: 3 }
+    deliverySlotStart:
+      type: string
+      format: date-time
+      nullable: true
+    deliverySlotEnd:
+      type: string
+      format: date-time
+      nullable: true
+    confirmLink:
+      type: string
+      nullable: true
+    placedAt:
+      type: string
+      format: date-time
+      nullable: true
+    confirmedAt:
+      type: string
+      format: date-time
+      nullable: true
+    deliveredAt:
+      type: string
+      format: date-time
+      nullable: true
+    reconciledAt:
+      type: string
+      format: date-time
+      nullable: true
+    cancelledAt:
+      type: string
+      format: date-time
+      nullable: true
+    cancelReason:
+      type: string
+      maxLength: 64
+      nullable: true
+    lastStatusCheckAt:
+      type: string
+      format: date-time
+      nullable: true
+    lines:
+      type: array
+      items: { $ref: '#/GroceryOrderLineDto' }
+    outstandingProposals:
+      type: array
+      nullable: true
+      items: { $ref: '#/GrocerySubstitutionProposalDto' }
+    version: { type: integer, format: int64 }
+
+GroceryOrderDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/GroceryOrderDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+
+GroceryProviderStateDto:
+  type: object
+  required: [id, userId, providerKey, enabled, consecutiveFailures, scheduledRefreshEnabled, refreshTopNIngredients]
+  properties:
+    id: { type: string, format: uuid }
+    userId: { type: string, format: uuid }
+    providerKey: { type: string, maxLength: 32 }
+    enabled: { type: boolean }
+    sessionExpiresAt:
+      type: string
+      format: date-time
+      nullable: true
+    lastLoginAt:
+      type: string
+      format: date-time
+      nullable: true
+    lastFailureAt:
+      type: string
+      format: date-time
+      nullable: true
+    lastFailureReason:
+      type: string
+      maxLength: 255
+      nullable: true
+    consecutiveFailures: { type: integer }
+    scheduledRefreshEnabled: { type: boolean }
+    refreshTopNIngredients: { type: integer }
+
+CreateOrderRequest:
+  type: object
+  required: [shoppingListId, providerKey]
+  properties:
+    shoppingListId: { type: string, format: uuid }
+    providerKey: { type: string, minLength: 1 }
+
+CancelOrderRequest:
+  type: object
+  required: [groceryOrderId]
+  properties:
+    groceryOrderId: { type: string, format: uuid }
+    reason:
+      type: string
+      maxLength: 64
+      nullable: true
+
+ResolveSubstitutionRequest:
+  type: object
+  required: [proposalId, decision]
+  properties:
+    proposalId: { type: string, format: uuid }
+    decision: { $ref: '#/SubstitutionProposalStatus' }
+
+ProviderConnectionRequest:
+  type: object
+  required: [providerKey]
+  properties:
+    providerKey: { type: string, minLength: 1 }
+    enabled: { type: boolean }
+    scheduledRefreshEnabled: { type: boolean }
+    refreshTopNIngredients:
+      type: integer
+      minimum: 0
+      maximum: 200
+      nullable: true
