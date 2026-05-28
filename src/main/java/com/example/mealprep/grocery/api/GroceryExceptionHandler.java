@@ -5,6 +5,7 @@ import com.example.mealprep.config.ProblemDetailSupport;
 import com.example.mealprep.grocery.exception.GroceryOrderNotFoundException;
 import com.example.mealprep.grocery.exception.GrocerySubstitutionProposalNotFoundException;
 import com.example.mealprep.grocery.exception.IllegalOrderTransitionException;
+import com.example.mealprep.grocery.exception.IllegalSubstitutionStateException;
 import com.example.mealprep.grocery.exception.LineAlreadyBoughtException;
 import com.example.mealprep.grocery.exception.LineNotBoughtException;
 import com.example.mealprep.grocery.exception.OrderConcurrencyConflictException;
@@ -104,6 +105,24 @@ public class GroceryExceptionHandler {
     if (pd != null) {
       pd.setProperty("from", ex.from());
       pd.setProperty("to", ex.to());
+    }
+    return response;
+  }
+
+  @ExceptionHandler(IllegalSubstitutionStateException.class)
+  public ResponseEntity<ProblemDetail> handleIllegalSubstitutionState(
+      IllegalSubstitutionStateException ex, HttpServletRequest req) {
+    ResponseEntity<ProblemDetail> response =
+        problem(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "illegal-substitution-state",
+            "Illegal substitution resolve",
+            req);
+    ProblemDetail pd = response.getBody();
+    if (pd != null) {
+      pd.setProperty("proposalId", ex.proposalId());
+      pd.setProperty("attemptedDecision", ex.attemptedDecision());
     }
     return response;
   }

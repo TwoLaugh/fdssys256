@@ -43,6 +43,12 @@ public class FakeGroceryProvider implements GroceryProvider {
   private volatile FailureMode failureMode = FailureMode.NONE;
   private volatile String unavailableReason = "provider_down";
 
+  // checkStatus tuning (grocery-01f): when delivered==true, checkStatus reports DELIVERED and
+  // surfaces the configured substitutions (the realistic delivery-with-substitutions path that
+  // persists proposals via SubstitutionPersister).
+  private volatile boolean delivered = false;
+  private volatile List<SubstitutionProposal> substitutions = List.of();
+
   public FakeGroceryProvider(ReferencePriceSource referencePriceSource, Clock clock) {
     this.referencePriceSource = referencePriceSource;
     this.clock = clock;
@@ -57,10 +63,22 @@ public class FakeGroceryProvider implements GroceryProvider {
     this.unavailableReason = reason;
   }
 
+  /** Make the NEXT {@code checkStatus} report DELIVERED (the refresh-status auto-deliver path). */
+  public void setDelivered(boolean delivered) {
+    this.delivered = delivered;
+  }
+
+  /** Substitutions {@code checkStatus} surfaces when {@link #setDelivered(boolean)} is true. */
+  public void setSubstitutions(List<SubstitutionProposal> substitutions) {
+    this.substitutions = substitutions == null ? List.of() : List.copyOf(substitutions);
+  }
+
   /** Reset to the happy path. */
   public void reset() {
     this.failureMode = FailureMode.NONE;
     this.unavailableReason = "provider_down";
+    this.delivered = false;
+    this.substitutions = List.of();
   }
 
   @Override
@@ -143,6 +161,18 @@ public class FakeGroceryProvider implements GroceryProvider {
       throw new ProviderUnavailableException(PROVIDER_KEY, unavailableReason, "fake provider down");
     }
     Instant now = clock.instant();
+    if (delivered) {
+      // Delivery report: DELIVERED + any configured substitutions (persisted as proposals).
+      return new OrderStatus(
+          GroceryOrderStatus.DELIVERED,
+          "delivered",
+          now.plusSeconds(3600),
+          now.plusSeconds(7200),
+          null,
+          null,
+          substitutions,
+          now);
+    }
     return new OrderStatus(
         GroceryOrderStatus.CONFIRMED,
         "confirmed",

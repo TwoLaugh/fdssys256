@@ -1,5 +1,6 @@
 package com.example.mealprep.grocery.testdata;
 
+import com.example.mealprep.grocery.domain.entity.GrocerySubstitutionProposal;
 import com.example.mealprep.grocery.domain.entity.LineFulfilmentStatus;
 import com.example.mealprep.grocery.domain.entity.PackSizeHeuristic;
 import com.example.mealprep.grocery.domain.entity.PriceObservation;
@@ -8,6 +9,8 @@ import com.example.mealprep.grocery.domain.entity.ReferencePriceRow;
 import com.example.mealprep.grocery.domain.entity.ShoppingList;
 import com.example.mealprep.grocery.domain.entity.ShoppingListLine;
 import com.example.mealprep.grocery.domain.entity.ShoppingListLineType;
+import com.example.mealprep.grocery.domain.entity.SubstitutionProposalStatus;
+import com.example.mealprep.grocery.domain.service.internal.providers.SubstitutionProposal;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -109,6 +112,66 @@ public final class GroceryTestData {
         .packUnit("g")
         .rank(rank)
         .build();
+  }
+
+  /**
+   * A persisted-shape {@link GrocerySubstitutionProposal} (01f) with sane defaults: a parseable,
+   * {@code PENDING_USER_REVIEW} proposal (original "white rice" → substitute "brown rice").
+   * Override fields via the builder; set {@code groceryOrderId} to attach it to an order.
+   */
+  public static GrocerySubstitutionProposal.GrocerySubstitutionProposalBuilder
+      substitutionProposal() {
+    Instant now = Instant.now();
+    return GrocerySubstitutionProposal.builder()
+        .id(UUID.randomUUID())
+        .groceryOrderId(UUID.randomUUID())
+        .originalProductId("fake-sku-white rice")
+        .originalDisplayName("White rice")
+        .originalIngredientMappingKey("white rice")
+        .substituteProductId("fake-sku-brown rice")
+        .substituteDisplayName("Brown rice")
+        .substituteIngredientMappingKey(null)
+        .substituteQuantity(new BigDecimal("1.000"))
+        .substituteUnit("kg")
+        .substituteUnitPence(22)
+        .reason("out of stock")
+        .proposalStatus(SubstitutionProposalStatus.PENDING_USER_REVIEW)
+        .version(0L)
+        .createdAt(now)
+        .updatedAt(now);
+  }
+
+  /**
+   * A provider-surfaced {@link SubstitutionProposal} (the SPI record the persister maps). {@code
+   * originalProductId} should match the order line's {@code providerProductId} (the fake sets it to
+   * {@code "fake-sku-" + key}) so the persister can attach the proposal to its line.
+   */
+  public static SubstitutionProposal providerSubstitution(
+      String originalKey, String substituteName) {
+    return new SubstitutionProposal(
+        "fake-sku-" + originalKey,
+        "Original " + originalKey,
+        "fake-sku-sub-" + originalKey,
+        substituteName,
+        new BigDecimal("1.000"),
+        "kg",
+        22,
+        "out of stock",
+        null);
+  }
+
+  /** A provider-surfaced OPAQUE substitution (no substitute product id) → persisted UNPARSED. */
+  public static SubstitutionProposal opaqueProviderSubstitution(String originalKey) {
+    return new SubstitutionProposal(
+        "fake-sku-" + originalKey,
+        "Original " + originalKey,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "dom differs",
+        null);
   }
 
   /** A persisted-shape {@link ReferencePriceRow} (01c) with the e2e chicken-breast defaults. */

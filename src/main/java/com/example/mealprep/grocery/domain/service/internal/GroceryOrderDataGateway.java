@@ -3,7 +3,9 @@ package com.example.mealprep.grocery.domain.service.internal;
 import com.example.mealprep.grocery.domain.entity.GroceryOrder;
 import com.example.mealprep.grocery.domain.entity.GroceryOrderStatus;
 import com.example.mealprep.grocery.domain.entity.GroceryProviderState;
+import com.example.mealprep.grocery.domain.entity.GrocerySubstitutionProposal;
 import com.example.mealprep.grocery.domain.entity.ShoppingList;
+import com.example.mealprep.grocery.domain.entity.SubstitutionProposalStatus;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -40,6 +42,32 @@ public interface GroceryOrderDataGateway {
   // ---- shopping list (the draft snapshot source) ----
 
   Optional<ShoppingList> findShoppingListWithLinesById(UUID shoppingListId);
+
+  // ---- substitution proposals (grocery-01f) — queried separately from the order aggregate ----
+
+  /** Persist (insert or update) a substitution proposal. */
+  GrocerySubstitutionProposal saveProposal(GrocerySubstitutionProposal proposal);
+
+  /**
+   * Persist a proposal and flush so its {@code @Version} reflects the DB state (used by the resolve
+   * path so a concurrent stale resolve surfaces an {@code OptimisticLockException} → 409).
+   */
+  GrocerySubstitutionProposal saveAndFlushProposal(GrocerySubstitutionProposal proposal);
+
+  /** Load a single proposal by id (404 mapping is the caller's). */
+  Optional<GrocerySubstitutionProposal> findProposalById(UUID proposalId);
+
+  /** All proposals for an order (any status). */
+  List<GrocerySubstitutionProposal> findProposalsByOrderId(UUID orderId);
+
+  /**
+   * Proposals for an order in a given status (e.g. the outstanding {@code PENDING_USER_REVIEW}).
+   */
+  List<GrocerySubstitutionProposal> findProposalsByOrderIdAndStatus(
+      UUID orderId, SubstitutionProposalStatus status);
+
+  /** Count proposals for an order whose status is in {@code statuses} — the reconcile gate. */
+  long countProposalsByOrderIdAndStatusIn(UUID orderId, List<SubstitutionProposalStatus> statuses);
 
   // ---- provider-state reads / writes ----
 
