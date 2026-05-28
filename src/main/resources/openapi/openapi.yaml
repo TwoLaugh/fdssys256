@@ -388,6 +388,29 @@ paths:
     $ref: 'paths/grocery.yaml#/priceHistoryManual'
   /api/v1/grocery/price-history/refresh:
     $ref: 'paths/grocery.yaml#/priceHistoryRefresh'
+  # ===== grocery — order (01e) =====
+  /api/v1/grocery/orders:
+    $ref: 'paths/grocery.yaml#/groceryOrders'
+  /api/v1/grocery/orders/{orderId}:
+    $ref: 'paths/grocery.yaml#/groceryOrderById'
+  /api/v1/grocery/orders/{orderId}/quote:
+    $ref: 'paths/grocery.yaml#/groceryOrderQuote'
+  /api/v1/grocery/orders/{orderId}/place:
+    $ref: 'paths/grocery.yaml#/groceryOrderPlace'
+  /api/v1/grocery/orders/{orderId}/mark-user-confirmed:
+    $ref: 'paths/grocery.yaml#/groceryOrderMarkUserConfirmed'
+  /api/v1/grocery/orders/{orderId}/refresh-status:
+    $ref: 'paths/grocery.yaml#/groceryOrderRefreshStatus'
+  /api/v1/grocery/orders/{orderId}/mark-delivered:
+    $ref: 'paths/grocery.yaml#/groceryOrderMarkDelivered'
+  /api/v1/grocery/orders/{orderId}/cancel:
+    $ref: 'paths/grocery.yaml#/groceryOrderCancel'
+  /api/v1/grocery/orders/{orderId}/substitutions:
+    $ref: 'paths/grocery.yaml#/groceryOrderSubstitutions'
+  /api/v1/grocery/orders/{orderId}/substitutions/{proposalId}/resolve:
+    $ref: 'paths/grocery.yaml#/groceryOrderSubstitutionResolve'
+  /api/v1/grocery/orders/providers/{providerKey}:
+    $ref: 'paths/grocery.yaml#/groceryOrderProviderState'
 components:
   securitySchemes:
     cookieAuth:
@@ -837,6 +860,19 @@ components:
     RecordManualPriceRequest: { $ref: 'schemas/grocery.yaml#/RecordManualPriceRequest' }
     RefreshPricesRequest: { $ref: 'schemas/grocery.yaml#/RefreshPricesRequest' }
     RefreshPricesResultDto: { $ref: 'schemas/grocery.yaml#/RefreshPricesResultDto' }
+    # grocery — order (01e)
+    GroceryOrderStatus: { $ref: 'schemas/grocery.yaml#/GroceryOrderStatus' }
+    OrderLineStatus: { $ref: 'schemas/grocery.yaml#/OrderLineStatus' }
+    SubstitutionProposalStatus: { $ref: 'schemas/grocery.yaml#/SubstitutionProposalStatus' }
+    GroceryOrderLineDto: { $ref: 'schemas/grocery.yaml#/GroceryOrderLineDto' }
+    GrocerySubstitutionProposalDto: { $ref: 'schemas/grocery.yaml#/GrocerySubstitutionProposalDto' }
+    GroceryOrderDto: { $ref: 'schemas/grocery.yaml#/GroceryOrderDto' }
+    GroceryOrderDtoPage: { $ref: 'schemas/grocery.yaml#/GroceryOrderDtoPage' }
+    GroceryProviderStateDto: { $ref: 'schemas/grocery.yaml#/GroceryProviderStateDto' }
+    CreateOrderRequest: { $ref: 'schemas/grocery.yaml#/CreateOrderRequest' }
+    CancelOrderRequest: { $ref: 'schemas/grocery.yaml#/CancelOrderRequest' }
+    ResolveSubstitutionRequest: { $ref: 'schemas/grocery.yaml#/ResolveSubstitutionRequest' }
+    ProviderConnectionRequest: { $ref: 'schemas/grocery.yaml#/ProviderConnectionRequest' }
     # common (cross-module)
     ProblemDetail: { $ref: 'schemas/common.yaml#/ProblemDetail' }
     PageEnvelope: { $ref: 'schemas/common.yaml#/PageEnvelope' }

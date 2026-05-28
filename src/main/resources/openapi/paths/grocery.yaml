@@ -450,3 +450,468 @@ priceHistoryRefresh:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+# ===== Tier 3 — grocery order (01e) =====
+
+groceryOrders:
+  get:
+    tags: [Grocery — Order]
+    operationId: getMyGroceryOrders
+    summary: 'Paginated grocery orders for the caller, newest-first.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of grocery orders.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryOrderDtoPage' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  post:
+    tags: [Grocery — Order]
+    operationId: createGroceryOrder
+    summary: 'Create a draft order from a shopping list (clones the list lines).'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/grocery.yaml#/CreateOrderRequest' }
+    responses:
+      '201':
+        description: The created draft order.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryOrderDto' }
+      '400':
+        description: 'Validation error.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such shopping list.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Concurrent operation in progress.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Provider not configured / disabled.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+groceryOrderById:
+  get:
+    tags: [Grocery — Order]
+    operationId: getGroceryOrderById
+    summary: 'Fetch a grocery order by id (with its lines).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The grocery order.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryOrderDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such order.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+groceryOrderQuote:
+  post:
+    tags: [Grocery — Order]
+    operationId: quoteGroceryOrder
+    summary: 'Quote a draft order against the provider (DRAFT → QUOTED).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The quoted order.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryOrderDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such order / provider state.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Concurrent operation in progress, or an illegal transition.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Provider not configured / disabled.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '503':
+        description: 'Provider unavailable, or AI features paused (reverts to DRAFT).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+groceryOrderPlace:
+  post:
+    tags: [Grocery — Order]
+    operationId: placeGroceryOrder
+    summary: 'Place a quoted order (drives to checkout; auto-advances to AWAITING_USER_CONFIRMATION; never auto-confirms). A partial place returns 200 with PLACED_PARTIAL.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'The placed order (PLACED → AWAITING_USER_CONFIRMATION, or PLACED_PARTIAL on a fail-forward partial).'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryOrderDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such order / provider state.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Concurrent operation in progress, or an illegal transition.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Provider not configured / disabled.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '503':
+        description: 'Provider unavailable, or AI features paused (reverts to DRAFT).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+groceryOrderMarkUserConfirmed:
+  post:
+    tags: [Grocery — Order]
+    operationId: markGroceryOrderUserConfirmed
+    summary: 'Mark an order user-confirmed (AWAITING_USER_CONFIRMATION → CONFIRMED).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The confirmed order.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryOrderDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such order.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Illegal transition (not awaiting confirmation).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+groceryOrderRefreshStatus:
+  post:
+    tags: [Grocery — Order]
+    operationId: refreshGroceryOrderStatus
+    summary: 'Pull the provider status for an order and apply lifecycle implications.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The refreshed order.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryOrderDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such order.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Concurrent operation in progress.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '503':
+        description: 'Provider unavailable.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+groceryOrderMarkDelivered:
+  post:
+    tags: [Grocery — Order]
+    operationId: markGroceryOrderDelivered
+    summary: 'Mark an order delivered (CONFIRMED → DELIVERED).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The delivered order.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryOrderDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such order.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Illegal transition (not confirmed).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+groceryOrderCancel:
+  post:
+    tags: [Grocery — Order]
+    operationId: cancelGroceryOrder
+    summary: 'Cancel an order (legal until delivered; 409 after reconciled/archived).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/grocery.yaml#/CancelOrderRequest' }
+    responses:
+      '200':
+        description: The cancelled order.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryOrderDto' }
+      '400':
+        description: 'Validation error (path/body id mismatch).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such order.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Illegal transition (already reconciled/archived).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+groceryOrderSubstitutions:
+  get:
+    tags: [Grocery — Order]
+    operationId: getGroceryOrderSubstitutions
+    summary: 'Outstanding substitution proposals for an order (resolution lands in 01f).'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Outstanding proposals (empty when none).'
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '../schemas/grocery.yaml#/GrocerySubstitutionProposalDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such order.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+groceryOrderSubstitutionResolve:
+  post:
+    tags: [Grocery — Order]
+    operationId: resolveGroceryOrderSubstitution
+    summary: 'Resolve a substitution proposal (ACCEPTED | REJECTED). Behaviour lands in 01f.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: proposalId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/grocery.yaml#/ResolveSubstitutionRequest' }
+    responses:
+      '200':
+        description: The resolved proposal.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GrocerySubstitutionProposalDto' }
+      '400':
+        description: 'Validation error (path/body id mismatch).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such order / proposal.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Proposal already resolved (stale resolve).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+groceryOrderProviderState:
+  get:
+    tags: [Grocery — Order]
+    operationId: getGroceryProviderState
+    summary: "Read the caller's provider connection state."
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: providerKey
+        required: true
+        schema: { type: string }
+    responses:
+      '200':
+        description: The provider state.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryProviderStateDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No provider state for that key.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+  put:
+    tags: [Grocery — Order]
+    operationId: upsertGroceryProviderConnection
+    summary: "Create or update the caller's provider connection (enable/disable/refresh)."
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: providerKey
+        required: true
+        schema: { type: string }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/grocery.yaml#/ProviderConnectionRequest' }
+    responses:
+      '200':
+        description: The upserted provider state.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryProviderStateDto' }
+      '400':
+        description: 'Validation error (path/body key mismatch).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
