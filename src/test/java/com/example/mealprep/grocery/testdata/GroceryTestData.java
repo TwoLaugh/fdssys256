@@ -1,5 +1,6 @@
 package com.example.mealprep.grocery.testdata;
 
+import com.example.mealprep.grocery.domain.entity.GroceryProviderState;
 import com.example.mealprep.grocery.domain.entity.GrocerySubstitutionProposal;
 import com.example.mealprep.grocery.domain.entity.LineFulfilmentStatus;
 import com.example.mealprep.grocery.domain.entity.PackSizeHeuristic;
@@ -172,6 +173,27 @@ public final class GroceryTestData {
         null,
         "dom differs",
         null);
+  }
+
+  /**
+   * A {@link GroceryProviderState} builder (grocery-01g) wired against the {@code "fake"} provider
+   * with {@code scheduled_refresh_enabled = true} and the default top-N (50). Override {@code
+   * userId} / {@code scheduledRefreshEnabled} / {@code refreshTopNIngredients} via the builder
+   * before {@code .build()}.
+   */
+  public static GroceryProviderState.GroceryProviderStateBuilder providerState() {
+    Instant now = Instant.now();
+    return GroceryProviderState.builder()
+        .id(UUID.randomUUID())
+        .userId(UUID.randomUUID())
+        .providerKey("fake")
+        .enabled(true)
+        .consecutiveFailures(0)
+        .scheduledRefreshEnabled(true)
+        .refreshTopNIngredients(50)
+        .version(0L)
+        .createdAt(now)
+        .updatedAt(now);
   }
 
   /** A persisted-shape {@link ReferencePriceRow} (01c) with the e2e chicken-breast defaults. */

@@ -76,6 +76,16 @@ class GroceryOrderDataGatewayImpl implements GroceryOrderDataGateway {
   }
 
   @Override
+  public List<GroceryOrder> findOrdersByStatus(GroceryOrderStatus status) {
+    return orderRepository.findAllByStatus(status);
+  }
+
+  @Override
+  public List<GroceryOrder> findReconciledOlderThan(Instant threshold) {
+    return orderRepository.findReconciledOlderThan(threshold);
+  }
+
+  @Override
   public GroceryOrder saveOrder(GroceryOrder order) {
     return orderRepository.save(order);
   }
@@ -130,6 +140,16 @@ class GroceryOrderDataGatewayImpl implements GroceryOrderDataGateway {
   @Override
   public GroceryProviderState saveProviderState(GroceryProviderState state) {
     return providerStateRepository.save(state);
+  }
+
+  @Override
+  public List<GroceryProviderState> findProviderStatesWithScheduledRefreshEnabled() {
+    return providerStateRepository.findAllByScheduledRefreshEnabledTrue();
+  }
+
+  @Override
+  public List<GroceryProviderState> findProviderStatesByUserId(UUID userId) {
+    return providerStateRepository.findAllByUserId(userId);
   }
 
   @Override

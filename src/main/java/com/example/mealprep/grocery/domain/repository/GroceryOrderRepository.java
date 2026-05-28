@@ -37,6 +37,20 @@ interface GroceryOrderRepository extends JpaRepository<GroceryOrder, UUID> {
         and o.status not in ('CANCELLED', 'RECONCILED', 'ARCHIVED')""")
   List<GroceryOrder> findActiveByShoppingListId(@Param("listId") UUID listId);
 
+  /** All orders in {@code status} — used by the grocery-01g hourly status / retry sweep. */
+  List<GroceryOrder> findAllByStatus(GroceryOrderStatus status);
+
+  /**
+   * RECONCILED orders whose {@code reconciledAt} is at or before {@code threshold} — the
+   * grocery-01g daily archival sweep candidate set (GROC-35, 12-month boundary). Inclusive on the
+   * threshold so "exactly 12 months ago" is included.
+   */
+  @Query(
+      """
+      select o from GroceryOrder o where o.status = 'RECONCILED'
+        and o.reconciledAt is not null and o.reconciledAt <= :threshold""")
+  List<GroceryOrder> findReconciledOlderThan(@Param("threshold") Instant threshold);
+
   /**
    * Immediate bulk status+reason update bypassing the persistence context — used by {@code
    * OrderFailureRecorder} in its {@code REQUIRES_NEW} transaction so the failure-forward state

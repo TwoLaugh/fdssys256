@@ -108,7 +108,15 @@ class ManualFulfilmentServiceTest {
             shoppingListMapper,
             planQueryService,
             eventPublisher,
-            markBoughtInventoryBridge);
+            markBoughtInventoryBridge,
+            new com.example.mealprep.grocery.domain.service.internal.testsupport
+                .EmptyObjectProvider<>(),
+            new com.example.mealprep.grocery.domain.service.internal.testsupport
+                .EmptyObjectProvider<>(),
+            new com.example.mealprep.grocery.domain.service.internal.testsupport
+                .EmptyObjectProvider<>(),
+            new com.example.mealprep.grocery.domain.service.internal.testsupport
+                .EmptyObjectProvider<>());
     list = GroceryTestData.shoppingList().userId(userId).householdId(null).build();
   }
 

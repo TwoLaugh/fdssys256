@@ -95,7 +95,15 @@ class ShoppingListServiceImplTest {
             shoppingListMapper,
             planQueryService,
             eventPublisher,
-            markBoughtInventoryBridge);
+            markBoughtInventoryBridge,
+            new com.example.mealprep.grocery.domain.service.internal.testsupport
+                .EmptyObjectProvider<>(),
+            new com.example.mealprep.grocery.domain.service.internal.testsupport
+                .EmptyObjectProvider<>(),
+            new com.example.mealprep.grocery.domain.service.internal.testsupport
+                .EmptyObjectProvider<>(),
+            new com.example.mealprep.grocery.domain.service.internal.testsupport
+                .EmptyObjectProvider<>());
     lenient().when(shoppingListMapper.toDto(any())).thenReturn(dto());
     lenient()
         .when(shoppingListDataGateway.findWithLinesById(any()))
