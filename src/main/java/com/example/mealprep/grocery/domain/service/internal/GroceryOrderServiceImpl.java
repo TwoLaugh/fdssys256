@@ -14,16 +14,19 @@ import com.example.mealprep.grocery.api.dto.QuoteRequest;
 import com.example.mealprep.grocery.api.dto.ResolveSubstitutionRequest;
 import com.example.mealprep.grocery.api.mapper.GroceryOrderMapper;
 import com.example.mealprep.grocery.api.mapper.GroceryProviderStateMapper;
+import com.example.mealprep.grocery.api.mapper.GrocerySubstitutionProposalMapper;
 import com.example.mealprep.grocery.config.GroceryConfig;
 import com.example.mealprep.grocery.domain.entity.AutomationFailureRecord;
 import com.example.mealprep.grocery.domain.entity.GroceryOrder;
 import com.example.mealprep.grocery.domain.entity.GroceryOrderLine;
 import com.example.mealprep.grocery.domain.entity.GroceryOrderStatus;
 import com.example.mealprep.grocery.domain.entity.GroceryProviderState;
+import com.example.mealprep.grocery.domain.entity.GrocerySubstitutionProposal;
 import com.example.mealprep.grocery.domain.entity.OrderLineStatus;
 import com.example.mealprep.grocery.domain.entity.PriceSource;
 import com.example.mealprep.grocery.domain.entity.ShoppingList;
 import com.example.mealprep.grocery.domain.entity.ShoppingListLine;
+import com.example.mealprep.grocery.domain.entity.SubstitutionProposalStatus;
 import com.example.mealprep.grocery.domain.service.GroceryOrderService;
 import com.example.mealprep.grocery.domain.service.internal.providers.BasketDraft;
 import com.example.mealprep.grocery.domain.service.internal.providers.GroceryProvider;
@@ -40,7 +43,10 @@ import com.example.mealprep.grocery.event.GroceryOrderDeliveredEvent;
 import com.example.mealprep.grocery.event.GroceryOrderPlacedEvent;
 import com.example.mealprep.grocery.event.GroceryOrderQuotedEvent;
 import com.example.mealprep.grocery.event.GroceryProviderUnavailableEvent;
+import com.example.mealprep.grocery.event.SubstitutionResolvedEvent;
 import com.example.mealprep.grocery.exception.GroceryOrderNotFoundException;
+import com.example.mealprep.grocery.exception.GrocerySubstitutionProposalNotFoundException;
+import com.example.mealprep.grocery.exception.IllegalSubstitutionStateException;
 import com.example.mealprep.grocery.exception.OrderConcurrencyConflictException;
 import com.example.mealprep.grocery.exception.ProviderNotConfiguredException;
 import java.time.Clock;
@@ -93,7 +99,10 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
   private final OrderStateMachine stateMachine;
   private final PriceObservationWriter priceObservationWriter;
   private final OrderFailureRecorder failureRecorder;
+  private final SubstitutionPersister substitutionPersister;
+  private final OrderReconciler orderReconciler;
   private final GroceryOrderMapper orderMapper;
+  private final GrocerySubstitutionProposalMapper proposalMapper;
   private final GroceryProviderStateMapper providerStateMapper;
   private final LockService lockService;
   private final GroceryConfig groceryConfig;
@@ -107,7 +116,10 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
       OrderStateMachine stateMachine,
       PriceObservationWriter priceObservationWriter,
       OrderFailureRecorder failureRecorder,
+      SubstitutionPersister substitutionPersister,
+      OrderReconciler orderReconciler,
       GroceryOrderMapper orderMapper,
+      GrocerySubstitutionProposalMapper proposalMapper,
       GroceryProviderStateMapper providerStateMapper,
       LockService lockService,
       GroceryConfig groceryConfig,
@@ -119,7 +131,10 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
     this.stateMachine = stateMachine;
     this.priceObservationWriter = priceObservationWriter;
     this.failureRecorder = failureRecorder;
+    this.substitutionPersister = substitutionPersister;
+    this.orderReconciler = orderReconciler;
     this.orderMapper = orderMapper;
+    this.proposalMapper = proposalMapper;
     this.providerStateMapper = providerStateMapper;
     this.lockService = lockService;
     this.groceryConfig = groceryConfig;
@@ -135,7 +150,9 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
   @Override
   @Transactional(readOnly = true)
   public Optional<GroceryOrderDto> getById(UUID orderId) {
-    return dataGateway.findOrderWithLinesById(orderId).map(orderMapper::toDto);
+    return dataGateway
+        .findOrderWithLinesById(orderId)
+        .map(order -> withOutstandingProposals(orderMapper.toDto(order), order.getId()));
   }
 
   @Override
@@ -454,10 +471,16 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
     order.setLastStatusCheckAt(now);
     applyStatusTotals(order, status);
 
-    // If the provider reports delivery and the order is confirmed, advance to DELIVERED.
+    // If the provider reports delivery and the order is confirmed, advance to DELIVERED + persist
+    // any surfaced substitutions, then attempt reconciliation (no-substitution path → RECONCILED;
+    // otherwise blocked until the user resolves).
     if (status.normalisedStatus() == GroceryOrderStatus.DELIVERED
         && stateMachine.canTransition(order.getStatus(), GroceryOrderStatus.DELIVERED)) {
-      applyDelivered(order, status, now);
+      int outstanding = applyDelivered(order, status, now);
+      eventPublisher.publishEvent(
+          new GroceryOrderDeliveredEvent(
+              userId, order.getId(), outstanding, order.getTraceId(), now));
+      orderReconciler.tryReconcile(order.getId());
     } else {
       dataGateway.saveOrder(order);
     }
@@ -466,13 +489,12 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
 
   /**
    * {@code markDelivered} ({@code CONFIRMED → DELIVERED}). Advance to {@code DELIVERED}; persist
-   * any substitution proposals as {@code pending_user_review}; publish {@link
-   * GroceryOrderDeliveredEvent}. Called both manually ("it arrived") and by 01g's scheduled poll.
-   *
-   * <p>01f SEAM: the proposal persistence is grocery-01f's {@code SubstitutionPersister} — NOT
-   * built yet. 01e takes the smaller stub: it no-ops the proposal persistence and publishes only
-   * {@code GroceryOrderDeliveredEvent} (count derived from the proposals the provider surfaced).
-   * See the ticket's "01f is not built — stub its seam" note.
+   * any provider-proposed substitutions as {@code pending_user_review}/{@code unparsed} via {@link
+   * SubstitutionPersister} (one {@link
+   * com.example.mealprep.grocery.event.SubstitutionProposedEvent} each); publish {@link
+   * GroceryOrderDeliveredEvent}. Then run {@code tryReconcile}: the no-substitution path goes
+   * straight to {@code RECONCILED}; otherwise it no-ops until the user resolves all proposals.
+   * Called both manually ("it arrived") and by 01g's scheduled poll.
    */
   @Override
   @Transactional
@@ -485,6 +507,8 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
     eventPublisher.publishEvent(
         new GroceryOrderDeliveredEvent(
             userId, order.getId(), outstanding, order.getTraceId(), now));
+    // No-substitution path → reconcile immediately; otherwise blocked until proposals resolve.
+    orderReconciler.tryReconcile(order.getId());
     return reload(order.getId());
   }
 
@@ -534,17 +558,80 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
   // Substitutions — grocery-01f
   // ---------------------------------------------------------------------------------------------
 
+  /**
+   * Resolve one substitution proposal (LLD lines 608, 912). Legal from {@code PENDING_USER_REVIEW}
+   * or {@code UNPARSED} only — any already-resolved status → 409 (an {@code ACCEPTED}/{@code
+   * REJECTED} proposal cannot be re-resolved). Sets the status / {@code resolved_at} / {@code
+   * resolved_by_user_id} and force-flushes so the proposal's {@code @Version} bump fires (a
+   * concurrent stale resolve → {@code OptimisticLockException} → 409). Publishes ONE {@link
+   * SubstitutionResolvedEvent} (decision-carrying — accepted vs rejected). Then runs {@code
+   * tryReconcile}, which only proceeds when no proposal remains {@code pending_user_review}/{@code
+   * unparsed}.
+   *
+   * <p><b>Auto-accept is structurally impossible</b> — the {@code decision} is a required request
+   * field (ACCEPTED|REJECTED, validated below); there is no code path that resolves a proposal
+   * without an explicit user decision.
+   */
   @Override
   @Transactional
   public GrocerySubstitutionProposalDto resolveSubstitution(
       UUID userId, ResolveSubstitutionRequest request) {
-    throw new UnsupportedOperationException("implemented in grocery-01f");
+    SubstitutionProposalStatus decision = request.decision();
+    if (decision != SubstitutionProposalStatus.ACCEPTED
+        && decision != SubstitutionProposalStatus.REJECTED) {
+      // The only legal decisions are ACCEPTED / REJECTED — never PENDING_USER_REVIEW / UNPARSED and
+      // never an implicit/auto value. Reject anything else as a 409 illegal transition.
+      throw new IllegalSubstitutionStateException(request.proposalId(), decision);
+    }
+
+    GrocerySubstitutionProposal proposal =
+        dataGateway
+            .findProposalById(request.proposalId())
+            .orElseThrow(
+                () -> new GrocerySubstitutionProposalNotFoundException(request.proposalId()));
+
+    SubstitutionProposalStatus current = proposal.getProposalStatus();
+    if (current != SubstitutionProposalStatus.PENDING_USER_REVIEW
+        && current != SubstitutionProposalStatus.UNPARSED) {
+      // Already resolved (ACCEPTED|REJECTED) — re-resolving is a 409 (LLD line 158 edge: ACCEPTED →
+      // anything is NOT legal).
+      throw new IllegalSubstitutionStateException(request.proposalId(), decision);
+    }
+
+    Instant now = clock.instant();
+    proposal.setProposalStatus(decision);
+    proposal.setResolvedAt(now);
+    proposal.setResolvedByUserId(userId);
+    // Flush so the @Version bump + optimistic-lock check fire now (concurrent stale resolve → 409).
+    GrocerySubstitutionProposal saved = dataGateway.saveAndFlushProposal(proposal);
+
+    UUID orderId = saved.getGroceryOrderId();
+    eventPublisher.publishEvent(
+        new SubstitutionResolvedEvent(
+            userId,
+            orderId,
+            saved.getId(),
+            decision,
+            saved.getOriginalIngredientMappingKey(),
+            saved.getSubstituteIngredientMappingKey(),
+            orderId,
+            now));
+
+    // Run reconciliation iff no proposal remains pending/unparsed (the gate is checked inside).
+    orderReconciler.tryReconcile(orderId);
+
+    return proposalMapper.toDto(saved);
   }
 
+  /**
+   * Outstanding proposals for an order, from a SEPARATE query (NOT the order aggregate load) — LLD
+   * line 485. Returns the {@code PENDING_USER_REVIEW} + {@code UNPARSED} proposals (the ones still
+   * blocking reconciliation).
+   */
   @Override
   @Transactional(readOnly = true)
   public List<GrocerySubstitutionProposalDto> getOutstandingProposals(UUID orderId) {
-    throw new UnsupportedOperationException("implemented in grocery-01f");
+    return outstandingProposalDtos(orderId);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -687,9 +774,10 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
   }
 
   /**
-   * Advance an order to {@code DELIVERED} and stub the 01f substitution-persistence seam (no-op
-   * persistence; only the proposal count is surfaced on the delivered event). Returns the
-   * outstanding-proposal count.
+   * Advance an order to {@code DELIVERED} and persist any provider-proposed substitutions via
+   * {@link SubstitutionPersister} (parseable → {@code PENDING_USER_REVIEW}, opaque → {@code
+   * UNPARSED}; one {@code SubstitutionProposedEvent} each). Returns the count persisted (the
+   * outstanding-at-delivery proposal count surfaced on {@link GroceryOrderDeliveredEvent}).
    */
   private int applyDelivered(GroceryOrder order, OrderStatus status, Instant now) {
     applyStatusTotals(order, status);
@@ -699,19 +787,71 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
     order.setStatusReason(null);
     dataGateway.saveOrder(order);
 
-    // TODO(grocery-01f): persist provider-proposed substitutions as PENDING_USER_REVIEW via the
-    // SubstitutionPersister + publish one SubstitutionProposedEvent each, then run tryReconcile.
-    // 01e
-    // stubs this: it surfaces the count only. The proposals are NOT persisted here.
     List<SubstitutionProposal> proposals =
         status == null || status.substitutions() == null ? List.of() : status.substitutions();
-    return proposals.size();
+    // Persist each proposal (PENDING_USER_REVIEW or UNPARSED) + publish one
+    // SubstitutionProposedEvent
+    // each. NO auto-accept — resolution is always a later user decision.
+    List<GrocerySubstitutionProposal> persisted =
+        substitutionPersister.persistAll(order, proposals);
+    return persisted.size();
   }
 
   private GroceryOrderDto reload(UUID orderId) {
     return dataGateway
         .findOrderWithLinesById(orderId)
-        .map(orderMapper::toDto)
+        .map(order -> withOutstandingProposals(orderMapper.toDto(order), order.getId()))
         .orElseThrow(() -> new GroceryOrderNotFoundException(orderId));
+  }
+
+  /**
+   * Copy {@code dto} with its {@code outstandingProposals} populated from a SEPARATE query (LLD
+   * line 485 — proposals are NOT loaded with the order aggregate). The mapper leaves the field
+   * null; this fills it for the single-order detail view.
+   */
+  private GroceryOrderDto withOutstandingProposals(GroceryOrderDto dto, UUID orderId) {
+    return new GroceryOrderDto(
+        dto.id(),
+        dto.userId(),
+        dto.householdId(),
+        dto.shoppingListId(),
+        dto.providerKey(),
+        dto.providerOrderId(),
+        dto.status(),
+        dto.statusReason(),
+        dto.quotedTotalPence(),
+        dto.confirmedTotalPence(),
+        dto.paidTotalPence(),
+        dto.currency(),
+        dto.deliverySlotStart(),
+        dto.deliverySlotEnd(),
+        dto.confirmLink(),
+        dto.placedAt(),
+        dto.confirmedAt(),
+        dto.deliveredAt(),
+        dto.reconciledAt(),
+        dto.cancelledAt(),
+        dto.cancelReason(),
+        dto.lastStatusCheckAt(),
+        dto.lines(),
+        outstandingProposalDtos(orderId),
+        dto.version());
+  }
+
+  /**
+   * The PENDING_USER_REVIEW + UNPARSED proposals for an order, mapped to DTOs (a separate query).
+   */
+  private List<GrocerySubstitutionProposalDto> outstandingProposalDtos(UUID orderId) {
+    List<GrocerySubstitutionProposalDto> out = new ArrayList<>();
+    for (GrocerySubstitutionProposal p :
+        dataGateway.findProposalsByOrderIdAndStatus(
+            orderId, SubstitutionProposalStatus.PENDING_USER_REVIEW)) {
+      out.add(proposalMapper.toDto(p));
+    }
+    for (GrocerySubstitutionProposal p :
+        dataGateway.findProposalsByOrderIdAndStatus(orderId, SubstitutionProposalStatus.UNPARSED)) {
+      out.add(proposalMapper.toDto(p));
+    }
+    return out;
   }
 }

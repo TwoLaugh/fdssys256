@@ -17,8 +17,11 @@ import com.example.mealprep.auth.testdata.AuthTestData;
 import com.example.mealprep.grocery.api.dto.CancelOrderRequest;
 import com.example.mealprep.grocery.api.dto.CreateOrderRequest;
 import com.example.mealprep.grocery.api.dto.ProviderConnectionRequest;
+import com.example.mealprep.grocery.api.dto.ResolveSubstitutionRequest;
+import com.example.mealprep.grocery.domain.entity.SubstitutionProposalStatus;
 import com.example.mealprep.grocery.domain.service.internal.providers.FakeGroceryProvider;
 import com.example.mealprep.grocery.domain.service.internal.providers.FakeGroceryProvider.FailureMode;
+import com.example.mealprep.grocery.testdata.GroceryTestData;
 import com.example.mealprep.grocery.testsupport.FakeGroceryProviderConfig;
 import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
@@ -71,6 +74,11 @@ class GroceryOrderControllerIT {
   @AfterEach
   void cleanup() {
     fakeGroceryProvider.reset();
+    jdbcTemplate.update("DELETE FROM provision_grocery_import_log");
+    jdbcTemplate.update("DELETE FROM provision_inventory_audit");
+    jdbcTemplate.update("DELETE FROM provision_inventory");
+    jdbcTemplate.update("DELETE FROM provision_supplier_products");
+    jdbcTemplate.update("DELETE FROM grocery_substitution_proposals");
     jdbcTemplate.update("DELETE FROM grocery_price_history");
     jdbcTemplate.update("DELETE FROM grocery_order_lines");
     jdbcTemplate.update("DELETE FROM grocery_orders");
@@ -330,7 +338,7 @@ class GroceryOrderControllerIT {
   // ---------------- confirm / deliver ----------------
 
   @Test
-  void fullLifecycle_throughDelivered() throws Exception {
+  void fullLifecycle_noSubstitution_markDeliveredReconcilesStraightThrough() throws Exception {
     AuthedUser user = registerUser();
     UUID orderId = quotedOrder(user);
 
@@ -343,10 +351,137 @@ class GroceryOrderControllerIT {
         .andExpect(jsonPath("$.status").value("CONFIRMED"))
         .andExpect(openApi().isValid(openApiValidator));
 
+    // 01f: a no-substitution mark-delivered runs tryReconcile inline → straight to RECONCILED.
     mvc.perform(post(BASE + "/" + orderId + "/mark-delivered").cookie(user.cookie()))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.status").value("DELIVERED"))
+        .andExpect(jsonPath("$.status").value("RECONCILED"))
+        .andExpect(jsonPath("$.outstandingProposals.length()").value(0))
         .andExpect(openApi().isValid(openApiValidator));
+
+    // Reconciliation wrote a PAID observation for the delivered line.
+    Long paidRows =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM grocery_price_history WHERE source = 'PAID'", Long.class);
+    assertThat(paidRows).isEqualTo(1L);
+  }
+
+  @Test
+  void fullLifecycle_throughResolveAndReconcile() throws Exception {
+    AuthedUser user = registerUser();
+    UUID orderId = quotedOrder(user);
+
+    mvc.perform(post(BASE + "/" + orderId + "/place").cookie(user.cookie()))
+        .andExpect(status().isOk());
+    mvc.perform(post(BASE + "/" + orderId + "/mark-user-confirmed").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CONFIRMED"));
+
+    // Provider reports DELIVERED with one substitution → persisted PENDING_USER_REVIEW.
+    fakeGroceryProvider.setDelivered(true);
+    fakeGroceryProvider.setSubstitutions(
+        java.util.List.of(GroceryTestData.providerSubstitution("white rice", "Brown rice")));
+    mvc.perform(post(BASE + "/" + orderId + "/refresh-status").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("DELIVERED"))
+        // blocked while pending — outstanding proposal surfaced on the order detail
+        .andExpect(jsonPath("$.outstandingProposals.length()").value(1))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // GET the outstanding substitutions (200).
+    MvcResult subs =
+        mvc.perform(get(BASE + "/" + orderId + "/substitutions").cookie(user.cookie()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(openApi().isValid(openApiValidator))
+            .andReturn();
+    UUID proposalId =
+        UUID.fromString(
+            objectMapper
+                .readTree(subs.getResponse().getContentAsString())
+                .get(0)
+                .get("id")
+                .asText());
+
+    // Resolve (ACCEPTED) → clears the gate → reconciliation runs.
+    ResolveSubstitutionRequest req =
+        new ResolveSubstitutionRequest(proposalId, SubstitutionProposalStatus.ACCEPTED);
+    mvc.perform(
+            post(BASE + "/" + orderId + "/substitutions/" + proposalId + "/resolve")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.proposalStatus").value("ACCEPTED"))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // Order reconciled; outstanding proposals now empty; PAID observation written.
+    mvc.perform(get(BASE + "/" + orderId).cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("RECONCILED"))
+        .andExpect(jsonPath("$.outstandingProposals.length()").value(0));
+
+    Long paidRows =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM grocery_price_history WHERE source = 'PAID'", Long.class);
+    assertThat(paidRows).isEqualTo(1L);
+  }
+
+  @Test
+  void resolve_alreadyResolvedProposal_returns409() throws Exception {
+    AuthedUser user = registerUser();
+    UUID orderId = quotedOrder(user);
+    mvc.perform(post(BASE + "/" + orderId + "/place").cookie(user.cookie()))
+        .andExpect(status().isOk());
+    mvc.perform(post(BASE + "/" + orderId + "/mark-user-confirmed").cookie(user.cookie()))
+        .andExpect(status().isOk());
+
+    // Two substitutions so resolving one leaves the order un-reconciled (proposal stays resolvable
+    // to test re-resolve, while the order is still DELIVERED).
+    fakeGroceryProvider.setDelivered(true);
+    fakeGroceryProvider.setSubstitutions(
+        java.util.List.of(
+            GroceryTestData.providerSubstitution("white rice", "Brown rice"),
+            GroceryTestData.providerSubstitution("other", "Sub other")));
+    mvc.perform(post(BASE + "/" + orderId + "/refresh-status").cookie(user.cookie()))
+        .andExpect(status().isOk());
+
+    MvcResult subs =
+        mvc.perform(get(BASE + "/" + orderId + "/substitutions").cookie(user.cookie()))
+            .andExpect(status().isOk())
+            .andReturn();
+    UUID proposalId =
+        UUID.fromString(
+            objectMapper
+                .readTree(subs.getResponse().getContentAsString())
+                .get(0)
+                .get("id")
+                .asText());
+
+    ResolveSubstitutionRequest req =
+        new ResolveSubstitutionRequest(proposalId, SubstitutionProposalStatus.ACCEPTED);
+    mvc.perform(
+            post(BASE + "/" + orderId + "/substitutions/" + proposalId + "/resolve")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+        .andExpect(status().isOk());
+
+    // Re-resolving the same (now ACCEPTED) proposal is a 409.
+    mvc.perform(
+            post(BASE + "/" + orderId + "/substitutions/" + proposalId + "/resolve")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+        .andExpect(status().isConflict());
+  }
+
+  @Test
+  void substitutions_unknownOrder_returnsEmpty200() throws Exception {
+    AuthedUser user = registerUser();
+    // An order with no proposals yields an empty list (200) — the endpoint does not 404 on absence.
+    mvc.perform(get(BASE + "/" + UUID.randomUUID() + "/substitutions").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(0));
   }
 
   @Test

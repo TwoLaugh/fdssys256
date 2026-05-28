@@ -3,7 +3,9 @@ package com.example.mealprep.grocery.domain.repository;
 import com.example.mealprep.grocery.domain.entity.GroceryOrder;
 import com.example.mealprep.grocery.domain.entity.GroceryOrderStatus;
 import com.example.mealprep.grocery.domain.entity.GroceryProviderState;
+import com.example.mealprep.grocery.domain.entity.GrocerySubstitutionProposal;
 import com.example.mealprep.grocery.domain.entity.ShoppingList;
+import com.example.mealprep.grocery.domain.entity.SubstitutionProposalStatus;
 import com.example.mealprep.grocery.domain.service.internal.GroceryOrderDataGateway;
 import java.time.Instant;
 import java.util.List;
@@ -32,16 +34,19 @@ class GroceryOrderDataGatewayImpl implements GroceryOrderDataGateway {
   private final GroceryOrderLineRepository orderLineRepository;
   private final GroceryProviderStateRepository providerStateRepository;
   private final ShoppingListRepository shoppingListRepository;
+  private final GrocerySubstitutionProposalRepository proposalRepository;
 
   GroceryOrderDataGatewayImpl(
       GroceryOrderRepository orderRepository,
       GroceryOrderLineRepository orderLineRepository,
       GroceryProviderStateRepository providerStateRepository,
-      ShoppingListRepository shoppingListRepository) {
+      ShoppingListRepository shoppingListRepository,
+      GrocerySubstitutionProposalRepository proposalRepository) {
     this.orderRepository = orderRepository;
     this.orderLineRepository = orderLineRepository;
     this.providerStateRepository = providerStateRepository;
     this.shoppingListRepository = shoppingListRepository;
+    this.proposalRepository = proposalRepository;
   }
 
   @Override
@@ -83,6 +88,38 @@ class GroceryOrderDataGatewayImpl implements GroceryOrderDataGateway {
   @Override
   public Optional<ShoppingList> findShoppingListWithLinesById(UUID shoppingListId) {
     return shoppingListRepository.findWithLinesById(shoppingListId);
+  }
+
+  @Override
+  public GrocerySubstitutionProposal saveProposal(GrocerySubstitutionProposal proposal) {
+    return proposalRepository.save(proposal);
+  }
+
+  @Override
+  public GrocerySubstitutionProposal saveAndFlushProposal(GrocerySubstitutionProposal proposal) {
+    return proposalRepository.saveAndFlush(proposal);
+  }
+
+  @Override
+  public Optional<GrocerySubstitutionProposal> findProposalById(UUID proposalId) {
+    return proposalRepository.findById(proposalId);
+  }
+
+  @Override
+  public List<GrocerySubstitutionProposal> findProposalsByOrderId(UUID orderId) {
+    return proposalRepository.findAllByGroceryOrderId(orderId);
+  }
+
+  @Override
+  public List<GrocerySubstitutionProposal> findProposalsByOrderIdAndStatus(
+      UUID orderId, SubstitutionProposalStatus status) {
+    return proposalRepository.findAllByGroceryOrderIdAndProposalStatus(orderId, status);
+  }
+
+  @Override
+  public long countProposalsByOrderIdAndStatusIn(
+      UUID orderId, List<SubstitutionProposalStatus> statuses) {
+    return proposalRepository.countByGroceryOrderIdAndProposalStatusIn(orderId, statuses);
   }
 
   @Override
