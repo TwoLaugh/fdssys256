@@ -65,7 +65,11 @@ jobs:
   mutation:
     name: Mutation testing (Pitest)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Historical durations: 37-44 min on the pre-grocery suite. The grocery module's mutation
+    # hardening campaign (#181) added 248 unit tests, pushing the sweep past the 45-min cap on
+    # the first post-campaign main push. Bumped to 75 to give meaningful headroom; revisit with
+    # Pitest historyInputFile / incremental mode if it climbs again.
+    timeout-minutes: 75
     # Run on main pushes (post-merge regressions) and on PRs labelled `mutation` (when an
     # individual ticket wants pre-merge mutation gating). Default PR runs skip Pitest to
     # keep the build-test-lint cycle under 4 minutes — saves 5-7 min per PR. Trade-off:
