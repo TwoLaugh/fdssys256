@@ -75,6 +75,8 @@ class AdaptationQueryServiceImplTest {
         jobMapper,
         traceMapper,
         hintMapper,
+        null,
+        null,
         null);
   }
 

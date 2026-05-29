@@ -215,6 +215,8 @@ class AdaptationServiceTriggerEntriesTest {
         null,
         null,
         null,
+        null,
+        null,
         null);
   }
 
