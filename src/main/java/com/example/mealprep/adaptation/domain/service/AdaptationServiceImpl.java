@@ -747,17 +747,24 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
 
       // Step 7 — Apply per approval_policy (LLD §Shared worker pipeline step 7). A LOW_CONFIDENCE
       // result is defensively downgraded to PENDING_CHANGE for user review even on a SYSTEM
-      // catalogue (HLD failure mode). NO_CHANGE never writes — it records NO_OP.
+      // catalogue (HLD failure mode).
       ApprovalPolicy effective =
           (confidenceResult == ValidationResult.LOW_CONFIDENCE)
               ? ApprovalPolicy.PENDING_CHANGE
               : job.getApprovalPolicy();
       OutcomeKind outcome;
       UUID outcomeTargetId = null;
-      if (noChange) {
-        // LLM declined to recommend any candidate (infeasibility / low coherence) — no write.
-        outcome = OutcomeKind.NO_OP;
-      } else if (effective == ApprovalPolicy.PENDING_CHANGE) {
+      if (effective == ApprovalPolicy.PENDING_CHANGE) {
+        // PENDING_CHANGE (USER catalogue / LOW_CONFIDENCE downgrade) is a propose/approve outcome:
+        // store the pending change for the user to review REGARDLESS of the NO_CHANGE
+        // classification
+        // (LLD §Shared worker pipeline step 7 — the PENDING_CHANGE branch is not classification-
+        // gated; it never auto-applies). A NO_CHANGE response simply yields an empty-diff pending
+        // record (PendingChangeStore folds finalDiffJson==null to an empty node). The NO_CHANGE →
+        // NO_OP short-circuit applies ONLY to the apply policies below, where there is genuinely no
+        // diff to write. This is the propose/approve invariant: a FEEDBACK-triggered adaptation of
+        // a
+        // USER's own recipe must reach AWAITING_USER_APPROVAL, never auto-APPLIED.
         ChangeDimension dim = dimensionResolver.resolve(job, withCandidates, response);
         UUID pcId =
             pendingChangeStore.create(
@@ -773,6 +780,11 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
                 job.getPromptTemplateVersion() == null ? "v0" : job.getPromptTemplateVersion());
         outcome = OutcomeKind.PENDING_CREATED;
         outcomeTargetId = pcId;
+      } else if (noChange) {
+        // Apply policies (DIRECT / PLAN_OVERLAY) only: the LLM declined to recommend any candidate
+        // (infeasibility / low coherence) — there is no diff to apply, so record NO_OP and write
+        // nothing. (The PENDING_CHANGE branch above is intentionally NOT gated on noChange.)
+        outcome = OutcomeKind.NO_OP;
       } else if (effective == ApprovalPolicy.PLAN_OVERLAY) {
         // Trigger 4 (plan-time refine): outcome is ALWAYS a substitution overlay — plan-scoped, the
         // master recipe never mutates (LLD §Decisions §9). No RebaseOrchestrator: a substitution is

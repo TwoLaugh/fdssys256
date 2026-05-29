@@ -15,9 +15,11 @@ import com.example.mealprep.adaptation.ai.AdaptationContextAssembler;
 import com.example.mealprep.adaptation.ai.RecipeAdaptationResponse;
 import com.example.mealprep.adaptation.ai.TriggerInputs;
 import com.example.mealprep.adaptation.api.dto.AdaptationCandidateDto;
+import com.example.mealprep.adaptation.api.dto.AdaptationResultDto;
 import com.example.mealprep.adaptation.api.dto.NutritionalKnowledgeBundleDto;
 import com.example.mealprep.adaptation.config.AdaptationConfig;
 import com.example.mealprep.adaptation.domain.entity.AdaptationJob;
+import com.example.mealprep.adaptation.domain.entity.AdaptationTrace;
 import com.example.mealprep.adaptation.domain.enums.AdaptationClassification;
 import com.example.mealprep.adaptation.domain.enums.ApprovalPolicy;
 import com.example.mealprep.adaptation.domain.enums.JobFailureReason;
@@ -298,6 +300,86 @@ class AdaptationWorkerApplyAndFilterTest {
     verify(w.events).publishEvent(ev.capture());
     assertThat(ev.getValue().outcomeKind()).isEqualTo(OutcomeKind.SUBSTITUTION_CREATED);
     assertThat(ev.getValue().outcomeTargetId()).isEqualTo(subId);
+  }
+
+  // --------------------------------------------------------------------------------------------
+  // REGRESSION LOCK (PR #190) — a FEEDBACK-triggered adaptation of a USER's own recipe is a
+  // propose/approve outcome: it must store a PendingChange (-> AWAITING_USER_APPROVAL) even when
+  // the Stage-C classification is NO_CHANGE, and must NEVER auto-apply. PR #190 added a
+  // `if (noChange) -> NO_OP` short-circuit that fired BEFORE the PENDING_CHANGE branch, so a
+  // NO_CHANGE FEEDBACK job recorded NO_OP (no pending change) -> requiresApproval=false ->
+  // the feedback RECIPE route mapped to APPLIED. The e2e (@xj02) caught this:
+  //   expected AWAITING_USER_APPROVAL but was APPLIED.
+  // --------------------------------------------------------------------------------------------
+
+  @Test
+  void feedback_recipe_job_with_NO_CHANGE_classification_still_stores_pending_change_not_no_op() {
+    Wiring w = new Wiring();
+    // The XJ-02 shape: a synchronous FEEDBACK adaptation of the user's OWN recipe (USER catalogue,
+    // PENDING_CHANGE approval policy) — the propose/approve path.
+    AdaptationJob job = job(JobSource.FEEDBACK, Catalogue.USER, ApprovalPolicy.PENDING_CHANGE);
+    w.stubCommon(job);
+    w.stubContextWithIngredients(job, "beef");
+    w.stubFilterAllPass();
+    w.stubScoringPassthrough();
+    // The e2e stub's built-in default: the Stage-C AI declines to recommend any candidate —
+    // classification NO_CHANGE, chosenCandidateIndex -1, both validation gates cleared. No diff.
+    when(w.scoringEngine.shouldAutoSkipStageC(any())).thenReturn(false);
+    when(w.llmInvoker.invoke(any(), any()))
+        .thenReturn(
+            new RecipeAdaptationResponse(
+                -1,
+                AdaptationClassification.NO_CHANGE,
+                "no change recommended",
+                "",
+                BigDecimal.valueOf(0.9), // clears the confidence floor
+                BigDecimal.valueOf(0.9), // clears the character-preservation gate
+                null,
+                null, // no finalDiff
+                List.of()));
+
+    w.service.processJob(job);
+
+    // The pending change IS stored regardless of the NO_CHANGE classification (propose/approve
+    // record for the user to review) — this is the regressed invariant.
+    verify(w.pendingChangeStore, times(1)).create(any(), any(), any(), any(), any(), any());
+    // Outcome is PENDING_CREATED — NOT NO_OP, and crucially NOT any auto-apply.
+    ArgumentCaptor<AdaptationJobCompletedEvent> ev =
+        ArgumentCaptor.forClass(AdaptationJobCompletedEvent.class);
+    verify(w.events).publishEvent(ev.capture());
+    assertThat(ev.getValue().outcomeKind()).isEqualTo(OutcomeKind.PENDING_CREATED);
+    // A user's own recipe must never be auto-applied from a casual feedback comment.
+    verify(w.recipeWriteApi, never()).saveAdaptedVersion(any());
+    verify(w.recipeWriteApi, never()).saveAdaptedBranch(any());
+    verify(w.recipeWriteApi, never()).saveAdaptedSubstitution(any());
+    // Job completed successfully — never a failure.
+    verify(w.events, never()).publishEvent(any(AdaptationJobFailedEvent.class));
+  }
+
+  @Test
+  void
+      loadResultFromTrace_pendingChangeOnFeedbackJob_requiresApproval_mapsToAwaitingUserApproval() {
+    // Companion assertion at the bridge-facing seam: the AdaptationResultDto a PENDING_CREATED
+    // FEEDBACK job yields has requiresApproval == true, which the RecipeFeedbackBridge maps to the
+    // AWAITING_USER_APPROVAL routing-log status (vs APPLIED for requiresApproval == false). This is
+    // the exact value the @xj02 e2e asserts on.
+    Wiring w = new Wiring();
+    AdaptationJob job = job(JobSource.FEEDBACK, Catalogue.USER, ApprovalPolicy.PENDING_CHANGE);
+    UUID pendingId = UUID.randomUUID();
+    AdaptationTrace trace = mock(AdaptationTrace.class);
+    when(trace.getOutcomeKind()).thenReturn(OutcomeKind.PENDING_CREATED);
+    when(trace.getOutcomeTargetId()).thenReturn(pendingId);
+    when(trace.getClassificationDecision()).thenReturn(AdaptationClassification.NO_CHANGE);
+    when(trace.getFinalDiff()).thenReturn(null);
+    when(trace.getConfidence()).thenReturn(BigDecimal.valueOf(0.9));
+    when(w.traceRepository.findByJobId(job.getId())).thenReturn(Optional.of(trace));
+
+    AdaptationResultDto result = w.service.loadResultFromTrace(job);
+
+    assertThat(result.requiresApproval())
+        .as("a PENDING_CHANGE FEEDBACK job with a created pending change must require approval")
+        .isTrue();
+    assertThat(result.pendingChangeIdCreated()).contains(pendingId);
   }
 
   @Test
@@ -680,6 +762,7 @@ class AdaptationWorkerApplyAndFilterTest {
     final RecipeWriteApi recipeWriteApi = mock(RecipeWriteApi.class);
     final AdaptationContextAssembler contextAssembler = mock(AdaptationContextAssembler.class);
     final HardConstraintFilterService filter = mock(HardConstraintFilterService.class);
+    final AdaptationTraceRepository traceRepository = mock(AdaptationTraceRepository.class);
     final AdaptationServiceImpl service;
 
     Wiring() {
@@ -710,7 +793,7 @@ class AdaptationWorkerApplyAndFilterTest {
           new AdaptationServiceImpl(
               jobRepository,
               mock(PendingChangeRepository.class),
-              mock(AdaptationTraceRepository.class),
+              traceRepository,
               mock(AdaptationFingerprintRepository.class),
               mock(PlannerHintRecordRepository.class),
               mock(NutritionalKnowledgeRepository.class),
