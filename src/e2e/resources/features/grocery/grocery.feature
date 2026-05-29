@@ -94,10 +94,11 @@ Feature: Grocery — manual fulfilment to inventory; shopping list / price-histo
 
   # GROC-03 (cost projection). The cost projection lives directly on the ShoppingListDto:
   # estimatedTotalPence + costConfidence + staleIngredientCount, computed in Step 6 of the
-  # calculator from the Tier-4 batch aggregate read. With no observations seeded for keys
-  # the reference snapshot covers, the cost settles null and every line is stale — the
-  # scenario asserts the SHAPE the read carries (the projection fields are part of the
-  # contract), not a specific value.
+  # calculator from the Tier-4 batch aggregate read. The plannable-recipe seed's `chicken breast`
+  # line (canonical space-form) matches the reference-price snapshot, so the calculator resolves a
+  # reference aggregate: the projection carries a REAL non-null total + confidence. The reference
+  # fallback is flagged stale, so staleIngredientCount is positive — the signal the estimate came
+  # from the reference snapshot, not a paid/observed price.
   Scenario: A user views the cost projection with a confidence and stale-data summary
     Given a fresh registered and logged-in user
     And the user has a household
@@ -106,7 +107,7 @@ Feature: Grocery — manual fulfilment to inventory; shopping list / price-histo
     When they generate a plan for a week
     Then a generated plan is created for this household
     When they request the shopping list for that plan
-    Then the shopping list carries the cost projection shape for this user
+    Then the shopping list carries a resolved cost projection for this user
 
   # ----- Tier 3 — provider order lifecycle (GROC-15..18) + substitution (GROC-19) -----
   # The fake provider (deterministic; promoted onto the e2e runtime classpath as
