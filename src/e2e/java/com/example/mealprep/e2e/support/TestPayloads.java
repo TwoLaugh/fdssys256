@@ -13,6 +13,14 @@ import java.util.Map;
  *
  * <p>Every builder returns a fresh mutable structure so a step can tweak one field (to drive a
  * validation-error pathway) without mutating a shared default.
+ *
+ * <p><b>Ingredient-mapping-key convention.</b> Keys are written in the canonical space-form ({@code
+ * "chicken breast"}, not {@code "chicken.breast"}) — the lowercase, whitespace-collapsed form
+ * {@code IngredientMappingKeys.normalise} produces from real ingredient text, and the form the
+ * grocery reference-price seed + recipe-import fixture use. This is what lets a plannable recipe's
+ * {@code chicken breast} line resolve against the reference snapshot so the GROC-03 cost projection
+ * carries a real estimate. Do NOT reintroduce dot-form: the normaliser does not bridge {@code .} ↔
+ * {@code space}, so a dot-key silently fails to match the seed.
  */
 public final class TestPayloads {
 
@@ -71,7 +79,7 @@ public final class TestPayloads {
     metadata.put("mealTypes", List.of(mealType));
 
     List<Map<String, Object>> ingredients = new ArrayList<>();
-    ingredients.add(ingredient(0, "chicken.breast", "Chicken breast", "300.000", "g"));
+    ingredients.add(ingredient(0, "chicken breast", "Chicken breast", "300.000", "g"));
 
     List<Map<String, Object>> method = new ArrayList<>();
     method.add(methodStep(1, "Prepare and cook the " + name + ".", 25));
@@ -110,9 +118,9 @@ public final class TestPayloads {
 
   private static List<Map<String, Object>> defaultIngredients() {
     List<Map<String, Object>> out = new ArrayList<>();
-    out.add(ingredient(0, "spaghetti.dry", "Spaghetti", "400.000", "g"));
-    out.add(ingredient(1, "beef.mince", "Lean beef mince", "500.000", "g"));
-    out.add(ingredient(2, "tomato.passata", "Passata", "700.000", "g"));
+    out.add(ingredient(0, "spaghetti", "Spaghetti", "400.000", "g"));
+    out.add(ingredient(1, "beef mince", "Lean beef mince", "500.000", "g"));
+    out.add(ingredient(2, "passata", "Passata", "700.000", "g"));
     return out;
   }
 

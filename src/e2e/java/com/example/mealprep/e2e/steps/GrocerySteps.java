@@ -48,9 +48,8 @@ import java.util.UUID;
  * <p><b>The shopping-list scenarios reuse the planner's spine.</b> Recalculate's hard precondition
  * is a real plan id, so GROC-01/03 chain through {@code PlannerSteps}' "the user has a household" +
  * "the user has plannable recipes in their catalogue" + "they generate a plan for a week" Givens to
- * assemble a plan with at least one scheduled-recipe slot (the seeded catalogue's {@code
- * chicken.breast} ingredient becomes one line). No grocery-side test-support seam is needed for
- * this batch.
+ * assemble a plan with at least one scheduled-recipe slot (the seeded catalogue's {@code chicken
+ * breast} ingredient becomes one line). No grocery-side test-support seam is needed for this batch.
  *
  * <p><b>The GROC-30 scenario seeds its own observation.</b> A fresh user with no manual prices gets
  * 404 on the aggregate read for ad-hoc keys (and would only get a low-confidence reference row for
@@ -227,37 +226,45 @@ public class GrocerySteps {
   /**
    * GROC-03: the cost-projection assertion. The projection is NOT a separate endpoint — the fields
    * {@code estimatedTotalPence}, {@code costConfidence}, {@code staleIngredientCount} live directly
-   * on ShoppingListDto, computed in Step 6 of the calculator. With this scenario's seeded plannable
-   * recipe ingredient ({@code chicken.breast}, dot-form) NOT matching the reference snapshot key
-   * ({@code chicken breast}, space-form) the cost settles to null and every line is stale — the
-   * assertion checks the SHAPE the read carries (the projection fields are part of the contract),
-   * and the stale-data summary's positive count is the load-bearing signal that the cost pass
-   * actually ran.
+   * on ShoppingListDto, computed in Step 6 of the calculator. The plannable-recipe seed's {@code
+   * chicken breast} line (canonical space-form, see {@code TestPayloads}) matches the reference-
+   * price snapshot ({@code R__grocery_seed_reference_prices.sql}), so the calculator resolves a
+   * reference aggregate for it: Step 6 sets {@code anyEstimate = true}, accumulates the line into
+   * {@code estimatedTotalPence}, and computes a line-weighted {@code costConfidence}. The reference
+   * fallback is flagged stale, so {@code staleIngredientCount} is positive — the load-bearing
+   * signal that the cost pass ran AND that the estimate came from the reference snapshot (not a
+   * paid/observed price). We assert a real resolved cost, not just the shape.
    */
-  @Then("the shopping list carries the cost projection shape for this user")
-  public void theShoppingListCarriesTheCostProjectionShapeForThisUser() {
+  @Then("the shopping list carries a resolved cost projection for this user")
+  public void theShoppingListCarriesAResolvedCostProjectionForThisUser() {
     Response response = context.lastResponse();
     assertThat(response.statusCode())
         .as("shopping-list current-by-plan GET should return 200 OK")
         .isEqualTo(200);
     assertThat(response.jsonPath().getString("userId")).isEqualTo(context.userId());
-    // The cost-projection fields are part of the DTO contract; their values are explicitly
-    // nullable when no reference / observation matches the demand keys (Step 6 of
-    // ShoppingListCalculator). Assert the contract (currency + stale-data summary are always
-    // populated even when cost is null), not a specific price.
     assertThat(response.jsonPath().getString("estimatedTotalCurrency"))
-        .as("the currency is always populated even when the cost is null")
+        .as("the currency is always populated")
         .isEqualTo("GBP");
+    // The seeded `chicken breast` line resolves against the reference snapshot, so the projection
+    // carries a REAL total + confidence (not null). Self-scoped: a positive integer total and a
+    // confidence in (0, 1].
+    Integer estimatedTotalPence =
+        response.jsonPath().getObject("estimatedTotalPence", Integer.class);
+    assertThat(estimatedTotalPence)
+        .as("the reference-resolved `chicken breast` line yields a non-null, positive cost total")
+        .isNotNull()
+        .isPositive();
+    java.math.BigDecimal costConfidence =
+        response.jsonPath().getObject("costConfidence", java.math.BigDecimal.class);
+    assertThat(costConfidence)
+        .as("a resolved projection carries a non-null line-weighted confidence")
+        .isNotNull();
+    assertThat(costConfidence.doubleValue()).isBetween(0.0, 1.0);
+    // Reference-snapshot prices are flagged stale, so at least the `chicken breast` line counts as
+    // a stale estimate — the signal the cost came from the reference fallback, not a paid price.
     assertThat(response.jsonPath().getInt("staleIngredientCount"))
-        .as("staleIngredientCount accumulates a count per line missing a usable aggregate")
-        .isGreaterThanOrEqualTo(0);
-    // Fields present on the DTO regardless of value — assert the keys are reachable on the
-    // response JSON (jsonPath().get returns null for absent paths and for present-null fields;
-    // a missing key would surface as an assertion failure elsewhere on shape mismatch).
-    // The estimate + confidence may be null on this fresh-user/no-observation path; the
-    // contract is what's asserted, not the populated value.
-    response.jsonPath().get("estimatedTotalPence");
-    response.jsonPath().get("costConfidence");
+        .as("the reference-resolved line is counted stale (reference fallback, not a paid price)")
+        .isGreaterThanOrEqualTo(1);
   }
 
   // ---------------- Tier 4 — learned price (01c: GROC-30) ----------
@@ -384,8 +391,9 @@ public class GrocerySteps {
   /**
    * GROC-15/16/17/18 — create the draft order from THIS scenario's recalculated shopping list. The
    * list id was stashed by {@link #theyRequestTheShoppingListForThatPlan()}; the draft clones its
-   * lines so the fake's quote derives line prices from the reference snapshot (or its 100p default
-   * for non-reference keys like {@code chicken.breast}).
+   * lines so the fake's quote derives line prices from the reference snapshot ({@code chicken
+   * breast} is a seeded reference key, so it prices from the snapshot rather than the fake's 100p
+   * default-for-unknown-keys).
    */
   @When("they draft a provider grocery order from that shopping list")
   public void theyDraftAProviderGroceryOrderFromThatShoppingList() {
@@ -536,10 +544,10 @@ public class GrocerySteps {
     Map<String, Object> seed = new HashMap<>();
     // The substitution's originalKey is mapped to "fake-sku-<key>"; this matches the SKU the
     // happy-path placeOrder stamped on the order's first line, so the SubstitutionPersister can
-    // attach the proposal to that line. We use a deliberately wide key that the calculator is
-    // very likely to emit — the planner spine's plannable-recipe seed produces a chicken.breast
-    // line at minimum, so picking that key keeps the join deterministic.
-    seed.put("originalKey", "chicken.breast");
+    // attach the proposal to that line. We use the key the planner spine's plannable-recipe seed
+    // produces — a "chicken breast" line at minimum (canonical space-form, see TestPayloads) — so
+    // the join stays deterministic.
+    seed.put("originalKey", "chicken breast");
     seed.put("substituteName", "Free-range chicken thighs");
     seed.put("quantity", "1.000");
     seed.put("unit", "kg");
