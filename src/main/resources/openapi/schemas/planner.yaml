@@ -293,6 +293,12 @@ AbandonPlanRequest:
   properties:
     reason: { type: string, maxLength: 255, nullable: true }
 
+RevertToPlanRequest:
+  type: object
+  required: [targetHistoricalPlanId]
+  properties:
+    targetHistoricalPlanId: { type: string, format: uuid }
+
 SlotStateChangeRequest:
   type: object
   required: [newState]

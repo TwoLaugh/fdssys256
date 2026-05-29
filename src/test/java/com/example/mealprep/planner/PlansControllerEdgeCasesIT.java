@@ -221,20 +221,31 @@ class PlansControllerEdgeCasesIT {
             jsonPath("$.type").value("https://mealprep.example.com/problems/plan-not-found"));
   }
 
-  // ---- revert 400 problem body ----------------------------------------------------------------
+  // ---- revert 422 problem body (target not in caller's household history) ---------------------
 
   @Test
-  void revert_returns400ProblemJson_whenNotActive() throws Exception {
+  void revert_returns422ProblemJson_whenTargetNotInCallerHousehold() throws Exception {
     AuthedUser user = registerUser();
-    UUID household = UUID.randomUUID();
-    grantMembership(household, user.userId());
-    Plan plan = seed(household, PlanStatus.GENERATED);
+    // The user is a member of householdA, but the revert target lives in householdB.
+    UUID householdA = UUID.randomUUID();
+    grantMembership(householdA, user.userId());
+    UUID foreignHousehold = UUID.randomUUID();
+    Plan foreignTarget = seed(foreignHousehold, PlanStatus.SUPERSEDED);
 
-    mvc.perform(post("/api/v1/plans/{id}/revert", plan.getId()).cookie(user.cookie()))
-        .andExpect(status().isBadRequest())
+    String body =
+        objectMapper.writeValueAsString(
+            java.util.Map.of("targetHistoricalPlanId", foreignTarget.getId().toString()));
+
+    mvc.perform(
+            post("/api/v1/plans/revert")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isUnprocessableEntity())
         .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
         .andExpect(
-            jsonPath("$.type").value("https://mealprep.example.com/problems/plan-not-reoptable"));
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/revert-target-invalid"));
   }
 
   // ---- slot-state 404 (unknown slot) ----------------------------------------------------------

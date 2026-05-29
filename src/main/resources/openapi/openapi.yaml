@@ -263,7 +263,7 @@ paths:
     $ref: 'paths/planner.yaml#/planReject'
   /api/v1/plans/{planId}/abandon:
     $ref: 'paths/planner.yaml#/planAbandon'
-  /api/v1/plans/{planId}/revert:
+  /api/v1/plans/revert:
     $ref: 'paths/planner.yaml#/planRevert'
   /api/v1/plans/{planId}/slots/{slotId}/state:
     $ref: 'paths/planner.yaml#/planSlotState'

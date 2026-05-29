@@ -8,10 +8,12 @@ import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.api.dto.PlanReoptSuggestionDto;
 import com.example.mealprep.planner.api.dto.RejectPlanRequest;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
+import com.example.mealprep.planner.api.dto.RevertToPlanRequest;
 import com.example.mealprep.planner.api.dto.SlotStateChangeRequest;
 import com.example.mealprep.planner.domain.service.PlanQueryService;
 import com.example.mealprep.planner.domain.service.PlanWriteService;
 import com.example.mealprep.planner.domain.service.internal.composer.PlanComposer;
+import com.example.mealprep.planner.domain.service.internal.lifecycle.RevertToPlanCoordinator;
 import com.example.mealprep.planner.exception.PlanNotFoundException;
 import com.example.mealprep.planner.security.PlannerAuth;
 import io.swagger.v3.oas.annotations.Operation;
@@ -66,6 +68,7 @@ public class PlansController {
   private final PlanQueryService planQueryService;
   private final PlanWriteService planWriteService;
   private final PlanComposer planComposer;
+  private final RevertToPlanCoordinator revertToPlanCoordinator;
   private final PlannerAuth plannerAuth;
   private final CurrentUserResolver currentUserResolver;
 
@@ -73,11 +76,13 @@ public class PlansController {
       PlanQueryService planQueryService,
       PlanWriteService planWriteService,
       PlanComposer planComposer,
+      RevertToPlanCoordinator revertToPlanCoordinator,
       PlannerAuth plannerAuth,
       CurrentUserResolver currentUserResolver) {
     this.planQueryService = planQueryService;
     this.planWriteService = planWriteService;
     this.planComposer = planComposer;
+    this.revertToPlanCoordinator = revertToPlanCoordinator;
     this.plannerAuth = plannerAuth;
     this.currentUserResolver = currentUserResolver;
   }
@@ -149,14 +154,18 @@ public class PlansController {
     return ResponseEntity.ok(reload(planId));
   }
 
-  @PostMapping(path = "/{planId}/revert", produces = MediaType.APPLICATION_JSON_VALUE)
+  @PostMapping(
+      path = "/revert",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(
       summary =
-          "Revert: supersede an ACTIVE plan and create a fresh GENERATED generation copy."
-              + " 201 + new PlanDto.")
-  public ResponseEntity<PlanDto> revert(@PathVariable UUID planId) {
-    authPlan(planId);
-    UUID newPlanId = planWriteService.revertPlan(planId);
+          "Revert to a chosen historical plan: copy its content onto a new active generation,"
+              + " re-checking the caller's current hard constraints and refilling stripped slots."
+              + " 201 + new PlanDto. 422 if the target is not in the caller's household history.")
+  public ResponseEntity<PlanDto> revert(@Valid @RequestBody RevertToPlanRequest body) {
+    UUID userId = requireUser();
+    UUID newPlanId = revertToPlanCoordinator.revertToPlan(userId, body);
     PlanDto dto =
         planQueryService
             .getPlanById(newPlanId)

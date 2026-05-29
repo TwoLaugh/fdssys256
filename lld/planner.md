@@ -597,7 +597,13 @@ public interface PlannerService {
     /** generated → rejected. Terminal. */
     PlanDto rejectPlan(RejectPlanRequest request);
 
-    /** Copy-forward revert. New plan created with generation = max+1, replaces_plan_id = current active. */
+    /** Copy-forward revert TO a chosen historical plan (see §Flow 4). New plan created with
+     *  generation = 1 + count(household, week), replaces_plan_id = current active (or the target
+     *  when none is active). The caller id is resolved server-side; the as-built surface is
+     *  {@code RevertToPlanCoordinator.revertToPlan(UUID userId, RevertToPlanRequest request)}
+     *  returning the new plan id (the controller maps it to PlanDto via the read service). It lives
+     *  on a dedicated coordinator, not PlanWriteServiceImpl, so the re-filter + refill run outside
+     *  the persistence tx (AI-outside-tx rule), mirroring PlanComposer. */
     PlanDto revertToPlan(RevertToPlanRequest request);
 
     /** active → abandoned. Terminal. */
@@ -1257,17 +1263,19 @@ Each is one method, `@Transactional`, transitions the plan via `PlanStateMachine
 
 `abandonPlan`: `ACTIVE → ABANDONED`. Sets `abandonedReason`. Mid-week revert is a different flow.
 
-### Flow 4: Revert
+### Flow 4: Revert (revert TO a chosen historical plan)
 
-`POST /api/v1/plans/revert` → `revertToPlan(request)`. Copy-forward semantics per [meal-planner.md §revert](../design/meal-planner.md#plan-history-and-revert).
+`POST /api/v1/plans/revert` with body `RevertToPlanRequest{ targetHistoricalPlanId }` → `RevertToPlanCoordinator.revertToPlan(userId, request)`. Copy-forward semantics per [meal-planner.md §revert](../design/meal-planner.md#plan-history-and-revert). **As-built (planner-5):**
 
-1. Acquire single-flight lock.
-2. Load `targetHistoricalPlan` by ID. If `targetHistoricalPlan.householdId` differs from the caller's household → `RevertTargetNotInHistoryException` (422).
-3. Load the current active plan for the same `(household, weekStartDate)`.
-4. Create a new plan: `generation = currentActive.generation + 1`, `replacesPlanId = currentActive.id`, status `GENERATED`. Days/slots/scheduled-recipes copied from `targetHistoricalPlan`. `score_breakdown` and `rollup_summary` recomputed in case the data models have changed since the target was generated.
-5. Run `HardConstraintFilterService` over every copied scheduled recipe. Any that now fails (allergy added, ingredient now banned) is removed from the slot and the slot's `state` is reset to `PLANNED` with `scheduledRecipe = null`. Per HLD: surface a warning ("3 ingredients no longer available") via the response payload (TBD; UI consumes the rollup summary to render).
-6. Run `Phase2Augmenter` over the copied plan to fill any newly empty slots from step 5.
-7. Persist; transition the current active to `SUPERSEDED`; promote the new plan to `GENERATED` (user accepts as Flow 3).
+This is **revert-to-historical**, not clone-active: the user picks an arbitrary historical plan from their history and its content is copied onto a new active generation. The orchestration lives on a dedicated `RevertToPlanCoordinator` (not `PlanWriteServiceImpl`) because — exactly like `PlanComposer` — the re-filter and catalogue refill are reads/AI-shaped work that must run **outside any persistence transaction** (planner #193/#194: AI/augmentation must not run inside a tx). The coordinator's `revertToPlan` is **not** `@Transactional`; only the final supersede+persist+publish runs in a short `@Transactional(REQUIRED)` boundary reached via a `@Lazy self` proxy.
+
+1. **Hydrate + ownership guard (read-only tx, runs first, before the lease):** load `targetHistoricalPlan` by id (→ `PlanNotFoundException`, 404, if missing). The planner is household-scoped, so "the caller's household" = any household the caller is a member of. If the caller is **not** a member of `targetHistoricalPlan.householdId` (checked via `PlannerAuth.canAccessHousehold`) → `RevertTargetNotInHistoryException` (**422**). Because the target is supplied in the request body (no `planId` path variable), this **service-level** guard is the authoritative ownership check — it is where the previously-defined-but-never-thrown 422 now fires. The target's day/slot graph is detached into an immutable snapshot read out of tx.
+2. **Single-flight lease:** `LockService.acquireLease(LockKey.forPlanWeek(household, week), leaseTtl)` (connection-free committed lease, released in `finally`). On contention → `ConcurrentGenerationInProgressException` (409).
+3. **Strip now-infeasible recipes (out of tx) — safety-relevant:** for each copied scheduled recipe, re-run `HardConstraintFilterService` against the caller's *current* hard constraints (shared slot → `checkForHousehold(eaters)`, per-person → `check(eater)` per eater; ingredient mapping keys read via `RecipeQueryService.getById`). Any recipe that now fails (allergy added since the target was generated, ingredient now banned) is stripped — the slot becomes `scheduledRecipe = null`, `state = PLANNED`.
+4. **Refill the emptied slots (out of tx):** each stripped slot is refilled deterministically from `RecipeQueryService.findPlannableCandidates` — the first candidate (by recipe id) that matches the slot kind + time budget, passes the slot's current hard constraints, and is not already used in the plan. **Deviation from the original spec's "run `Phase2Augmenter`":** the refill reuses the same catalogue read + `HardConstraintFilterService` surfaces the generation path uses, which gives a *deterministic, guaranteed-constraint-passing* fill for the safety-critical "complete the plan" requirement; the AI augmenter neither fills slots by id nor runs when AI is unavailable. If no feasible candidate exists, the slot ships empty (LLD §Failure Modes) and the plan is flagged `qualityWarning = true`.
+5. **Persist + supersede + publish (single short tx):** create the new plan — `generation = 1 + countByHouseholdIdAndWeekStartDate(household, week)`, `replacesPlanId = currentActive.id` (falls back to the target id when no active plan exists), status `GENERATED`, `score_breakdown`/`rollup_summary` carried from the target. Transition the current active (if any) to `SUPERSEDED`, publish `PlanSupersededEvent` (old, only when an active plan existed) + `PlanGeneratedEvent` (new) inside the tx, write the lifecycle audit row. The user then accepts the new `GENERATED` plan as Flow 3 (`acceptPlan` → `ACTIVE`), which the DB partial-unique-active index keeps single-active.
+
+**Fate of the old `revertPlan(UUID)`:** removed. It was clone-active (re-clone the current ACTIVE plan onto generation+1) and no longer matches the HLD use-case; nothing else referenced it, so it is replaced rather than renamed. `RevertTargetNotInHistoryException` (422) is now reachable.
 
 ### Flow 5: Slot state transitions
 
@@ -1349,7 +1357,7 @@ Inside Flow 1 step 11. Pre-conditions: Phase 2 emitted at least one `RefineDirec
 | Refine-directive infeasible at recipe level | Optimiser can't satisfy directive | `OptimiserService.adapt` returns `InfeasibleDirective`; planner picks a different candidate from the top-N or stops refining. |
 | Iteration budget exhausted with directive still pending | Stage D loop hit 3 cycles | Accept current candidate; log unmet directive in `decision_log` with `emitted_directive` populated and `chosen.source = "iteration-budget-exhausted"`. |
 | `OptimisticLockException` on `markSlotState` | Concurrent re-opt force-incremented the plan | 409 ProblemDetail; UI re-fetches and retries. |
-| Revert target lacks a recipe still in catalogue | Recipe archived since target plan generated | The slot becomes `scheduledRecipe = null`; Phase 2 fills it in. If Phase 2 cannot, the slot ships empty with `qualityWarning = true`. |
+| Revert target recipe now fails the caller's hard constraints, or is archived | Allergy added / recipe archived since the target plan was generated | The slot becomes `scheduledRecipe = null` (§Flow 4 step 3); the deterministic catalogue refill (§Flow 4 step 4) fills it from a constraint-passing candidate. If no feasible candidate exists, the slot ships empty with `qualityWarning = true`. |
 | Listener processes the same event twice | Spring delivery is at-least-once | Idempotent via the suggestion's unique key `(household, week, triggerEventId)`. |
 
 ---
