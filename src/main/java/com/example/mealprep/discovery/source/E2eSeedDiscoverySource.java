@@ -57,7 +57,9 @@ public class E2eSeedDiscoverySource implements DiscoverySource {
    * clears the cold-start threshold (3 × distinct-slot-kinds) for any realistic week (max 3 main
    * kinds ⇒ threshold 9; +snack ⇒ 12). Each has a stable canonical URL + a per-recipe-unique method
    * instruction so the runner's content-fingerprint dedup is idempotent across re-runs and never
-   * collapses distinct seeds. Ingredient-free (see {@link Seed#toParsedRecipe} for why).
+   * collapses distinct seeds. Each carries a small ingredient list (see {@link
+   * Seed#toParsedRecipe}) — discovery-1 fixed the ingest path so ingredient-bearing recipes now
+   * persist with normalised {@code ingredient_mapping_key}s.
    */
   private static final List<Seed> SEEDS = buildSeeds();
 
@@ -120,12 +122,20 @@ public class E2eSeedDiscoverySource implements DiscoverySource {
   private record Seed(String url, String name, String mealType) {
 
     ParsedRecipe toParsedRecipe() {
-      // No ingredients: the discovery→recipe import path persists recipe_ingredients with a NULL
-      // ingredient_mapping_key, which violates the NOT-NULL column (a PRE-EXISTING import defect —
-      // ImportedRecipeData.ImportedIngredient carries no mapping key, and RecipeServiceImpl hard-
-      // codes null). Until that is fixed, an imported recipe MUST be ingredient-free to persist.
-      // The per-recipe-unique method instruction (qualified by the recipe name) keeps the content
-      // fingerprint distinct so each seed imports rather than dedup-collapsing.
+      // discovery-1 (fixed): the discovery→recipe import path now carries a normalised
+      // ingredient_mapping_key through every hop (extractor → runner → RecipeServiceImpl), so an
+      // imported recipe with ingredients persists cleanly against the NOT-NULL column. These seeds
+      // are deliberately ingredient-bearing so the prod-parity e2e stack exercises that path.
+      // Each ParsedIngredient supplies an explicit normalised key; the runner re-normalises and
+      // falls back to normalise(displayName) defensively. The per-recipe-unique method instruction
+      // (qualified by the recipe name) keeps the content fingerprint distinct so each seed imports
+      // rather than dedup-collapsing.
+      List<ParsedRecipe.ParsedIngredient> ingredients =
+          List.of(
+              new ParsedRecipe.ParsedIngredient(
+                  "Olive oil", "olive oil", new BigDecimal("1"), "tbsp", null, false),
+              new ParsedRecipe.ParsedIngredient(
+                  "Sea salt", "sea salt", new BigDecimal("1"), "pinch", null, true));
       List<ParsedRecipe.ParsedMethodStep> method =
           List.of(new ParsedRecipe.ParsedMethodStep(1, "Prepare and serve " + name + ".", 25));
       ParsedRecipe.ParsedRecipeMetadata metadata =
@@ -135,7 +145,7 @@ public class E2eSeedDiscoverySource implements DiscoverySource {
           url,
           name,
           "Deterministic e2e seed recipe.",
-          List.of(),
+          ingredients,
           method,
           metadata,
           "e2e-seed",

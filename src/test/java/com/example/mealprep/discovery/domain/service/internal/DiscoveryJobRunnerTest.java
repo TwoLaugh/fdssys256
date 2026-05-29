@@ -169,6 +169,118 @@ class DiscoveryJobRunnerTest {
     verify(transitions, atLeastOnce()).incrementIngested(jobId);
   }
 
+  // -------- discovery-1: ingredientMappingKey carried into the SPI payload --------
+
+  @Test
+  void run_carriesSuppliedIngredientMappingKey_intoImportedRecipeData() {
+    // The runner's toImportedRecipeData must carry ParsedIngredient.ingredientMappingKey onto the
+    // SPI ImportedIngredient (it was silently dropped before discovery-1). Capture the SPI payload.
+    ParsedRecipe parsed =
+        new ParsedRecipe(
+            "https://example.test/r/x",
+            "Recipe X",
+            "desc",
+            List.of(
+                new ParsedRecipe.ParsedIngredient(
+                    "Sea Salt", "sea salt", BigDecimal.ONE, "tsp", null, false)),
+            List.of(new ParsedRecipe.ParsedMethodStep(1, "Mix.", null)),
+            new ParsedRecipe.ParsedRecipeMetadata(
+                2, 5, 10, 15, List.of(), "Asian", List.of("dinner")),
+            "jsonld",
+            new BigDecimal("0.9"));
+
+    ImportedRecipeData captured = runHappyPathAndCaptureSpiPayload(parsed);
+
+    assertThat(captured.ingredients()).hasSize(1);
+    ImportedRecipeData.ImportedIngredient ing = captured.ingredients().get(0);
+    assertThat(ing.displayName()).isEqualTo("Sea Salt");
+    assertThat(ing.ingredientMappingKey()).isEqualTo("sea salt");
+  }
+
+  @Test
+  void run_nullSuppliedMappingKey_fallsBackToNormalisedDisplayName_inSpiPayload() {
+    // When a ParsedIngredient supplies no key, the runner derives the deterministic v1 fallback
+    // from displayName via the canonical normaliser, so the SPI payload is never null/blank.
+    ParsedRecipe parsed =
+        new ParsedRecipe(
+            "https://example.test/r/x",
+            "Recipe X",
+            "desc",
+            List.of(
+                new ParsedRecipe.ParsedIngredient(
+                    "  Chicken   Breast ", null, BigDecimal.ONE, "g", null, false)),
+            List.of(new ParsedRecipe.ParsedMethodStep(1, "Mix.", null)),
+            new ParsedRecipe.ParsedRecipeMetadata(
+                2, 5, 10, 15, List.of(), "Asian", List.of("dinner")),
+            "jsonld",
+            new BigDecimal("0.9"));
+
+    ImportedRecipeData captured = runHappyPathAndCaptureSpiPayload(parsed);
+
+    assertThat(captured.ingredients()).hasSize(1);
+    assertThat(captured.ingredients().get(0).ingredientMappingKey()).isEqualTo("chicken breast");
+  }
+
+  @Test
+  void run_blankDisplayNameAndNullKey_carriesBlankMappingKey_intoSpiPayload() {
+    // Defensive carry-layer behaviour: when an ingredient supplies neither a key nor usable
+    // displayName text, the runner emits a blank (never-null) key; the recipe module then skips
+    // the line so the NOT-NULL column is never violated. Pins the final fall-through return.
+    ParsedRecipe parsed =
+        new ParsedRecipe(
+            "https://example.test/r/x",
+            "Recipe X",
+            "desc",
+            List.of(
+                new ParsedRecipe.ParsedIngredient("   ", null, BigDecimal.ONE, "g", null, false)),
+            List.of(new ParsedRecipe.ParsedMethodStep(1, "Mix.", null)),
+            new ParsedRecipe.ParsedRecipeMetadata(
+                2, 5, 10, 15, List.of(), "Asian", List.of("dinner")),
+            "jsonld",
+            new BigDecimal("0.9"));
+
+    ImportedRecipeData captured = runHappyPathAndCaptureSpiPayload(parsed);
+
+    assertThat(captured.ingredients()).hasSize(1);
+    assertThat(captured.ingredients().get(0).ingredientMappingKey()).isEmpty();
+  }
+
+  /**
+   * Drives the happy path with the given parsed recipe and returns the {@link ImportedRecipeData}
+   * handed to {@code saveImportedRecipe}, so a test can assert on the mapped SPI payload.
+   */
+  private ImportedRecipeData runHappyPathAndCaptureSpiPayload(ParsedRecipe parsed) {
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
+    job.setId(jobId);
+    job.setRequestedCount(1);
+    job.setSourcesRequested(new ArrayList<>(List.of("src_a")));
+
+    DiscoverySource source = stubSource("src_a", Optional.empty());
+    when(transitions.claim(jobId)).thenReturn(Optional.of(job));
+    when(sourceRegistry.resolveEnabledByKey(anyList())).thenReturn(List.of(source));
+    when(sourceRegistry.isCircuitOpen(eq(source), any())).thenReturn(false);
+    when(rateLimiterRegistry.tryAcquire("src_a")).thenReturn(true);
+    DiscoveryCandidate candidate =
+        new DiscoveryCandidate("src_a", "https://example.test/r/1", "T", "D", Map.of());
+    when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
+    when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(source.fetchRecipe(candidate)).thenReturn(parsed);
+    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+        .thenReturn(new FilterResult(true, List.of()));
+    when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
+    lenient().when(sourceRepository.findBySourceKey("src_a")).thenReturn(Optional.empty());
+    lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+    runner.run(startedEvent(jobId));
+
+    ArgumentCaptor<ImportedRecipeData> spiPayload =
+        ArgumentCaptor.forClass(ImportedRecipeData.class);
+    verify(recipeWriteApi).saveImportedRecipe(spiPayload.capture());
+    return spiPayload.getValue();
+  }
+
   // -------- hard-constraint safety net --------
 
   @Test

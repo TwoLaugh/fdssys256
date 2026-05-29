@@ -1,5 +1,6 @@
 package com.example.mealprep.discovery.domain.service.internal;
 
+import com.example.mealprep.core.ingredient.IngredientMappingKeys;
 import com.example.mealprep.discovery.api.dto.DiscoveryCandidate;
 import com.example.mealprep.discovery.api.dto.DiscoveryConstraints;
 import com.example.mealprep.discovery.api.dto.DiscoveryQuery;
@@ -712,7 +713,13 @@ public class DiscoveryJobRunner {
       for (ParsedRecipe.ParsedIngredient i : parsed.ingredients()) {
         ingredients.add(
             new ImportedRecipeData.ImportedIngredient(
-                idx++, i.displayName(), i.quantity(), i.unit(), i.preparation(), i.optional()));
+                idx++,
+                i.displayName(),
+                mappingKeyFor(i.ingredientMappingKey(), i.displayName()),
+                i.quantity(),
+                i.unit(),
+                i.preparation(),
+                i.optional()));
       }
     }
     List<ImportedRecipeData.ImportedMethodStep> method = new ArrayList<>();
@@ -753,6 +760,30 @@ public class DiscoveryJobRunner {
         parsed.extractionConfidence(),
         jobId,
         traceId);
+  }
+
+  /**
+   * Resolve the {@code ingredient_mapping_key} for an imported ingredient. Prefers the source-
+   * supplied key, falling back to the deterministic v1 key derived from {@code displayName} — both
+   * run through the canonical cross-module {@link IngredientMappingKeys#normalise} so the key is
+   * consistent regardless of which extractor produced it. The recipe module re-applies the same
+   * normalise+fallback before persisting, so this is the carry layer, not the final NOT-NULL guard.
+   * Returns a blank string only when neither source provides any usable text (e.g. blank
+   * displayName) — the recipe module then skips the line so the NOT-NULL column is never violated.
+   */
+  private static String mappingKeyFor(String suppliedKey, String displayName) {
+    String fromSupplied = blankToEmpty(IngredientMappingKeys.normalise(suppliedKey));
+    if (!fromSupplied.isBlank()) {
+      return fromSupplied;
+    }
+    return blankToEmpty(IngredientMappingKeys.normalise(displayName));
+  }
+
+  /**
+   * {@code null} → {@code ""}; otherwise the value unchanged. Keeps {@code mappingKeyFor} total.
+   */
+  private static String blankToEmpty(String value) {
+    return value == null ? "" : value;
   }
 
   private RobotsTxtOutcome checkRobots(DiscoverySource source, DiscoveryCandidate candidate) {

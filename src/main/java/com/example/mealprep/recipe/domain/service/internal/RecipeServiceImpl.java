@@ -1029,12 +1029,27 @@ public class RecipeServiceImpl
       return;
     }
     for (ImportedRecipeData.ImportedIngredient i : ingredients) {
+      // discovery-1: ingredient_mapping_key is NOT NULL and feeds USDA/nutrition mapping. Final
+      // invariant guard — always normalise, falling back to the displayName-derived key when the
+      // carried key is absent, so a discovered ingredient can never reach the DB with a null/blank
+      // key. If BOTH the carried key and displayName normalise to blank (a malformed line with no
+      // usable text — should not happen for a real recipe), the line is skipped (logged) rather
+      // than failing the whole import or violating the NOT-NULL column.
+      String mappingKey = resolveImportedMappingKey(i);
+      if (mappingKey.isBlank()) {
+        log.warn(
+            "discovery import skipping ingredient line {} on versionId={}: blank displayName and no"
+                + " mapping key — cannot derive a non-null ingredient_mapping_key",
+            i.lineOrder(),
+            version.getId());
+        continue;
+      }
       RecipeIngredient ingredient =
           RecipeIngredient.builder()
               .id(UUID.randomUUID())
               .version(version)
               .lineOrder(i.lineOrder())
-              .ingredientMappingKey(null)
+              .ingredientMappingKey(mappingKey)
               .displayName(i.displayName())
               .quantity(i.quantity())
               .unit(i.unit())
@@ -1045,6 +1060,26 @@ public class RecipeServiceImpl
               .build();
       version.getIngredients().add(ingredient);
     }
+  }
+
+  /**
+   * Resolve a non-blank, normalised {@code ingredient_mapping_key} for an imported ingredient.
+   * Prefers the carried key, falling back to the {@code displayName}-derived key; both run through
+   * the canonical {@link IngredientMappingKeys#normalise}. Returns a blank string only when neither
+   * yields usable text — the caller then skips the line (via {@code isBlank()}) so the NOT-NULL
+   * column is never violated. (A blank return is the single "no usable key" signal — there is no
+   * {@code null}-vs-empty distinction for callers to depend on.)
+   */
+  private static String resolveImportedMappingKey(ImportedRecipeData.ImportedIngredient i) {
+    String carried = IngredientMappingKeys.normalise(i.ingredientMappingKey());
+    if (carried != null && !carried.isBlank()) {
+      return carried;
+    }
+    String fromName = IngredientMappingKeys.normalise(i.displayName());
+    if (fromName != null && !fromName.isBlank()) {
+      return fromName;
+    }
+    return "";
   }
 
   private static void populateImportedMethodSteps(

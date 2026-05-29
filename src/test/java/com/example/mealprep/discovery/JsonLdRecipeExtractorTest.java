@@ -46,7 +46,9 @@ class JsonLdRecipeExtractorTest {
     assertThat(r.extractionConfidence()).isEqualByComparingTo(BigDecimal.valueOf(0.85));
     assertThat(r.ingredients()).hasSize(4);
     assertThat(r.ingredients().get(0).displayName()).isEqualTo("2 tbsp olive oil");
-    assertThat(r.ingredients().get(0).ingredientMappingKey()).isNull();
+    // discovery-1: the extractor now derives a deterministic, normalised mapping key from the
+    // display line (the v1 fallback) — never null, so the NOT-NULL column / nutrition mapping hold.
+    assertThat(r.ingredients().get(0).ingredientMappingKey()).isEqualTo("2 tbsp olive oil");
     assertThat(r.method()).hasSize(4);
     assertThat(r.method().get(0).stepNumber()).isEqualTo(1);
     assertThat(r.method().get(3).stepNumber()).isEqualTo(4);
@@ -289,6 +291,27 @@ class JsonLdRecipeExtractorTest {
     Optional<ParsedRecipe> result = extractor.extract(html, "https://test/x");
     assertThat(result).isPresent();
     assertThat(result.get().ingredients()).extracting("displayName").containsExactly("salt");
+  }
+
+  @Test
+  void extract_ingredientMappingKey_isNormalisedDisplayName() {
+    // discovery-1: the extractor populates ingredient_mapping_key via the canonical normaliser
+    // (lowercase + trim + collapse internal whitespace), never null. Kills any mutation that
+    // would pass the raw line, a null, or skip the normalise call.
+    String html =
+        "<html><head><script type=\"application/ld+json\">"
+            + "{\"@type\":\"Recipe\",\"name\":\"X\","
+            + "\"recipeIngredient\":[\"  Chicken   Breast  \"],"
+            + "\"recipeInstructions\":[\"b\"]}"
+            + "</script></head><body></body></html>";
+
+    Optional<ParsedRecipe> result = extractor.extract(html, "https://test/x");
+    assertThat(result).isPresent();
+    ParsedRecipe.ParsedIngredient ing = result.get().ingredients().get(0);
+    // stringArray trims the outer whitespace before it reaches the constructor; the normaliser
+    // then lowercases and collapses the interior double-space.
+    assertThat(ing.displayName()).isEqualTo("Chicken   Breast");
+    assertThat(ing.ingredientMappingKey()).isEqualTo("chicken breast");
   }
 
   @Test
