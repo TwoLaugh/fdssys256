@@ -247,7 +247,9 @@ class AdaptationServiceImplProcessJobSmokeTest {
               null,
               null,
               null,
-              lockAcquirer);
+              lockAcquirer,
+              null,
+              null);
     }
   }
 }

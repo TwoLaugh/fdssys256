@@ -53,6 +53,7 @@ import com.example.mealprep.adaptation.domain.service.internal.FingerprintRefres
 import com.example.mealprep.adaptation.domain.service.internal.JobReadyEvent;
 import com.example.mealprep.adaptation.domain.service.internal.PendingChangeStore;
 import com.example.mealprep.adaptation.domain.service.internal.PlannerHintEmitter;
+import com.example.mealprep.adaptation.domain.service.internal.RebaseOrchestrator;
 import com.example.mealprep.adaptation.domain.service.internal.ScoringEngine;
 import com.example.mealprep.adaptation.event.AdaptationCandidateProducedEvent;
 import com.example.mealprep.adaptation.event.AdaptationJobCompletedEvent;
@@ -63,6 +64,7 @@ import com.example.mealprep.adaptation.exception.AdaptationAiResponseInvalidExce
 import com.example.mealprep.adaptation.exception.AdaptationAiUnavailableException;
 import com.example.mealprep.adaptation.exception.AdaptationCharacterBreakException;
 import com.example.mealprep.adaptation.exception.AdaptationException;
+import com.example.mealprep.adaptation.exception.AdaptationHardConstraintViolationException;
 import com.example.mealprep.adaptation.exception.AdaptationJobNotFoundException;
 import com.example.mealprep.adaptation.exception.AdaptationJobNotRetryableException;
 import com.example.mealprep.adaptation.exception.PendingChangeExpiredException;
@@ -73,17 +75,33 @@ import com.example.mealprep.adaptation.exception.RebaseExhaustedException;
 import com.example.mealprep.core.audit.api.dto.DecisionLogScale;
 import com.example.mealprep.core.audit.api.dto.DecisionLogWriteRequest;
 import com.example.mealprep.core.audit.domain.service.DecisionLogService;
+import com.example.mealprep.preference.api.dto.FilterResult;
+import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
 import com.example.mealprep.recipe.api.dto.CharacterFingerprintDto;
+import com.example.mealprep.recipe.api.dto.CreateIngredientRequest;
+import com.example.mealprep.recipe.api.dto.CreateMethodStepRequest;
+import com.example.mealprep.recipe.api.dto.IngredientDto;
+import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
+import com.example.mealprep.recipe.api.dto.RecipeSubstitutionDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
+import com.example.mealprep.recipe.api.dto.SubstitutionItemRequest;
+import com.example.mealprep.recipe.api.dto.SubstitutionReason;
 import com.example.mealprep.recipe.domain.entity.Catalogue;
 import com.example.mealprep.recipe.spi.RecipeWriteApi;
+import com.example.mealprep.recipe.spi.SaveAdaptedBranchCommand;
+import com.example.mealprep.recipe.spi.SaveAdaptedSubstitutionCommand;
 import com.example.mealprep.recipe.spi.SaveAdaptedVersionCommand;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -111,6 +129,10 @@ import org.springframework.transaction.annotation.Transactional;
 public class AdaptationServiceImpl implements AdaptationService, AdaptationQueryService {
 
   private static final Logger LOG = LoggerFactory.getLogger(AdaptationServiceImpl.class);
+
+  // Pure JSON tree-building for the inputs JSONB serialise/parse round-trip (adaptation source-bias
+  // payload). No Spring config dependency — a vanilla mapper is sufficient for record <-> tree.
+  private static final ObjectMapper INPUTS_MAPPER = new ObjectMapper();
 
   private static final String UOE_TICKET_01C = "ticket-01c";
   private static final String UOE_TICKET_01D = "ticket-01d";
@@ -152,6 +174,16 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   private final RecipeWriteApi recipeWriteApi;
   private final PendingChangeMapper pendingChangeMapper;
   private final AdaptationConfig adaptationConfig;
+
+  // Apply-path + safety helpers. DIRECT (SYSTEM-catalogue) writes route THROUGH the orchestrator
+  // for
+  // RecipeVersionConflict rebase-retry / REBASE_EXHAUSTED handling (never raw RecipeWriteApi); the
+  // hard-constraint filter is the deterministic allergy/dietary safety net invoked at Step 3 (drop
+  // infeasible candidates before scoring) and Step 6 (re-check the final chosen diff). Both are
+  // nullable in the older skeleton ctors — those wirings never reach the apply / filter paths
+  // (PENDING_CHANGE-only smoke wirings, or candidate-set fixtures that exercise scoring alone).
+  private final RebaseOrchestrator rebaseOrchestrator;
+  private final HardConstraintFilterService hardConstraintFilterService;
 
   // 01e — real context loader. Nullable in older ctors; processJob falls back to the 01c
   // placeholder loader when absent (keeps the 01b/01c skeleton + smoke tests green).
@@ -213,6 +245,8 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         null,
         null,
         null,
+        null,
+        null,
         null);
   }
 
@@ -248,7 +282,9 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
       AdaptationJobMapper jobMapper,
       AdaptationTraceMapper traceMapper,
       PlannerHintMapper plannerHintMapper,
-      AdaptationLockAcquirer lockAcquirer) {
+      AdaptationLockAcquirer lockAcquirer,
+      RebaseOrchestrator rebaseOrchestrator,
+      HardConstraintFilterService hardConstraintFilterService) {
     this.jobRepository = jobRepository;
     this.pendingChangeRepository = pendingChangeRepository;
     this.traceRepository = traceRepository;
@@ -275,6 +311,8 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
     this.traceMapper = traceMapper;
     this.plannerHintMapper = plannerHintMapper;
     this.lockAcquirer = lockAcquirer;
+    this.rebaseOrchestrator = rebaseOrchestrator;
+    this.hardConstraintFilterService = hardConstraintFilterService;
   }
 
   // ---------------------------------------------------------------------------
@@ -310,7 +348,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
             .priority(priority)
             .approvalPolicy(approval)
             .status(JobStatus.PENDING)
-            .inputs(emptyInputs())
+            .inputs(importInputs(request))
             .traceId(traceId)
             .enqueuedAt(Instant.now())
             .build();
@@ -355,7 +393,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
             .priority(JobPriority.SYNC)
             .approvalPolicy(ApprovalPolicy.PENDING_CHANGE)
             .status(JobStatus.PENDING)
-            .inputs(emptyInputs())
+            .inputs(feedbackInputs(request))
             .traceId(request.traceId())
             .parentDecisionId(request.parentDecisionId())
             .enqueuedAt(Instant.now())
@@ -382,7 +420,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
               .priority(JobPriority.BATCH)
               .approvalPolicy(ApprovalPolicy.PENDING_CHANGE)
               .status(JobStatus.PENDING)
-              .inputs(emptyInputs())
+              .inputs(dataModelInputs(request))
               .traceId(request.traceId())
               .enqueuedAt(now)
               .build());
@@ -424,7 +462,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
             .priority(JobPriority.SYNC)
             .approvalPolicy(ApprovalPolicy.PLAN_OVERLAY)
             .status(JobStatus.PENDING)
-            .inputs(emptyInputs())
+            .inputs(planTimeInputs(request))
             .traceId(request.traceId())
             .parentDecisionId(request.parentDecisionId())
             .enqueuedAt(Instant.now())
@@ -634,10 +672,21 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
       // assembler bean is absent, e.g. older skeleton-constructor unit wirings).
       AdaptationContext context = loadContext(job);
 
-      // Step 3 — Stage A candidate generation.
-      List<AdaptationCandidateDto> candidates = candidateGenerator.generate(job, context);
+      // Step 3 — Stage A candidate generation, then the hard-constraint safety net BEFORE scoring.
+      // The deterministic allergy/dietary filter is invariant per HLD §Guardrails — it is never
+      // bypassed; the LLM only ever sees a pre-vetted shortlist. Candidates whose resulting
+      // ingredient set would violate the owner's hard constraints are dropped here so the LLM
+      // cannot
+      // pick one. Empty-after-filter (no feasible candidate, e.g. every swap reintroduces an
+      // allergen) fails the job HARD_FILTER per LLD Step 3 / JobFailureReason.HARD_FILTER.
+      List<AdaptationCandidateDto> generated = candidateGenerator.generate(job, context);
+      List<AdaptationCandidateDto> candidates = filterFeasibleCandidates(job, context, generated);
       if (candidates.isEmpty()) {
-        handleFailure(job, JobFailureReason.HARD_FILTER, "no-candidates", startMillis);
+        String excerpt =
+            generated.isEmpty()
+                ? "no-candidates"
+                : "hard-filter: all " + generated.size() + " candidates infeasible";
+        handleFailure(job, JobFailureReason.HARD_FILTER, excerpt, startMillis);
         return;
       }
 
@@ -669,7 +718,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         }
       }
 
-      // Step 6 — Validation gates.
+      // Step 6 — Validation gates (in order, all must pass).
       ValidationResult confidenceResult = confidenceFloorGate.evaluate(response);
       boolean forceBranch;
       try {
@@ -678,17 +727,37 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
         handleFailure(job, JobFailureReason.CHARACTER_BREAK, e.getMessage(), startMillis);
         throw e;
       }
+      // Step 6 (final gate) — re-run the hard-constraint filter against the FINAL chosen diff.
+      // Guards against the LLM stitching together a candidate post-hoc (refinedDiff / a free-form
+      // finalDiff) that reintroduces an allergen the Step-3 shortlist had excluded. Never bypassed.
+      // Skipped only when the LLM declined entirely (NO_CHANGE) — there is no diff to apply.
+      AdaptationClassification finalClassification =
+          forceBranch ? AdaptationClassification.BRANCH : response.classification();
+      boolean noChange =
+          response.classification() == AdaptationClassification.NO_CHANGE
+              || response.chosenCandidateIndex() < 0;
+      if (!noChange) {
+        try {
+          recheckFinalDiff(job, context, withCandidates, response);
+        } catch (AdaptationHardConstraintViolationException e) {
+          handleFailure(job, JobFailureReason.HARD_FILTER, e.getMessage(), startMillis);
+          throw e;
+        }
+      }
 
-      // Step 7 — Apply path: in 01c we always go via PendingChangeStore for safety.
+      // Step 7 — Apply per approval_policy (LLD §Shared worker pipeline step 7). A LOW_CONFIDENCE
+      // result is defensively downgraded to PENDING_CHANGE for user review even on a SYSTEM
+      // catalogue (HLD failure mode). NO_CHANGE never writes — it records NO_OP.
       ApprovalPolicy effective =
           (confidenceResult == ValidationResult.LOW_CONFIDENCE)
               ? ApprovalPolicy.PENDING_CHANGE
               : job.getApprovalPolicy();
       OutcomeKind outcome;
       UUID outcomeTargetId = null;
-      AdaptationClassification finalClassification =
-          forceBranch ? AdaptationClassification.BRANCH : response.classification();
-      if (effective == ApprovalPolicy.PENDING_CHANGE) {
+      if (noChange) {
+        // LLM declined to recommend any candidate (infeasibility / low coherence) — no write.
+        outcome = OutcomeKind.NO_OP;
+      } else if (effective == ApprovalPolicy.PENDING_CHANGE) {
         ChangeDimension dim = dimensionResolver.resolve(job, withCandidates, response);
         UUID pcId =
             pendingChangeStore.create(
@@ -704,9 +773,21 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
                 job.getPromptTemplateVersion() == null ? "v0" : job.getPromptTemplateVersion());
         outcome = OutcomeKind.PENDING_CREATED;
         outcomeTargetId = pcId;
+      } else if (effective == ApprovalPolicy.PLAN_OVERLAY) {
+        // Trigger 4 (plan-time refine): outcome is ALWAYS a substitution overlay — plan-scoped, the
+        // master recipe never mutates (LLD §Decisions §9). No RebaseOrchestrator: a substitution is
+        // an additive overlay, not a head-moving version write, so it can't lose a version race.
+        UUID subId = applyPlanOverlay(job, context, withCandidates, response);
+        outcome = OutcomeKind.SUBSTITUTION_CREATED;
+        outcomeTargetId = subId;
       } else {
-        // DIRECT / PLAN_OVERLAY apply paths land in 01d / 01e. For 01c the trace records NO_OP.
-        outcome = OutcomeKind.NO_OP;
+        // DIRECT (SYSTEM catalogue): write a new VERSION or BRANCH straight through, routed via the
+        // RebaseOrchestrator so a RecipeVersionConflictException retries up to maxRebaseAttempts
+        // and
+        // then fails REBASE_EXHAUSTED (LLD §Shared worker pipeline step 7 / §Concurrency).
+        ApplyOutcome applied = applyDirect(job, context, response, finalClassification);
+        outcome = applied.outcome();
+        outcomeTargetId = applied.targetId();
       }
 
       // Step 7b (01f) — post-apply hooks. On a new-version / branch write the prior version's
@@ -825,24 +906,106 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   }
 
   /**
-   * Parse the source-specific {@link TriggerInputs} from the job's {@code inputs} JSONB. 01d
-   * persists an empty inputs object today, so every variant is constructed null/empty-tolerant; the
-   * assembler folds nulls into the context cleanly via the {@code TriggerInputs} accessor defaults.
+   * Parse the source-specific {@link TriggerInputs} from the job's {@code inputs} JSONB. The
+   * enqueue methods now persist the full trigger payload (ratingDelta, directive, feedbackText,
+   * dataModelChange), so this parse hydrates the live source-bias inputs that {@code
+   * CandidateGenerator} reads — they are no longer dead at runtime. Each branch is null-tolerant:
+   * an absent field yields {@code null} and the assembler folds it cleanly into the context.
    */
   TriggerInputs triggerInputsFromJob(AdaptationJob job) {
-    com.fasterxml.jackson.databind.JsonNode inputs = job.getInputs();
+    JsonNode inputs = job.getInputs();
     return switch (job.getSource()) {
       case FEEDBACK -> {
         String text =
             inputs != null && inputs.hasNonNull("feedbackText")
                 ? inputs.get("feedbackText").asText()
                 : null;
-        yield new TriggerInputs.FeedbackTriggerInputs(text, null);
+        FeedbackJobRequest.RatingDeltaDto ratingDelta =
+            parseNode(
+                inputs == null ? null : inputs.get("ratingDelta"),
+                FeedbackJobRequest.RatingDeltaDto.class);
+        yield new TriggerInputs.FeedbackTriggerInputs(text, ratingDelta);
       }
-      case PLAN_TIME -> new TriggerInputs.PlanTimeTriggerInputs(null, null);
-      case DATA_MODEL_CHANGE -> new TriggerInputs.DataModelTriggerInputs(null, inputs);
-      case IMPORT -> new TriggerInputs.ImportTriggerInputs(inputs);
+      case PLAN_TIME -> {
+        PlanTimeRefineDirectiveRequest.RefineDirectiveDto directive =
+            parseNode(
+                inputs == null ? null : inputs.get("directive"),
+                PlanTimeRefineDirectiveRequest.RefineDirectiveDto.class);
+        yield new TriggerInputs.PlanTimeTriggerInputs(directive, null);
+      }
+      case DATA_MODEL_CHANGE -> {
+        JsonNode summary = inputs == null ? null : inputs.get("changeSummary");
+        yield new TriggerInputs.DataModelTriggerInputs(null, summary == null ? inputs : summary);
+      }
+      case IMPORT -> {
+        JsonNode raw = inputs == null ? null : inputs.get("rawImportContext");
+        yield new TriggerInputs.ImportTriggerInputs(raw);
+      }
     };
+  }
+
+  /** Null-tolerant tree → record parse; returns {@code null} on missing/blank/malformed nodes. */
+  private static <T> T parseNode(JsonNode node, Class<T> type) {
+    if (node == null || node.isNull()) {
+      return null;
+    }
+    try {
+      return INPUTS_MAPPER.treeToValue(node, type);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      LOG.warn(
+          "trigger-inputs parse of {} failed (non-fatal): {}",
+          type.getSimpleName(),
+          e.getMessage());
+      return null;
+    }
+  }
+
+  // --- inputs JSONB builders (adaptation source-bias payload persisted per trigger)
+  // ---------------
+
+  /** IMPORT inputs: raw scrape/import context (may be null for a manual create). */
+  private static JsonNode importInputs(ImportJobRequest request) {
+    var node = JsonNodeFactory.instance.objectNode();
+    if (request.rawImportContext() != null) {
+      node.set("rawImportContext", request.rawImportContext());
+    }
+    return node;
+  }
+
+  /** FEEDBACK inputs: verbatim text + structured rating delta (biases CandidateGenerator). */
+  private static JsonNode feedbackInputs(FeedbackJobRequest request) {
+    var node = JsonNodeFactory.instance.objectNode();
+    if (request.feedbackText() != null) {
+      node.put("feedbackText", request.feedbackText());
+    }
+    if (request.ratingDelta() != null) {
+      node.set("ratingDelta", INPUTS_MAPPER.valueToTree(request.ratingDelta()));
+    }
+    return node;
+  }
+
+  /** DATA_MODEL_CHANGE inputs: which surface changed + the JSON summary. */
+  private static JsonNode dataModelInputs(DataModelJobRequest request) {
+    var node = JsonNodeFactory.instance.objectNode();
+    if (request.changeType() != null) {
+      node.put("changeType", request.changeType().name());
+    }
+    if (request.changeSummary() != null) {
+      node.set("changeSummary", request.changeSummary());
+    }
+    return node;
+  }
+
+  /** PLAN_TIME inputs: the refine directive (DirectiveKind biases Stage A) + plan constraints. */
+  private static JsonNode planTimeInputs(PlanTimeRefineDirectiveRequest request) {
+    var node = JsonNodeFactory.instance.objectNode();
+    if (request.directive() != null) {
+      node.set("directive", INPUTS_MAPPER.valueToTree(request.directive()));
+    }
+    if (request.constraints() != null) {
+      node.set("constraints", INPUTS_MAPPER.valueToTree(request.constraints()));
+    }
+    return node;
   }
 
   /**
@@ -904,6 +1067,333 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Hard-constraint safety net (Step 3 pre-scoring filter + Step 6 final-diff re-check)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Step 3 safety net — drop every candidate whose RESULTING ingredient set would violate the
+   * owner's hard constraints, BEFORE scoring, so the LLM only ever picks from a pre-vetted
+   * shortlist (HLD §Guardrails: the deterministic filter is invariant; the LLM never touches hard
+   * constraints). Each candidate's resulting key set is the current version's keys with the diff's
+   * removals/additions applied; {@link HardConstraintFilterService#checkRecipe} then validates it.
+   *
+   * <p>Null-safe fallback: when the filter is not wired (older skeleton-ctor unit wirings) the
+   * generated list passes through unchanged — those wirings never exercise the safety path.
+   */
+  List<AdaptationCandidateDto> filterFeasibleCandidates(
+      AdaptationJob job, AdaptationContext context, List<AdaptationCandidateDto> generated) {
+    if (hardConstraintFilterService == null || generated.isEmpty()) {
+      return generated;
+    }
+    List<String> baseKeys = currentVersionKeys(context);
+    List<AdaptationCandidateDto> feasible = new ArrayList<>(generated.size());
+    for (AdaptationCandidateDto c : generated) {
+      List<String> resultingKeys = resultingIngredientKeys(baseKeys, c.proposedDiff());
+      FilterResult result =
+          hardConstraintFilterService.checkRecipe(
+              job.getUserId(), job.getRecipeId(), resultingKeys);
+      if (result.passes()) {
+        feasible.add(c);
+      } else {
+        LOG.info(
+            "Step-3 hard-filter dropped candidate index={} jobId={} (violations={})",
+            c.index(),
+            job.getId(),
+            result.violations() == null ? 0 : result.violations().size());
+      }
+    }
+    return feasible;
+  }
+
+  /**
+   * Step 6 final gate — re-run the hard-constraint filter against the diff actually about to be
+   * applied (the LLM's {@code finalDiffJson}/{@code refinedDiff} if present, else the chosen
+   * candidate's pre-vetted diff). Catches the LLM stitching together a post-hoc diff that
+   * reintroduces an allergen the Step-3 shortlist excluded. Never bypassed.
+   *
+   * @throws AdaptationHardConstraintViolationException when the final diff violates a hard
+   *     constraint
+   */
+  void recheckFinalDiff(
+      AdaptationJob job,
+      AdaptationContext context,
+      AdaptationContext withCandidates,
+      RecipeAdaptationResponse response) {
+    if (hardConstraintFilterService == null) {
+      return;
+    }
+    JsonNode finalDiff = resolveFinalDiff(withCandidates, response);
+    List<String> resultingKeys = resultingIngredientKeys(currentVersionKeys(context), finalDiff);
+    FilterResult result =
+        hardConstraintFilterService.checkRecipe(job.getUserId(), job.getRecipeId(), resultingKeys);
+    if (!result.passes()) {
+      int violationCount = result.violations() == null ? 0 : result.violations().size();
+      throw new AdaptationHardConstraintViolationException(
+          "final-diff re-check failed: "
+              + violationCount
+              + " hard-constraint violation(s) on recipe "
+              + job.getRecipeId());
+    }
+  }
+
+  /**
+   * The diff that will actually be applied: the LLM's free-form {@code finalDiffJson} when present,
+   * else the chosen candidate's pre-vetted {@code proposedDiff}. Falls back to an empty node when
+   * neither is resolvable (defensive — the resulting key set then equals the base keys).
+   */
+  private JsonNode resolveFinalDiff(
+      AdaptationContext withCandidates, RecipeAdaptationResponse response) {
+    if (response.finalDiffJson() != null) {
+      return response.finalDiffJson();
+    }
+    int idx = response.chosenCandidateIndex();
+    List<AdaptationCandidateDto> candidates =
+        withCandidates == null ? List.of() : withCandidates.candidates();
+    for (AdaptationCandidateDto c : candidates) {
+      if (c.index() == idx) {
+        return c.proposedDiff();
+      }
+    }
+    return JsonNodeFactory.instance.objectNode();
+  }
+
+  /** Distinct ingredient mapping keys on the recipe's current version (empty when no body). */
+  private List<String> currentVersionKeys(AdaptationContext context) {
+    RecipeVersionDto version = context == null ? null : context.currentVersion();
+    if (version == null || version.ingredients() == null) {
+      return List.of();
+    }
+    return version.ingredients().stream()
+        .map(IngredientDto::ingredientMappingKey)
+        .filter(k -> k != null && !k.isBlank())
+        .distinct()
+        .toList();
+  }
+
+  /**
+   * Compute the ingredient-mapping-key set that RESULTS from applying {@code diff} to the recipe's
+   * current keys. Mirrors the deterministic v1 candidate-diff shapes emitted by the Stage-A
+   * strategies:
+   *
+   * <ul>
+   *   <li>{@code ingredient-swap {from,to}} — remove {@code from}, add {@code to} (the swap-in is
+   *       the key that could reintroduce an allergen).
+   *   <li>{@code ingredient-remove {key}} — remove {@code key}.
+   *   <li>{@code portion-adjust} / {@code method-*} — no ingredient-set change.
+   * </ul>
+   *
+   * <p>Also tolerates an {@code ingredientChanges[]} array (the {@link
+   * com.example.mealprep.recipe.api.dto.RecipeDiffDto} shape an LLM {@code finalDiffJson} may
+   * carry): any node with a {@code to.ingredientMappingKey} adds that key. Conservative by
+   * construction — an unrecognised diff leaves the base set intact, so the filter still checks the
+   * existing recipe.
+   */
+  List<String> resultingIngredientKeys(List<String> baseKeys, JsonNode diff) {
+    Set<String> keys = new LinkedHashSet<>(baseKeys);
+    if (diff == null || diff.isNull()) {
+      return List.copyOf(keys);
+    }
+    String kind = diff.hasNonNull("kind") ? diff.get("kind").asText() : null;
+    if ("ingredient-swap".equals(kind)) {
+      if (diff.hasNonNull("from")) {
+        keys.remove(diff.get("from").asText());
+      }
+      if (diff.hasNonNull("to")) {
+        keys.add(diff.get("to").asText());
+      }
+    } else if ("ingredient-remove".equals(kind)) {
+      if (diff.hasNonNull("key")) {
+        keys.remove(diff.get("key").asText());
+      }
+    }
+    // Free-form LLM diff carrying ingredientChanges[] — fold in any introduced keys defensively so
+    // a post-hoc-stitched substitution still gets re-checked.
+    JsonNode changes = diff.get("ingredientChanges");
+    if (changes != null && changes.isArray()) {
+      for (JsonNode ch : changes) {
+        JsonNode to = ch.get("to");
+        if (to != null && to.hasNonNull("ingredientMappingKey")) {
+          keys.add(to.get("ingredientMappingKey").asText());
+        }
+        JsonNode from = ch.get("from");
+        if (from != null
+            && from.hasNonNull("ingredientMappingKey")
+            && ch.hasNonNull("action")
+            && "REMOVED".equalsIgnoreCase(ch.get("action").asText())) {
+          keys.remove(from.get("ingredientMappingKey").asText());
+        }
+      }
+    }
+    return List.copyOf(keys);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Apply paths (Step 7): DIRECT (version/branch via RebaseOrchestrator) + PLAN_OVERLAY
+  // (substitution)
+  // ---------------------------------------------------------------------------
+
+  /** Outcome of a DIRECT apply: which kind was written and the new target id. */
+  private record ApplyOutcome(OutcomeKind outcome, UUID targetId) {}
+
+  /**
+   * DIRECT apply (SYSTEM catalogue) — write a new VERSION on the current branch, or a new BRANCH
+   * when the gates forced a branch (character-preservation BRANCH candidate). Routed through {@link
+   * RebaseOrchestrator} so a {@code RecipeVersionConflictException} retries up to {@code
+   * maxRebaseAttempts} and then surfaces {@code RebaseExhaustedException} → REBASE_EXHAUSTED.
+   */
+  ApplyOutcome applyDirect(
+      AdaptationJob job,
+      AdaptationContext context,
+      RecipeAdaptationResponse response,
+      AdaptationClassification finalClassification) {
+    RecipeVersionDto current = context == null ? null : context.currentVersion();
+    JsonNode finalDiff =
+        response.finalDiffJson() == null
+            ? JsonNodeFactory.instance.objectNode()
+            : response.finalDiffJson();
+    UUID traceId = job.getTraceId();
+
+    if (finalClassification == AdaptationClassification.BRANCH) {
+      SaveAdaptedBranchCommand branchCmd =
+          new SaveAdaptedBranchCommand(
+              job.getRecipeId(),
+              current == null ? null : current.branchId(),
+              current == null ? null : current.id(),
+              "adaptation-" + traceId,
+              "adapted",
+              response.reasoning(),
+              List.<CreateIngredientRequest>of(),
+              List.<CreateMethodStepRequest>of(),
+              null,
+              null,
+              (CharacterFingerprintDto) null,
+              traceId);
+      RecipeBranchDto branch =
+          rebaseOrchestrator.saveAdaptedBranchWithRebase(
+              branchCmd, c -> rebaseBranchCommand(c, job));
+      return new ApplyOutcome(OutcomeKind.BRANCH_CREATED, branch.id());
+    }
+
+    SaveAdaptedVersionCommand versionCmd =
+        new SaveAdaptedVersionCommand(
+            job.getRecipeId(),
+            current == null ? null : current.branchId(),
+            current == null ? 0 : current.versionNumber(),
+            current == null ? null : current.id(),
+            List.<CreateIngredientRequest>of(),
+            List.<CreateMethodStepRequest>of(),
+            null,
+            null,
+            (CharacterFingerprintDto) null,
+            finalDiff,
+            response.reasoning(),
+            traceId);
+    RecipeVersionDto version =
+        rebaseOrchestrator.saveAdaptedVersionWithRebase(
+            versionCmd, c -> rebaseVersionCommand(c, job));
+    return new ApplyOutcome(OutcomeKind.VERSION_CREATED, version.id());
+  }
+
+  /**
+   * Rebase a version command after a conflict: refresh the parent-version expectations from the
+   * catalogue's CURRENT head, keeping the same diff/reason/trace. The orchestrator re-attempts the
+   * write against the moved head.
+   */
+  private SaveAdaptedVersionCommand rebaseVersionCommand(
+      SaveAdaptedVersionCommand prev, AdaptationJob job) {
+    Optional<RecipeVersionDto> head = currentHead(job.getRecipeId());
+    return new SaveAdaptedVersionCommand(
+        prev.recipeId(),
+        head.map(RecipeVersionDto::branchId).orElse(prev.branchId()),
+        head.map(RecipeVersionDto::versionNumber).orElse(prev.expectedParentVersionNumber()),
+        head.map(RecipeVersionDto::id).orElse(prev.expectedParentVersionId()),
+        prev.ingredients(),
+        prev.method(),
+        prev.metadata(),
+        prev.tags(),
+        prev.characterFingerprint(),
+        prev.changeDiff(),
+        prev.changeReason(),
+        prev.adapterTraceId());
+  }
+
+  /** Rebase a branch command after a conflict: refresh the branch-point version from the head. */
+  private SaveAdaptedBranchCommand rebaseBranchCommand(
+      SaveAdaptedBranchCommand prev, AdaptationJob job) {
+    Optional<RecipeVersionDto> head = currentHead(job.getRecipeId());
+    return new SaveAdaptedBranchCommand(
+        prev.recipeId(),
+        head.map(RecipeVersionDto::branchId).orElse(prev.parentBranchId()),
+        head.map(RecipeVersionDto::id).orElse(prev.branchPointVersionId()),
+        prev.name(),
+        prev.label(),
+        prev.reason(),
+        prev.ingredients(),
+        prev.method(),
+        prev.metadata(),
+        prev.tags(),
+        prev.characterFingerprint(),
+        prev.adapterTraceId());
+  }
+
+  /** Re-read the recipe's current-version head for a rebase attempt (null-safe). */
+  private Optional<RecipeVersionDto> currentHead(UUID recipeId) {
+    if (contextAssembler == null) {
+      return Optional.empty();
+    }
+    // The assembler reads recipe + current version via RecipeQueryService; reuse it so we don't add
+    // a second cross-module read seam. A fresh placeholder job carries only the recipeId we need.
+    AdaptationContext fresh =
+        contextAssembler.assemble(
+            AdaptationJob.builder()
+                .id(UUID.randomUUID())
+                .recipeId(recipeId)
+                .userId(UUID.randomUUID())
+                .source(JobSource.IMPORT)
+                .build(),
+            List.of(),
+            new TriggerInputs.ImportTriggerInputs(null));
+    return Optional.ofNullable(fresh.currentVersion());
+  }
+
+  /**
+   * PLAN_OVERLAY apply (Trigger 4) — persist a plan-scoped substitution overlay. The master recipe
+   * never mutates (LLD §Decisions §9). The substitution swaps the directive's targeted ingredient
+   * (the chosen candidate's {@code from}) for its replacement ({@code to}); a DIETARY_TEMP reason
+   * marks the overlay as plan-scoped.
+   */
+  UUID applyPlanOverlay(
+      AdaptationJob job,
+      AdaptationContext context,
+      AdaptationContext withCandidates,
+      RecipeAdaptationResponse response) {
+    RecipeVersionDto current = context == null ? null : context.currentVersion();
+    JsonNode diff = resolveFinalDiff(withCandidates, response);
+    String fromKey = diff != null && diff.hasNonNull("from") ? diff.get("from").asText() : null;
+    String toKey = diff != null && diff.hasNonNull("to") ? diff.get("to").asText() : null;
+    if (fromKey == null || toKey == null) {
+      // Defensive: a plan-time directive without a resolvable ingredient swap is a no-op overlay
+      // candidate — surface as NO_CHANGE upstream rather than writing a malformed substitution.
+      throw new AdaptationHardConstraintViolationException(
+          "plan-overlay diff missing from/to ingredient keys for recipe " + job.getRecipeId());
+    }
+    SaveAdaptedSubstitutionCommand cmd =
+        new SaveAdaptedSubstitutionCommand(
+            job.getRecipeId(),
+            current == null ? job.getRecipeId() : current.id(),
+            new SubstitutionItemRequest(fromKey, BigDecimal.ONE, "unit"),
+            new SubstitutionItemRequest(toKey, BigDecimal.ONE, "unit"),
+            SubstitutionReason.DIETARY_TEMP,
+            null,
+            List.of(),
+            response.reasoning(),
+            true,
+            job.getTraceId());
+    RecipeSubstitutionDto sub = recipeWriteApi.saveAdaptedSubstitution(cmd);
+    return sub.id();
+  }
+
   private void publishCandidateProduced(AdaptationJob job, List<AdaptationCandidateDto> topN) {
     BigDecimal topScore =
         topN.isEmpty() ? BigDecimal.ZERO : topN.get(0).rollup().tasteAlignmentScore();
@@ -963,14 +1453,6 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
     events.publishEvent(
         new AdaptationJobFailedEvent(
             job.getId(), job.getRecipeId(), reason, excerpt, job.getTraceId(), Instant.now()));
-  }
-
-  /**
-   * Empty JSONB stub for {@code AdaptationJob.inputs} on insert. 01e enriches with real prompt
-   * payloads; for 01d we just need a non-null insert.
-   */
-  private com.fasterxml.jackson.databind.JsonNode emptyInputs() {
-    return JsonNodeFactory.instance.objectNode();
   }
 
   /**
