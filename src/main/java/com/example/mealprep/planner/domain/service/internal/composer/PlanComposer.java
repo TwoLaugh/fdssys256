@@ -5,6 +5,8 @@ import com.example.mealprep.adaptation.api.dto.PlanTimeRefineDirectiveRequest;
 import com.example.mealprep.adaptation.domain.enums.AdaptationClassification;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
 import com.example.mealprep.adaptation.exception.AdaptationAiUnavailableException;
+import com.example.mealprep.core.lock.LockKey;
+import com.example.mealprep.core.lock.LockService;
 import com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto;
 import com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto;
 import com.example.mealprep.nutrition.domain.entity.ActivityLevel;
@@ -27,6 +29,7 @@ import com.example.mealprep.planner.domain.service.internal.rollup.RollupBuilder
 import com.example.mealprep.planner.domain.service.internal.stagec.Phase2Augmenter;
 import com.example.mealprep.planner.domain.service.internal.stagec.StageCInvoker;
 import com.example.mealprep.planner.event.PlanGeneratedEvent;
+import com.example.mealprep.planner.exception.ConcurrentGenerationInProgressException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -51,19 +54,37 @@ import org.springframework.transaction.annotation.Transactional;
  * B (rollup) &rarr; Stage C (LLM pick) &rarr; Phase 2 (augment) &rarr; Stage D (refine-directive
  * routing to the adaptation pipeline) &rarr; persist, per LLD §Composer and §Flow 1.
  *
- * <h2>Transaction semantics (ticket invariant #7, gotchas)</h2>
+ * <h2>Transaction semantics (LLD §Flow 1 + §Concurrency — Tier-1 decision: AI-in-tx = no)</h2>
  *
- * {@link #compose} is {@code @Transactional(REQUIRED)} — the whole composition + persist runs in
- * one transaction; a failure after Stage A rolls the partial plan back. The {@link
- * AdaptationService#runPlanTimeRefineJob} calls inside are themselves
+ * {@link #compose} is <b>not</b> {@code @Transactional}. Stage A (beam search), Stage C (LLM pick),
+ * Phase 2 (LLM augment) and Stage D (synchronous adaptation calls) all run with <b>no active
+ * transaction</b> — they make AI / cross-module calls that must not hold a DB connection or row
+ * locks across the AI latency window (LLD §Flow 1 line ~1211, §Concurrency line ~1322). Only the
+ * final persist + event publish — the LLD's "steps 12-13 are the only DB write boundary" — runs
+ * inside a short {@code @Transactional(REQUIRED)} block: {@link #persistAndPublish}, reached
+ * through the {@link #self} Spring proxy so the advice fires.
+ *
+ * <p>The {@link AdaptationService#runPlanTimeRefineJob} calls (Stage D) are themselves
  * {@code @Transactional(REQUIRES_NEW)} (declared by adaptation-pipeline-01b) so their
- * pending-change / trace rows commit independently — the planner's rollback does NOT undo them.
- * This is the intended audit semantic: adaptation work survives composer failures.
+ * pending-change / trace rows commit in their own transactions, independent of the composer.
  *
- * <p>{@link PlanGeneratedEvent} is published <b>inside</b> the transactional body so an {@code
+ * <p><b>Single-flight lock (LLD §Flow 1 step 1, §Concurrency).</b> The first act inside {@link
+ * #persistAndPublish} is {@code LockService.tryAcquire(LockKey.forPlanWeek(householdId,
+ * weekStartDate))}. The shipped {@code core.LockService} is a <b>transaction-scoped</b> Postgres
+ * advisory lock ({@code pg_try_advisory_xact_lock}) — it has no explicit release and auto-releases
+ * when the surrounding transaction commits or rolls back; so it is acquired inside the persist
+ * transaction (the only one the composer opens) and released the instant that tx ends. On
+ * contention the persist transaction rolls back (releasing nothing it acquired) and {@link
+ * ConcurrentGenerationInProgressException} (HTTP 409) is thrown. This guarantees the single-active
+ * invariant at the persist boundary: two concurrent generations for the same {@code (household,
+ * week)} cannot both insert a plan. (Deviation from the LLD's assumed {@code tryLock}/{@code
+ * release} session-lock API: the shipped primitive is tx-scoped, so the lock cannot span the
+ * out-of-tx AI stages without re-introducing the very in-tx-AI it forbids — the persist boundary is
+ * the strongest single-flight the shipped primitive supports.)
+ *
+ * <p>{@link PlanGeneratedEvent} is published <b>inside</b> {@link #persistAndPublish} so an {@code
  * AFTER_COMMIT} {@code @TransactionalEventListener} actually receives it (a no-active-tx publish is
- * dropped — gotcha). The composer does not self-invoke any other {@code @Transactional} method, so
- * no {@code @Lazy self} indirection is needed.
+ * dropped — gotcha).
  *
  * <p><b>Decision-log</b> writes go through {@link DecisionLogWriter} (planner-01l). Each stage row
  * chains its {@code parentDecisionId} to the previous stage's id, forming a single connected DAG
@@ -86,10 +107,12 @@ public class PlanComposer {
   private final PlanCompositionContextBuilder contextBuilder;
   private final ColdStartGate coldStartGate;
   // Self-reference through the Spring proxy so the public (non-transactional) compose() can invoke
-  // the @Transactional composeTransactional() WITH proxy advice. Required because the cold-start
-  // gate must run BEFORE the composition transaction opens: the gate's runJobSync persists +
-  // publishes the discovery-runner event AFTER_COMMIT, so it has to commit on its own (it would
-  // never fire while the composer's outer tx stayed open). @Lazy breaks the construction cycle.
+  // the @Transactional persistAndPublish() WITH proxy advice (a same-bean call would bypass the
+  // proxy and run with no transaction — the lock acquire would then throw, and the event publish
+  // would be dropped). Both the cold-start gate AND every AI stage (A/C/Phase-2/D) must run BEFORE
+  // this transaction opens (LLD §Flow 1 / §Concurrency: AI-in-tx = no; and the gate's runJobSync
+  // publishes its discovery-runner event AFTER_COMMIT, which would never fire under an open
+  // composer tx). @Lazy breaks the construction cycle.
   private final PlanComposer self;
   private final BeamSearchEngine beamSearchEngine;
   private final RollupBuilder rollupBuilder;
@@ -100,6 +123,7 @@ public class PlanComposer {
   private final AdaptationService adaptationService;
   private final ApplicationEventPublisher eventPublisher;
   private final DecisionLogWriter decisionLogWriter;
+  private final LockService lockService;
   private final PlannerProperties properties;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -121,6 +145,7 @@ public class PlanComposer {
       AdaptationService adaptationService,
       ApplicationEventPublisher eventPublisher,
       DecisionLogWriter decisionLogWriter,
+      LockService lockService,
       PlannerProperties properties,
       ObjectMapper objectMapper,
       Clock clock) {
@@ -136,6 +161,7 @@ public class PlanComposer {
     this.adaptationService = adaptationService;
     this.eventPublisher = eventPublisher;
     this.decisionLogWriter = decisionLogWriter;
+    this.lockService = lockService;
     this.properties = properties;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -157,15 +183,26 @@ public class PlanComposer {
    * (the controller maps it to a {@code PlanDto} via the read service — the {@code Plan} entity
    * must not cross the {@code api} boundary, ArchUnit).
    *
-   * <p><b>Not {@code @Transactional}.</b> The recipe-pool Tier-2 cold-start gate (LLD §Flow-1 step
-   * 5) MUST run BEFORE the composition transaction opens: its {@code DiscoveryService.runJobSync}
-   * persists the discovery job and publishes the runner's {@code AFTER_COMMIT} event, which only
-   * fires once that write commits. If the gate ran inside the composer's transaction the runner
-   * would never start (the event would wait for the outer commit) and the synchronous wait would
-   * always time out. So this method: (1) builds a read-only pre-context to size the catalogue, (2)
-   * runs the gate (its discovery work commits independently), then (3) delegates the actual
-   * composition + persist to {@link #composeTransactional} through the Spring proxy ({@link #self})
-   * so the {@code @Transactional} advice applies.
+   * <p><b>Not {@code @Transactional}, and the AI stages run with no active transaction</b> (LLD
+   * §Flow 1 line ~1211 / §Concurrency line ~1322 — Tier-1 decision: AI-in-tx = no). The flow is:
+   *
+   * <ol>
+   *   <li>Run the recipe-pool Tier-2 cold-start gate (LLD §Flow-1 step 5). It MUST run before any
+   *       composition transaction: its {@code DiscoveryService.runJobSync} persists the discovery
+   *       job and publishes the runner's {@code AFTER_COMMIT} event, which only fires once that
+   *       write commits — inside an open composer tx the runner would never start and the
+   *       synchronous wait would always time out.
+   *   <li>Build the {@link PlanCompositionContext} and run Stage A (beam search), Stage B (rollup),
+   *       Stage C (LLM pick), Phase 2 (LLM augment) and Stage D (synchronous adaptation calls) —
+   *       all with no active transaction. The decision-log writes interleaved through these stages
+   *       are {@code REQUIRES_NEW} ({@link DecisionLogWriter}), so they open + commit their own
+   *       transactions exactly as before whether or not a surrounding tx exists.
+   *   <li>Open the single short {@code @Transactional(REQUIRED)} write boundary ({@link
+   *       #persistAndPublish} via the {@link #self} proxy): acquire the single-flight lock, persist
+   *       the plan + cascade, publish {@link PlanGeneratedEvent}, write the closing decision-log
+   *       row, and cache the idempotency key. This is the LLD's "steps 12-13 are the only DB write
+   *       boundary."
+   * </ol>
    *
    * @param request the generate request
    * @param requestUserId resolved server-side caller id
@@ -177,10 +214,9 @@ public class PlanComposer {
     if (properties.coldStart().enabled()) {
       // Lightweight read-only pre-context purely to feed the cold-start gate (slot kinds + current
       // pool size). Built outside any planner transaction — the cross-module reads each manage
-      // their own readOnly tx. The composition transaction re-reads a fresh context downstream.
-      // Only
-      // paid for when the gate is enabled (the common steady-state config disables it once the
-      // catalogue is mature).
+      // their own readOnly tx. The composition re-reads a fresh context downstream. Only paid for
+      // when the gate is enabled (the common steady-state config disables it once the catalogue is
+      // mature).
       UUID gateTraceId = UUID.randomUUID();
       PlanCompositionContext preContext =
           contextBuilder.build(request, requestUserId, gateTraceId, null);
@@ -191,19 +227,20 @@ public class PlanComposer {
               preContext.recipePool().recipes().size(),
               gateTraceId);
     }
-    return self.composeTransactional(request, requestUserId, idempotencyKey, coldStart);
+    return composeOutsideTransaction(request, requestUserId, idempotencyKey, coldStart);
   }
 
   /**
-   * The transactional composition body (Stage A&rarr;D + persist), single transaction (REQUIRED).
-   * Re-reads a fresh {@link PlanCompositionContext} so Stage A sees any SYSTEM recipes the
-   * cold-start gate just imported. Package-visible (not private) so the {@link #self} proxy can
-   * invoke it with transactional advice.
+   * Stage A&rarr;D orchestration with <b>no active transaction</b> (the AI / cross-module calls
+   * must run outside a tx — LLD §Flow 1 / §Concurrency). Re-reads a fresh {@link
+   * PlanCompositionContext} so Stage A sees any SYSTEM recipes the cold-start gate just imported.
+   * Produces the chosen-and-mutated {@link CandidatePlan} (or the empty no-candidates plan) plus
+   * its flags, then hands off to the single short persist transaction {@link #persistAndPublish}
+   * (through the {@link #self} proxy so the {@code @Transactional} advice fires).
    *
    * @param coldStart whether the cold-start gate fired (threaded onto the persisted plan)
    */
-  @Transactional(propagation = Propagation.REQUIRED)
-  UUID composeTransactional(
+  private UUID composeOutsideTransaction(
       GeneratePlanRequest request,
       UUID requestUserId,
       @Nullable String idempotencyKey,
@@ -226,8 +263,8 @@ public class PlanComposer {
                 "Composer entry",
                 "user"));
 
-    // Stage A context — re-read inside the tx so it reflects any cold-start-imported SYSTEM
-    // recipes.
+    // Stage A context — re-read here (outside any tx) so it reflects any cold-start-imported SYSTEM
+    // recipes the gate just committed.
     PlanCompositionContext context =
         contextBuilder.build(request, requestUserId, traceId, decisionId);
 
@@ -260,14 +297,22 @@ public class PlanComposer {
       // HTTP face stays alive ahead of the recipe-search dependency (LLD §Failure Modes).
       CandidatePlan empty =
           new CandidatePlan(UUID.randomUUID(), request.weekStartDate(), List.of(), null);
-      Plan plan =
-          planPersister.persist(
-              empty, request, context, planId, emptyRollup(), false, true, coldStart);
-      finishDecisionLog(
-          traceId, stageADecision, planId, requestUserId, plan, startNanos, "no-candidates");
-      publishGenerated(plan, traceId);
-      cacheIdempotent(requestUserId, idempotencyKey, plan.getId());
-      return plan.getId();
+      return self.persistAndPublish(
+          new PersistInputs(
+              empty,
+              request,
+              context,
+              planId,
+              emptyRollup(),
+              false,
+              true,
+              coldStart,
+              traceId,
+              stageADecision,
+              startNanos,
+              "no-candidates",
+              requestUserId,
+              idempotencyKey));
     }
 
     // Stage B — per-candidate rollups.
@@ -421,8 +466,8 @@ public class PlanComposer {
         new CandidatePlan(
             chosen.candidateId(), chosen.weekStartDate(), mutatedAssignments, chosen.scoreResult());
 
-    Plan plan =
-        planPersister.persist(
+    return self.persistAndPublish(
+        new PersistInputs(
             mutated,
             request,
             context,
@@ -430,11 +475,77 @@ public class PlanComposer {
             chosenRollup,
             aiAugmented,
             qualityWarning,
-            coldStart);
+            coldStart,
+            traceId,
+            phase2Decision,
+            startNanos,
+            "ok",
+            requestUserId,
+            idempotencyKey));
+  }
 
-    finishDecisionLog(traceId, phase2Decision, planId, requestUserId, plan, startNanos, "ok");
-    publishGenerated(plan, traceId);
-    cacheIdempotent(requestUserId, idempotencyKey, plan.getId());
+  /**
+   * Carrier for the single persist + publish write boundary. Bundles every value the out-of-tx
+   * Stage A&rarr;D orchestration computed so {@link #persistAndPublish} stays a thin transactional
+   * seam (and the proxy hop takes one argument).
+   */
+  record PersistInputs(
+      CandidatePlan chosen,
+      GeneratePlanRequest request,
+      PlanCompositionContext context,
+      UUID planId,
+      RollupSummaryDocument rollupSummary,
+      boolean aiAugmented,
+      boolean qualityWarning,
+      boolean coldStart,
+      UUID traceId,
+      @Nullable UUID finishParentDecision,
+      long startNanos,
+      String outcome,
+      UUID requestUserId,
+      @Nullable String idempotencyKey) {}
+
+  /**
+   * The single short DB write boundary (LLD §Flow 1 steps 1 + 12&ndash;13). Runs in one
+   * {@code @Transactional(REQUIRED)}: (1) acquire the single-flight advisory lock for {@code
+   * (household, week)} — on contention the tx rolls back and {@link
+   * ConcurrentGenerationInProgressException} (409) is thrown; (2) persist the plan + cascade; (3)
+   * write the closing decision-log row; (4) publish {@link PlanGeneratedEvent} (inside the tx so an
+   * {@code AFTER_COMMIT} listener fires); (5) cache the idempotency key. The advisory lock is
+   * tx-scoped ({@code pg_try_advisory_xact_lock}) and auto-releases when this tx ends.
+   *
+   * <p>Package-visible (not private) so the {@link #self} proxy invokes it with transactional
+   * advice. Returns the persisted plan id; only scalar columns of the returned {@code Plan} are
+   * read (id/status/qualityWarning — all eagerly loaded), never the lazy {@code days} collection,
+   * so no {@code LazyInitializationException} escapes this tx.
+   */
+  @Transactional(propagation = Propagation.REQUIRED)
+  UUID persistAndPublish(PersistInputs in) {
+    if (!lockService.tryAcquire(
+        LockKey.forPlanWeek(in.request().householdId(), in.request().weekStartDate()))) {
+      throw new ConcurrentGenerationInProgressException(
+          in.request().householdId(), in.request().weekStartDate());
+    }
+    Plan plan =
+        planPersister.persist(
+            in.chosen(),
+            in.request(),
+            in.context(),
+            in.planId(),
+            in.rollupSummary(),
+            in.aiAugmented(),
+            in.qualityWarning(),
+            in.coldStart());
+    finishDecisionLog(
+        in.traceId(),
+        in.finishParentDecision(),
+        in.planId(),
+        in.requestUserId(),
+        plan,
+        in.startNanos(),
+        in.outcome());
+    publishGenerated(plan, in.traceId());
+    cacheIdempotent(in.requestUserId(), in.idempotencyKey(), plan.getId());
     return plan.getId();
   }
 
