@@ -215,6 +215,119 @@ class RecipeServiceImplTest {
         .isEqualTo("chicken breast");
   }
 
+  // ---------------- saveImportedRecipe: discovery-1 ingredient_mapping_key population ----------
+
+  private void stubImportPersistence() {
+    when(importRepository.findByContentFingerprint(any())).thenReturn(Optional.empty());
+    when(recipeRepository.save(any(Recipe.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(branchRepository.save(any(RecipeBranch.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(versionRepository.saveAndFlush(any(RecipeVersion.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(recipeRepository.saveAndFlush(any(Recipe.class))).thenAnswer(inv -> inv.getArgument(0));
+  }
+
+  private static com.example.mealprep.recipe.spi.ImportedRecipeData importedRecipeWith(
+      List<com.example.mealprep.recipe.spi.ImportedRecipeData.ImportedIngredient> ingredients) {
+    return new com.example.mealprep.recipe.spi.ImportedRecipeData(
+        "bbc_good_food",
+        "https://example.test/r/1",
+        "fingerprint-1",
+        "Imported Recipe",
+        "desc",
+        ingredients,
+        List.of(
+            new com.example.mealprep.recipe.spi.ImportedRecipeData.ImportedMethodStep(1, "Go.", 5)),
+        null,
+        null,
+        "json_ld",
+        new BigDecimal("0.85"),
+        UUID.randomUUID(),
+        UUID.randomUUID());
+  }
+
+  private RecipeVersion captureSavedImportVersion() {
+    ArgumentCaptor<RecipeVersion> versionCaptor = ArgumentCaptor.forClass(RecipeVersion.class);
+    verify(versionRepository).saveAndFlush(versionCaptor.capture());
+    return versionCaptor.getValue();
+  }
+
+  @Test
+  void saveImportedRecipe_carriesAndNormalisesSuppliedMappingKey() {
+    // discovery-1: the carried key is normalised and persisted, NOT hardcoded null (the old bug).
+    stubImportPersistence();
+    var data =
+        importedRecipeWith(
+            List.of(
+                new com.example.mealprep.recipe.spi.ImportedRecipeData.ImportedIngredient(
+                    0, "Sea Salt", "  Sea   Salt ", BigDecimal.ONE, "tsp", null, false)));
+
+    service().saveImportedRecipe(data);
+
+    RecipeVersion version = captureSavedImportVersion();
+    assertThat(version.getIngredients()).hasSize(1);
+    assertThat(version.getIngredients().get(0).getIngredientMappingKey()).isEqualTo("sea salt");
+    assertThat(version.getIngredients().get(0).getDisplayName()).isEqualTo("Sea Salt");
+  }
+
+  @Test
+  void saveImportedRecipe_nullCarriedKey_fallsBackToNormalisedDisplayName() {
+    // The final NOT-NULL invariant guard: a null carried key falls back to normalise(displayName)
+    // so the row can persist against the NOT-NULL ingredient_mapping_key column.
+    stubImportPersistence();
+    var data =
+        importedRecipeWith(
+            List.of(
+                new com.example.mealprep.recipe.spi.ImportedRecipeData.ImportedIngredient(
+                    0, "  Chicken   Breast ", null, BigDecimal.ONE, "g", null, false)));
+
+    service().saveImportedRecipe(data);
+
+    RecipeVersion version = captureSavedImportVersion();
+    assertThat(version.getIngredients()).hasSize(1);
+    assertThat(version.getIngredients().get(0).getIngredientMappingKey())
+        .isEqualTo("chicken breast");
+  }
+
+  @Test
+  void saveImportedRecipe_blankCarriedKey_fallsBackToNormalisedDisplayName() {
+    // A blank (whitespace-only) carried key is also treated as absent → displayName fallback.
+    stubImportPersistence();
+    var data =
+        importedRecipeWith(
+            List.of(
+                new com.example.mealprep.recipe.spi.ImportedRecipeData.ImportedIngredient(
+                    0, "Olive Oil", "   ", BigDecimal.ONE, "tbsp", null, false)));
+
+    service().saveImportedRecipe(data);
+
+    RecipeVersion version = captureSavedImportVersion();
+    assertThat(version.getIngredients().get(0).getIngredientMappingKey()).isEqualTo("olive oil");
+  }
+
+  @Test
+  void saveImportedRecipe_blankDisplayNameAndNoKey_skipsLine_neverNullKey() {
+    // Invariant: a line with neither a usable key nor a usable displayName is skipped, never
+    // persisted with a null/blank key (which would violate the NOT-NULL column). The valid line
+    // still persists with its normalised key.
+    stubImportPersistence();
+    var data =
+        importedRecipeWith(
+            List.of(
+                new com.example.mealprep.recipe.spi.ImportedRecipeData.ImportedIngredient(
+                    0, "   ", null, BigDecimal.ONE, "g", null, false),
+                new com.example.mealprep.recipe.spi.ImportedRecipeData.ImportedIngredient(
+                    1, "Flour", null, BigDecimal.TEN, "g", null, false)));
+
+    service().saveImportedRecipe(data);
+
+    RecipeVersion version = captureSavedImportVersion();
+    assertThat(version.getIngredients()).hasSize(1);
+    assertThat(version.getIngredients().get(0).getDisplayName()).isEqualTo("Flour");
+    assertThat(version.getIngredients().get(0).getIngredientMappingKey()).isEqualTo("flour");
+    assertThat(version.getIngredients())
+        .allSatisfy(ing -> assertThat(ing.getIngredientMappingKey()).isNotBlank());
+  }
+
   // ---------------- findPlannableCandidates (planner Stage-A read) ----------------
 
   @Test

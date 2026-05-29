@@ -1,5 +1,6 @@
 package com.example.mealprep.discovery.source.internal;
 
+import com.example.mealprep.core.ingredient.IngredientMappingKeys;
 import com.example.mealprep.discovery.api.dto.ParsedRecipe;
 import com.example.mealprep.discovery.api.dto.ParsedRecipe.ParsedIngredient;
 import com.example.mealprep.discovery.api.dto.ParsedRecipe.ParsedMethodStep;
@@ -131,8 +132,14 @@ public class JsonLdRecipeExtractor {
 
     List<ParsedIngredient> ingredients = new ArrayList<>();
     for (String line : stringArray(r.get("recipeIngredient"))) {
-      // Ingredient line parsing is deferred (worth user review): v1 ships displayName only.
-      ingredients.add(new ParsedIngredient(line, null, null, null, null, false));
+      // Quantity/unit/preparation parsing is deferred (worth user review): v1 ships displayName
+      // only. The ingredient_mapping_key MUST be non-null though (NOT-NULL column + nutrition
+      // mapping), so derive the deterministic v1 fallback from the display line via the canonical
+      // cross-module normaliser. stringArray() already trims + drops blanks, so `line` is
+      // non-blank.
+      ingredients.add(
+          new ParsedIngredient(
+              line, IngredientMappingKeys.normalise(line), null, null, null, false));
     }
 
     List<ParsedMethodStep> method = new ArrayList<>();

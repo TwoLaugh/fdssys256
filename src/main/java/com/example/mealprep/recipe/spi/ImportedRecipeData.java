@@ -31,9 +31,17 @@ public record ImportedRecipeData(
     UUID jobId,
     UUID traceId) {
 
+  /**
+   * One imported ingredient line. {@code ingredientMappingKey} is the normalised key used by the
+   * nutrition pipeline to resolve USDA mappings (per {@code design/recipe-system.md} §Ingredients);
+   * the discovery runner populates it (deriving the v1 fallback from {@code displayName} via {@code
+   * IngredientMappingKeys.normalise} when the source supplies none) so it is never {@code null} —
+   * {@code recipe_ingredients.ingredient_mapping_key} is {@code NOT NULL}.
+   */
   public record ImportedIngredient(
       int lineOrder,
       String displayName,
+      String ingredientMappingKey,
       BigDecimal quantity,
       String unit,
       String preparation,
