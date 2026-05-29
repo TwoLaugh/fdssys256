@@ -185,7 +185,12 @@ class PlansControllerIT {
   }
 
   private Plan seed(UUID householdId, PlanStatus status) {
-    Plan plan = PlanTestData.newPlanGraph(householdId, mondayWeek(), 1, status, 1, 2);
+    return seedGen(householdId, status, 1);
+  }
+
+  /** Seed a plan at a specific generation for the shared {@link #mondayWeek()} (1 day, 2 slots). */
+  private Plan seedGen(UUID householdId, PlanStatus status, int generation) {
+    Plan plan = PlanTestData.newPlanGraph(householdId, mondayWeek(), generation, status, 1, 2);
     tx().executeWithoutResult(t -> planRepository.save(plan));
     return plan;
   }
@@ -299,30 +304,62 @@ class PlansControllerIT {
   }
 
   @Test
-  void revert_supersedesActive_andCreatesNewGeneration() throws Exception {
+  void revertToHistorical_copiesTargetContent_supersedesActive_createsNewGeneration()
+      throws Exception {
     AuthedUser user = registerUser();
     UUID household = UUID.randomUUID();
     grantMembership(household, user.userId());
-    Plan plan = seed(household, PlanStatus.ACTIVE);
+    // Historical target (an older generation the user picks) + the current active plan.
+    Plan target = seedGen(household, PlanStatus.SUPERSEDED, 1);
+    Plan active = seedGen(household, PlanStatus.ACTIVE, 2);
 
-    mvc.perform(post("/api/v1/plans/{id}/revert", plan.getId()).cookie(user.cookie()))
+    String body =
+        objectMapper.writeValueAsString(
+            java.util.Map.of("targetHistoricalPlanId", target.getId().toString()));
+
+    mvc.perform(
+            post("/api/v1/plans/revert")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
         .andExpect(status().isCreated())
         .andExpect(jsonPath("$.status").value("GENERATED"))
-        .andExpect(jsonPath("$.generation").value(2));
+        // generation = 1 + count(target gen1, active gen2) = 3
+        .andExpect(jsonPath("$.generation").value(3))
+        // content copied from the TARGET (1 day, 2 slots — see seedGen)
+        .andExpect(jsonPath("$.days.length()").value(1))
+        .andExpect(jsonPath("$.days[0].slots.length()").value(2))
+        .andExpect(openApi().isValid(openApiValidator));
 
-    assertThat(planRepository.findById(plan.getId()).orElseThrow().getStatus())
+    // The prior active plan is superseded; the target itself is untouched (immutability).
+    assertThat(planRepository.findById(active.getId()).orElseThrow().getStatus())
+        .isEqualTo(PlanStatus.SUPERSEDED);
+    assertThat(planRepository.findById(target.getId()).orElseThrow().getStatus())
         .isEqualTo(PlanStatus.SUPERSEDED);
   }
 
   @Test
-  void revert_returns400_whenNotActive() throws Exception {
+  void revertToHistorical_returns422_whenTargetNotInCallerHousehold() throws Exception {
     AuthedUser user = registerUser();
-    UUID household = UUID.randomUUID();
-    grantMembership(household, user.userId());
-    Plan plan = seed(household, PlanStatus.GENERATED);
+    UUID ownHousehold = UUID.randomUUID();
+    grantMembership(ownHousehold, user.userId());
+    // Target lives in a household the caller is NOT a member of → 422 (previously-dead exception).
+    UUID foreignHousehold = UUID.randomUUID();
+    Plan foreignTarget = seed(foreignHousehold, PlanStatus.SUPERSEDED);
 
-    mvc.perform(post("/api/v1/plans/{id}/revert", plan.getId()).cookie(user.cookie()))
-        .andExpect(status().isBadRequest());
+    String body =
+        objectMapper.writeValueAsString(
+            java.util.Map.of("targetHistoricalPlanId", foreignTarget.getId().toString()));
+
+    mvc.perform(
+            post("/api/v1/plans/revert")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/revert-target-invalid"));
   }
 
   @Test

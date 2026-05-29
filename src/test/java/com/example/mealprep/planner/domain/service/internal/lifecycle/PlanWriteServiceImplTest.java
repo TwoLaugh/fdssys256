@@ -231,58 +231,8 @@ class PlanWriteServiceImplTest {
     verify(eventPublisher, never()).publishEvent(any());
   }
 
-  // ---------- revertPlan ----------
-
-  @Test
-  void revertPlan_active_supersedesAndCreatesGeneratedCopy_publishesBothEvents() {
-    Plan current = PlanTestData.newPlanGraph(UUID.randomUUID(), WEEK, 3, PlanStatus.ACTIVE, 2, 2);
-    when(planRepository.findById(current.getId())).thenReturn(Optional.of(current));
-
-    UUID newId = service.revertPlan(current.getId());
-
-    assertThat(newId).isNotEqualTo(current.getId());
-    assertThat(current.getStatus()).isEqualTo(PlanStatus.SUPERSEDED);
-
-    ArgumentCaptor<Plan> saved = ArgumentCaptor.forClass(Plan.class);
-    verify(planRepository, times(2)).save(saved.capture());
-    Plan copy =
-        saved.getAllValues().stream()
-            .filter(p -> !p.getId().equals(current.getId()))
-            .findFirst()
-            .orElseThrow();
-    assertThat(copy.getStatus()).isEqualTo(PlanStatus.GENERATED);
-    // Kills L226 NullReturnVals: the returned id must be exactly the new copy's id.
-    assertThat(newId).isEqualTo(copy.getId());
-    assertThat(copy.getGeneration()).isEqualTo(current.getGeneration() + 1);
-    assertThat(copy.getReplacesPlanId()).isEqualTo(current.getId());
-    // copyForward deep-copies the graph with fresh ids.
-    assertThat(copy.getDays()).hasSize(current.getDays().size());
-    assertThat(copy.getDays().get(0).getId()).isNotEqualTo(current.getDays().get(0).getId());
-    assertThat(copy.getDays().get(0).getSlots().get(0).getScheduledRecipe().getRecipeId())
-        .isEqualTo(current.getDays().get(0).getSlots().get(0).getScheduledRecipe().getRecipeId());
-
-    ArgumentCaptor<PlanSupersededEvent> sup = ArgumentCaptor.forClass(PlanSupersededEvent.class);
-    verify(eventPublisher).publishEvent(sup.capture());
-    assertThat(sup.getValue().planId()).isEqualTo(current.getId());
-    assertThat(sup.getValue().replacedByPlanId()).isEqualTo(copy.getId());
-    ArgumentCaptor<PlanGeneratedEvent> gen = ArgumentCaptor.forClass(PlanGeneratedEvent.class);
-    verify(eventPublisher).publishEvent(gen.capture());
-    assertThat(gen.getValue().planId()).isEqualTo(copy.getId());
-    // Kills L202 VoidMethodCall: logTransition must emit a SUPERSEDED transition audit row.
-    ArgumentCaptor<DecisionLogEntry> log = ArgumentCaptor.forClass(DecisionLogEntry.class);
-    verify(decisionLogWriter).write(log.capture());
-    assertThat(log.getValue().kind()).isEqualTo(PlannerDecisionKind.PLAN_LIFECYCLE_TRANSITION);
-    assertThat(log.getValue().inputs().get("to").asText()).isEqualTo("SUPERSEDED");
-  }
-
-  @Test
-  void revertPlan_notActive_throwsPlanNotReoptable_noSave() {
-    Plan plan = generatedPlan();
-    assertThatThrownBy(() -> service.revertPlan(plan.getId()))
-        .isInstanceOf(PlanNotReoptableException.class);
-    verify(planRepository, never()).save(any());
-    verifyNoInteractions(eventPublisher);
-  }
+  // revert-to-historical lives on RevertToPlanCoordinator (see RevertToPlanCoordinatorTest); the
+  // old clone-active revertPlan(UUID) was removed with planner-5.
 
   // ---------- changeSlotState ----------
 

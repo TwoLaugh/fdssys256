@@ -309,23 +309,25 @@ planAbandon:
 planRevert:
   post:
     tags: [Plans]
-    operationId: revertPlan
-    summary: 'Revert: supersede an ACTIVE plan and create a fresh GENERATED generation copy.'
+    operationId: revertToPlan
+    summary: >-
+      Revert to a chosen historical plan: copy its content onto a new active generation,
+      re-checking the caller's current hard constraints and refilling stripped slots.
     security:
       - cookieAuth: []
-    parameters:
-      - in: path
-        name: planId
-        required: true
-        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/planner.yaml#/RevertToPlanRequest' }
     responses:
       '201':
-        description: 'New generation created.'
+        description: 'New generation created from the target historical plan.'
         content:
           application/json:
             schema: { $ref: '../schemas/planner.yaml#/PlanDto' }
       '400':
-        description: 'Plan not in a revertable state.'
+        description: 'Validation error (missing / malformed targetHistoricalPlanId).'
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
@@ -334,13 +336,18 @@ planRevert:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
-      '403':
-        description: 'Forbidden.'
+      '404':
+        description: 'Target historical plan not found.'
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
-      '404':
-        description: 'Plan not found.'
+      '409':
+        description: 'Concurrent generation in progress for the (household, week).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: "Target plan is not in the caller's household history."
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

@@ -183,51 +183,6 @@ public class PlanWriteServiceImpl implements PlanWriteService {
 
   @Override
   @Transactional
-  public UUID revertPlan(UUID planId) {
-    Plan current = load(planId);
-    // Revert is only meaningful from an ACTIVE plan (LLD §Flow 4). Any other state is a
-    // not-reoptable error (400).
-    if (current.getStatus() != PlanStatus.ACTIVE) {
-      throw new PlanNotReoptableException(planId, current.getStatus());
-    }
-    Plan copy = copyForward(current);
-    stateMachine.assertPlanTransitionAllowed(PlanStatus.DRAFT, PlanStatus.GENERATED);
-    copy.setStatus(PlanStatus.GENERATED);
-    planRepository.save(copy);
-
-    PlanStatus currentFrom = current.getStatus();
-    stateMachine.assertPlanTransitionAllowed(currentFrom, PlanStatus.SUPERSEDED);
-    current.setStatus(PlanStatus.SUPERSEDED);
-    planRepository.save(current);
-    logTransition(current, currentFrom, PlanStatus.SUPERSEDED);
-
-    eventPublisher.publishEvent(
-        new PlanSupersededEvent(
-            current.getId(),
-            copy.getId(),
-            current.getHouseholdId(),
-            current.getWeekStartDate(),
-            current.getTraceId(),
-            clock.instant()));
-    eventPublisher.publishEvent(
-        new PlanGeneratedEvent(
-            copy.getId(),
-            copy.getHouseholdId(),
-            copy.getWeekStartDate(),
-            copy.getGeneration(),
-            copy.getTriggerKind(),
-            copy.getTriggerEventId(),
-            copy.getDecisionId(),
-            copy.isColdStart(),
-            copy.isAiAugmented(),
-            copy.isQualityWarning(),
-            copy.getTraceId(),
-            clock.instant()));
-    return copy.getId();
-  }
-
-  @Override
-  @Transactional
   public UUID changeSlotState(UUID planId, UUID slotId, SlotState newState) {
     MealSlot slot =
         mealSlotRepository
