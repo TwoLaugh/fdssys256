@@ -6,6 +6,7 @@ import com.example.mealprep.ai.domain.service.AiService;
 import com.example.mealprep.ai.event.AiCallFailedEvent;
 import com.example.mealprep.ai.event.AiCallSucceededEvent;
 import com.example.mealprep.ai.event.CostBudgetExceededEvent;
+import com.example.mealprep.ai.exception.AiCircuitOpenException;
 import com.example.mealprep.ai.exception.AiCostBudgetExceededException;
 import com.example.mealprep.ai.exception.AiInvalidRequestException;
 import com.example.mealprep.ai.exception.AiInvalidResponseException;
@@ -137,7 +138,13 @@ public class AiServiceImpl implements AiService {
     } catch (AiInvalidResponseException ex) {
       finalizeFailure(callId, task, CallErrorKind.INVALID_RESPONSE, startNanos);
       throw ex;
+    } catch (AiCircuitOpenException ex) {
+      // Breaker open — short-circuited before the wire. Record as AI_UNAVAILABLE so the audit row
+      // doesn't leak PENDING, then rethrow for the 503 mapping / graceful-degrade contract.
+      finalizeFailure(callId, task, CallErrorKind.AI_UNAVAILABLE, startNanos);
+      throw ex;
     } catch (AiUnavailableException ex) {
+      // Includes AiRateLimitException (retries exhausted on 429).
       finalizeFailure(callId, task, CallErrorKind.AI_UNAVAILABLE, startNanos);
       throw ex;
     }

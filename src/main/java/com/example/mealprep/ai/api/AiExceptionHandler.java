@@ -1,5 +1,6 @@
 package com.example.mealprep.ai.api;
 
+import com.example.mealprep.ai.exception.AiCircuitOpenException;
 import com.example.mealprep.ai.exception.AiCostBudgetExceededException;
 import com.example.mealprep.ai.exception.AiInvalidRequestException;
 import com.example.mealprep.ai.exception.AiInvalidResponseException;
@@ -37,6 +38,21 @@ public class AiExceptionHandler {
     pd.setProperty("windowSeconds", ex.window().toSeconds());
     return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
         .header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds))
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(AiCircuitOpenException.class)
+  public ResponseEntity<ProblemDetail> handleAiCircuitOpen(
+      AiCircuitOpenException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "AI circuit open",
+            "ai-circuit-open",
+            "AI circuit open",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

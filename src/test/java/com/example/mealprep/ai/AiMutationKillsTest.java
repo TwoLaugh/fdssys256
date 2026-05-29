@@ -35,6 +35,7 @@ import com.openai.models.CreateEmbeddingResponse;
 import com.openai.models.Embedding;
 import com.openai.models.EmbeddingCreateParams;
 import com.openai.services.blocking.EmbeddingService;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -112,7 +113,8 @@ class AiMutationKillsTest {
             .baseUrl(properties.anthropicBaseUrl())
             .requestInterceptor((req, body, e) -> exec.execute(req, body))
             .build();
-    AnthropicClient client = new AnthropicClient(rest, properties, objectMapper);
+    AnthropicClient client =
+        new AnthropicClient(rest, properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
     List<Long> sleeps = new ArrayList<>();
     client.setSleeper(sleeps::add);
 
@@ -147,7 +149,8 @@ class AiMutationKillsTest {
             .baseUrl(properties.anthropicBaseUrl())
             .requestInterceptor((req, body, e) -> exec.execute(req, body))
             .build();
-    AnthropicClient client = new AnthropicClient(rest, properties, objectMapper);
+    AnthropicClient client =
+        new AnthropicClient(rest, properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
     client.setSleeper(ms -> {});
 
     assertThatThrownBy(
@@ -200,7 +203,9 @@ class AiMutationKillsTest {
   void anthropic_buildRequestBody_emptyToolsList_omitsToolsArray() throws Exception {
     AiProperties properties =
         new AiProperties("k", "https://x", "haiku", "sonnet", "opus", 60, 3, null, null, null);
-    AnthropicClient client = new AnthropicClient(mock(RestClient.class), properties, objectMapper);
+    AnthropicClient client =
+        new AnthropicClient(
+            mock(RestClient.class), properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
     // Custom AiTask with explicit non-empty Optional containing empty list (impossible via
     // AiTestData which collapses empties to Optional.empty()) — we use a hand-rolled stub.
     AiTask<String> task = explicitlyEmptyToolsListTask();
@@ -219,7 +224,9 @@ class AiMutationKillsTest {
   void anthropic_buildRequestBody_toolDescriptionNull_omitsDescriptionField() throws Exception {
     AiProperties properties =
         new AiProperties("k", "https://x", "haiku", "sonnet", "opus", 60, 3, null, null, null);
-    AnthropicClient client = new AnthropicClient(mock(RestClient.class), properties, objectMapper);
+    AnthropicClient client =
+        new AnthropicClient(
+            mock(RestClient.class), properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
     com.fasterxml.jackson.databind.node.ObjectNode schema = objectMapper.createObjectNode();
     schema.put("type", "object");
     com.example.mealprep.ai.spi.ToolDefinition toolNoDesc =
@@ -260,7 +267,8 @@ class AiMutationKillsTest {
             .baseUrl(properties.anthropicBaseUrl())
             .requestInterceptor((req, body, e) -> exec.execute(req, body))
             .build();
-    AnthropicClient client = new AnthropicClient(rest, properties, objectMapper);
+    AnthropicClient client =
+        new AnthropicClient(rest, properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
     client.setSleeper(ms -> {});
 
     AiTask<String> task =
@@ -291,7 +299,9 @@ class AiMutationKillsTest {
       throws Exception {
     AiProperties properties =
         new AiProperties("k", "https://x", "haiku", "sonnet", "opus", 60, 3, null, null, null);
-    AnthropicClient client = new AnthropicClient(mock(RestClient.class), properties, objectMapper);
+    AnthropicClient client =
+        new AnthropicClient(
+            mock(RestClient.class), properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
 
     // (a) empty vars — content = prompt.name()
     AiTask<String> emptyVars = emptyVariablesTask();
@@ -317,7 +327,9 @@ class AiMutationKillsTest {
   void anthropic_parse_emptyContent_returnsResponseWithEmptyBody() {
     AiProperties properties =
         new AiProperties("k", "https://x", "haiku", "sonnet", "opus", 60, 3, null, null, null);
-    AnthropicClient client = new AnthropicClient(mock(RestClient.class), properties, objectMapper);
+    AnthropicClient client =
+        new AnthropicClient(
+            mock(RestClient.class), properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
 
     AnthropicResponse parsed =
         client.parse(
@@ -344,7 +356,9 @@ class AiMutationKillsTest {
   void anthropic_parse_toolUseScalarInput_fallsThroughToText() {
     AiProperties properties =
         new AiProperties("k", "https://x", "haiku", "sonnet", "opus", 60, 3, null, null, null);
-    AnthropicClient client = new AnthropicClient(mock(RestClient.class), properties, objectMapper);
+    AnthropicClient client =
+        new AnthropicClient(
+            mock(RestClient.class), properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
 
     // tool_use block with string input — should be ignored, text block wins.
     AnthropicResponse parsed =
@@ -373,7 +387,8 @@ class AiMutationKillsTest {
             .baseUrl(properties.anthropicBaseUrl())
             .requestInterceptor((req, body, e) -> exec.execute(req, body))
             .build();
-    AnthropicClient client = new AnthropicClient(rest, properties, objectMapper);
+    AnthropicClient client =
+        new AnthropicClient(rest, properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
     client.setSleeper(ms -> {});
 
     assertThatThrownBy(
@@ -411,7 +426,8 @@ class AiMutationKillsTest {
             .baseUrl(properties.anthropicBaseUrl())
             .requestInterceptor((req, body, e) -> exec.execute(req, body))
             .build();
-    AnthropicClient client = new AnthropicClient(rest, properties, objectMapper);
+    AnthropicClient client =
+        new AnthropicClient(rest, properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
     client.setSleeper(
         ms -> {
           throw new InterruptedException("simulated");
@@ -612,6 +628,47 @@ class AiMutationKillsTest {
     // Cost = 1 in * 237p/MTok + 1 out * 1185p/MTok = 237 + 1185 = 1422 — matches Sonnet (MID).
     // If the conditional is negated, fallback "haiku-id" would price as CHEAP = 79 + 395 = 474.
     verify(recorder).recordSuccess(eq(callId), eq(1), eq(1), anyInt(), eq(237L + 1185L));
+  }
+
+  /**
+   * Covers the dispatcher's {@code AiCircuitOpenException} catch branch (ai-2): when the breaker
+   * short-circuits the wire call, the PENDING audit row must be finalised as {@code AI_UNAVAILABLE}
+   * (not left dangling), a failed event published, and the exception rethrown unchanged for the 503
+   * mapping. Kills VoidMethodCall mutants on the {@code finalizeFailure}/rethrow in that branch.
+   */
+  @Test
+  void aiServiceImpl_execute_circuitOpen_finalizesAsUnavailable_andRethrows() {
+    AnthropicClient anthropic = mock(AnthropicClient.class);
+    AiCallRecorder recorder = mock(AiCallRecorder.class);
+    ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+    CostBudgetGuard guard = mock(CostBudgetGuard.class);
+    OpenAiEmbeddingClient embedding = mock(OpenAiEmbeddingClient.class);
+    AiProperties props =
+        new AiProperties("k", null, "haiku-id", "sonnet-id", "opus-id", 60, 3, null, null, null);
+    CostCalculator calc = new CostCalculator();
+    Clock clock = Clock.fixed(Instant.parse("2026-05-08T12:00:00Z"), ZoneOffset.UTC);
+
+    UUID callId = UUID.randomUUID();
+    AiTask<String> task =
+        AiTestData.task(String.class).ofType(TaskType.FEEDBACK_CLASSIFICATION).build();
+    when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
+    when(anthropic.call(any(), any()))
+        .thenThrow(
+            new com.example.mealprep.ai.exception.AiCircuitOpenException(
+                "circuit open for ai-FEEDBACK_CLASSIFICATION"));
+
+    AiServiceImpl svc =
+        new AiServiceImpl(
+            anthropic, embedding, recorder, publisher, props, objectMapper, clock, guard, calc);
+
+    assertThatThrownBy(() -> svc.execute(task))
+        .isInstanceOf(com.example.mealprep.ai.exception.AiCircuitOpenException.class);
+    verify(recorder)
+        .recordFailure(
+            eq(callId),
+            eq(com.example.mealprep.ai.domain.entity.CallErrorKind.AI_UNAVAILABLE),
+            anyInt());
+    verify(publisher).publishEvent(any(com.example.mealprep.ai.event.AiCallFailedEvent.class));
   }
 
   // ============================================================================================

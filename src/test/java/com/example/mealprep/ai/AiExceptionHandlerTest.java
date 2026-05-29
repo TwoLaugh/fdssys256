@@ -3,6 +3,7 @@ package com.example.mealprep.ai;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.mealprep.ai.api.AiExceptionHandler;
+import com.example.mealprep.ai.exception.AiCircuitOpenException;
 import com.example.mealprep.ai.exception.AiCostBudgetExceededException;
 import com.example.mealprep.ai.exception.AiInvalidRequestException;
 import com.example.mealprep.ai.exception.AiInvalidResponseException;
@@ -113,6 +114,30 @@ class AiExceptionHandlerTest {
         "AI unavailable",
         "AI service unavailable",
         "/api/ai/admin/calls");
+  }
+
+  @Test
+  void aiCircuitOpen_maps_to_503_withDistinctCircuitOpenSlug() {
+    var resp =
+        handler.handleAiCircuitOpen(
+            new AiCircuitOpenException("circuit open for ai-FEEDBACK_CLASSIFICATION"),
+            req("/api/v1/ai/dispatch"));
+    assertProblem(
+        resp,
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "ai-circuit-open",
+        "AI circuit open",
+        "AI circuit open",
+        "/api/v1/ai/dispatch");
+  }
+
+  @Test
+  void circuitOpen_and_unavailable_shareStatus_butDistinctTypeSlug() {
+    var circuitOpen = handler.handleAiCircuitOpen(new AiCircuitOpenException("open"), req("/x"));
+    var unavailable = handler.handleAiUnavailable(new AiUnavailableException("down"), req("/x"));
+    assertThat(circuitOpen.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    assertThat(unavailable.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    assertThat(circuitOpen.getBody().getType()).isNotEqualTo(unavailable.getBody().getType());
   }
 
   // ---------------- 400 ----------------
