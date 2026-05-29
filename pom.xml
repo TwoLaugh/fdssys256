@@ -507,17 +507,15 @@
                         <param>com.example.mealprep.*.config.*</param>
                         <param>com.example.mealprep.*MapperImpl</param>
                         <param>com.example.mealprep.*Noop*</param>
-                        <!-- Grocery: pure-data + skeleton classes are not meaningful mutation
-                             targets (same rationale as config.* / *MapperImpl above): entities,
-                             enums and JSONB records are Lombok/record-generated data; DTOs/request
-                             records are data; GroceryServiceImpl in 01a is a throwing skeleton that
-                             later tiers fill by DELEGATING to behavior collaborators
-                             (PriceAggregator, ShoppingListCalculator, …) — those collaborators are
-                             NOT excluded and remain mutation-gated as each tier lands. Revisit when
-                             the module is complete. -->
+                        <!-- Grocery: only the pure-data classes stay excluded (same rationale as
+                             config.* / *MapperImpl above): entities, enums and JSONB records are
+                             Lombok/record-generated data; DTOs/request records are data. The grocery
+                             module is now complete (01a–01g merged); GroceryServiceImpl is no longer
+                             a throwing skeleton but a fully-implemented behaviour facade, so it is
+                             mutation-gated like every other behaviour class (its delegation targets —
+                             PriceAggregator, ShoppingListCalculator, … — were always gated). -->
                         <param>com.example.mealprep.grocery.domain.entity.*</param>
                         <param>com.example.mealprep.grocery.api.dto.*</param>
-                        <param>com.example.mealprep.grocery.domain.service.internal.GroceryServiceImpl</param>
                     </excludedClasses>
                     <outputFormats>
                         <outputFormat>HTML</outputFormat>
