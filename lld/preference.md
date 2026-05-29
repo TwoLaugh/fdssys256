@@ -296,8 +296,13 @@ public record UpdateHardConstraintsRequest(
     @NotNull List<@NotBlank String> medicalDiets,
     @NotNull @Valid List<HardIntoleranceDto> intolerances,
     @NotNull @Valid List<AgeRestrictionDto> ageRestrictions,
-    long expectedVersion
+    long expectedVersion,
+    Boolean confirmTier1Removals          // GAP-04: required true to apply a Tier-1 removal; absent ⇒ false
 ) {}
+
+// GAP-04 rejection payload (carried on the 409 ProblemDetail's removedConstraints[] extension).
+public record RemovedTier1Constraint(Tier1Category category, String value) {}
+public enum Tier1Category { ALLERGY, MEDICAL_DIET, SEVERE_INTOLERANCE, DIETARY_IDENTITY_BASE }
 
 public record SoftPreferenceBundleDto(
     UUID userId,
@@ -636,6 +641,7 @@ All error responses use RFC 9457 `ProblemDetail`. Module-specific exceptions and
 | `InvalidTasteProfileDeltaException` | 422 | `https://mealprep.example.com/problems/invalid-taste-profile-delta` |
 | `TasteProfileBudgetExceededException` | 422 | `https://mealprep.example.com/problems/taste-profile-budget-exceeded` |
 | `HardConstraintFilterAmbiguityException` | 422 | `https://mealprep.example.com/problems/hard-constraint-ambiguous` |
+| `Tier1RemovalRequiresConfirmationException` (GAP-04) | 409 | `https://mealprep.example.com/problems/tier1-removal-requires-confirmation` — carries `reason=TIER1_REMOVAL_REQUIRES_CONFIRMATION` + `removedConstraints[]` extensions |
 | `OptimisticLockException` (JPA) | 409 | `https://mealprep.example.com/problems/optimistic-lock` |
 | `MethodArgumentNotValidException` | 400 | `errors[]` extension on ProblemDetail |
 
@@ -697,7 +703,11 @@ None. The preference module **does not consume** `FeedbackProcessedEvent`. **Loc
 
 ### Flow 1: Hard constraint update
 
-`PUT /api/v1/preferences/hard-constraints` → `updateHardConstraints(userId, request, actorUserId)`. Service impl method is `@Transactional`. Loads existing aggregate by `userId` (404 if missing — onboarding uses `initialise...`). `expectedVersion` mismatch → `OptimisticLockException` → 409. Diffs each field, replaces scalars and child collections (cascade orphanRemoval handles child churn). Writes one `HardConstraintsAuditLog` row per changed field. Publishes `HardConstraintsChangedEvent` after commit. Returns the updated DTO.
+`PUT /api/v1/preferences/hard-constraints` → `updateHardConstraints(userId, request, actorUserId)`. Service impl method is `@Transactional`. Loads existing aggregate by `userId` (404 if missing — onboarding uses `initialise...`). `expectedVersion` mismatch → `OptimisticLockException` → 409.
+
+**Tier-1 removal safety gate (GAP-04).** After the lock pre-check and **before any mutation**, `Tier1RemovalDetector.detectRemovals(stored, request)` diffs the stored aggregate against the request to find any *removed* Tier-1 constraint: an allergy dropped from `allergies`, a medical diet dropped from `medical_diets`, a severe-intolerance *substance* dropped from `intolerances_hard`, or a **relaxation** of the dietary-identity `base` (the new base excludes a strict subset of the stored base's excluded foods — e.g. `vegan→vegetarian`; tightening like `omnivore→vegetarian` and lateral switches like `vegetarian→keto` are not gated). If ≥1 such removal is detected **and** `confirmTier1Removals` is not `true`, the method throws `Tier1RemovalRequiresConfirmationException` → **409** with `reason=TIER1_REMOVAL_REQUIRES_CONFIRMATION` and the `removedConstraints[]` the UI names in the confirmation interstitial — no audit row, no event, no version bump. The client re-submits the same payload with `confirmTier1Removals=true` to proceed. Additions, reorderings, label-only edits, and non-Tier-1 edits return an empty removal set, so they apply one-step unchanged. Age restrictions are not gated (auto-managed for child profiles). The detector is a pure function (no I/O) so the gate is unit-tested in isolation; the in-process directive-apply path (`PreferenceDirectiveApplyTarget`) passes `confirmTier1Removals=true` as an authoritative system actor (and only adds an intolerance anyway).
+
+Once the gate passes, it diffs each field, replaces scalars and child collections (cascade orphanRemoval handles child churn). Writes one `HardConstraintsAuditLog` row per changed field. Publishes `HardConstraintsChangedEvent` after commit. Returns the updated DTO.
 
 ### Flow 2: Hard-filter check (the deterministic safety net)
 

@@ -10,6 +10,7 @@ import com.example.mealprep.preference.exception.PreferenceArchiveEntryNotFoundE
 import com.example.mealprep.preference.exception.TasteProfileBudgetExceededException;
 import com.example.mealprep.preference.exception.TasteProfileNotFoundException;
 import com.example.mealprep.preference.exception.TasteProfileVersionNotFoundException;
+import com.example.mealprep.preference.exception.Tier1RemovalRequiresConfirmationException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -106,6 +107,31 @@ public class PreferenceExceptionHandler {
             "Lifestyle config not found",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  /**
+   * GAP-04 safety interstitial: a hard-constraints PUT that would remove a Tier-1 constraint
+   * (allergy / medical diet / severe intolerance / dietary-identity base) without {@code
+   * confirmTier1Removals=true}. Mapped to 409 Conflict (the request conflicts with the safety
+   * policy until confirmed) with a machine-readable {@code reason} slug + the {@code
+   * removedConstraints} the UI names in the confirmation prompt. A distinct {@code type} URI keeps
+   * it separable from the optimistic-lock 409 mapped in the {@code GlobalExceptionHandler}.
+   */
+  @ExceptionHandler(Tier1RemovalRequiresConfirmationException.class)
+  public ResponseEntity<ProblemDetail> handleTier1RemovalRequiresConfirmation(
+      Tier1RemovalRequiresConfirmationException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            ex.getMessage(),
+            "tier1-removal-requires-confirmation",
+            "Tier-1 hard-constraint removal requires confirmation",
+            req.getRequestURI());
+    pd.setProperty("reason", Tier1RemovalRequiresConfirmationException.REASON);
+    pd.setProperty("removedConstraints", ex.removedConstraints());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

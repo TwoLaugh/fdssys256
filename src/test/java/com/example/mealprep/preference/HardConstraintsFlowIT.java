@@ -211,6 +211,139 @@ class HardConstraintsFlowIT {
         .andExpect(jsonPath("$.errors[?(@.field == 'dietaryIdentity')]").exists());
   }
 
+  // ---------------- GAP-04: Tier-1 removal confirmation interstitial ----------------
+
+  /**
+   * Seed an aggregate carrying a single allergy ("peanuts") so the removal scenarios have a Tier-1
+   * constraint to drop. Returns the post-seed version the next PUT must echo.
+   */
+  private long seedAllergyPeanuts(AuthedUser user) throws Exception {
+    preferenceUpdateService.initialiseHardConstraints(user.userId());
+    UpdateHardConstraintsRequest add =
+        HardConstraintsTestData.updateRequest()
+            .withAllergies("peanuts")
+            .withExpectedVersion(0L)
+            .build();
+    MvcResult result =
+        mvc.perform(
+                put("/api/v1/preferences/hard-constraints")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(add)))
+            .andExpect(status().isOk())
+            .andReturn();
+    return objectMapper.readTree(result.getResponse().getContentAsString()).get("version").asLong();
+  }
+
+  @Test
+  void put_removingAllergyWithoutConfirmation_isBlockedWithStructuredInterstitial()
+      throws Exception {
+    AuthedUser user = registerUser();
+    long version = seedAllergyPeanuts(user);
+
+    // Drop the peanuts allergy with NO confirmation flag → 409 + structured interstitial body.
+    UpdateHardConstraintsRequest removal =
+        HardConstraintsTestData.updateRequest().withExpectedVersion(version).build();
+
+    mvc.perform(
+            put("/api/v1/preferences/hard-constraints")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(removal)))
+        .andExpect(status().isConflict())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+        .andExpect(jsonPath("$.status").value(409))
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/tier1-removal-requires-confirmation"))
+        .andExpect(jsonPath("$.reason").value("TIER1_REMOVAL_REQUIRES_CONFIRMATION"))
+        .andExpect(jsonPath("$.removedConstraints.length()").value(1))
+        .andExpect(jsonPath("$.removedConstraints[0].category").value("ALLERGY"))
+        .andExpect(jsonPath("$.removedConstraints[0].value").value("peanuts"))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // The block is pre-mutation: the allergy is still stored, no second audit row.
+    mvc.perform(get("/api/v1/preferences/hard-constraints").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.allergies.length()").value(1))
+        .andExpect(jsonPath("$.allergies[0]").value("peanuts"));
+    assertThat(auditLogRepository.count()).isEqualTo(1L);
+  }
+
+  @Test
+  void put_removingAllergyWithConfirmation_appliesTheRemoval() throws Exception {
+    AuthedUser user = registerUser();
+    long version = seedAllergyPeanuts(user);
+
+    // Re-submit the removal WITH the confirmation flag → applied.
+    UpdateHardConstraintsRequest confirmed =
+        HardConstraintsTestData.updateRequest()
+            .withConfirmTier1Removals(true)
+            .withExpectedVersion(version)
+            .build();
+
+    mvc.perform(
+            put("/api/v1/preferences/hard-constraints")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(confirmed)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.allergies.length()").value(0))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    mvc.perform(get("/api/v1/preferences/hard-constraints").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.allergies.length()").value(0));
+  }
+
+  @Test
+  void put_addingAllergyWithoutConfirmation_isNotGated() throws Exception {
+    AuthedUser user = registerUser();
+    long version = seedAllergyPeanuts(user);
+
+    // Pure addition (keep peanuts, add shellfish), no confirmation flag → applied one-step.
+    UpdateHardConstraintsRequest add =
+        HardConstraintsTestData.updateRequest()
+            .withAllergies("peanuts", "shellfish")
+            .withExpectedVersion(version)
+            .build();
+
+    mvc.perform(
+            put("/api/v1/preferences/hard-constraints")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(add)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.allergies.length()").value(2))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void put_nonTier1EditWithoutConfirmation_isNotGated() throws Exception {
+    AuthedUser user = registerUser();
+    long version = seedAllergyPeanuts(user);
+
+    // Keep the allergy + base; only set a non-Tier-1 dietary-identity label. No flag → applied.
+    UpdateHardConstraintsRequest labelEdit =
+        HardConstraintsTestData.updateRequest()
+            .withAllergies("peanuts")
+            .withDietaryIdentity(
+                new com.example.mealprep.preference.api.dto.DietaryIdentityDto(
+                    "omnivore", "Flexitarian", java.util.List.of()))
+            .withExpectedVersion(version)
+            .build();
+
+    mvc.perform(
+            put("/api/v1/preferences/hard-constraints")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(labelEdit)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.allergies.length()").value(1))
+        .andExpect(jsonPath("$.dietaryIdentity.labelForDisplay").value("Flexitarian"))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
   @Test
   void put_whenNoFieldsChanged_returns200_butWritesNoAuditRow_andDoesNotBumpVersion()
       throws Exception {

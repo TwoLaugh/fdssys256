@@ -121,6 +121,7 @@ public final class HardConstraintsTestData {
     private List<HardIntoleranceDto> intolerances = new ArrayList<>();
     private List<AgeRestrictionDto> ageRestrictions = new ArrayList<>();
     private long expectedVersion = 0L;
+    private Boolean confirmTier1Removals;
 
     public UpdateRequestBuilder withAllergies(String... allergies) {
       this.allergies = new ArrayList<>(List.of(allergies));
@@ -152,9 +153,23 @@ public final class HardConstraintsTestData {
       return this;
     }
 
+    /**
+     * Set the GAP-04 confirmation flag that lets a Tier-1 removal proceed (default: unset/false).
+     */
+    public UpdateRequestBuilder withConfirmTier1Removals(boolean confirm) {
+      this.confirmTier1Removals = confirm;
+      return this;
+    }
+
     public UpdateHardConstraintsRequest build() {
       return new UpdateHardConstraintsRequest(
-          allergies, dietaryIdentity, medicalDiets, intolerances, ageRestrictions, expectedVersion);
+          allergies,
+          dietaryIdentity,
+          medicalDiets,
+          intolerances,
+          ageRestrictions,
+          expectedVersion,
+          confirmTier1Removals);
     }
   }
 }

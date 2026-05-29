@@ -511,6 +511,14 @@ Fields not yet configured use sensible defaults. The system works without them; 
 - **Never modified by AI** — user-only edits through a dedicated, clearly labeled UI
 - Enforced by deterministic code filter, not AI prompts
 - Changes are logged with timestamps for audit
+- **Removing a Tier-1 hard constraint requires a confirmation interstitial (GAP-04).** Because the deterministic hard-filter is the system's *only* allergy/safety guardrail, dropping a safety-critical constraint cannot be a silent one-step edit. A hard-constraints update that would **remove** a Tier-1 constraint is rejected with a structured response the UI renders a confirmation interstitial from (naming exactly what is being dropped); the client re-submits the same payload with an explicit confirmation to proceed. **Additions, reorderings, and non-Tier-1 edits stay one-step** — ordinary edits are never gated.
+  - **Gated removals** (the safety-critical Tier-1 set the filter enforces):
+    - An **allergy** is removed from `allergies`.
+    - A **medical diet** is removed from `medical_diets`.
+    - A **severe (hard) intolerance** *substance* is removed from `intolerances_hard` (editing a kept substance's severity/notes is not a removal).
+    - The **dietary-identity `base`** is **relaxed** — changed to a base whose excluded-food set is a strict subset of the previous base's (e.g. `vegan→vegetarian`, `vegetarian→omnivore`). The filter uses `base` as the safe default, so relaxing it widens what passes. **Tightening** the base (`omnivore→vegetarian`) adds protection and is **not** gated; a lateral switch between incomparable identities (e.g. `vegetarian→keto`) is not a base *removal* (any allergen exposure it implies is still covered by the allergy/intolerance gates).
+  - **Not gated:** age restrictions are auto-populated/managed for child profiles rather than user-removed as a deliberate safety decision, so they are not part of this interstitial.
+  - **Contract:** the rejection is `409 Conflict` (the request conflicts with the safety policy until confirmed) with an RFC 9457 `ProblemDetail` carrying `type = .../problems/tier1-removal-requires-confirmation`, a machine-readable `reason = TIER1_REMOVAL_REQUIRES_CONFIRMATION`, and a `removedConstraints[]` list (`{category, value}`) the UI names in the prompt. The confirm mechanism is a `confirmTier1Removals: true` flag on the update request (the simpler v1 contract; the same payload is re-submitted with the flag set). See `lld/preference.md` §"Flow 1: Hard constraint update" for the implementation.
 
 ---
 

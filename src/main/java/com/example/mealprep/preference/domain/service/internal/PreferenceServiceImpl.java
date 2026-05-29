@@ -6,6 +6,7 @@ import com.example.mealprep.preference.api.dto.DietaryIdentityExceptionDto;
 import com.example.mealprep.preference.api.dto.HardConstraintsAuditEntryDto;
 import com.example.mealprep.preference.api.dto.HardConstraintsDto;
 import com.example.mealprep.preference.api.dto.HardIntoleranceDto;
+import com.example.mealprep.preference.api.dto.RemovedTier1Constraint;
 import com.example.mealprep.preference.api.dto.UpdateHardConstraintsRequest;
 import com.example.mealprep.preference.api.mapper.HardConstraintsMapper;
 import com.example.mealprep.preference.domain.entity.AgeRestriction;
@@ -24,6 +25,7 @@ import com.example.mealprep.preference.domain.service.PreferenceQueryService;
 import com.example.mealprep.preference.domain.service.PreferenceUpdateService;
 import com.example.mealprep.preference.event.HardConstraintsUpdatedEvent;
 import com.example.mealprep.preference.exception.HardConstraintsNotFoundException;
+import com.example.mealprep.preference.exception.Tier1RemovalRequiresConfirmationException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -276,6 +278,21 @@ public class PreferenceServiceImpl implements PreferenceQueryService, Preference
     if (aggregate.getVersion() != request.expectedVersion()) {
       throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
           HardConstraints.class, aggregate.getId());
+    }
+
+    // GAP-04 safety gate: removing a Tier-1 hard constraint (allergy / medical diet / severe
+    // intolerance / dietary-identity base narrowing) is a deliberate two-step action. If this PUT
+    // would remove ≥1 such constraint and the caller did NOT confirm, reject with the structured
+    // 409 the UI renders an interstitial from — BEFORE any mutation, audit row, or version bump.
+    // Additions, reorderings, and non-Tier-1 edits are unaffected (the detector returns empty).
+    List<RemovedTier1Constraint> removedTier1 =
+        Tier1RemovalDetector.detectRemovals(aggregate, request);
+    if (!removedTier1.isEmpty() && !request.tier1RemovalsConfirmed()) {
+      log.info(
+          "hard constraints Tier-1 removal blocked pending confirmation userId={} removed={}",
+          userId,
+          removedTier1);
+      throw new Tier1RemovalRequiresConfirmationException(removedTier1);
     }
 
     // Capture current state BEFORE mutation; the diff compares old vs new values.
