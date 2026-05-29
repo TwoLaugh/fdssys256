@@ -109,6 +109,7 @@ class PlanComposerIT {
     // the test's tx). Single DELETE — the table self-FKs on parent_decision_id; row-by-row delete
     // would trip it.
     jdbcTemplate.update("DELETE FROM decision_log");
+    jdbcTemplate.update("DELETE FROM core_lock_leases");
   }
 
   private UUID slotId = UUID.randomUUID();

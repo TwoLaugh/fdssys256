@@ -374,6 +374,7 @@ class BeamSearchEngineTest {
         3,
         5,
         2,
+        Duration.ofMinutes(10),
         null,
         null,
         null);

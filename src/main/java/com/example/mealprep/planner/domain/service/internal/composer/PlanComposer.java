@@ -5,6 +5,7 @@ import com.example.mealprep.adaptation.api.dto.PlanTimeRefineDirectiveRequest;
 import com.example.mealprep.adaptation.domain.enums.AdaptationClassification;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
 import com.example.mealprep.adaptation.exception.AdaptationAiUnavailableException;
+import com.example.mealprep.core.lock.LeaseHandle;
 import com.example.mealprep.core.lock.LockKey;
 import com.example.mealprep.core.lock.LockService;
 import com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto;
@@ -68,19 +69,25 @@ import org.springframework.transaction.annotation.Transactional;
  * {@code @Transactional(REQUIRES_NEW)} (declared by adaptation-pipeline-01b) so their
  * pending-change / trace rows commit in their own transactions, independent of the composer.
  *
- * <p><b>Single-flight lock (LLD §Flow 1 step 1, §Concurrency).</b> The first act inside {@link
- * #persistAndPublish} is {@code LockService.tryAcquire(LockKey.forPlanWeek(householdId,
- * weekStartDate))}. The shipped {@code core.LockService} is a <b>transaction-scoped</b> Postgres
- * advisory lock ({@code pg_try_advisory_xact_lock}) — it has no explicit release and auto-releases
- * when the surrounding transaction commits or rolls back; so it is acquired inside the persist
- * transaction (the only one the composer opens) and released the instant that tx ends. On
- * contention the persist transaction rolls back (releasing nothing it acquired) and {@link
- * ConcurrentGenerationInProgressException} (HTTP 409) is thrown. This guarantees the single-active
- * invariant at the persist boundary: two concurrent generations for the same {@code (household,
- * week)} cannot both insert a plan. (Deviation from the LLD's assumed {@code tryLock}/{@code
- * release} session-lock API: the shipped primitive is tx-scoped, so the lock cannot span the
- * out-of-tx AI stages without re-introducing the very in-tx-AI it forbids — the persist boundary is
- * the strongest single-flight the shipped primitive supports.)
+ * <p><b>Single-flight lease (LLD §Flow 1 step 1, §Concurrency).</b> The very first act inside
+ * {@link #compose} — BEFORE any AI work — is {@code
+ * LockService.acquireLease(LockKey.forPlanWeek(...), leaseTtl)}. This is a <b>connection-free,
+ * committed lease</b> ({@code core_lock_leases} row), not a held lock: the short {@code
+ * REQUIRES_NEW} acquire transaction commits and releases its connection immediately, then the lease
+ * persists across the whole ~20s out-of-tx AI pipeline <b>without pinning a DB connection</b>. On
+ * contention (another generation for the same {@code (household, week)} already holds a live lease)
+ * {@code acquireLease} returns empty and {@link ConcurrentGenerationInProgressException} (HTTP 409)
+ * is thrown <b>immediately, before any AI tokens are spent</b> — the whole point of moving
+ * single-flight to the start. The lease is always released in a {@code finally} block (success,
+ * failure, or exception) so a normal completion frees it at once; its TTL ({@code
+ * mealprep.planner.lease-ttl}, default 10m, safely &gt; max generation time) is the liveness
+ * backstop that makes a crashed generator's lease reclaimable.
+ *
+ * <p>This supersedes #193's persist-boundary {@code tryAcquire} advisory lock, which is now
+ * removed: a tx-scoped advisory lock can only be held inside the persist transaction (the only one
+ * the composer opens), so it could reject a duplicate only AFTER both ran the full doomed AI
+ * pipeline. The lease rejects the loser up front. The DB-level partial unique index on active plans
+ * remains the persist-time safety net against a double-active insert.
  *
  * <p>{@link PlanGeneratedEvent} is published <b>inside</b> {@link #persistAndPublish} so an {@code
  * AFTER_COMMIT} {@code @TransactionalEventListener} actually receives it (a no-active-tx publish is
@@ -187,6 +194,11 @@ public class PlanComposer {
    * §Flow 1 line ~1211 / §Concurrency line ~1322 — Tier-1 decision: AI-in-tx = no). The flow is:
    *
    * <ol>
+   *   <li><b>Acquire the start-of-generation single-flight lease</b> for {@code (household, week)}
+   *       via {@code LockService.acquireLease} — BEFORE any AI work. On contention (another live
+   *       lease) throw {@link ConcurrentGenerationInProgressException} (409) immediately, having
+   *       spent zero AI tokens. The lease is connection-free, so holding it across the AI pipeline
+   *       pins no DB connection. Released in the {@code finally} below.
    *   <li>Run the recipe-pool Tier-2 cold-start gate (LLD §Flow-1 step 5). It MUST run before any
    *       composition transaction: its {@code DiscoveryService.runJobSync} persists the discovery
    *       job and publishes the runner's {@code AFTER_COMMIT} event, which only fires once that
@@ -198,10 +210,11 @@ public class PlanComposer {
    *       are {@code REQUIRES_NEW} ({@link DecisionLogWriter}), so they open + commit their own
    *       transactions exactly as before whether or not a surrounding tx exists.
    *   <li>Open the single short {@code @Transactional(REQUIRED)} write boundary ({@link
-   *       #persistAndPublish} via the {@link #self} proxy): acquire the single-flight lock, persist
-   *       the plan + cascade, publish {@link PlanGeneratedEvent}, write the closing decision-log
-   *       row, and cache the idempotency key. This is the LLD's "steps 12-13 are the only DB write
-   *       boundary."
+   *       #persistAndPublish} via the {@link #self} proxy): persist the plan + cascade, publish
+   *       {@link PlanGeneratedEvent}, write the closing decision-log row, and cache the idempotency
+   *       key. This is the LLD's "steps 12-13 are the only DB write boundary."
+   *   <li><b>Release the lease</b> in a {@code finally} — success, failure, or exception — so a
+   *       normal completion frees it at once rather than waiting for the TTL.
    * </ol>
    *
    * @param request the generate request
@@ -210,24 +223,41 @@ public class PlanComposer {
    */
   public UUID compose(
       GeneratePlanRequest request, UUID requestUserId, @Nullable String idempotencyKey) {
-    boolean coldStart = false;
-    if (properties.coldStart().enabled()) {
-      // Lightweight read-only pre-context purely to feed the cold-start gate (slot kinds + current
-      // pool size). Built outside any planner transaction — the cross-module reads each manage
-      // their own readOnly tx. The composition re-reads a fresh context downstream. Only paid for
-      // when the gate is enabled (the common steady-state config disables it once the catalogue is
-      // mature).
-      UUID gateTraceId = UUID.randomUUID();
-      PlanCompositionContext preContext =
-          contextBuilder.build(request, requestUserId, gateTraceId, null);
-      coldStart =
-          coldStartGate.fillIfCold(
-              requestUserId,
-              preContext.slotSkeletons(),
-              preContext.recipePool().recipes().size(),
-              gateTraceId);
+    // Start-of-generation single-flight: claim the connection-free lease BEFORE any AI work so a
+    // concurrent generate for the same (household, week) is rejected up front (no wasted tokens),
+    // not after running a doomed pipeline. acquireLease commits its short tx and frees the
+    // connection immediately, so holding the lease across the ~20s pipeline pins nothing.
+    LockKey lockKey = LockKey.forPlanWeek(request.householdId(), request.weekStartDate());
+    LeaseHandle lease =
+        lockService
+            .acquireLease(lockKey, properties.leaseTtl())
+            .orElseThrow(
+                () ->
+                    new ConcurrentGenerationInProgressException(
+                        request.householdId(), request.weekStartDate()));
+    try {
+      boolean coldStart = false;
+      if (properties.coldStart().enabled()) {
+        // Lightweight read-only pre-context purely to feed the cold-start gate (slot kinds +
+        // current pool size). Built outside any planner transaction — the cross-module reads each
+        // manage their own readOnly tx. The composition re-reads a fresh context downstream. Only
+        // paid for when the gate is enabled (the common steady-state config disables it once the
+        // catalogue is mature).
+        UUID gateTraceId = UUID.randomUUID();
+        PlanCompositionContext preContext =
+            contextBuilder.build(request, requestUserId, gateTraceId, null);
+        coldStart =
+            coldStartGate.fillIfCold(
+                requestUserId,
+                preContext.slotSkeletons(),
+                preContext.recipePool().recipes().size(),
+                gateTraceId);
+      }
+      return composeOutsideTransaction(request, requestUserId, idempotencyKey, coldStart);
+    } finally {
+      // Free the lease immediately on any exit (success/failure/exception) — don't wait for TTL.
+      lockService.releaseLease(lease);
     }
-    return composeOutsideTransaction(request, requestUserId, idempotencyKey, coldStart);
   }
 
   /**
@@ -506,13 +536,15 @@ public class PlanComposer {
       @Nullable String idempotencyKey) {}
 
   /**
-   * The single short DB write boundary (LLD §Flow 1 steps 1 + 12&ndash;13). Runs in one
-   * {@code @Transactional(REQUIRED)}: (1) acquire the single-flight advisory lock for {@code
-   * (household, week)} — on contention the tx rolls back and {@link
-   * ConcurrentGenerationInProgressException} (409) is thrown; (2) persist the plan + cascade; (3)
-   * write the closing decision-log row; (4) publish {@link PlanGeneratedEvent} (inside the tx so an
-   * {@code AFTER_COMMIT} listener fires); (5) cache the idempotency key. The advisory lock is
-   * tx-scoped ({@code pg_try_advisory_xact_lock}) and auto-releases when this tx ends.
+   * The single short DB write boundary (LLD §Flow 1 steps 12&ndash;13). Runs in one
+   * {@code @Transactional(REQUIRED)}: (1) persist the plan + cascade; (2) write the closing
+   * decision-log row; (3) publish {@link PlanGeneratedEvent} (inside the tx so an {@code
+   * AFTER_COMMIT} listener fires); (4) cache the idempotency key.
+   *
+   * <p>Single-flight is no longer re-checked here: {@link #compose} already holds the
+   * start-of-generation lease for this {@code (household, week)} for the whole call, so no second
+   * generation can reach this boundary concurrently. The DB-level partial unique index on active
+   * plans remains the persist-time safety net against a double-active insert.
    *
    * <p>Package-visible (not private) so the {@link #self} proxy invokes it with transactional
    * advice. Returns the persisted plan id; only scalar columns of the returned {@code Plan} are
@@ -521,11 +553,6 @@ public class PlanComposer {
    */
   @Transactional(propagation = Propagation.REQUIRED)
   UUID persistAndPublish(PersistInputs in) {
-    if (!lockService.tryAcquire(
-        LockKey.forPlanWeek(in.request().householdId(), in.request().weekStartDate()))) {
-      throw new ConcurrentGenerationInProgressException(
-          in.request().householdId(), in.request().weekStartDate());
-    }
     Plan plan =
         planPersister.persist(
             in.chosen(),

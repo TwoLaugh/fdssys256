@@ -3,10 +3,13 @@ package com.example.mealprep.planner;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.mealprep.adaptation.domain.service.AdaptationQueryService;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
+import com.example.mealprep.core.lock.LeaseHandle;
 import com.example.mealprep.core.lock.LockKey;
 import com.example.mealprep.core.lock.LockService;
 import com.example.mealprep.core.types.SlotKind;
@@ -32,14 +35,12 @@ import com.example.mealprep.planner.exception.ConcurrentGenerationInProgressExce
 import com.example.mealprep.planner.testdata.PlanTestData;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -64,10 +65,12 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       TransactionSynchronizationManager.isActualTransactionActive() == false}; the persist +
  *       {@code PlanGeneratedEvent} publish run in one short tx and the plan commits {@code
  *       GENERATED}.
- *   <li><b>planner-2 (single-flight lock):</b> a second concurrent generate for the same {@code
- *       (household, week)} — while the advisory lock is held by another transaction — fails with
- *       {@link ConcurrentGenerationInProgressException} (mapped to 409). A held lock on a
- *       <i>different</i> {@code (household, week)} does not contend.
+ *   <li><b>planner-2 (start-of-generation single-flight lease):</b> a second concurrent generate
+ *       for the same {@code (household, week)} — while another holder owns the connection-free
+ *       lease — fails with {@link ConcurrentGenerationInProgressException} (mapped to 409)
+ *       <b>before any AI work runs</b> (Stage C is never invoked for the rejected request). A held
+ *       lease on a <i>different</i> {@code (household, week)} does not contend. A normal generate
+ *       releases its lease, so a subsequent generate for the same key succeeds.
  * </ul>
  *
  * <p>The deterministic stages are {@code @MockBean}ed exactly as in {@code PlanComposerIT} (same
@@ -124,6 +127,7 @@ class PlanComposerLockAndTxIT {
     jdbcTemplate.update("DELETE FROM planner_days");
     jdbcTemplate.update("DELETE FROM planner_plans");
     jdbcTemplate.update("DELETE FROM decision_log");
+    jdbcTemplate.update("DELETE FROM core_lock_leases");
   }
 
   private PlanCompositionContext ctx(UUID household) {
@@ -226,90 +230,86 @@ class PlanComposerLockAndTxIT {
   }
 
   /**
-   * planner-2: a concurrent generate for the same (household, week) — while another transaction
-   * holds the advisory lock — fails fast with ConcurrentGenerationInProgressException (409). The
-   * lock is held in a background thread's open tx so the contention is real, mirroring two
-   * header-less "regenerate" clicks racing.
+   * planner-2 (the whole point): a concurrent generate for the same (household, week) — while
+   * another holder owns the connection-free lease — fails fast with
+   * ConcurrentGenerationInProgressException (409) <b>before any AI work</b>. We assert Stage C (the
+   * LLM pick) is NEVER invoked for the rejected request: the lease rejects the loser up front, so
+   * no AI tokens are spent. The lease is held simply by calling {@code acquireLease} (it commits
+   * and leaves a committed row — no held transaction needed), mirroring a first regenerate click
+   * that is mid-pipeline when a second click arrives.
    */
   @Test
-  void concurrentGenerateSameHouseholdWeek_throwsConcurrentGenerationInProgress() throws Exception {
+  void concurrentGenerateSameHouseholdWeek_throwsBeforeStageC() {
     UUID household = UUID.randomUUID();
     wireDeterministicStages(household);
 
-    CountDownLatch lockHeld = new CountDownLatch(1);
-    CountDownLatch releaseLock = new CountDownLatch(1);
-
-    CompletableFuture<Boolean> holder =
-        CompletableFuture.supplyAsync(
-            () ->
-                tx().execute(
-                        status -> {
-                          boolean ok = lockService.tryAcquire(LockKey.forPlanWeek(household, WEEK));
-                          lockHeld.countDown();
-                          await(releaseLock);
-                          return ok;
-                        }));
-
+    // A concurrent generation holds the lease for (household, WEEK).
+    LeaseHandle held =
+        lockService
+            .acquireLease(LockKey.forPlanWeek(household, WEEK), Duration.ofMinutes(10))
+            .orElseThrow();
     try {
-      assertThat(lockHeld.await(5, TimeUnit.SECONDS)).isTrue();
-
-      // The lock for (household, WEEK) is held by the background tx; this generate must 409.
       assertThatThrownBy(() -> composer.compose(request(household), UUID.randomUUID(), null))
           .isInstanceOf(ConcurrentGenerationInProgressException.class);
+
+      // The rejected request must NOT have run the AI pipeline — Stage C is never invoked.
+      verify(stageCInvoker, never()).pickOne(any(), any(), any(), any());
+      verify(phase2Augmenter, never()).augment(any(), any(), any(), any());
     } finally {
-      releaseLock.countDown();
+      lockService.releaseLease(held);
     }
-    assertThat(holder.get(5, TimeUnit.SECONDS)).isTrue();
   }
 
   /**
-   * planner-2: a held lock on a DIFFERENT (household, week) does not contend — a generate for an
-   * unrelated household/week proceeds and commits GENERATED while the other lock is held.
+   * planner-2: a held lease on a DIFFERENT (household, week) does not contend — a generate for an
+   * unrelated household/week proceeds and commits GENERATED while the other lease is held.
    */
   @Test
-  void concurrentGenerateDifferentHouseholdWeek_doesNotContend() throws Exception {
+  void concurrentGenerateDifferentHouseholdWeek_doesNotContend() {
     UUID lockedHousehold = UUID.randomUUID();
     UUID generatingHousehold = UUID.randomUUID();
     wireDeterministicStages(generatingHousehold);
 
-    CountDownLatch lockHeld = new CountDownLatch(1);
-    CountDownLatch releaseLock = new CountDownLatch(1);
-
-    CompletableFuture<Boolean> holder =
-        CompletableFuture.supplyAsync(
-            () ->
-                tx().execute(
-                        status -> {
-                          boolean ok =
-                              lockService.tryAcquire(LockKey.forPlanWeek(lockedHousehold, WEEK));
-                          lockHeld.countDown();
-                          await(releaseLock);
-                          return ok;
-                        }));
-
+    LeaseHandle held =
+        lockService
+            .acquireLease(LockKey.forPlanWeek(lockedHousehold, WEEK), Duration.ofMinutes(10))
+            .orElseThrow();
     UUID planId;
     try {
-      assertThat(lockHeld.await(5, TimeUnit.SECONDS)).isTrue();
-      // Different household → different advisory-lock key → no contention.
+      // Different household → different lease key → no contention.
       planId = composer.compose(request(generatingHousehold), UUID.randomUUID(), null);
       assertThat(planId).isNotNull();
     } finally {
-      releaseLock.countDown();
+      lockService.releaseLease(held);
     }
-    assertThat(holder.get(5, TimeUnit.SECONDS)).isTrue();
 
     Plan p = planRepository.findById(planId).orElseThrow();
     assertThat(p.getStatus()).isEqualTo(PlanStatus.GENERATED);
   }
 
-  private static void await(CountDownLatch latch) {
-    try {
-      if (!latch.await(10, TimeUnit.SECONDS)) {
-        throw new IllegalStateException("latch await timed out");
-      }
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new IllegalStateException(e);
-    }
+  /**
+   * planner-2: a normal generate releases its lease on completion (the finally block), so a
+   * subsequent generate for the same (household, week) succeeds rather than 409-ing on a leaked
+   * lease.
+   */
+  @Test
+  void normalGenerate_releasesLease_soNextGenerateSucceeds() {
+    UUID household = UUID.randomUUID();
+    wireDeterministicStages(household);
+
+    UUID first = composer.compose(request(household), UUID.randomUUID(), null);
+    assertThat(first).isNotNull();
+
+    // No lease row should linger for the key after a normal completion.
+    Integer leaseRows =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM core_lock_leases WHERE lock_key = ?",
+            Integer.class,
+            LockKey.forPlanWeek(household, WEEK).serialize());
+    assertThat(leaseRows).isZero();
+
+    // A second generate for the same key succeeds (lease was freed).
+    UUID second = composer.compose(request(household), UUID.randomUUID(), null);
+    assertThat(second).isNotNull();
   }
 }

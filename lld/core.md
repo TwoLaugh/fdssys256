@@ -13,7 +13,7 @@ This document specifies the `core` module — package layout, JPA entities, Flyw
 | `core.types` | Shared enums and value objects used in cross-module DTOs and event payloads | Every domain module |
 | `core.events` | Sealed marker interfaces (`MealPrepEvent`, `ScopeChangedEvent`) for the project-wide event hierarchy | Every module that publishes or consumes events |
 | `core.audit` | The shared `decision_log` table, `DecisionLogService`, trace-ID propagation helpers | Every module that runs an optimisation loop (planner, adaptation pipeline) |
-| `core.lock` | `LockService` for single-flight scope locks via `pg_try_advisory_xact_lock` | Planner (per-week), adaptation pipeline (per-recipe), grocery batch jobs |
+| `core.lock` | `LockService` — two single-flight primitives: a tx-scoped advisory lock (`pg_try_advisory_xact_lock`) and a connection-free TTL **lease** (`core_lock_leases` table) | Advisory: adaptation pipeline (per-recipe), grocery batch jobs. Lease: planner (per-week, start-of-generation) |
 
 `core` depends only on Spring + Hibernate + JDK — no domain module, no AI service, no domain JPA mappings. If a piece of code wants domain knowledge, it does not belong here.
 
@@ -42,8 +42,11 @@ com.example.mealprep.core/
 │   └── trace/TraceIdFilter.java                       servlet filter — populates MDC per request
 ├── events/                                            MealPrepEvent (sealed), ScopeChangedEvent (sealed),
 │                                                      EventScope, EventScopeKind
-├── lock/                                              LockService, LockKey, LockHandle,
-│                                                      LockAcquisitionException, internal/LockServiceImpl,
+├── lock/                                              LockService, LockKey (sealed), LeaseHandle,
+│                                                      internal/LockServiceImpl (composite),
+│                                                      internal/AdvisoryLockServiceImpl (tx-advisory),
+│                                                      internal/LeaseLockServiceImpl (TTL lease),
+│                                                      internal/LockLease (entity), internal/LockLeaseRepository,
 │                                                      internal/LockKeyHasher
 ├── types/                                             SlotKind, MealKind, DataQuality, PreferenceTier,
 │                                                      value/IngredientMappingKey, value/ScopeId
@@ -122,9 +125,23 @@ CREATE INDEX idx_decision_log_actor_created ON decision_log (actor_user_id, crea
 
 No GIN index on JSONB. If analytics later needs `inputs->>'constraint_summary'`, that index lands in its own migration.
 
-### Lock service — no schema
+### Lock service — advisory (no schema) + lease (`core_lock_leases`)
 
-`pg_try_advisory_xact_lock` requires no table; lock state lives in the Postgres backend's lock manager and is auto-released at transaction end. Zero schema, zero stale-row cleanup — the reason advisory locks beat a `locks` table here.
+The advisory half of `LockService` (`pg_try_advisory_xact_lock`) requires no table; lock state lives in the Postgres backend's lock manager and is auto-released at transaction end. Zero schema, zero stale-row cleanup — the reason advisory locks beat a `locks` table for tx-scoped critical sections.
+
+The **lease** half does need a committed row, so it ships its own versioned migration `V20260615270000__core_create_lock_leases.sql`:
+
+```sql
+CREATE TABLE core_lock_leases (
+    lock_key     varchar(160) PRIMARY KEY,   -- LockKey.serialize(); PK is the single-flight gate
+    holder_token uuid        NOT NULL,        -- per-acquisition secret; only the holder can release/renew
+    acquired_at  timestamptz NOT NULL,
+    expires_at   timestamptz NOT NULL         -- lease becomes reclaimable once this passes (liveness)
+);
+CREATE INDEX idx_core_lock_leases_expires_at ON core_lock_leases (expires_at);
+```
+
+Why a committed lease and not an advisory lock here: a tx-scoped advisory lock is released the instant its transaction ends, and a session-scoped one (`pg_advisory_lock`) pins a DB connection for as long as it is held. The planner's plan-generation runs a ~20s AI pipeline that must hold **no** DB connection across the LLM latency (the Tier-1 "AI calls outside any transaction" rule). The only way to single-flight that work *before* it starts, without pinning a connection for the whole window, is a committed marker: a short transaction inserts a lease row (connection released on commit), the `lock_key` PK enforces single-flight, and `expires_at` makes a crashed holder's lease reclaimable. See §LockService and §Flow 5.
 
 ---
 
@@ -203,7 +220,7 @@ public record DecisionTraceDto(UUID traceId, List<DecisionLogEntryDto> entries) 
 
 ## Mappers
 
-One MapStruct mapper, sparse usage. The lock service has no DTO surface (returns `LockHandle` and `boolean`); no mapper.
+One MapStruct mapper, sparse usage. The lock service has no DTO surface (returns `boolean` and `LeaseHandle`); no mapper.
 
 ```java
 @Mapper(componentModel = "spring")
@@ -277,28 +294,47 @@ public interface DecisionLogQueryService {
 
 ### `LockService`
 
-Implements [style-guide.md §Concurrency](style-guide.md#concurrency) "single-flight per scope" via `pg_try_advisory_xact_lock`. Lock is transaction-scoped and auto-released at commit/rollback — no explicit unlock call.
+Implements [style-guide.md §Concurrency](style-guide.md#concurrency) "single-flight per scope". Two mechanisms, for two shapes of work — both behind one interface.
 
 ```java
 public interface LockService {
 
-    /** Throws LockAcquisitionException on contention. MUST be called inside an active @Transactional. */
-    LockHandle acquire(LockKey key);
+    // --- 1. Transaction-scoped advisory lock (pg_try_advisory_xact_lock) -------------------
+    /** Non-throwing. False on contention. MUST be called inside an active @Transactional;
+     *  auto-releases at commit/rollback — no explicit unlock. */
+    boolean tryAcquire(LockKey key);
 
-    /** Non-throwing variant. Returns Optional.empty() on contention. Used by background jobs that should silently skip. */
-    Optional<LockHandle> tryAcquire(LockKey key);
+    // --- 2. Connection-free TTL lease (core_lock_leases) -----------------------------------
+    /** Claim a committed lease in a short REQUIRES_NEW tx (connection released on commit). Empty on
+     *  contention; reclaims a lease whose TTL has passed (lazy reclaim of a crashed holder). */
+    Optional<LeaseHandle> acquireLease(LockKey key, Duration ttl);
+
+    /** Delete the lease by (lockKey, holderToken). Only the holder may release; a stale handle whose
+     *  lease was reclaimed by another caller is a silent no-op. True iff this call removed it. */
+    boolean releaseLease(LeaseHandle handle);
+
+    /** Extend a still-held lease's TTL; empty if no longer the holder. Optional — the planner sets
+     *  its TTL generously above max generation time and does not renew. */
+    Optional<LeaseHandle> renewLease(LeaseHandle handle, Duration ttl);
 }
 
-public record LockKey(EventScopeKind scopeKind, String scopeId) {
-    public static LockKey forWeek(UUID householdId, LocalDate weekStart) { /* "household:<uuid>:week:<iso>" */ }
-    public static LockKey forRecipe(UUID recipeId)                       { /* "recipe:<uuid>" */ }
-    // Other scope kinds add factories as call sites land.
+public sealed interface LockKey {           // sealed so all scopes are explicit; serialize() is the wire form
+    String serialize();
+    static LockKey forPlanWeek(UUID householdId, LocalDate weekStart);   // "plan-week|<uuid>|<iso>"
+    static LockKey forRecipe(UUID recipeId);                             // "recipe|<uuid>"
+    static LockKey forCustom(String scopeKind, UUID scopeId);            // "custom|<kind>|<uuid>"
 }
 
-public record LockHandle(LockKey key, long advisoryKey, Instant acquiredAt) {}
+public record LeaseHandle(LockKey key, UUID holderToken, Instant acquiredAt, Instant expiresAt) {}
 ```
 
-`LockKey` is a typed value object with factories rather than a free-form `String` so callers can't typo a scope. `advisoryKey` is the `bigint` Postgres saw — useful for log correlation when contention is suspected. **Documented decision: transaction-scoped over session-scoped** advisory locks. Session-scoped (`pg_try_advisory_lock`) requires explicit unlock and a connection pool that respects session affinity; transaction-scoped is automatic, leak-free, and matches the "one optimisation loop = one transaction" pattern the planner uses anyway.
+`LockKey` is a sealed typed value object with factories rather than a free-form `String` so callers can't typo a scope; `serialize()` is the stable form hashed for the advisory `bigint` and stored as the lease `lock_key`.
+
+**Mechanism 1 — advisory, transaction-scoped over session-scoped.** Session-scoped (`pg_advisory_lock`) requires explicit unlock, a pool that respects session affinity, AND it pins a connection for as long as it is held; transaction-scoped is automatic and leak-free, matching the "one short critical section = one transaction" pattern the adaptation pipeline (per-recipe) and grocery batch jobs use. **Preserved unchanged** — those callers depend on `tryAcquire`.
+
+**Mechanism 2 — lease, the connection-free single-flight.** No held lock can single-flight the planner's generation: a tx-advisory lock only lives inside the persist transaction (so it rejects a duplicate only *after* both ran the full ~20s AI pipeline — wasted tokens), and a session-advisory lock held across the pipeline would pin a connection for the whole AI-latency window — exactly the connection-pinning the "AI outside any transaction" rule forbids. The lease sidesteps both: `acquireLease` writes a committed `core_lock_leases` row in a short `REQUIRES_NEW` tx (connection released on commit), the `lock_key` PK enforces single-flight, and the row persists across the connection-free pipeline. On a holder crash the lease is never released, so `expires_at` (a TTL safely larger than max generation time, configurable; planner default 10 min) makes it reclaimable on the next `acquireLease` (lazy reclaim-on-acquire — no sweeper in v1). Acquire is `INSERT ... ON CONFLICT (lock_key) DO NOTHING`; on a 0-row insert it tries a conditional `UPDATE ... WHERE expires_at < now` reclaim — both atomic, so racing acquirers can't both win.
+
+**Note on prior LLD divergence (closed here).** Earlier drafts of this section specced `LockHandle acquire(...)`/`Optional<LockHandle> tryAcquire(...)` with a `LockHandle(key, advisoryKey, acquiredAt)` record and a `LockKey(EventScopeKind, String)` shape; the shipped advisory primitive was actually `boolean tryAcquire(LockKey)` over a sealed `LockKey`. This revision documents the as-built advisory contract and adds the lease primitive — the doc now matches the code.
 
 ---
 
@@ -329,10 +365,9 @@ RFC 9457 ProblemDetail per the style guide. Module exceptions and their mappings
 |---|---|---|
 | `DecisionLogNotFoundException` | 404 | `https://mealprep.example.com/problems/decision-log-not-found` |
 | `DecisionLogPayloadOversizedException` | 422 | `https://mealprep.example.com/problems/decision-log-payload-oversized` |
-| `LockAcquisitionException` | 409 | `https://mealprep.example.com/problems/lock-contention` |
 | `MethodArgumentNotValidException` | 400 | `errors[]` extension on ProblemDetail |
 
-`MealPrepException` (the project-wide root) lives here in `core.exception`.
+`MealPrepException` (the project-wide root) lives here in `core.exception`. `LockService` itself throws no contention exception: `tryAcquire` returns `boolean` and `acquireLease` returns `Optional` — each caller maps "lost" to its own domain exception and 409 (planner `ConcurrentGenerationInProgressException`, adaptation `LockTimeoutException`, grocery `OrderConcurrencyConflictException`). There is no `core`-level `LockAcquisitionException`.
 
 ---
 
@@ -453,17 +488,31 @@ No event published. The decision-log write is a side-effect of an existing flow,
 2. If empty, return `new DecisionTraceDto(traceId, List.of())` — not 404. A trace with zero decisions is meaningful (the loop ran, terminated immediately on hard-filter failure, and logged elsewhere via the constraint-feasibility path).
 3. Map and return.
 
-### Flow 3: Advisory lock acquisition
+### Flow 3: Advisory lock acquisition (`tryAcquire`)
 
-`LockService.acquire(key)` wraps `pg_try_advisory_xact_lock`. Must be called inside a `@Transactional` method (lock is auto-released at transaction end).
+`LockService.tryAcquire(key)` wraps `pg_try_advisory_xact_lock`. Must be called inside a `@Transactional` method (lock is auto-released at transaction end); the impl is `@Transactional(MANDATORY)` so calling it without an active tx fails fast rather than acquiring a meaningless, instantly-released lock.
 
-1. `long advisoryKey = LockKeyHasher.hash(key)`. Stable hash — same `LockKey` always maps to the same `advisoryKey`. Implementation uses Murmur3 128 truncated to 64 bits; collision probability at expected scope volumes is negligible. The hash function is fixed in `core`; changing it requires a project-wide release because in-flight locks would not collide correctly across versions.
+1. `long advisoryKey = LockKeyHasher.hash(key)`. Stable hash — same `LockKey` always maps to the same `advisoryKey`. Shipped impl uses SHA-256 truncated to 64 bits (Murmur3 is not on the main classpath; documented deviation); collision probability at expected scope volumes is negligible. The hash function is fixed in `core`; changing it requires a project-wide release because in-flight locks would not collide correctly across versions.
 2. `SELECT pg_try_advisory_xact_lock(:advisoryKey)` via native query.
-3. `true` → log INFO, return `new LockHandle(key, advisoryKey, Instant.now())`.
-4. `false` → throw `LockAcquisitionException` (409).
+3. `true` → return `true` (caller holds the lock for the rest of its tx).
+4. `false` → return `false` (caller decides: 409, silent skip, etc.).
 5. SQL exception → propagate; caller's `@Transactional` rolls back, no lock to release.
 
-`tryAcquire` follows the same path but returns `Optional.empty()` instead of throwing on contention. Used by background jobs that should silently skip rather than escalate (e.g. a scheduled mid-week re-optimisation that concurs with a user-triggered one).
+Used by short critical sections already inside one transaction: the adaptation pipeline (per-recipe) and grocery batch jobs (per-list). A `false` is mapped by those callers to their own 409 / silent-skip.
+
+### Flow 5: Lease acquisition / release (`acquireLease` / `releaseLease`)
+
+`LockService.acquireLease(key, ttl)` claims a committed lease for `key`, runnable with or without a surrounding transaction (it opens its own `REQUIRES_NEW`). Used by long, connection-free operations — the planner's start-of-generation single-flight.
+
+Acquire:
+1. `token = randomUUID()`, `now = clock.instant()`, `expiresAt = now + ttl`.
+2. `INSERT INTO core_lock_leases (...) VALUES (...) ON CONFLICT (lock_key) DO NOTHING`. 1 row → won; return `LeaseHandle(key, token, now, expiresAt)`.
+3. 0 rows (row exists) → `UPDATE core_lock_leases SET holder_token = token, acquired_at = now, expires_at = :expiresAt WHERE lock_key = :k AND expires_at < :now`. 1 row → reclaimed an expired (crashed-holder) lease under the fresh token; return the handle. 0 rows → a live holder owns it → `Optional.empty()` (contended).
+4. The short tx commits and releases its connection; the lease then lives as a committed row, held with no connection pinned.
+
+Release: `DELETE FROM core_lock_leases WHERE lock_key = :k AND holder_token = :token`. Only the holder's `(key, token)` matches — a stale handle whose lease was reclaimed by someone else deletes nothing (no-op, returns `false`). Idempotent. The planner calls this in a `finally`, so a normal completion frees the lease immediately; the TTL is only the crash backstop.
+
+`renewLease` extends a still-held lease (`UPDATE ... WHERE lock_key = :k AND holder_token = :token`); not needed by the planner.
 
 ### Flow 4: Trace-ID inbound — request lifecycle
 
@@ -486,7 +535,7 @@ Background work mirrors this via `TraceContext.runWithTraceId` for the lambda's 
 | Read-method propagation | `@Transactional(readOnly = true)`. |
 | Write-method propagation | Default REQUIRED. `DecisionLogService.write` joins the caller's transaction by design — log entry rolls back if the work it describes does. |
 | Optimistic locking | None. Decision log is append-only; no `@Version`. |
-| Pessimistic locking | The advisory-lock service IS the project's pessimistic-locking primitive. No row-level locks anywhere in `core`. |
+| Pessimistic locking | The advisory-lock service IS the project's pessimistic-locking primitive. The lease lock is the connection-free single-flight primitive (committed marker, not a held lock). No row-level locks anywhere in `core`. |
 | Idempotency | `DecisionLogService.write` is idempotent on `decisionId`; caller responsibility to reuse the same UUID across retries. |
 | MDC cleanup | `TraceIdFilter` and `TraceContext` always clean up in `finally`. Verified by `TraceIdFilterIT` checking thread-local cleanliness after each request. |
 
@@ -505,7 +554,9 @@ Unit tests use `@ExtendWith(MockitoExtension.class)`. Integration tests are `*IT
 | `DecisionLogTokenBudgetGuardTest` | Exact-size payloads pass; +1-byte payloads throw. Three fixtures: small, near-budget, oversized. |
 | `DecisionLogMapperTest` | MapStruct round-trips preserve all fields including the JSONB record-tree. |
 | `LockKeyHasherTest` | Same key → same `long` across instances; different keys → different hashes; special-character `scopeId` doesn't break determinism. |
-| `LockKeyTest` | `forWeek`, `forRecipe` factories produce the documented `scopeId` strings. |
+| `LockKeyTest` | `forPlanWeek`, `forRecipe`, `forCustom` factories produce the documented `serialize()` strings. |
+| `AdvisoryLockServiceImplTest` | `tryAcquire` null-key throws; no-active-tx throws; `pg_try_advisory_xact_lock` true/false/null mapped to `true`/`false`/`false` (repository mocked). |
+| `LeaseLockServiceImplTest` | `acquireLease` returns a handle on insert-won; reclaims on expired existing lease; empty on live contention; bad/zero TTL and null key throw. `releaseLease` true on holder-delete, false (no-op) for a non-holder. `renewLease` refreshes for the holder, empty for a non-holder. Repository mocked; fixed `Clock`. |
 | `TraceContextTest` | `runWithTraceId` puts and removes MDC entry; nested calls restore the outer trace ID; exception in body still cleans up. |
 
 ### Integration
@@ -514,7 +565,8 @@ Unit tests use `@ExtendWith(MockitoExtension.class)`. Integration tests are `*IT
 |---|---|
 | `DecisionLogServiceIT` | Real DB write, trace reconstruction, ancestor chain, scope-filtered pagination. Recursive CTE handles a 5-deep chain and stops at 32-row cap on a synthetic 50-deep chain. |
 | `DecisionLogAdminControllerIT` | HTTP layer: GET single (200/404), GET trace, GET ancestors, GET listings with each query-param shape, ProblemDetail shape on errors. Admin auth gating asserted via security test config. |
-| `LockServiceIT` | Real DB: `acquire` succeeds in a fresh transaction; second concurrent `acquire` on the same key throws `LockAcquisitionException`; lock is released at transaction commit (third call after commit succeeds); `tryAcquire` returns empty on contention. Two `@Transactional` methods on separate connections used to exercise contention. |
+| `AdvisoryLockServiceIT` | Real DB: `tryAcquire` requires an active tx; a second concurrent `tryAcquire` on the same key from a separate tx returns `false`; the lock auto-releases on commit AND on rollback (a fresh acquire then succeeds); different keys never contend. Two `@Transactional` methods on separate connections exercise contention. |
+| `LeaseLockServiceIT` | Real DB + Flyway-applied `core_lock_leases`: acquire → contend (second acquire empty while live); acquire → release → re-acquire (succeeds); acquire → expire (past TTL via direct insert) → reclaim-by-other (succeeds, fresh token); release-by-non-holder is a no-op that does not evict the owner; `renewLease` extends a held lease and is a no-op for a non-holder; different keys never contend. Each `acquireLease` is `REQUIRES_NEW` so the test (no surrounding tx) sees committed rows — the connection-free property the planner relies on. |
 | `TraceIdFilterIT` | MockMvc request with `X-Trace-Id` propagates to log MDC; missing header generates a UUID; response carries the trace-id back; thread-local empty after request completion (verified by a second request on the same thread observing no leakage). |
 | `FlywayMigrationIT` | Boots Postgres, runs `core` migrations, asserts schema matches JPA mapping (`spring.jpa.hibernate.ddl-auto=validate`). |
 | `DecisionLogPayloadIT` | A planner-shaped payload (5 candidates, week-level rollup, ~16 KB serialised) writes and reads back unchanged. The 64 KB cap rejects a synthetic oversize. |
