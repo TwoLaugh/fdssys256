@@ -133,7 +133,12 @@ public class PreferenceDirectiveApplyTarget implements DirectiveApplyTarget {
             current.medicalDiets() == null ? List.of() : current.medicalDiets(),
             intolerances,
             current.ageRestrictions() == null ? List.of() : current.ageRestrictions(),
-            current.version());
+            current.version(),
+            // System-driven directive apply: it only ADDS an intolerance to the current snapshot
+            // (never removes a Tier-1), so the GAP-04 gate would not fire anyway — but this is an
+            // authoritative system actor, not a user, so confirm explicitly to keep it one-step and
+            // immune to any future edge that would otherwise surface a 409 mid-transaction.
+            true);
 
     updateService.updateHardConstraints(userId, request, actorUserId);
 

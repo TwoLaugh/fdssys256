@@ -68,6 +68,60 @@ UpdateHardConstraintsRequest:
       type: integer
       format: int64
       minimum: 0
+    confirmTier1Removals:
+      type: boolean
+      nullable: true
+      description: >-
+        GAP-04 safety gate. Set true to confirm a removal of a Tier-1 hard constraint
+        (an allergy, medical diet, severe intolerance, or a dietary-identity base
+        change). Omitted/false on a request that removes one ⇒ the PUT is rejected with
+        409 + reason TIER1_REMOVAL_REQUIRES_CONFIRMATION so the UI can show a
+        confirmation interstitial; re-submit the same payload with this flag true to
+        proceed. Additions, reorderings, and non-Tier-1 edits never need it.
+Tier1Category:
+  type: string
+  description: The safety-critical Tier-1 hard-constraint category whose removal is gated (GAP-04).
+  enum: [ALLERGY, MEDICAL_DIET, SEVERE_INTOLERANCE, DIETARY_IDENTITY_BASE]
+RemovedTier1Constraint:
+  type: object
+  description: One Tier-1 hard constraint a rejected PUT would have removed (GAP-04).
+  required: [category, value]
+  properties:
+    category: { $ref: '#/Tier1Category' }
+    value:
+      type: string
+      description: >-
+        The item being removed — the allergen / medical diet / intolerance substance,
+        or (for a DIETARY_IDENTITY_BASE change) the previous base being changed away from.
+Tier1RemovalConfirmationProblem:
+  type: object
+  description: >-
+    RFC 9457 ProblemDetail returned by PUT /api/v1/preferences/hard-constraints (409)
+    when the request would remove ≥1 Tier-1 hard constraint without confirmTier1Removals=true
+    (GAP-04). A self-contained superset of ProblemDetail carrying the machine-readable reason
+    slug and the specific constraints the UI must name in the confirmation interstitial.
+  required: [type, title, status, reason, removedConstraints]
+  properties:
+    type:
+      type: string
+      format: uri
+      example: https://mealprep.example.com/problems/tier1-removal-requires-confirmation
+    title:
+      type: string
+      example: Tier-1 hard-constraint removal requires confirmation
+    status:
+      type: integer
+      example: 409
+    detail: { type: string }
+    instance: { type: string, format: uri }
+    reason:
+      type: string
+      description: Machine-readable rejection slug the client matches to drive the interstitial.
+      enum: [TIER1_REMOVAL_REQUIRES_CONFIRMATION]
+    removedConstraints:
+      type: array
+      minItems: 1
+      items: { $ref: '#/RemovedTier1Constraint' }
 HardConstraintsAuditEntryDto:
   type: object
   required: [id, hardConstraintsId, actorUserId, fieldChanged, previousValueJson, newValueJson, occurredAt]

@@ -736,6 +736,9 @@ class PreferenceMutationKillsTest {
         HardConstraintsTestData.updateRequest()
             .withDietaryIdentity(HardConstraintsTestData.omnivoreIdentity())
             .withIntolerances(new HardIntoleranceDto("gluten", "HIGH", "celiac"))
+            // Swaps lactose → gluten, which DROPS the lactose intolerance (a Tier-1 removal under
+            // the GAP-04 gate), so the confirmation flag is required for this to apply.
+            .withConfirmTier1Removals(true)
             .withExpectedVersion(0L)
             .build();
 

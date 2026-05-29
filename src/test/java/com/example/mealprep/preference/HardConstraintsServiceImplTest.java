@@ -330,6 +330,143 @@ class HardConstraintsServiceImplTest {
     assertThat(result.allergies()).containsExactly("peanuts");
   }
 
+  // ---------------- GAP-04: Tier-1 removal confirmation gate ----------------
+
+  @Test
+  void updateHardConstraints_removingAllergyWithoutConfirmation_throwsAndDoesNotMutate() {
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints()
+            .withUserId(userId)
+            .withAllergies("peanuts", "shellfish")
+            .build();
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+
+    // Drops "shellfish" with no confirmation flag.
+    UpdateHardConstraintsRequest request =
+        HardConstraintsTestData.updateRequest()
+            .withAllergies("peanuts")
+            .withDietaryIdentity(HardConstraintsTestData.omnivoreIdentity())
+            .withExpectedVersion(0L)
+            .build();
+
+    assertThatThrownBy(() -> service().updateHardConstraints(userId, request, userId))
+        .isInstanceOf(
+            com.example.mealprep.preference.exception.Tier1RemovalRequiresConfirmationException
+                .class)
+        .satisfies(
+            ex -> {
+              var hc =
+                  (com.example.mealprep.preference.exception
+                          .Tier1RemovalRequiresConfirmationException)
+                      ex;
+              assertThat(hc.removedConstraints())
+                  .containsExactly(
+                      new com.example.mealprep.preference.api.dto.RemovedTier1Constraint(
+                          com.example.mealprep.preference.api.dto.Tier1Category.ALLERGY,
+                          "shellfish"));
+            });
+
+    // Gate fires BEFORE any mutation: no audit row, no event, no save, version untouched.
+    verifyNoInteractions(eventPublisher, auditLogRepository);
+    verify(hardConstraintsRepository, never()).save(any());
+    verify(hardConstraintsRepository, never()).saveAndFlush(any());
+    assertThat(aggregate.getAllergies()).containsExactly("peanuts", "shellfish");
+  }
+
+  @Test
+  void updateHardConstraints_removingAllergyWithConfirmation_appliesTheRemoval() {
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints()
+            .withUserId(userId)
+            .withAllergies("peanuts", "shellfish")
+            .build();
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+    when(hardConstraintsRepository.saveAndFlush(any(HardConstraints.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    UpdateHardConstraintsRequest request =
+        HardConstraintsTestData.updateRequest()
+            .withAllergies("peanuts")
+            .withDietaryIdentity(HardConstraintsTestData.omnivoreIdentity())
+            .withConfirmTier1Removals(true)
+            .withExpectedVersion(0L)
+            .build();
+
+    HardConstraintsDto result = service().updateHardConstraints(userId, request, userId);
+
+    // Confirmed → removal applied, audit row for allergies, event published.
+    assertThat(result.allergies()).containsExactly("peanuts");
+    ArgumentCaptor<HardConstraintsAuditLog> captor =
+        ArgumentCaptor.forClass(HardConstraintsAuditLog.class);
+    verify(auditLogRepository, times(1)).save(captor.capture());
+    assertThat(captor.getValue().getFieldChanged()).isEqualTo("allergies");
+    verify(eventPublisher).publishEvent(any(HardConstraintsUpdatedEvent.class));
+  }
+
+  @Test
+  void updateHardConstraints_addingAllergyWithoutConfirmation_isNotGated() {
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints()
+            .withUserId(userId)
+            .withAllergies("peanuts")
+            .build();
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+    when(hardConstraintsRepository.saveAndFlush(any(HardConstraints.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    // Pure addition — no confirmation flag — must apply one-step.
+    UpdateHardConstraintsRequest request =
+        HardConstraintsTestData.updateRequest()
+            .withAllergies("peanuts", "shellfish")
+            .withDietaryIdentity(HardConstraintsTestData.omnivoreIdentity())
+            .withExpectedVersion(0L)
+            .build();
+
+    HardConstraintsDto result = service().updateHardConstraints(userId, request, userId);
+
+    assertThat(result.allergies()).containsExactly("peanuts", "shellfish");
+    verify(eventPublisher).publishEvent(any(HardConstraintsUpdatedEvent.class));
+  }
+
+  @Test
+  void updateHardConstraints_nonTier1EditWithoutConfirmation_isNotGated() {
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints()
+            .withUserId(userId)
+            .withAllergies("peanuts")
+            .withDietaryIdentityBase("omnivore")
+            .build();
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+    when(hardConstraintsRepository.saveAndFlush(any(HardConstraints.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    // Only a dietary-identity LABEL change (non-Tier-1) — allergies/base/diets/intolerances kept.
+    UpdateHardConstraintsRequest request =
+        HardConstraintsTestData.updateRequest()
+            .withAllergies("peanuts")
+            .withDietaryIdentity(
+                new com.example.mealprep.preference.api.dto.DietaryIdentityDto(
+                    "omnivore", "Flexitarian", List.of()))
+            .withExpectedVersion(0L)
+            .build();
+
+    HardConstraintsDto result = service().updateHardConstraints(userId, request, userId);
+
+    assertThat(result.dietaryIdentity().labelForDisplay()).isEqualTo("Flexitarian");
+    ArgumentCaptor<HardConstraintsAuditLog> captor =
+        ArgumentCaptor.forClass(HardConstraintsAuditLog.class);
+    verify(auditLogRepository, times(1)).save(captor.capture());
+    assertThat(captor.getValue().getFieldChanged()).isEqualTo("dietaryIdentityLabel");
+  }
+
   @Test
   void updateHardConstraints_whenOnlyAllergiesChange_writesOneAuditRowOnly() {
     UUID userId = UUID.randomUUID();

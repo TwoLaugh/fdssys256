@@ -54,10 +54,18 @@ hardConstraints:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '409':
-        description: Conflict.
+        description: >-
+          Conflict. Either an optimistic-lock failure (stale expectedVersion) or — per GAP-04 —
+          the request would remove a Tier-1 hard constraint (allergy / medical diet / severe
+          intolerance / dietary-identity base) without confirmTier1Removals=true. The latter
+          carries reason=TIER1_REMOVAL_REQUIRES_CONFIRMATION and the removedConstraints the UI
+          names in the confirmation interstitial.
         content:
           application/problem+json:
-            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+            schema:
+              oneOf:
+                - { $ref: '../schemas/preference.yaml#/Tier1RemovalConfirmationProblem' }
+                - { $ref: '../schemas/common.yaml#/ProblemDetail' }
 hardConstraintsAuditLog:
   get:
     tags: [Preferences]
