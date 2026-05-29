@@ -15,6 +15,7 @@ import com.example.mealprep.ai.spi.TaskType;
 import com.example.mealprep.ai.testdata.AiTestData;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
@@ -65,7 +66,9 @@ class AnthropicClientTest {
             .baseUrl(properties.anthropicBaseUrl())
             .requestInterceptor((req, body, exec) -> stubExecution.execute(req, body))
             .build();
-    client = new AnthropicClient(restClient, properties, objectMapper);
+    client =
+        new AnthropicClient(
+            restClient, properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
     // No-op sleeper so tests don't sleep in retry backoff.
     client.setSleeper(ms -> {});
   }
