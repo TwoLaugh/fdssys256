@@ -143,6 +143,7 @@ class PlansControllerIT {
     jdbcTemplate.update("DELETE FROM planner_plans");
     // planner-01l: lifecycle transitions now write decision_log rows. Single DELETE (self-FK).
     jdbcTemplate.update("DELETE FROM decision_log");
+    jdbcTemplate.update("DELETE FROM core_lock_leases");
     sessionRepository.deleteAll();
     userRepository.deleteAll();
   }

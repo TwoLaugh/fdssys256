@@ -109,6 +109,7 @@ class PlanComposerOrchestrationIT {
     jdbcTemplate.update("DELETE FROM planner_days");
     jdbcTemplate.update("DELETE FROM planner_plans");
     jdbcTemplate.update("DELETE FROM decision_log");
+    jdbcTemplate.update("DELETE FROM core_lock_leases");
   }
 
   private PlanCompositionContext ctx(UUID household) {

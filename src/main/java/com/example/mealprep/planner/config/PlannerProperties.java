@@ -25,6 +25,13 @@ import org.springframework.validation.annotation.Validated;
  * {@code materiality} group (the event-listener materiality-filter thresholds — see {@code
  * Materiality}).
  *
+ * <p>{@code leaseTtl} (default {@code PT10M}) is the validity window of the connection-free
+ * start-of-generation single-flight lease ({@code core.LockService.acquireLease}) taken at the very
+ * start of {@code compose()}, before the AI pipeline runs. It must be safely larger than the
+ * maximum plan-generation time (~20s) so a still-running generation never has its lease reclaimed
+ * out from under it; on a holder crash the lease becomes reclaimable after this window. Normal
+ * completions release the lease immediately in a finally block, well before the TTL.
+ *
  * <p>Spring Boot 3.x record-shaped {@code @ConfigurationProperties} are auto-{@code
  * ConstructorBinding} so defaults are wired via {@code application.properties} (not record
  * defaults). {@code @Validated} runs the Jakarta constraints at context-load time — a bad override
@@ -49,6 +56,7 @@ public record PlannerProperties(
     @Min(1) int iterationBudget,
     @Min(1) int maxAugmentations,
     @Min(0) int maxRefineDirectives,
+    @NotNull Duration leaseTtl,
     @NotNull MidWeek midWeek,
     @NotNull Materiality materiality,
     @NotNull ColdStart coldStart) {

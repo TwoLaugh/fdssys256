@@ -94,6 +94,7 @@ class WeeklyCostConfidenceTest {
         3,
         5,
         2,
+        java.time.Duration.ofMinutes(10),
         PlanTestData.defaultMidWeek(),
         PlanTestData.defaultMateriality(),
         PlanTestData.defaultColdStart());

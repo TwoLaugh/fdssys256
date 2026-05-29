@@ -56,6 +56,7 @@ class ColdStartGateTest {
         3,
         5,
         2,
+        Duration.ofMinutes(10),
         null,
         null,
         cfg);

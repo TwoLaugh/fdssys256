@@ -584,7 +584,8 @@ Returning `Page<PlanDto>` from `getPlansBetween` deviates from the HLD's `List<P
 
 ```java
 public interface PlannerService {
-    /** Stage A→B→C→D pipeline. Single-flight per (householdId, weekStartDate) via LockService. */
+    /** Stage A→B→C→D pipeline. Start-of-generation single-flight per (householdId, weekStartDate)
+     *  via core.LockService.acquireLease/releaseLease (connection-free lease). */
     PlanDto generatePlan(GeneratePlanRequest request);
 
     /** Mid-week re-opt scoped from `fromDate` onward. Pinned slots preserved per PinningRules. */
@@ -1198,7 +1199,7 @@ The planner injects (via `PlannerModule` constructor):
 | `OptimiserService` (adaptation pipeline) | Stage D refine-directives |
 | `AiService` | Stage C pick + Phase 2 augmentation |
 | `core.DecisionLogService` | one row per loop iteration (decision_log table per [optimisation-loop.md](../design/optimisation-loop.md#decision-log)) |
-| `core.LockService` | single-flight per `(household, week)` |
+| `core.LockService` | start-of-generation single-flight per `(household, week)` via the connection-free `acquireLease`/`releaseLease` lease |
 
 No update-service injections — the planner is read-only against the data models.
 
@@ -1210,7 +1211,7 @@ No update-service injections — the planner is read-only against the data model
 
 `POST /api/v1/plans/generate` → `generatePlan(request)`. Service-impl method is **not** annotated `@Transactional` at the top — the AI calls in Stages C and D must be outside a transaction per [style-guide §AI Service](style-guide.md#ai-service--graceful-degradation) (Tier 1 decision: AI calls in-transaction = no). Sub-operations have their own `@Transactional` boundaries.
 
-1. Acquire single-flight lock: `core.LockService.tryLock("planner:generate", "%s:%s".formatted(householdId, weekStartDate))`. If lock unavailable → `ConcurrentGenerationInProgressException` (409).
+1. **Acquire the start-of-generation single-flight lease — BEFORE any AI work.** `core.LockService.acquireLease(LockKey.forPlanWeek(householdId, weekStartDate), leaseTtl)`. On `Optional.empty()` (another generation already holds a live lease for this `(household, week)`) → `ConcurrentGenerationInProgressException` (409), thrown immediately, having spent **zero AI tokens**. The lease is connection-free: its short `REQUIRES_NEW` acquire tx commits and releases its connection at once, so holding the lease across the ~20s AI pipeline pins **no** DB connection. The whole `compose()` body is wrapped in try/finally and the lease is released in the `finally` (success, failure, or exception) so a normal completion frees it immediately; the lease TTL (`mealprep.planner.lease-ttl`, default 10 min, safely larger than max generation time) is the liveness backstop that makes a crashed generator's lease reclaimable. **This is the as-built contract — it supersedes the earlier draft's `tryLock("planner:generate", ...)` session-lock call, which never matched the shipped `core.LockService`.**
 2. Determine generation number and predecessor: `generation = max(existing) + 1`, `replacesPlanId = findActiveByHouseholdAndWeek(...)`.
 3. Build `PlanCompositionContext` (one round trip per service via the bundle DTOs — see [Read pattern](#read-pattern)).
 4. Run `ConstraintFeasibilityCheck.check(context)`. If `feasible = false` and `request.forceRegenerateIfActive = false`, return early with a draft plan flagged `qualityWarning = true`. The user-facing flow runs the feasibility check *first* via `GET /feasibility` so this in-flight branch is rare.
@@ -1223,7 +1224,7 @@ No update-service injections — the planner is read-only against the data model
 11. **Stage D (optional).** For each `RefineDirectiveDto`, call `OptimiserService.adapt(directive)` synchronously, wait for the adapted recipe, re-run Stage A on the affected slot. Bounded by iteration budget (3 cycles per [optimisation-loop.md §Iteration budget](../design/optimisation-loop.md#iteration-budget)).
 12. **Persist.** Open a `@Transactional` write block: insert `Plan` + cascade `Day`, `MealSlot`, `ScheduledRecipe`. Status starts as `GENERATED`. Score breakdown + rollup serialised to JSONB columns.
 13. Publish `PlanGeneratedEvent` after commit.
-14. Release the lock (always, even on failure — finally block).
+14. Release the lease (always, even on failure — `finally` block, via `core.LockService.releaseLease(handle)`). The persist tx no longer re-checks single-flight: the lease taken at step 1 covers the whole call, and the DB-level partial unique index on active plans is the persist-time safety net against a double-active insert.
 15. Return the `PlanDto`.
 
 Steps 7–11 are deterministic + AI; steps 12–13 are the only DB write boundary. Trace ID is set once at step 1 and threaded via `MDC` and method args across every helper.
@@ -1320,7 +1321,7 @@ Inside Flow 1 step 11. Pre-conditions: Phase 2 emitted at least one `RefineDirec
 | Concern | Decision |
 |---|---|
 | `@Transactional` placement | All service-impl writes; reads are `readOnly = true`. `generatePlan` and `reoptimisePlan` are *not* `@Transactional` at the outermost — the AI calls in Stages C and D run outside any tx. Sub-steps have their own boundaries. |
-| Single-flight per `(household_id, week_start_date)` | `core.LockService.tryLock("planner:generate", ...)` wrapping `pg_try_advisory_xact_lock`. Always paired with a `try/finally` release. |
+| Single-flight per `(household_id, week_start_date)` | **`core.LockService.acquireLease(LockKey.forPlanWeek(...), leaseTtl)` taken at the very start of `compose()`, before any AI work**, and `releaseLease` in a `try/finally`. A connection-free committed lease ([lld/core.md §LockService](core.md#lockservice)), NOT a held advisory lock: generation runs a ~20s AI pipeline that must hold no DB connection (Tier-1 AI-outside-tx rule), so a held lock either pins a connection for that window (session-scoped) or can only fire at the persist boundary after the doomed pipeline already ran (tx-scoped). The lease rejects a concurrent generate up front. TTL (`mealprep.planner.lease-ttl`, default 10 min) > max generation time; lazy reclaim makes a crashed holder's lease reusable. |
 | Optimistic locking | `@Version Long version` on `Plan` and `ReoptSuggestion`. Children inherit via the parent — `markSlotState` does `entityManager.lock(plan, OPTIMISTIC_FORCE_INCREMENT)` so concurrent re-opt aborts. |
 | Pessimistic locking | None at row level. Advisory lock is the only pessimistic mechanism. |
 | Cross-module write transactions | The planner does no cross-module writes (read-only against data models). Stage D's `OptimiserService.adapt(...)` is a synchronous call to a different module's tx; the planner doesn't span the boundary. |
@@ -1340,7 +1341,7 @@ Inside Flow 1 step 11. Pre-conditions: Phase 2 emitted at least one `RefineDirec
 | `AiUnavailable` at Phase 2 | Same | Skip-and-flag: empty augmentation list, plan ships unaugmented. |
 | `TransientAiFailureException` at Stage C | Network blip, parse failure | Logged WARN; deterministic fallback. Same outcome as `AiUnavailable` for the user. |
 | Phase 2 returns invalid output (allergen, malformed JSON) | LLM error | `AugmentationVerifier` discards the bad augmentation silently and logs WARN. Per HLD failure-modes "retry once with explicit constraint reminder, then accept the un-augmented plan" — the corrective re-prompt is owned by `AiService`'s retry policy ([lld/ai.md §Flow 1](ai.md)). |
-| Concurrent generation on same scope | User clicks regenerate twice, or event arrives during user-initiated run | `LockService.tryLock` fails → `ConcurrentGenerationInProgressException` (409). |
+| Concurrent generation on same scope | User clicks regenerate twice, or event arrives during user-initiated run | `LockService.acquireLease` returns empty (a live lease is held for the `(household, week)`) → `ConcurrentGenerationInProgressException` (409), thrown at the start of `compose()` **before any AI work** so the rejected request never invokes Stage C / Phase 2 (no wasted tokens). |
 | Generation timeout (Stage A > 30s) | Catalogue too large | `BeamSearchEngine` honours `BeamSearchConfig.timeout`; on timeout, retry once with width halved; on second timeout, degrade to greedy selection (width 1). Plan flagged with `qualityWarning = true` for the latter. |
 | Stage C timeout (LLM > 20s) | API slow | `AiTask.getTimeoutOverride() = 20s`; `AiService` retries per its policy then surfaces `TransientAiFailureException`. Falls back as above. |
 | Plan goes stale during composition (concurrent recipe edit) | Concurrent recipe edit | Plan composed against `RecipePoolSnapshot`; doesn't re-read mid-flight. Stale recipes caught at slot rendering. |
@@ -1393,7 +1394,7 @@ Unit tests use `@ExtendWith(MockitoExtension.class)`. Integration tests are `*IT
 | `MidWeekReoptIT` | Mid-week re-opt preserves pinned slots; new plan replaces active; `PlanSupersededEvent` payload carries old + new IDs. |
 | `RevertIT` | Copy-forward revert creates a new plan with `generation = max+1`; old active becomes `SUPERSEDED`; `HardConstraintFilterService` strips now-banned recipes; warning surfaced. |
 | `ListenerIT` | `ProvisionChangedEvent.ItemSpoiledEvent` for an unconsumed slot creates a `PENDING` suggestion; same event re-fired updates the existing suggestion (no duplicate). `ItemAddedFromGroceryEvent` does not create a suggestion. `HardConstraintsChangedEvent` always creates one. |
-| `SingleFlightIT` | Two concurrent `generatePlan` calls on the same `(household, week)` — second receives 409 `ConcurrentGenerationInProgressException`. |
+| `PlanComposerLockAndTxIT` | Start-of-generation single-flight via the connection-free lease: a concurrent generate for the same `(household, week)` (while a lease is held) throws `ConcurrentGenerationInProgressException` (409) **before any AI work — Stage C / Phase 2 are never invoked for the rejected request** (`verify(..., never())`); a held lease on a different `(household, week)` does not contend; a normal generate releases its lease so the next generate for the same key succeeds. Also asserts the AI seams run with no active transaction and the persist commits `GENERATED`. (Supersedes the earlier `SingleFlightIT` placeholder.) |
 | `UniqueActiveConstraintIT` | Manually inserting a second `ACTIVE` plan for the same `(household, week)` violates the partial unique index. |
 | `FlywayMigrationIT` | Boots Postgres, runs all planner migrations, validates schema matches the JPA mapping (`spring.jpa.hibernate.ddl-auto = validate`). |
 | `EventPublicationIT` | `PlanGeneratedEvent`, `PlanAcceptedEvent`, `PlanSupersededEvent`, `PlanCompletedEvent`, `ReoptSuggestedEvent` each published exactly once after commit. Listener failures don't roll back planner state. |
