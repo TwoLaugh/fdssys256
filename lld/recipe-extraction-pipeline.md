@@ -11,7 +11,9 @@ The extraction pipeline is the engineering core that two consumers share:
 
 Both call into the **same `RecipeExtractionService`** with the same input contract and get the same `ParsedRecipe` shape back. This LLD specifies that pipeline.
 
-The pipeline lives in **`com.example.mealprep.recipe.extraction`** (sub-package of the recipe module). The recipe module's facade re-exports `RecipeExtractionService` so the discovery module can inject it without depending on the recipe module's catalogue internals.
+The pipeline lives in **`com.example.mealprep.recipe.extraction`** (sub-package of the recipe module). `RecipeExtractionService` is a **public** interface in that package, so the discovery module injects it directly without depending on the recipe module's catalogue internals (the layer implementations live in the package-private `recipe.extraction.internal`; the `RecipeExtractionServices.defaultService(ObjectMapper)` factory lets non-Spring callers build one without reaching into `.internal`).
+
+> **As-built note (see [§As-built v1](#as-built-v1) below).** The realized v1 service implements **Layers 1, 2, 3, 5** as pure code; **Layer 4 (AI)** is a reserved no-op (its prompt content is a separate deferred track). The two consumers route through it via thin adapters that preserve their pre-refactor behaviour exactly: `recipe.domain.service.internal.HtmlImportParser` (URL import) and `discovery.source.internal.JsonLdRecipeExtractor` (discovery ingest). The async/cache/rate-limit/robots/search-engine sections further down remain **design intent** — the live politeness + fetching wiring lives on each consumer's own fetcher (`UrlFetcher`, `DiscoveryHttpFetcher`), not in the service yet.
 
 This doc does **not** cover:
 - The user-facing import UX (Paprika-style in-app browser, paste-URL flow) — Figma phase
@@ -239,16 +241,12 @@ Pluggable per-locale (UK metric vs US imperial). v1 supports both; lifestyle con
 
 ## `RecipeExtractionService` interface
 
+> **Design-intent signature.** The original spec below (sync `extract` + async `extractAsync` + `ExtractionResult`/`FailureReason` + cache) anticipated the service owning fetching, async orchestration, and caching. The **as-built v1** interface is narrower (see [§As-built v1](#as-built-v1)): the service is a synchronous, pure layer-stack engine; fetching/async/cache stay on the consumers for now.
+
 ```java
+// Design intent (not the as-built v1 signature):
 public interface RecipeExtractionService {
-
-    /** Synchronous extraction. Used by user-driven import (caller waits to show preview).
-     *  Throws ExtractionFailureException on hard failure; returns ParsedRecipe with
-     *  validationWarnings on soft failure. */
     ParsedRecipe extract(ExtractionInput input);
-
-    /** Async variant — used by autonomous discovery. Returns a CompletableFuture so
-     *  per-source rate-limited orchestration can compose calls. */
     CompletableFuture<ExtractionResult> extractAsync(ExtractionInput input);
 }
 
@@ -264,7 +262,50 @@ public enum FailureReason {
 }
 ```
 
-Both methods first check the **extraction cache** (see below) before invoking the layer stack. Cache hit → return immediately, no network or AI cost.
+The cache / async-result wrapper are deferred — the as-built service does not check a cache (no `recipe_extraction_cache` table ships yet).
+
+---
+
+## As-built v1
+
+The realized service in `com.example.mealprep.recipe.extraction`:
+
+```java
+public interface RecipeExtractionService {
+    /** Full stack, Layer-5 validated. Used by the recipe URL-import adapter. Empty = hard fail. */
+    Optional<ParsedRecipe> extract(ExtractionInput input);
+
+    /** Layer 1 only, no completeness gate. Used by the discovery ingest adapter (JSON-LD only,
+     *  tolerates a Recipe missing ingredients/instructions — the runner gates quality downstream). */
+    Optional<ParsedRecipe> extractJsonLdOnly(ExtractionInput input);
+}
+
+public sealed interface ExtractionInput { String sourceUrl();
+    record FromHtml(String sourceUrl, String html) implements ExtractionInput {}  // realised path
+    record FromUrl(String sourceUrl) implements ExtractionInput {}                // reserved
+}
+```
+
+**Layers (`recipe.extraction.internal`):**
+
+| # | Class | Role | v1 status |
+|---|---|---|---|
+| 1 | `JsonLdExtractionLayer` | `schema.org/Recipe` JSON-LD — the dominant real-site format. Consolidates the two pre-refactor JSON-LD parsers. | **live** |
+| 2 | `MicrodataExtractionLayer` | schema.org microdata, then the `h1.recipe-title` / `.ingredients li` / `.method li` common-selector fallback. | **live** |
+| 3 | `PerSiteExtractorRegistry` | indexes `RecipeSiteExtractor` beans by domain; `preExtract` (bypass 1-2) + `postProcess` (clean 1-2 output) hooks. | **live, empty registry** |
+| 4 | (AI HTML extraction) | cheap-tier LLM fallback. | **reserved no-op** — prompt content deferred (see Out of Scope) |
+| 5 | `ExtractionValidator` | hard-fail gate: non-blank name + ≥1 ingredient + ≥1 method step. | **live** |
+
+`RecipeExtractionServiceImpl` sequences them (Layer 3 pre-extract → Layer 1 → Layer 2 → Layer 3 post-process → Layer 5) and stamps `ExtractionProvenance(winningLayer, layersTried, layerDetail)`. `layerDetail` distinguishes `microdata` vs `common_selectors` within Layer 2 so the recipe-import provenance row keeps its exact `extraction_method` string.
+
+**Two consumers (both route through the one service):**
+
+- **Recipe URL import** — `HtmlImportParser` calls `extract(...)`, maps the canonical `ParsedRecipe` back to its existing string-list carrier + the `json_ld` / `microdata` / `common_selectors` provenance label, and throws `RecipeImportFailureException("no_extractor_matched")` on empty. `RecipeServiceImpl.importFromUrl` is unchanged downstream.
+- **Discovery ingest** — `JsonLdRecipeExtractor` (kept in `discovery.source.internal`, same name/contract) calls `extractJsonLdOnly(...)`, maps to discovery's `ParsedRecipe` DTO, deriving `ingredientMappingKey` via `IngredientMappingKeys.normalise(displayLine)` (never null) and stamping `extraction_method = "json_ld"`, `confidence = 0.85`.
+
+Behaviour was preserved exactly across the refactor — proven by the unchanged `RecipeImportFlowIT`, `DiscoveryIngredientIngestIT`, e2e RCP-03/XJ-01, and the per-extractor unit/mutation suites, plus the new `RealRecipeSiteCaptureTest` (a live-captured real BBC Good Food page).
+
+**Deferred from this build (still design intent above):** Layer 4 AI extraction, the extraction cache, `extractAsync`/`ExtractionResult`, server-side fetching with rate-limiting/robots in the service, and the Google CSE / source-rotation machinery (the last lives in the discovery module's own sources today).
 
 ---
 
