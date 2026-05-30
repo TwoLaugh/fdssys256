@@ -130,6 +130,61 @@ class RegisterFlowIT {
   }
 
   @Test
+  void register_returns400_withReasons_whenPasswordMatchesUsername() throws Exception {
+    // auth-5: a password that passes @ValidPassword (length/whitespace/not-breached) but equals the
+    // username is rejected service-side via WeakPasswordException → 400 with a machine-readable
+    // reasons[] extension (MATCHES_USERNAME) and a fixed, non-leaking detail.
+    String username = "alicewonders1"; // valid username, 13 chars
+    RegisterRequest body = AuthTestData.registerRequest(username, username);
+
+    mvc.perform(
+            post("/api/v1/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(body)))
+        .andExpect(status().isBadRequest())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+        .andExpect(jsonPath("$.type").value(Matchers.endsWith("/problems/weak-password")))
+        .andExpect(jsonPath("$.reasons").isArray())
+        .andExpect(jsonPath("$.reasons", Matchers.hasItem("MATCHES_USERNAME")))
+        // The detail must NOT echo the policy reasons (no block-list / reason-name leak).
+        .andExpect(jsonPath("$.detail", Matchers.not(Matchers.containsString("MATCHES_USERNAME"))))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    assertThat(userRepository.findByUsernameNormalised(username)).isEmpty();
+  }
+
+  @Test
+  void register_returns400_onReservedUsername() throws Exception {
+    // auth-4: reserved names (default admin/root/system/support) cannot be registered. The
+    // @ValidUsername rejection surfaces as a 400 with a field-level errors[] entry for 'username'.
+    RegisterRequest body = AuthTestData.registerRequest("admin");
+
+    mvc.perform(
+            post("/api/v1/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(body)))
+        .andExpect(status().isBadRequest())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+        .andExpect(jsonPath("$.errors[?(@.field == 'username')]").exists());
+
+    assertThat(userRepository.findByUsernameNormalised("admin")).isEmpty();
+  }
+
+  @Test
+  void register_returns400_onUsernameWithLeadingOrTrailingSeparator() throws Exception {
+    // auth-4: must not start or end with a separator.
+    for (String bad : new String[] {"-alice", "alice-", "_alice", "alice_"}) {
+      RegisterRequest body = AuthTestData.registerRequest(bad);
+      mvc.perform(
+              post("/api/v1/auth/register")
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(objectMapper.writeValueAsString(body)))
+          .andExpect(status().isBadRequest())
+          .andExpect(jsonPath("$.errors[?(@.field == 'username')]").exists());
+    }
+  }
+
+  @Test
   void register_normalisesUsernameCaseForUniquenessCheck() throws Exception {
     String suffix = AuthTestData.shortId();
     RegisterRequest first = AuthTestData.registerRequest("Alice-" + suffix);

@@ -35,6 +35,15 @@ public interface SessionRepository extends JpaRepository<Session, UUID> {
           + " where s.userId = :userId and s.revokedAt is null")
   int revokeAllActiveForUser(@Param("userId") UUID userId, @Param("now") Instant now);
 
+  /**
+   * Revoke a single still-active session in one statement. Used by the authentication filter's
+   * best-effort soft-deleted-user cleanup (auth-6) — runs in its own transaction so a failure never
+   * affects the inbound request.
+   */
+  @Modifying
+  @Query("update Session s set s.revokedAt = :now where s.id = :id and s.revokedAt is null")
+  int revokeById(@Param("id") UUID id, @Param("now") Instant now);
+
   /** Reaper-friendly bulk delete; not exposed to controllers. */
   @Modifying
   @Query(

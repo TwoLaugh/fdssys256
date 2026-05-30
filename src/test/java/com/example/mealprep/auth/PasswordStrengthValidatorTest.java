@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 class PasswordStrengthValidatorTest {
 
   private final AuthProperties properties =
-      new AuthProperties(null, null, null, null, null, 12, 128, null, null);
+      new AuthProperties(null, null, null, null, null, 12, 128, null, null, null, null);
   private final PasswordStrengthValidator validator = new PasswordStrengthValidator(properties);
 
   @Test

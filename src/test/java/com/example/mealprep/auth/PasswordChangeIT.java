@@ -16,7 +16,9 @@ import com.example.mealprep.auth.api.dto.LoginRequest;
 import com.example.mealprep.auth.api.dto.PasswordChangeRequest;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.config.AuthProperties;
+import com.example.mealprep.auth.domain.entity.LoginFailureReason;
 import com.example.mealprep.auth.domain.entity.Session;
+import com.example.mealprep.auth.domain.repository.LoginAttemptRepository;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.event.UserPasswordChangedEvent;
@@ -61,11 +63,13 @@ class PasswordChangeIT {
   @Autowired private OpenApiInteractionValidator openApiValidator;
   @Autowired private UserRepository userRepository;
   @Autowired private SessionRepository sessionRepository;
+  @Autowired private LoginAttemptRepository loginAttemptRepository;
   @Autowired private AuthProperties authProperties;
   @Autowired private EventCollector eventCollector;
 
   @AfterEach
   void cleanup() {
+    loginAttemptRepository.deleteAll();
     sessionRepository.deleteAll();
     userRepository.deleteAll();
     eventCollector.clear();
@@ -179,6 +183,45 @@ class PasswordChangeIT {
         .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
         .andExpect(jsonPath("$.errors").isArray())
         .andExpect(jsonPath("$.errors[?(@.field == 'newPassword')]").exists());
+  }
+
+  @Test
+  void wrongCurrentPasswordOnPasswordChange_countsTowardLoginThrottle() throws Exception {
+    // auth-2: a wrong current-password on PUT /password records a BAD_PASSWORD LoginAttempt (in a
+    // committed tx via noRollbackFor) so PUT /password shares the login throttle surface. Drive the
+    // per-username failure threshold entirely through PUT /password, then prove a LOGIN for the
+    // same
+    // username is throttled (429) — the two endpoints share one throttle window.
+    String oldPwd = AuthTestData.DEFAULT_PASSWORD;
+    RegisteredFixture fixture = register(oldPwd);
+
+    int threshold = authProperties.throttle().usernameMaxFailures();
+    for (int i = 0; i < threshold; i++) {
+      mvc.perform(
+              put("/api/v1/auth/password")
+                  .cookie(fixture.cookie)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(body("the-wrong-current-password", "fresh-new-password-12345")))
+          .andExpect(status().isUnauthorized());
+    }
+
+    // Each wrong-current PUT committed a BAD_PASSWORD attempt for this username.
+    assertThat(
+            loginAttemptRepository.findAll().stream()
+                .filter(a -> a.getUsernameNormalised().equals(fixture.username.toLowerCase()))
+                .filter(a -> a.getFailureReason() == LoginFailureReason.BAD_PASSWORD)
+                .count())
+        .isGreaterThanOrEqualTo(threshold);
+
+    // A login for the same username now trips the SAME per-username throttle → 429.
+    mvc.perform(
+            post("/api/v1/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(new LoginRequest(fixture.username, oldPwd))))
+        .andExpect(status().isTooManyRequests())
+        .andExpect(header().exists("Retry-After"))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test

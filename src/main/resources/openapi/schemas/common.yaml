@@ -32,6 +32,16 @@ ProblemDetail:
           field: { type: string }
           message: { type: string }
           rejectedValue: {}
+    reasons:
+      type: array
+      description: >-
+        Optional machine-readable policy-rejection codes. Used by the auth
+        weak-password response (type `.../problems/weak-password`) so a UI can
+        render actionable feedback without the human-readable `detail` ever
+        leaking block-list contents or specific policy reasons.
+      items:
+        type: string
+        enum: [TOO_SHORT, TOO_LONG, LEADING_OR_TRAILING_WHITESPACE, MATCHES_USERNAME, BREACHED]
 PageEnvelope:
   type: object
   description: >-

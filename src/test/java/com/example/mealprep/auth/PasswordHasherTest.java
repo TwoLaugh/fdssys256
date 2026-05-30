@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 class PasswordHasherTest {
 
   private final AuthProperties properties =
-      new AuthProperties(12, null, null, null, null, null, null, null, null);
+      new AuthProperties(12, null, null, null, null, null, null, null, null, null, null);
   private final PasswordHasher hasher = new PasswordHasher(properties);
 
   @Test

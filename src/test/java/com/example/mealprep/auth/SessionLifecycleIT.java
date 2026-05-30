@@ -140,6 +140,33 @@ class SessionLifecycleIT {
   }
 
   @Test
+  void getMe_softDeletedUser_revokesTheStillActiveSession() throws Exception {
+    // auth-6: when the filter observes a still-active session of a soft-deleted user, it leaves the
+    // context anonymous (401) AND revokes the session in a separate tx so the stale credential
+    // can't be re-presented. Non-transactional so the SessionRevoker's REQUIRES_NEW commit is
+    // observable; cleaned up explicitly afterwards.
+    RegisteredFixture fixture = register();
+    try {
+      User user = userRepository.findById(fixture.userId).orElseThrow();
+      user.setDeletedAt(Instant.now());
+      userRepository.saveAndFlush(user);
+
+      UUID sessionId = sessionRepository.findAll().get(0).getId();
+      assertThat(sessionRepository.findById(sessionId).orElseThrow().getRevokedAt()).isNull();
+
+      mvc.perform(get("/api/v1/auth/me").cookie(fixture.cookie))
+          .andExpect(status().isUnauthorized())
+          .andExpect(openApi().isValid(openApiValidator));
+
+      // The filter's best-effort revoke committed: the session row now carries revokedAt.
+      assertThat(sessionRepository.findById(sessionId).orElseThrow().getRevokedAt()).isNotNull();
+    } finally {
+      sessionRepository.deleteAll();
+      userRepository.deleteAll();
+    }
+  }
+
+  @Test
   void logout_returns204_andClearsCookie_andRevokesSession() throws Exception {
     RegisteredFixture fixture = register();
 

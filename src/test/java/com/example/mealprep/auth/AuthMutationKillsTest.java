@@ -96,7 +96,7 @@ class AuthMutationKillsTest {
 
   private static AuthProperties properties() {
     return new AuthProperties(
-        12, Duration.ofDays(30), "AUTH_SESSION", true, "Strict", 12, 128, null, null);
+        12, Duration.ofDays(30), "AUTH_SESSION", true, "Strict", 12, 128, null, null, null, null);
   }
 
   private static AuthController controller(
@@ -345,7 +345,7 @@ class AuthMutationKillsTest {
     // mutators on the AuthProperties.cookieSecure() / cookieSameSite() reads.
     AuthProperties laxProps =
         new AuthProperties(
-            12, Duration.ofHours(1), "AUTH_SESSION", false, "Lax", 12, 128, null, null);
+            12, Duration.ofHours(1), "AUTH_SESSION", false, "Lax", 12, 128, null, null, null, null);
     AuthUpdateService updateService = mock(AuthUpdateService.class);
     AuthQueryService queryService = mock(AuthQueryService.class);
     CurrentUserResolver resolver = mock(CurrentUserResolver.class);
@@ -536,7 +536,8 @@ class AuthMutationKillsTest {
 
   @Test
   void authProperties_allNulls_applyDocumentedDefaults() {
-    AuthProperties p = new AuthProperties(null, null, null, null, null, null, null, null, null);
+    AuthProperties p =
+        new AuthProperties(null, null, null, null, null, null, null, null, null, null, null);
 
     assertThat(p.bcryptCost()).isEqualTo(12);
     assertThat(p.sessionTtl()).isEqualTo(Duration.ofDays(30));
@@ -557,19 +558,22 @@ class AuthMutationKillsTest {
 
   @Test
   void authProperties_blankCookieName_isReplacedWithDefault() {
-    AuthProperties p = new AuthProperties(12, null, "   ", null, null, null, null, null, null);
+    AuthProperties p =
+        new AuthProperties(12, null, "   ", null, null, null, null, null, null, null, null);
     assertThat(p.cookieName()).isEqualTo("AUTH_SESSION");
   }
 
   @Test
   void authProperties_blankSameSite_isReplacedWithDefault() {
-    AuthProperties p = new AuthProperties(12, null, null, null, "   ", null, null, null, null);
+    AuthProperties p =
+        new AuthProperties(12, null, null, null, "   ", null, null, null, null, null, null);
     assertThat(p.cookieSameSite()).isEqualTo("Lax");
   }
 
   @Test
   void authProperties_passwordMinGreaterThanMax_throwsIllegalArgument() {
-    assertThatThrownBy(() -> new AuthProperties(12, null, null, null, null, 128, 64, null, null))
+    assertThatThrownBy(
+            () -> new AuthProperties(12, null, null, null, null, 128, 64, null, null, null, null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("passwordMinLength")
         .hasMessageContaining("passwordMaxLength");
@@ -578,7 +582,8 @@ class AuthMutationKillsTest {
   @Test
   void authProperties_passwordMinEqualToMax_isPermitted() {
     // The boundary — min == max is allowed (not >); kills any > vs >= mutant.
-    AuthProperties p = new AuthProperties(12, null, null, null, null, 64, 64, null, null);
+    AuthProperties p =
+        new AuthProperties(12, null, null, null, null, 64, 64, null, null, null, null);
     assertThat(p.passwordMinLength()).isEqualTo(64);
     assertThat(p.passwordMaxLength()).isEqualTo(64);
   }
@@ -595,7 +600,9 @@ class AuthMutationKillsTest {
             16,
             256,
             new AuthProperties.Throttle(Duration.ofMinutes(5), 7, 21),
-            new AuthProperties.Lockout(3, Duration.ofMinutes(30)));
+            new AuthProperties.Lockout(3, Duration.ofMinutes(30)),
+            new AuthProperties.Session(Duration.ofDays(14), "0 0 1 * * *"),
+            new AuthProperties.Username(java.util.Set.of("Mallory", "OPS")));
 
     assertThat(p.bcryptCost()).isEqualTo(14);
     assertThat(p.sessionTtl()).isEqualTo(Duration.ofHours(2));
@@ -609,6 +616,25 @@ class AuthMutationKillsTest {
     assertThat(p.throttle().ipMaxFailures()).isEqualTo(21);
     assertThat(p.lockout().threshold()).isEqualTo(3);
     assertThat(p.lockout().duration()).isEqualTo(Duration.ofMinutes(30));
+    assertThat(p.session().retainRevokedFor()).isEqualTo(Duration.ofDays(14));
+    assertThat(p.session().reaperCron()).isEqualTo("0 0 1 * * *");
+    // Reserved names are normalised (trimmed + lower-cased) on construction.
+    assertThat(p.username().reservedNames()).containsExactlyInAnyOrder("mallory", "ops");
+  }
+
+  @Test
+  void authProperties_sessionNullsApplyDefaults() {
+    AuthProperties.Session s = new AuthProperties.Session(null, null);
+    assertThat(s.retainRevokedFor()).isEqualTo(Duration.ofDays(7));
+    assertThat(s.reaperCron()).isEqualTo("0 15 3 * * *");
+  }
+
+  @Test
+  void authProperties_usernameNullOrEmptyAppliesDefaultReservedNames() {
+    assertThat(new AuthProperties.Username(null).reservedNames())
+        .containsExactlyInAnyOrder("admin", "root", "system", "support");
+    assertThat(new AuthProperties.Username(java.util.Set.of()).reservedNames())
+        .containsExactlyInAnyOrder("admin", "root", "system", "support");
   }
 
   @Test
@@ -670,7 +696,8 @@ class AuthMutationKillsTest {
       LoginThrottleService loginThrottleService,
       ApplicationEventPublisher eventPublisher,
       Clock clock) {
-    AuthProperties props = new AuthProperties(12, null, null, null, null, null, null, null, null);
+    AuthProperties props =
+        new AuthProperties(12, null, null, null, null, null, null, null, null, null, null);
     UserMapper mapper = new UserMapperImpl();
     PasswordHasher hasher = new PasswordHasher(props);
     PasswordStrengthValidator strength = new PasswordStrengthValidator(props);
@@ -768,7 +795,8 @@ class AuthMutationKillsTest {
     ApplicationEventPublisher pub = mock(ApplicationEventPublisher.class);
     Clock clock = Clock.fixed(Instant.parse("2026-05-07T12:00:00Z"), ZoneOffset.UTC);
 
-    AuthProperties props = new AuthProperties(12, null, null, null, null, null, null, null, null);
+    AuthProperties props =
+        new AuthProperties(12, null, null, null, null, null, null, null, null, null, null);
     PasswordHasher hasher = new PasswordHasher(props);
 
     UUID sessionId = UUID.randomUUID();
@@ -855,7 +883,8 @@ class AuthMutationKillsTest {
     Instant now = Instant.parse("2026-05-07T12:00:00Z");
     Clock clock = Clock.fixed(now, ZoneOffset.UTC);
 
-    AuthProperties props = new AuthProperties(12, null, null, null, null, null, null, null, null);
+    AuthProperties props =
+        new AuthProperties(12, null, null, null, null, null, null, null, null, null, null);
     PasswordHasher hasher = new PasswordHasher(props);
     User user =
         AuthTestData.user()
@@ -900,7 +929,8 @@ class AuthMutationKillsTest {
     Instant now = Instant.parse("2026-05-07T12:00:00Z");
     Clock clock = Clock.fixed(now, ZoneOffset.UTC);
 
-    AuthProperties props = new AuthProperties(12, null, null, null, null, null, null, null, null);
+    AuthProperties props =
+        new AuthProperties(12, null, null, null, null, null, null, null, null, null, null);
     PasswordHasher hasher = new PasswordHasher(props);
     User user =
         AuthTestData.user()
@@ -1113,7 +1143,17 @@ class AuthMutationKillsTest {
     // secure=true property — cleared cookie must propagate it.
     AuthProperties secureProps =
         new AuthProperties(
-            12, Duration.ofDays(30), "AUTH_SESSION", true, "Strict", 12, 128, null, null);
+            12,
+            Duration.ofDays(30),
+            "AUTH_SESSION",
+            true,
+            "Strict",
+            12,
+            128,
+            null,
+            null,
+            null,
+            null);
 
     var resp = controller(updateService, queryService, resolver, secureProps).logout();
     String setCookie = resp.getHeaders().getFirst(HttpHeaders.SET_COOKIE);

@@ -1,12 +1,15 @@
 package com.example.mealprep.auth.api;
 
+import com.example.mealprep.auth.domain.service.internal.PasswordStrengthValidator.Reason;
 import com.example.mealprep.auth.exception.AccountLockedException;
 import com.example.mealprep.auth.exception.InvalidCredentialsException;
 import com.example.mealprep.auth.exception.LoginThrottledException;
 import com.example.mealprep.auth.exception.UsernameAlreadyExistsException;
+import com.example.mealprep.auth.exception.WeakPasswordException;
 import com.example.mealprep.config.ProblemDetailSupport;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Clock;
+import java.util.List;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
@@ -76,6 +79,28 @@ public class AuthExceptionHandler {
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.LOCKED)
         .header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds))
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  /**
+   * Service-side weak-password rejection. Maps to {@code 400} with a machine-readable {@code
+   * reasons[]} extension (e.g. {@code MATCHES_USERNAME}, {@code BREACHED}) and a fixed generic
+   * detail — the block-list contents are never echoed back.
+   */
+  @ExceptionHandler(WeakPasswordException.class)
+  public ResponseEntity<ProblemDetail> handleWeakPassword(
+      WeakPasswordException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.BAD_REQUEST,
+            ex.getMessage(),
+            "weak-password",
+            "Weak password",
+            req.getRequestURI());
+    List<String> reasonCodes = ex.reasons().stream().map(Reason::name).toList();
+    pd.setProperty("reasons", reasonCodes);
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

@@ -12,6 +12,7 @@ import com.example.mealprep.auth.domain.entity.ServiceToken;
 import com.example.mealprep.auth.domain.repository.ServiceTokenRepository;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
+import com.example.mealprep.auth.domain.service.internal.SessionRevoker;
 import com.example.mealprep.auth.domain.service.internal.SessionTokenGenerator;
 import com.example.mealprep.auth.security.ServiceTokenAuthenticationProvider;
 import com.example.mealprep.config.GlobalExceptionHandler;
@@ -80,6 +81,8 @@ class OriginFilterIT {
   @MockBean private SessionRepository sessionRepository;
   @MockBean private UserRepository userRepository;
   @MockBean private SessionTokenGenerator sessionTokenGenerator;
+  // SessionRevoker (auth-6): the filter now depends on it; not in the WebMvcTest slice scan.
+  @MockBean private SessionRevoker sessionRevoker;
   @MockBean private ServiceTokenRepository serviceTokenRepository;
 
   // ------------------------------------------------------------------------------------------
