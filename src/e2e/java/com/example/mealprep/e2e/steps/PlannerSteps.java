@@ -47,14 +47,15 @@ import java.util.UUID;
  * </ul>
  *
  * <p><b>What is green vs @pending.</b> Green: generate (201 + GENERATED, AI primed), accept (->
- * ACTIVE), reject (-> REJECTED), abandon (-> ABANDONED), revert (-> 201 new GENERATED gen2 + prior
- * SUPERSEDED), the empty-state reads (active 404 / history empty / list empty / suggestions empty),
- * 404 on an unknown plan id, the cross-household 403, and the illegal-transition 409/400 errors.
- * Also green now that the planner plans from the recipe catalogue (Tier-1 {@code
- * CatalogueRecipePoolSource}): the slot-state lifecycle (PLAN-18) and the recipe-driven flagship
- * (PLAN-40) — both seed plannable recipes over the real {@code POST /api/v1/recipes} create path
- * (see {@link #theUserHasPlannableRecipesInTheirCatalogue()}) so Stage A produces candidates and a
- * generated plan carries real scheduled-recipe slots.
+ * ACTIVE), reject (-> REJECTED), abandon (-> ABANDONED), revert-to-historical (POST /plans/revert
+ * with {@code {"targetHistoricalPlanId": <uuid>}} -> 201 new GENERATED gen2 + prior SUPERSEDED; a
+ * foreign-household target -> 422; a non-existent target -> 404), the empty-state reads (active 404
+ * / history empty / list empty / suggestions empty), 404 on an unknown plan id, the cross-household
+ * 403, and the illegal-transition 409 errors. Also green now that the planner plans from the recipe
+ * catalogue (Tier-1 {@code CatalogueRecipePoolSource}): the slot-state lifecycle (PLAN-18) and the
+ * recipe-driven flagship (PLAN-40) — both seed plannable recipes over the real {@code POST
+ * /api/v1/recipes} create path (see {@link #theUserHasPlannableRecipesInTheirCatalogue()}) so Stage
+ * A produces candidates and a generated plan carries real scheduled-recipe slots.
  *
  * <p>Self-contained (D5): every scenario mints its OWN fresh user, creates its OWN household, and
  * plans a per-scenario-random week, asserting only on THIS plan's id / status / generation
@@ -63,11 +64,14 @@ import java.util.UUID;
 public class PlannerSteps {
 
   private static final String PLANS = "/api/v1/plans";
+  private static final String PLANS_REVERT = PLANS + "/revert";
   private static final String HOUSEHOLDS = "/api/v1/households";
 
   private static final String HOUSEHOLD_ID = "planner.householdId";
   private static final String WEEK_START = "planner.weekStart";
   private static final String PLAN_ID = "planner.planId";
+  // The id of a plan owned by a SECOND household (a different user) — the 422 revert target.
+  private static final String FOREIGN_PLAN_ID = "planner.foreignPlanId";
 
   /**
    * The four built-in slot kinds {@code POST /api/v1/households} seeds by default
@@ -216,20 +220,33 @@ public class PlannerSteps {
     assertThat(response.jsonPath().getString("id")).isEqualTo(planId());
   }
 
-  @When("they revert that active plan")
-  public void theyRevertThatActivePlan() {
-    context.setLastResponse(context.api().post(PLANS + "/" + planId() + "/revert", Map.of()));
+  @When("they revert to that plan as a historical target")
+  public void theyRevertToThatPlanAsAHistoricalTarget() {
+    // New contract (#196): POST /api/v1/plans/revert with {"targetHistoricalPlanId": <uuid>}. The
+    // target's (household, week) determines scope; the caller is resolved server-side and must be a
+    // member of the target's household (RevertToPlanCoordinator.hydrateTarget gates on
+    // canAccessHousehold). Reverting to the household's OWN currently-active plan is the simplest
+    // valid target reachable over HTTP — the active plan is, by definition, in this household's
+    // history. There is no longer a /{planId}/revert path.
+    context.setLastResponse(
+        context.api().post(PLANS_REVERT, Map.of("targetHistoricalPlanId", planId())));
   }
 
-  @Then("a fresh generation is created and the prior plan is superseded for this household")
-  public void aFreshGenerationIsCreatedAndThePriorPlanIsSupersededForThisHousehold() {
-    // Revert is copy-forward: a NEW plan (generation 2, GENERATED) is created (201) and the prior
-    // active is superseded. Assert the new generation here; the prior is left as SUPERSEDED in the
-    // DB
-    // (its supersede is the documented side effect, asserted via the new plan's replacesPlanId).
+  @Then(
+      "a fresh generation is created from the historical plan and the prior is superseded for this"
+          + " household")
+  public void aFreshGenerationIsCreatedFromTheHistoricalPlanForThisHousehold() {
+    // Revert-to-historical: a NEW plan (generation 2, GENERATED) is created (201) by copying the
+    // target's content forward; the prior active is superseded. The new plan's replacesPlanId
+    // points at the superseded prior active — here the target IS the active plan, so replacesPlanId
+    // equals the target id (RevertToPlanCoordinator.persistAndPublish:
+    // replacesPlanId = current != null ? current.getId() : target.targetPlanId()). The prior's
+    // SUPERSEDED state is the documented side effect, asserted via this new plan's replacesPlanId.
     Response response = context.lastResponse();
     assertThat(response.statusCode()).as("revert should return 201 Created").isEqualTo(201);
     assertThat(response.jsonPath().getString("status")).isEqualTo("GENERATED");
+    assertThat(response.jsonPath().getString("householdId"))
+        .isEqualTo(context.<String>get(HOUSEHOLD_ID));
     assertThat(response.jsonPath().getInt("generation")).isEqualTo(2);
     assertThat(response.jsonPath().getString("replacesPlanId")).isEqualTo(planId());
   }
@@ -244,17 +261,104 @@ public class PlannerSteps {
         .isEqualTo(409);
   }
 
-  @When("they revert that generated plan")
-  public void theyRevertThatGeneratedPlan() {
-    context.setLastResponse(context.api().post(PLANS + "/" + planId() + "/revert", Map.of()));
+  // ---------------- revert-to-historical errors (422 / 404) ----------------
+
+  @And("another household has its own plan")
+  public void anotherHouseholdHasItsOwnPlan() {
+    // Mint a SECOND, independent user on a FRESH session (its own cookie jar = a different
+    // browser), give them their own household, and generate a plan they own. Its id is a real,
+    // existing plan that is NOT in the FIRST caller's household — the exact precondition for the
+    // 422 "not in the caller's household history" guard (RevertToPlanCoordinator.hydrateTarget ->
+    // canAccessHousehold == false -> RevertTargetNotInHistoryException). The AI stub is a global,
+    // server-side double keyed by TaskType, so priming it on either session covers both; we prime
+    // again here so this step is order-independent. Each step asserts its own status so a wiring
+    // failure fails the SETUP loudly rather than masquerading as a wrong revert status later.
+    ApiClient other = new ApiClient();
+    String username = "e2e-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+    Response register =
+        other.post(
+            "/api/v1/auth/register",
+            Map.of("username", username, "password", "E2e-Other-Pass-7531"));
+    assertThat(register.statusCode())
+        .as("second user register should return 201 Created")
+        .isEqualTo(201);
+
+    Response household = other.post(HOUSEHOLDS, Map.of("name", "E2E Other Household " + shortId()));
+    assertThat(household.statusCode())
+        .as("second household create should return 201 Created")
+        .isEqualTo(201);
+    String otherHouseholdId = household.jsonPath().getString("id");
+
+    // Prime the AI on the second session (global stub; mirrors theyGenerateAPlanForAWeek).
+    other.post(
+        "/test-support/ai/canned",
+        Map.of(
+            "taskType",
+            TaskType.PLANNER_STAGE_C.name(),
+            "responseJson",
+            "{\"chosenIndex\":0,\"reasoning\":\"e2e deterministic pick\"}"));
+    other.post(
+        "/test-support/ai/canned",
+        Map.of(
+            "taskType",
+            TaskType.PLANNER_PHASE2_AUGMENTATION.name(),
+            "responseJson",
+            "{\"augmentations\":[],\"refineDirectives\":[]}"));
+
+    Response generated =
+        other.post(
+            PLANS + "/generate",
+            Map.of(
+                "householdId",
+                otherHouseholdId,
+                "weekStartDate",
+                nextMonday().toString(),
+                "forceRegenerateIfActive",
+                false));
+    assertThat(generated.statusCode())
+        .as("second household's generate should return 201 Created")
+        .isEqualTo(201);
+    String foreignPlanId = generated.jsonPath().getString("id");
+    assertThat(foreignPlanId).as("the foreign plan must have an id").isNotBlank();
+    context.put(FOREIGN_PLAN_ID, foreignPlanId);
   }
 
-  @Then("the revert is rejected because the plan is not active")
-  public void theRevertIsRejectedBecauseThePlanIsNotActive() {
-    // Reverting a non-ACTIVE plan (a GENERATED one) is a bad request -> 400 (PlanNotReoptable).
+  @When("they revert to the other household's plan as a historical target")
+  public void theyRevertToTheOtherHouseholdsPlanAsAHistoricalTarget() {
+    // The first caller (this scenario's session) targets the SECOND household's plan id. The plan
+    // exists, but the caller is not a member of its household -> RevertTargetNotInHistoryException.
+    context.setLastResponse(
+        context
+            .api()
+            .post(
+                PLANS_REVERT,
+                Map.of("targetHistoricalPlanId", context.<String>get(FOREIGN_PLAN_ID))));
+  }
+
+  @Then("the revert is rejected because the target is not in the caller's household history")
+  public void theRevertIsRejectedBecauseTheTargetIsNotInTheCallersHouseholdHistory() {
+    // RevertTargetNotInHistoryException -> 422 (PlannerExceptionHandler). The headline ownership
+    // guard for revert: the target is a real plan, but it belongs to another household.
     assertThat(context.lastResponse().statusCode())
-        .as("reverting a non-ACTIVE plan must be 400 Bad Request")
-        .isEqualTo(400);
+        .as("reverting to a foreign-household plan must be 422 Unprocessable Entity")
+        .isEqualTo(422);
+  }
+
+  @When("they revert to a random non-existent target plan")
+  public void theyRevertToARandomNonExistentTargetPlan() {
+    context.setLastResponse(
+        context
+            .api()
+            .post(PLANS_REVERT, Map.of("targetHistoricalPlanId", UUID.randomUUID().toString())));
+  }
+
+  @Then("the revert target read is rejected as not found")
+  public void theRevertTargetReadIsRejectedAsNotFound() {
+    // A target id that does not exist at all -> PlanNotFoundException -> 404 (distinct from the 422
+    // "exists but belongs to another household" guard above).
+    assertThat(context.lastResponse().statusCode())
+        .as("reverting to a non-existent target plan must be 404 Not Found")
+        .isEqualTo(404);
   }
 
   // ---------------- reads (empty-state + not-found) ----------------
