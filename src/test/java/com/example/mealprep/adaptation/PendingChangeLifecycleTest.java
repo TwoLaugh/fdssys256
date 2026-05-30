@@ -225,6 +225,75 @@ class PendingChangeLifecycleTest {
   }
 
   @Test
+  void accept_branch_classified_change_forks_via_saveAdaptedBranch_not_saveAdaptedVersion() {
+    // adaptation-5: a pending change the worker classified BRANCH must fork (saveAdaptedBranch),
+    // not overwrite the trunk head with a new VERSION.
+    UUID userId = UUID.randomUUID();
+    PendingChange pc = pending(userId, PendingChangeStatus.PENDING);
+    pc.setProposedClassification(AdaptationClassification.BRANCH);
+    pc.setProposedDiff(JsonNodeFactory.instance.objectNode().put("kind", "ingredient-swap"));
+    pc.setExpiresAt(Instant.now().plusSeconds(86_400));
+
+    PendingChangeRepository repo = mock(PendingChangeRepository.class);
+    when(repo.findById(pc.getId())).thenReturn(Optional.of(pc));
+    when(repo.saveAndFlush(any(PendingChange.class))).thenAnswer(inv -> inv.getArgument(0));
+
+    RecipeWriteApi writeApi = mock(RecipeWriteApi.class);
+    UUID newBranchVersionId = UUID.randomUUID();
+    when(writeApi.saveAdaptedBranch(any())).thenReturn(branchDto(newBranchVersionId));
+
+    PendingChangeMapper mapper = mock(PendingChangeMapper.class);
+    when(mapper.toDto(any(PendingChange.class)))
+        .thenAnswer(inv -> dtoFrom((PendingChange) inv.getArgument(0)));
+
+    AdaptationServiceImpl svc = svc(repo, writeApi, mapper, mock(ApplicationEventPublisher.class));
+    svc.acceptPendingChange(pc.getId(), new AcceptPendingChangeRequest(null, 0L), userId);
+
+    // Forked, not versioned; accepted_version_id is the new branch's v1 version id.
+    verify(writeApi).saveAdaptedBranch(any());
+    org.mockito.Mockito.verify(writeApi, org.mockito.Mockito.never()).saveAdaptedVersion(any());
+    assertThat(pc.getStatus()).isEqualTo(PendingChangeStatus.ACCEPTED);
+    assertThat(pc.getAcceptedVersionId()).isEqualTo(newBranchVersionId);
+  }
+
+  @Test
+  void accept_version_routed_through_orchestrator_persistentConflict_surfacesRebaseExhausted() {
+    // adaptation-4: accept's write goes through RebaseOrchestrator, so a never-clearing
+    // RecipeVersionConflictException surfaces as RebaseExhaustedException, not the raw conflict.
+    UUID userId = UUID.randomUUID();
+    PendingChange pc = pending(userId, PendingChangeStatus.PENDING);
+    pc.setProposedClassification(AdaptationClassification.VERSION);
+    pc.setExpiresAt(Instant.now().plusSeconds(86_400));
+
+    PendingChangeRepository repo = mock(PendingChangeRepository.class);
+    when(repo.findById(pc.getId())).thenReturn(Optional.of(pc));
+
+    RecipeWriteApi writeApi = mock(RecipeWriteApi.class);
+    when(writeApi.saveAdaptedVersion(any()))
+        .thenThrow(
+            new com.example.mealprep.recipe.exception.RecipeVersionConflictException("moved"));
+    var orchestrator =
+        new com.example.mealprep.adaptation.domain.service.internal.RebaseOrchestrator(
+            writeApi, config());
+
+    AdaptationServiceImpl svc =
+        svc(
+            repo,
+            writeApi,
+            mock(PendingChangeMapper.class),
+            mock(ApplicationEventPublisher.class),
+            orchestrator);
+
+    assertThatThrownBy(
+            () ->
+                svc.acceptPendingChange(
+                    pc.getId(), new AcceptPendingChangeRequest(null, 0L), userId))
+        .isInstanceOf(com.example.mealprep.adaptation.exception.RebaseExhaustedException.class);
+    // maxRebaseAttempts = 3 in config() → exactly 3 write attempts before exhaustion.
+    verify(writeApi, org.mockito.Mockito.times(3)).saveAdaptedVersion(any());
+  }
+
+  @Test
   void reject_happy_path_publishes_event() {
     UUID userId = UUID.randomUUID();
     PendingChange pc = pending(userId, PendingChangeStatus.PENDING);
@@ -311,6 +380,26 @@ class PendingChangeLifecycleTest {
         List.of());
   }
 
+  private static com.example.mealprep.recipe.api.dto.RecipeBranchDto branchDto(UUID v1VersionId) {
+    // The branch's v1 version id is what saveAdaptedBranchWithRebase returns as
+    // RecipeBranchDto.id()
+    // in the adaptation accept path (branch id == accepted version id by that contract).
+    return new com.example.mealprep.recipe.api.dto.RecipeBranchDto(
+        v1VersionId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "adapted-branch",
+        "adapted",
+        "reason",
+        1,
+        BigDecimal.ZERO,
+        Instant.now(),
+        "adapter",
+        UUID.randomUUID(),
+        0L);
+  }
+
   private static PendingChangeDto dtoFrom(PendingChange pc) {
     return new PendingChangeDto(
         pc.getId(),
@@ -343,6 +432,15 @@ class PendingChangeLifecycleTest {
       RecipeWriteApi writeApi,
       PendingChangeMapper mapper,
       ApplicationEventPublisher events) {
+    return svc(repo, writeApi, mapper, events, null);
+  }
+
+  private static AdaptationServiceImpl svc(
+      PendingChangeRepository repo,
+      RecipeWriteApi writeApi,
+      PendingChangeMapper mapper,
+      ApplicationEventPublisher events,
+      com.example.mealprep.adaptation.domain.service.internal.RebaseOrchestrator orchestrator) {
     return new AdaptationServiceImpl(
         mock(AdaptationJobRepository.class),
         repo,
@@ -370,7 +468,7 @@ class PendingChangeLifecycleTest {
         null,
         null,
         null,
-        null,
+        orchestrator,
         null);
   }
 

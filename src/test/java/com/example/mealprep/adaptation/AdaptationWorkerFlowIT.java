@@ -247,6 +247,155 @@ class AdaptationWorkerFlowIT {
   }
 
   // ---------------------------------------------------------------------------------------------
+  // adaptation-3 — a "too salty" FEEDBACK rating biases the candidate set (swap-only) AND the
+  // pending change's change_dimension to SALT_LEVEL, proving the persisted trigger payload is live.
+  // ---------------------------------------------------------------------------------------------
+
+  @Test
+  void trigger2_feedback_tooSaltyRatingDelta_biasesCandidateSet_andSaltDimension() {
+    UUID recipeId = UUID.randomUUID();
+    UUID userId = UUID.randomUUID();
+    UUID branchId = UUID.randomUUID();
+    UUID currentVersionId = UUID.randomUUID();
+
+    when(recipeQueryService.getById(recipeId))
+        .thenReturn(Optional.of(recipe(recipeId, userId, branchId, currentVersionId, "beef")));
+    when(recipeQueryService.getFingerprint(any(), any())).thenReturn(Optional.empty());
+    when(hardConstraintFilterService.checkRecipe(any(), any(), any())).thenReturn(pass());
+
+    // The AI picks candidate 0 and proposes a VERSION; the diff itself touches a side ingredient,
+    // but the dimension must still resolve to SALT_LEVEL from the negative-taste rating delta.
+    ObjectNode diff = swapDiff("beef", "chicken");
+    when(aiService.execute(any()))
+        .thenReturn(response(0, AdaptationClassification.VERSION, diff, BigDecimal.valueOf(0.9)));
+
+    // FEEDBACK + USER catalogue → PENDING_CHANGE. Persist a "too salty" rating delta (taste -0.9)
+    // into job.inputs, exactly as enqueueFeedbackJobRow would.
+    ObjectNode inputs = JsonNodeFactory.instance.objectNode();
+    inputs.put("feedbackText", "way too salty");
+    ObjectNode rating = inputs.putObject("ratingDelta");
+    rating.put("taste", -0.9);
+    AdaptationJob job =
+        seedWithInputs(
+            recipeId,
+            userId,
+            JobSource.FEEDBACK,
+            JobPriority.SYNC,
+            Catalogue.USER,
+            ApprovalPolicy.PENDING_CHANGE,
+            inputs);
+
+    adaptationService.processJob(job);
+
+    // The pending change exists and its dimension was biased to SALT_LEVEL by the rating delta,
+    // proving triggerInputsFromJob hydrated the persisted payload into the live context (Stage A
+    // also narrowed to swap-only, but the dimension is the durable, assertable signal).
+    var pending = pendingChangeRepository.findAll();
+    assertThat(pending).hasSize(1);
+    assertThat(pending.get(0).getChangeDimension())
+        .isEqualTo(com.example.mealprep.adaptation.domain.enums.ChangeDimension.SALT_LEVEL);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // adaptation-3 — a COST_DELTA plan-time directive narrows Stage A to ingredient-swap candidates.
+  // ---------------------------------------------------------------------------------------------
+
+  @Test
+  void trigger4_costDeltaDirective_narrowsStageA_toSwapCandidates() {
+    UUID recipeId = UUID.randomUUID();
+    UUID userId = UUID.randomUUID();
+    UUID branchId = UUID.randomUUID();
+    UUID currentVersionId = UUID.randomUUID();
+
+    when(recipeQueryService.getById(recipeId))
+        .thenReturn(Optional.of(recipe(recipeId, userId, branchId, currentVersionId, "beef")));
+    when(recipeQueryService.getFingerprint(any(), any())).thenReturn(Optional.empty());
+    when(hardConstraintFilterService.checkRecipe(any(), any(), any())).thenReturn(pass());
+
+    ObjectNode diff = swapDiff("beef", "chicken");
+    when(aiService.execute(any()))
+        .thenReturn(
+            response(0, AdaptationClassification.SUBSTITUTION, diff, BigDecimal.valueOf(0.9)));
+    UUID subId = UUID.randomUUID();
+    when(recipeWriteApi.saveAdaptedSubstitution(any(SaveAdaptedSubstitutionCommand.class)))
+        .thenReturn(substitutionDto(subId));
+
+    // Persist a COST_DELTA directive into job.inputs, exactly as enqueuePlanTimeJobRow would.
+    ObjectNode inputs = JsonNodeFactory.instance.objectNode();
+    ObjectNode directive = inputs.putObject("directive");
+    directive.put("kind", "COST_DELTA");
+    directive.put("description", "trim £2");
+    directive.putObject("targetDelta").put("amountGbp", -2.0);
+    AdaptationJob job =
+        seedWithInputs(
+            recipeId,
+            userId,
+            JobSource.PLAN_TIME,
+            JobPriority.SYNC,
+            Catalogue.USER,
+            ApprovalPolicy.PLAN_OVERLAY,
+            inputs);
+
+    adaptationService.processJob(job);
+
+    AdaptationJob reloaded = jobRepository.findById(job.getId()).orElseThrow();
+    assertThat(reloaded.getStatus()).isEqualTo(JobStatus.DONE);
+    // COST_DELTA narrowed Stage A to ingredient-swap; the chosen swap drives a substitution
+    // overlay.
+    ArgumentCaptor<SaveAdaptedSubstitutionCommand> cmd =
+        ArgumentCaptor.forClass(SaveAdaptedSubstitutionCommand.class);
+    verify(recipeWriteApi).saveAdaptedSubstitution(cmd.capture());
+    assertThat(cmd.getValue().original().ingredientMappingKey()).isEqualTo("beef");
+    assertThat(cmd.getValue().substitute().ingredientMappingKey()).isEqualTo("chicken");
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // adaptation-4 — DIRECT version write hits a persistent RecipeVersionConflict →
+  // RebaseOrchestrator
+  // exhausts its retries → the job fails REBASE_EXHAUSTED (not a raw conflict), nothing written.
+  // ---------------------------------------------------------------------------------------------
+
+  @Test
+  void trigger1_directApply_persistentConflict_failsRebaseExhausted() {
+    UUID recipeId = UUID.randomUUID();
+    UUID userId = UUID.randomUUID();
+    UUID branchId = UUID.randomUUID();
+    UUID currentVersionId = UUID.randomUUID();
+
+    when(recipeQueryService.getById(recipeId))
+        .thenReturn(Optional.of(recipe(recipeId, userId, branchId, currentVersionId, "beef")));
+    when(recipeQueryService.getFingerprint(any(), any())).thenReturn(Optional.empty());
+    when(hardConstraintFilterService.checkRecipe(any(), any(), any())).thenReturn(pass());
+
+    ObjectNode diff = swapDiff("beef", "chicken");
+    when(aiService.execute(any()))
+        .thenReturn(response(0, AdaptationClassification.VERSION, diff, BigDecimal.valueOf(0.9)));
+    // Every attempt conflicts — the head keeps moving — so the orchestrator exhausts its retries.
+    when(recipeWriteApi.saveAdaptedVersion(any(SaveAdaptedVersionCommand.class)))
+        .thenThrow(
+            new com.example.mealprep.recipe.exception.RecipeVersionConflictException("head moved"));
+
+    AdaptationJob job =
+        seed(
+            recipeId,
+            userId,
+            JobSource.IMPORT,
+            JobPriority.ASYNC,
+            Catalogue.SYSTEM,
+            ApprovalPolicy.DIRECT);
+
+    assertThatThrownBy(() -> adaptationService.processJob(job))
+        .isInstanceOf(com.example.mealprep.adaptation.exception.RebaseExhaustedException.class);
+
+    AdaptationJob reloaded = jobRepository.findById(job.getId()).orElseThrow();
+    assertThat(reloaded.getStatus()).isEqualTo(JobStatus.FAILED);
+    assertThat(reloaded.getFailureReason()).isEqualTo(JobFailureReason.REBASE_EXHAUSTED);
+    AdaptationTrace trace = traceRepository.findByJobId(job.getId()).orElseThrow();
+    assertThat(trace.getOutcomeKind()).isEqualTo(OutcomeKind.FAILED);
+    assertThat(pendingChangeRepository.count()).isZero();
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // helpers
   // ---------------------------------------------------------------------------------------------
 
@@ -283,6 +432,24 @@ class AdaptationWorkerFlowIT {
       JobPriority priority,
       Catalogue catalogue,
       ApprovalPolicy policy) {
+    return seedWithInputs(
+        recipeId,
+        userId,
+        source,
+        priority,
+        catalogue,
+        policy,
+        JsonNodeFactory.instance.objectNode());
+  }
+
+  private AdaptationJob seedWithInputs(
+      UUID recipeId,
+      UUID userId,
+      JobSource source,
+      JobPriority priority,
+      Catalogue catalogue,
+      ApprovalPolicy policy,
+      com.fasterxml.jackson.databind.JsonNode inputs) {
     return jobRepository.saveAndFlush(
         AdaptationJob.builder()
             .id(UUID.randomUUID())
@@ -293,7 +460,7 @@ class AdaptationWorkerFlowIT {
             .priority(priority)
             .approvalPolicy(policy)
             .status(JobStatus.PENDING)
-            .inputs(JsonNodeFactory.instance.objectNode())
+            .inputs(inputs)
             .traceId(UUID.randomUUID())
             .enqueuedAt(Instant.now())
             .build());

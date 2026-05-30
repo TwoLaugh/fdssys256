@@ -1,6 +1,8 @@
 package com.example.mealprep.adaptation.domain.service.internal;
 
 import com.example.mealprep.adaptation.ai.RecipeAdaptationResponse;
+import com.example.mealprep.adaptation.api.dto.AdaptationCandidateDto;
+import com.example.mealprep.adaptation.api.dto.AdaptationRollupDto;
 import com.example.mealprep.adaptation.config.AdaptationConfig;
 import com.example.mealprep.adaptation.domain.entity.AdaptationJob;
 import com.example.mealprep.adaptation.domain.entity.PendingChange;
@@ -11,6 +13,7 @@ import com.example.mealprep.adaptation.event.PendingChangeCreatedEvent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
@@ -70,7 +73,8 @@ public class PendingChangeStore {
       ChangeDimension dimension,
       UUID baseVersionId,
       UUID baseBranchId,
-      String promptTemplateVersion) {
+      String promptTemplateVersion,
+      AdaptationCandidateDto chosenCandidate) {
     Instant now = Instant.now();
     UUID newId = UUID.randomUUID();
     // Supersede any active PENDING for (recipe, dimension). saveAndFlush forces the UPDATE to hit
@@ -104,6 +108,7 @@ public class PendingChangeStore {
     }
 
     JsonNode diff = diffNode(response);
+    BigDecimal impactScore = deriveImpactScore(chosenCandidate, safe(response.confidence()));
     PendingChange entity =
         PendingChange.builder()
             .id(newId)
@@ -119,7 +124,7 @@ public class PendingChangeStore {
             .reasoning(response.reasoning() == null ? "" : response.reasoning())
             .nutritionalNotes(response.nutritionalNotes())
             .confidence(safe(response.confidence()))
-            .impactScore(BigDecimal.valueOf(0.5))
+            .impactScore(impactScore)
             .promptTemplateVersion(promptTemplateVersion == null ? "v0" : promptTemplateVersion)
             .status(PendingChangeStatus.PENDING)
             .createdAt(now)
@@ -141,7 +146,7 @@ public class PendingChangeStore {
             job.getUserId(),
             dimension,
             safe(response.confidence()),
-            BigDecimal.valueOf(0.5),
+            impactScore,
             job.getTraceId(),
             now));
     return newId;
@@ -152,6 +157,78 @@ public class PendingChangeStore {
       return response.finalDiffJson();
     }
     return JsonNodeFactory.instance.objectNode();
+  }
+
+  /**
+   * Derive the ranking-pool sort key (LLD line 133 — {@code impact_score numeric(4,3)}) from the
+   * chosen candidate's rollup: a normalised magnitude of its macro / cost / time deltas, weighted
+   * by the response confidence so a high-magnitude-but-uncertain change does not crowd out a
+   * confident smaller one. This replaces the prior hard-coded {@code 0.5} that made the
+   * impact-ranked 3-per-week budget (enforced rank-at-read in {@code listPendingForUser})
+   * degenerate to confidence-then-recency only (adaptation-6).
+   *
+   * <p>Magnitude is the sum of three independently-normalised, saturating components:
+   *
+   * <ul>
+   *   <li>macro kcal delta, saturating at 400 kcal;
+   *   <li>cost delta, saturating at £3.00;
+   *   <li>time delta, saturating at 30 min.
+   * </ul>
+   *
+   * Each component contributes up to ~0.33, so a candidate that moves all three meaningfully
+   * approaches a magnitude of 1.0. The final score is {@code magnitude × confidence}, clamped to
+   * {@code [0.000, 0.999]} so it fits {@code numeric(4,3)}. When no candidate / rollup is available
+   * (older skeleton wirings, NO_CHANGE) we fall back to {@code confidence × 0.5} — still better
+   * than a flat constant because it at least preserves confidence ordering.
+   */
+  public static BigDecimal deriveImpactScore(
+      AdaptationCandidateDto chosenCandidate, BigDecimal confidence) {
+    BigDecimal conf = clamp01(safe(confidence));
+    AdaptationRollupDto rollup = chosenCandidate == null ? null : chosenCandidate.rollup();
+    if (rollup == null) {
+      return roundScore(conf.multiply(BigDecimal.valueOf(0.5)));
+    }
+    double macro = normaliseAbs(rollup.macroDeltaKcal(), 400.0);
+    double cost = normaliseAbs(rollup.costDeltaGbp(), 3.0);
+    double time =
+        rollup.timeDeltaMins() == null
+            ? 0.0
+            : Math.min(1.0, Math.abs(rollup.timeDeltaMins()) / 30.0);
+    // Average of the three saturating components → magnitude in [0,1].
+    double magnitude = (macro + cost + time) / 3.0;
+    BigDecimal score = BigDecimal.valueOf(magnitude).multiply(conf);
+    return roundScore(score);
+  }
+
+  /** |value| / saturation, capped at 1.0; null/zero saturation → 0. */
+  private static double normaliseAbs(BigDecimal value, double saturation) {
+    if (value == null || saturation <= 0) {
+      return 0.0;
+    }
+    return Math.min(1.0, value.abs().doubleValue() / saturation);
+  }
+
+  private static BigDecimal clamp01(BigDecimal v) {
+    if (v.compareTo(BigDecimal.ZERO) < 0) {
+      return BigDecimal.ZERO;
+    }
+    if (v.compareTo(BigDecimal.ONE) > 0) {
+      return BigDecimal.ONE;
+    }
+    return v;
+  }
+
+  /** Round to 3dp and clamp to [0.000, 0.999] so it fits the {@code numeric(4,3)} column. */
+  private static BigDecimal roundScore(BigDecimal raw) {
+    BigDecimal rounded = raw.setScale(3, RoundingMode.HALF_UP);
+    BigDecimal max = new BigDecimal("0.999");
+    if (rounded.compareTo(max) > 0) {
+      return max;
+    }
+    if (rounded.compareTo(BigDecimal.ZERO) < 0) {
+      return BigDecimal.ZERO.setScale(3, RoundingMode.UNNECESSARY);
+    }
+    return rounded;
   }
 
   private static BigDecimal safe(BigDecimal v) {

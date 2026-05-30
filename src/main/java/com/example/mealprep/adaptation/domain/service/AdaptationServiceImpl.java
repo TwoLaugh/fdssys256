@@ -115,15 +115,24 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Single implementation of both {@link AdaptationService} and {@link AdaptationQueryService}.
+ * Single implementation of both {@link AdaptationService} and {@link AdaptationQueryService}. The
+ * full public surface is implemented: the four trigger entries ({@code enqueueImportJob}, {@code
+ * enqueueFeedbackJob}, {@code enqueueDataModelChangeJobs}, {@code runPlanTimeRefineJob}), the
+ * pending-change lifecycle ({@code acceptPendingChange} / {@code rejectPendingChange} / sweep), the
+ * planner-hint emit, the retry path, and the query fan-out.
  *
- * <p>01c fills in {@link #processJob(AdaptationJob)} (private worker entry point) and {@link
- * #transitionJobStatus(UUID, JobStatus, JobFailureReason, String)} (status writer with {@code
- * noRollbackFor = AdaptationException.class}). The four public trigger methods stay UOE — 01d wires
- * them, calling {@link #processJob} after enqueuing.
+ * <p>The 10-step worker pipeline lives in {@link #processJob(AdaptationJob)} (private entry point,
+ * called by the async {@code JobReadyEvent} listener, the batch orchestrator, and the two sync
+ * trigger entries) with the status writer {@link #transitionJobStatus(UUID, JobStatus,
+ * JobFailureReason, String)} (annotated {@code noRollbackFor = AdaptationException.class}). Apply
+ * paths route the DIRECT version/branch writes — and the user-approved {@code acceptPendingChange}
+ * writes — through {@link RebaseOrchestrator} for conflict-rebase / REBASE_EXHAUSTED handling.
  *
- * <p>Per ticket 01c §Worker entry point and §Hard constraints — every step in the pipeline opens
- * its own short transaction; the worker itself is NOT {@code @Transactional}.
+ * <p>Every step in the pipeline opens its own short transaction; the worker method itself is NOT
+ * {@code @Transactional} (LLM call durations don't fit a transaction — same shape as the AI
+ * module). Historically the bodies were filled ticket-by-ticket (01c worker, 01d triggers +
+ * lifecycle, 01e context assembly, 01f hints/fingerprint/reads); none remain {@code
+ * UnsupportedOperationException} skeletons.
  */
 @Service
 public class AdaptationServiceImpl implements AdaptationService, AdaptationQueryService {
@@ -133,11 +142,6 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
   // Pure JSON tree-building for the inputs JSONB serialise/parse round-trip (adaptation source-bias
   // payload). No Spring config dependency — a vanilla mapper is sufficient for record <-> tree.
   private static final ObjectMapper INPUTS_MAPPER = new ObjectMapper();
-
-  private static final String UOE_TICKET_01C = "ticket-01c";
-  private static final String UOE_TICKET_01D = "ticket-01d";
-  private static final String UOE_TICKET_01E = "ticket-01e";
-  private static final String UOE_TICKET_01F = "ticket-01f";
 
   private final AdaptationJobRepository jobRepository;
 
@@ -516,26 +520,18 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
           PendingChange.class, pendingChangeId);
     }
 
-    // Apply via RecipeWriteApi.saveAdaptedVersion — null/zero-fill the heavy fields (01e refines).
-    SaveAdaptedVersionCommand cmd =
-        new SaveAdaptedVersionCommand(
-            pc.getRecipeId(),
-            pc.getBaseBranchId(),
-            0,
-            pc.getBaseVersionId(),
-            java.util.List.of(),
-            java.util.List.of(),
-            null,
-            null,
-            (CharacterFingerprintDto) null,
-            pc.getProposedDiff(),
-            pc.getReasoning(),
-            pc.getTraceId());
-    RecipeVersionDto resultVersion = recipeWriteApi.saveAdaptedVersion(cmd);
+    // Apply per the proposed classification (adaptation-5). A change the worker classified as
+    // BRANCH must fork via saveAdaptedBranch (+ fingerprint refresh) rather than overwriting the
+    // master branch's head with a new VERSION — the prior code wrote a VERSION unconditionally,
+    // collapsing a BRANCH proposal onto the trunk. Both writes route through RebaseOrchestrator
+    // (adaptation-4) so a RecipeVersionConflictException — the catalogue head moved between
+    // proposal and accept — is rebased up to maxRebaseAttempts and then surfaces REBASE_EXHAUSTED
+    // rather than the raw conflict.
+    UUID acceptedVersionId = applyAcceptedPendingChange(pc);
 
     boolean wasModified = request.userEdits() != null;
     pc.setStatus(wasModified ? PendingChangeStatus.MODIFIED : PendingChangeStatus.ACCEPTED);
-    pc.setAcceptedVersionId(resultVersion.id());
+    pc.setAcceptedVersionId(acceptedVersionId);
     pc.setUserEdits(request.userEdits());
     pc.setResolvedAt(now);
     pendingChangeRepository.saveAndFlush(pc);
@@ -545,11 +541,130 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
             pc.getId(),
             pc.getRecipeId(),
             pc.getUserId(),
-            resultVersion.id(),
+            acceptedVersionId,
             wasModified,
             pc.getTraceId(),
             now));
     return pendingChangeMapper.toDto(pc);
+  }
+
+  /**
+   * Write the accepted pending change to the catalogue per its {@code proposedClassification},
+   * routed through {@link RebaseOrchestrator} for conflict-rebase / REBASE_EXHAUSTED handling
+   * (adaptation-4 + adaptation-5).
+   *
+   * <ul>
+   *   <li>{@code BRANCH} → {@link RecipeWriteApi#saveAdaptedBranch}; the new branch's v1 version id
+   *       is the accepted-version id, and {@link FingerprintRefresher} caches + pushes the branch
+   *       fingerprint (the body-moving write that {@code applyPostWriteHooks} performs on the
+   *       worker's DIRECT path is here folded into the accept path for the user-approved branch).
+   *   <li>{@code VERSION} (and any other non-BRANCH value) → {@link
+   *       RecipeWriteApi#saveAdaptedVersion}, a new version on the proposal's base branch.
+   * </ul>
+   *
+   * <p>Null-safe on the orchestrator: older skeleton-ctor wirings (and the focused accept-lifecycle
+   * unit tests) pass a null {@link RebaseOrchestrator}; in that case the write goes straight
+   * through {@link RecipeWriteApi} with no rebase wrapper (those wirings never drive a concurrent
+   * conflict).
+   *
+   * @return the catalogue version id the accept produced (a new VERSION's id, or the branch's v1)
+   */
+  private UUID applyAcceptedPendingChange(PendingChange pc) {
+    if (pc.getProposedClassification() == AdaptationClassification.BRANCH) {
+      SaveAdaptedBranchCommand branchCmd =
+          new SaveAdaptedBranchCommand(
+              pc.getRecipeId(),
+              pc.getBaseBranchId(),
+              pc.getBaseVersionId(),
+              "adaptation-" + pc.getTraceId(),
+              "adapted",
+              pc.getReasoning(),
+              java.util.List.<CreateIngredientRequest>of(),
+              java.util.List.<CreateMethodStepRequest>of(),
+              null,
+              null,
+              (CharacterFingerprintDto) null,
+              pc.getTraceId());
+      RecipeBranchDto branch =
+          rebaseOrchestrator == null
+              ? recipeWriteApi.saveAdaptedBranch(branchCmd)
+              : rebaseOrchestrator.saveAdaptedBranchWithRebase(
+                  branchCmd, c -> rebaseAcceptedBranchCommand(c, pc.getRecipeId()));
+      // On a user-approved branch the prior version's hints are stale and the branch fingerprint
+      // (carried inline on the proposed diff) is refreshed — mirrors the worker DIRECT branch path.
+      if (plannerHintEmitter != null && pc.getBaseVersionId() != null) {
+        plannerHintEmitter.invalidateHintsForOldVersion(pc.getBaseVersionId());
+      }
+      if (fingerprintRefresher != null && pc.getProposedDiff() != null) {
+        fingerprintRefresher.refreshOnBranch(
+            pc.getRecipeId(),
+            branch.id(),
+            branch.id(),
+            pc.getProposedDiff(),
+            pc.getProposedDiff().toString(),
+            pc.getJobId());
+      }
+      return branch.id();
+    }
+
+    SaveAdaptedVersionCommand versionCmd =
+        new SaveAdaptedVersionCommand(
+            pc.getRecipeId(),
+            pc.getBaseBranchId(),
+            0,
+            pc.getBaseVersionId(),
+            java.util.List.<CreateIngredientRequest>of(),
+            java.util.List.<CreateMethodStepRequest>of(),
+            null,
+            null,
+            (CharacterFingerprintDto) null,
+            pc.getProposedDiff(),
+            pc.getReasoning(),
+            pc.getTraceId());
+    RecipeVersionDto version =
+        rebaseOrchestrator == null
+            ? recipeWriteApi.saveAdaptedVersion(versionCmd)
+            : rebaseOrchestrator.saveAdaptedVersionWithRebase(
+                versionCmd, c -> rebaseAcceptedVersionCommand(c, pc.getRecipeId()));
+    return version.id();
+  }
+
+  /** Rebase an accepted-VERSION command against the catalogue's CURRENT head after a conflict. */
+  private SaveAdaptedVersionCommand rebaseAcceptedVersionCommand(
+      SaveAdaptedVersionCommand prev, UUID recipeId) {
+    Optional<RecipeVersionDto> head = currentHead(recipeId);
+    return new SaveAdaptedVersionCommand(
+        prev.recipeId(),
+        head.map(RecipeVersionDto::branchId).orElse(prev.branchId()),
+        head.map(RecipeVersionDto::versionNumber).orElse(prev.expectedParentVersionNumber()),
+        head.map(RecipeVersionDto::id).orElse(prev.expectedParentVersionId()),
+        prev.ingredients(),
+        prev.method(),
+        prev.metadata(),
+        prev.tags(),
+        prev.characterFingerprint(),
+        prev.changeDiff(),
+        prev.changeReason(),
+        prev.adapterTraceId());
+  }
+
+  /** Rebase an accepted-BRANCH command's branch-point version against the head after a conflict. */
+  private SaveAdaptedBranchCommand rebaseAcceptedBranchCommand(
+      SaveAdaptedBranchCommand prev, UUID recipeId) {
+    Optional<RecipeVersionDto> head = currentHead(recipeId);
+    return new SaveAdaptedBranchCommand(
+        prev.recipeId(),
+        head.map(RecipeVersionDto::branchId).orElse(prev.parentBranchId()),
+        head.map(RecipeVersionDto::id).orElse(prev.branchPointVersionId()),
+        prev.name(),
+        prev.label(),
+        prev.reason(),
+        prev.ingredients(),
+        prev.method(),
+        prev.metadata(),
+        prev.tags(),
+        prev.characterFingerprint(),
+        prev.adapterTraceId());
   }
 
   @Override
@@ -777,7 +892,8 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
                 context.currentVersion() == null
                     ? job.getRecipeId()
                     : context.currentVersion().branchId(),
-                job.getPromptTemplateVersion() == null ? "v0" : job.getPromptTemplateVersion());
+                job.getPromptTemplateVersion() == null ? "v0" : job.getPromptTemplateVersion(),
+                chosenCandidate(withCandidates, response));
         outcome = OutcomeKind.PENDING_CREATED;
         outcomeTargetId = pcId;
       } else if (noChange) {
@@ -1159,15 +1275,35 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
     if (response.finalDiffJson() != null) {
       return response.finalDiffJson();
     }
+    AdaptationCandidateDto chosen = chosenCandidate(withCandidates, response);
+    if (chosen != null) {
+      return chosen.proposedDiff();
+    }
+    return JsonNodeFactory.instance.objectNode();
+  }
+
+  /**
+   * The candidate the LLM (or the auto-skip path) selected, matched by {@code
+   * chosenCandidateIndex}. Returns {@code null} on NO_CHANGE (index &lt; 0) or when the index is
+   * not in the top-N list — the pending-change store then derives its impact score from confidence
+   * alone. The chosen candidate's {@link
+   * com.example.mealprep.adaptation.api.dto.AdaptationRollupDto} is the real impact-magnitude
+   * source for the rank-at-read budget (adaptation-6).
+   */
+  AdaptationCandidateDto chosenCandidate(
+      AdaptationContext withCandidates, RecipeAdaptationResponse response) {
     int idx = response.chosenCandidateIndex();
+    if (idx < 0) {
+      return null;
+    }
     List<AdaptationCandidateDto> candidates =
         withCandidates == null ? List.of() : withCandidates.candidates();
     for (AdaptationCandidateDto c : candidates) {
       if (c.index() == idx) {
-        return c.proposedDiff();
+        return c;
       }
     }
-    return JsonNodeFactory.instance.objectNode();
+    return null;
   }
 
   /** Distinct ingredient mapping keys on the recipe's current version (empty when no body). */
