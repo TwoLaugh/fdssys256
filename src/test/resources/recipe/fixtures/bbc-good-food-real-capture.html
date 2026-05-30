@@ -1,0 +1,116 @@
+<!--
+  CAPTURE PROVENANCE — live-captured real-world markup, NOT a hand-built toy.
+
+  Source : https://www.bbcgoodfood.com/recipes/classic-lasagne  ("Easy classic lasagne")
+  Method : fetched live with curl (HTTP 200) on 2026-05-30 during this PR's work; the
+           <script type="application/ld+json"> schema.org/Recipe block below is the page's
+           ACTUAL embedded JSON-LD, reproduced verbatim (values, key order, HowToStep[]
+           shape, ImageObject[], NutritionInformation, author[], keywords CSV, recipeYield
+           integer, ISO-8601 PT durations). Only the surrounding <body> chrome (nav, ads,
+           ~540KB of Next.js markup) was trimmed to keep the fixture reviewable — the JSON-LD
+           Recipe object itself is unmodified live bytes.
+
+  Why captured-and-stored rather than fetched at test time: pointing CI at the live site
+  would be flaky (site changes, downtime, bot-blocking). This stored capture is the
+  deterministic regression lock; the opt-in @Tag("live") smoke test (RealRecipeSiteLiveSmokeTest)
+  hits the live URL on demand.
+-->
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <title>Easy classic lasagne recipe | Good Food</title>
+  <link rel="canonical" href="https://www.bbcgoodfood.com/recipes/classic-lasagne">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Recipe",
+    "@id": "https://www.bbcgoodfood.com/recipes/classic-lasagne#Recipe",
+    "name": "Easy classic lasagne",
+    "description": "Kids will love to help assemble this easiest ever pasta bake with streaky bacon, beef mince, a crème fraîche sauce and gooey mozzarella",
+    "image": [
+      {
+        "@type": "ImageObject",
+        "url": "https://images.immediate.co.uk/production/volatile/sites/30/2020/08/classic-lasange-4a66137.jpg?resize=440,400",
+        "width": 440,
+        "height": 400
+      }
+    ],
+    "author": [
+      {
+        "@type": "Person",
+        "name": "Angela Boggiano",
+        "url": "https://www.bbcgoodfood.com/author/angelaboggiano"
+      }
+    ],
+    "datePublished": "2015-05-30T13:38:07+01:00",
+    "mainEntityOfPage": {
+      "@type": "WebPage",
+      "@id": "https://www.bbcgoodfood.com/recipes/classic-lasagne"
+    },
+    "keywords": "2 of 5-a-day, Angela Boggiano, Beef lasagne, Calcium, Children, Cooking with children, Cooking with kids, Family friendly, Kids, Lasagne, Spring",
+    "recipeCuisine": "Italian",
+    "recipeCategory": "Dinner, Lunch, Main course, Pasta, Supper",
+    "prepTime": "PT15M",
+    "cookTime": "PT1H",
+    "totalTime": "PT1H15M",
+    "recipeYield": 6,
+    "recipeIngredient": [
+      "1 tbsp olive oil",
+      "2 rashers smoked streaky bacon",
+      "1 onion finely chopped",
+      "1 celery stick, finely chopped",
+      "1 medium carrot grated",
+      "2 garlic cloves finely chopped",
+      "500g beef mince",
+      "1 tbsp tomato purée",
+      "2 x 400g cans chopped tomatoes",
+      "1 tbsp clear honey",
+      "500g pack fresh egg lasagne sheets",
+      "400ml crème fraîche",
+      "125g ball mozzarella roughly torn",
+      "50g freshly grated parmesan",
+      "large handful basil leaves torn (optional)"
+    ],
+    "recipeInstructions": [
+      {
+        "@type": "HowToStep",
+        "text": "Heat the oil in a large saucepan. Use kitchen scissors to snip the bacon into small pieces, or use a sharp knife to chop it on a chopping board. Add the bacon to the pan and cook for just a few mins until starting to turn golden. Add the onion, celery and carrot, and cook over a medium heat for 5 mins, stirring occasionally, until softened."
+      },
+      {
+        "@type": "HowToStep",
+        "text": "Add the garlic and cook for 1 min, then tip in the mince and cook, stirring and breaking it up with a wooden spoon, for about 6 mins until browned all over."
+      },
+      {
+        "@type": "HowToStep",
+        "text": "Stir in the tomato purée and cook for 1 min, mixing in well with the beef and vegetables. Tip in the chopped tomatoes. Fill each can half full with water to rinse out any tomatoes left in the can, and add to the pan. Add the honey and season to taste. Simmer for 20 mins."
+      },
+      {
+        "@type": "HowToStep",
+        "text": "Heat oven to 200C/180C fan/gas 6. To assemble the lasagne, ladle a little of the ragu sauce into the bottom of the roasting tin or casserole dish, spreading the sauce all over the base. Place 2 sheets of lasagne on top of the sauce overlapping to make it fit, then repeat with more sauce and another layer of pasta. Repeat with a further 2 layers of sauce and pasta, finishing with a layer of pasta."
+      },
+      {
+        "@type": "HowToStep",
+        "text": "Put the crème fraîche in a bowl and mix with 2 tbsp water to loosen it and make a smooth pourable sauce. Pour this over the top of the pasta, then top with the mozzarella. Sprinkle Parmesan over the top and bake for 25–30 mins until golden and bubbling. Serve scattered with basil, if you like."
+      }
+    ],
+    "nutrition": {
+      "@type": "NutritionInformation",
+      "calories": "844 calories",
+      "fatContent": "52 grams fat",
+      "saturatedFatContent": "30 grams saturated fat",
+      "carbohydrateContent": "54 grams carbohydrates",
+      "sugarContent": "13 grams sugar",
+      "fiberContent": "5 grams fiber",
+      "proteinContent": "37 grams protein",
+      "sodiumContent": "1.1 milligram of sodium"
+    }
+  }
+  </script>
+</head>
+<body>
+  <main>
+    <h1>Easy classic lasagne</h1>
+  </main>
+</body>
+</html>

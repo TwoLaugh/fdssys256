@@ -40,6 +40,11 @@
         <cucumber.version>7.18.1</cucumber.version>
         <build-helper.version>3.6.0</build-helper.version>
 
+        <!-- JUnit-5 tag groups excluded from the default test gate. `live`-tagged tests hit live
+             third-party sites and are flaky in CI; run them on demand with
+             `./mvnw test -Dgroups=live -Dtest.excludedGroups=`. -->
+        <test.excludedGroups>live</test.excludedGroups>
+
         <!-- Plugin versions -->
         <spotless.version>2.43.0</spotless.version>
         <jacoco.version>0.8.12</jacoco.version>
@@ -326,6 +331,13 @@
                         <exclude>**/*IT.java</exclude>
                         <exclude>**/*E2ETest.java</exclude>
                     </excludes>
+                    <!-- Exclude JUnit-5 @Tag("live") tests from the blocking gate. These hit live
+                         third-party sites (e.g. the real BBC Good Food recipe pages) and would be
+                         flaky in CI (site changes, downtime, bot-blocking). Default `mvn test` /
+                         `verify` never runs them, so they do not appear in the normal `Tests run`
+                         count. Run them on demand by clearing the exclude and selecting the group:
+                         `./mvnw test -Dgroups=live -Dtest.excludedGroups=`. -->
+                    <excludedGroups>${test.excludedGroups}</excludedGroups>
                 </configuration>
             </plugin>
 
@@ -338,6 +350,10 @@
                         <include>**/*IT.java</include>
                         <include>**/*E2ETest.java</include>
                     </includes>
+                    <!-- Same gate exclusion for any @Tag("live") *IT (none ship today, but a live
+                         smoke could be authored as an IT later). Override:
+                         `-Dgroups=live -Dtest.excludedGroups=`. -->
+                    <excludedGroups>${test.excludedGroups}</excludedGroups>
                 </configuration>
                 <executions>
                     <execution>
