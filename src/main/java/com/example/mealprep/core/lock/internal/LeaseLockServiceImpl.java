@@ -2,6 +2,7 @@ package com.example.mealprep.core.lock.internal;
 
 import com.example.mealprep.core.lock.LeaseHandle;
 import com.example.mealprep.core.lock.LockKey;
+import com.example.mealprep.core.lock.domain.repository.LockLeaseRepository;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
