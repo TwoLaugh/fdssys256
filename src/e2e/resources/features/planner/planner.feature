@@ -59,17 +59,22 @@ Feature: Planner — plan generation, accept/reject/abandon/revert lifecycle, em
     When they abandon that plan
     Then the plan is abandoned for this household
 
-  # PLAN-30: reverting an active plan copy-forwards a fresh GENERATED generation (2) and supersedes
-  # the prior (the new plan's replacesPlanId points back at it).
-  Scenario: A user reverts an active plan into a fresh generation
+  # PLAN-30: revert-to-historical (the #196 contract). POST /api/v1/plans/revert takes a body
+  # {"targetHistoricalPlanId": <uuid>} and copies the chosen historical plan's content onto a NEW
+  # active generation (gen 2, GENERATED), re-checking the caller's current hard constraints and
+  # refilling stripped slots; the prior active is superseded (the new plan's replacesPlanId points
+  # back at it). "In the caller's household history" means any plan in a household the caller is a
+  # member of — so reverting to the household's own currently-active plan is the simplest valid
+  # target (RevertToPlanCoordinator.hydrateTarget gates on canAccessHousehold). 201 Created.
+  Scenario: A user reverts to a historical plan in their household
     Given a fresh registered and logged-in user
     And the user has a household
     When they generate a plan for a week
     Then a generated plan is created for this household
     When they accept that plan
     Then the plan becomes active for this household
-    When they revert that active plan
-    Then a fresh generation is created and the prior plan is superseded for this household
+    When they revert to that plan as a historical target
+    Then a fresh generation is created from the historical plan and the prior is superseded for this household
 
   # ----- Illegal transitions (green) -----
 
@@ -84,14 +89,25 @@ Feature: Planner — plan generation, accept/reject/abandon/revert lifecycle, em
     When they accept that plan
     Then the accept is rejected as an illegal plan transition
 
-  # PLAN-30 (error slice): reverting a GENERATED (non-ACTIVE) plan is a bad request (400).
-  Scenario: Reverting a non-active plan is rejected
+  # PLAN-30 (error slice, headline guard): reverting to a plan that belongs to a DIFFERENT
+  # household is "not in the caller's household history" -> 422 (RevertTargetNotInHistoryException).
+  # This is the authoritative ownership check for revert (the target is in the body, not the path,
+  # so there is no controller-level pre-auth). Constructed over HTTP by minting a SECOND user with
+  # their own household + plan and having the first user target it.
+  Scenario: Reverting to a plan in another household is rejected as not in history
     Given a fresh registered and logged-in user
     And the user has a household
-    When they generate a plan for a week
-    Then a generated plan is created for this household
-    When they revert that generated plan
-    Then the revert is rejected because the plan is not active
+    And another household has its own plan
+    When they revert to the other household's plan as a historical target
+    Then the revert is rejected because the target is not in the caller's household history
+
+  # PLAN-30 (error slice): reverting to a target plan id that does not exist at all is a clean
+  # not-found (404, PlanNotFoundException) — distinct from the 422 "exists but not yours" guard.
+  Scenario: Reverting to a non-existent target plan returns not found
+    Given a fresh registered and logged-in user
+    And the user has a household
+    When they revert to a random non-existent target plan
+    Then the revert target read is rejected as not found
 
   # ----- Empty-state reads + not-found (green) -----
 
