@@ -14,6 +14,7 @@ This document specifies the `core` module — package layout, JPA entities, Flyw
 | `core.events` | Sealed marker interfaces (`MealPrepEvent`, `ScopeChangedEvent`) for the project-wide event hierarchy | Every module that publishes or consumes events |
 | `core.audit` | The shared `decision_log` table, `DecisionLogService`, trace-ID propagation helpers | Every module that runs an optimisation loop (planner, adaptation pipeline) |
 | `core.lock` | `LockService` — two single-flight primitives: a tx-scoped advisory lock (`pg_try_advisory_xact_lock`) and a connection-free TTL **lease** (`core_lock_leases` table) | Advisory: adaptation pipeline (per-recipe), grocery batch jobs. Lease: planner (per-week, start-of-generation) |
+| `core.origin` | Origin-tracking foundation — the `OriginFilter` that validates `X-Origin*` headers and applies non-user policy (confidence floor, recursion guard, rate limit, `@OriginAware` endpoint gate), the request-scoped `OriginContext`, and the `AuditMetadata` projection. See [§Origin-Tracking](#origin-tracking) and [design/origin-tracking-pattern.md](../design/origin-tracking-pattern.md). | Every module that mutates user-scoped state on a user's behalf (feedback bridges, adaptation, scheduled scanners, re-opt, discovery) |
 
 `core` depends only on Spring + Hibernate + JDK — no domain module, no AI service, no domain JPA mappings. If a piece of code wants domain knowledge, it does not belong here.
 
@@ -25,37 +26,44 @@ This document specifies the `core` module — package layout, JPA entities, Flyw
 com.example.mealprep.core/
 ├── CoreModule.java                              facade re-exporting public services
 ├── api/
-│   ├── controller/DecisionLogAdminController.java   read-only admin observability endpoint
-│   ├── dto/                                          records (see DTOs section)
-│   └── mapper/DecisionLogMapper.java                 entity → DTO; lock service has no DTO surface
+│   ├── OriginHeaders.java                             canonical X-Origin* header-name constants
+│   └── markers/BoundedCollection.java                 list-endpoint pagination marker
 ├── audit/
+│   ├── api/
+│   │   ├── controller/AdminDecisionLogController.java read-only admin observability endpoint
+│   │   ├── dto/                                        records (see DTOs section)
+│   │   └── mapper/DecisionLogMapper.java               entity → DTO; lock service has no DTO surface
 │   ├── domain/
-│   │   ├── entity/DecisionLog.java + payload/         JSONB payload record-tree
-│   │   ├── repository/DecisionLogRepository.java      package-private
+│   │   ├── entity/DecisionLog.java                     JSONB payload columns (JsonNode)
+│   │   ├── repository/DecisionLogRepository.java       package-private at the package level
 │   │   └── service/
 │   │       ├── DecisionLogService.java                public — write side
 │   │       ├── DecisionLogQueryService.java           public — read side
-│   │       ├── DecisionLogServiceImpl.java            single impl of both
 │   │       └── internal/
-│   │           ├── TraceContext.java                  MDC trace-id helpers
-│   │           └── DecisionLogTokenBudgetGuard.java   caps the JSONB payloads
+│   │           ├── DecisionLogServiceImpl.java        single impl of both
+│   │           ├── TraceContext.java                  MDC trace-id helpers (no Spring Web)
+│   │           └── DecisionLogTokenBudgetGuard.java   caps the JSONB payloads (64 KB)
 │   └── trace/TraceIdFilter.java                       servlet filter — populates MDC per request
+│                                                      (ArchUnit springWebStaysInApi carve-out, like core.origin)
 ├── events/                                            MealPrepEvent (sealed), ScopeChangedEvent (sealed),
-│                                                      EventScope, EventScopeKind
+│                                                      OriginAwareEvent (non-sealed)
 ├── lock/                                              LockService, LockKey (sealed), LeaseHandle,
+│                                                      domain/entity/LockLease, domain/repository/LockLeaseRepository,
 │                                                      internal/LockServiceImpl (composite),
 │                                                      internal/AdvisoryLockServiceImpl (tx-advisory),
 │                                                      internal/LeaseLockServiceImpl (TTL lease),
-│                                                      internal/LockLease (entity), internal/LockLeaseRepository,
 │                                                      internal/LockKeyHasher
-├── types/                                             SlotKind, MealKind, DataQuality, PreferenceTier,
-│                                                      value/IngredientMappingKey, value/ScopeId
-├── exception/                                         MealPrepException (project root), CoreException,
-│                                                      DecisionLogNotFoundException,
+├── origin/                                            Origin, ActorType, OriginContext (@RequestScope),
+│                                                      OriginFilter, OriginAware, OriginProperties, AuditMetadata,
+│                                                      internal/InMemoryTokenBucketRateLimiter,
+│                                                      exception/Origin*Exception (see §Origin-Tracking)
+├── types/                                             SlotKind, MealKind, DataQuality, PreferenceTier
+├── exception/                                         DecisionLogNotFoundException,
 │                                                      DecisionLogPayloadOversizedException
-└── config/                                            JpaAuditingConfig, CoreJsonConfig (Hibernate JsonType
-                                                       bean), TraceIdFilterConfig (highest filter precedence)
+└── config/                                            DefaultAsyncConfig, CorsProperties, DevCorsConfiguration
 ```
+
+The `core.exception` package holds the two decision-log exceptions; the project-wide `GlobalExceptionHandler` (in `com.example.mealprep.config`) maps them to ProblemDetail. The decision-log payloads ship as Jackson `JsonNode` columns rather than a typed record-tree (`core` enforces no per-scale shape — see the DTO note below), so there is no `entity/payload/` sub-tree.
 
 `MealPrepException` lives in `core.exception` rather than the project root because every module's exceptions extend it, and `core` is the only module everyone already depends on.
 
@@ -195,7 +203,7 @@ public record DecisionLogEntryDto(
 ) {}
 
 public record WriteDecisionLogRequest(
-    @NotNull UUID decisionId,                          // caller-supplied for idempotency
+    UUID decisionId,                                   // OPTIONAL — caller-supplied for idempotency; null → service generates one
     @NotNull UUID traceId,
     UUID parentDecisionId,
     @NotNull DecisionScale scale,
@@ -215,6 +223,8 @@ public record DecisionTraceDto(UUID traceId, List<DecisionLogEntryDto> entries) 
 ```
 
 `WriteDecisionLogRequest` is an in-process command, not a REST request — there is no public POST endpoint for the decision log. Validation annotations are still applied at the service-method boundary via `@Valid` so misuse from a sibling module fails fast.
+
+> **As-built note.** The shipped DTO (`DecisionLogWriteRequest` / `DecisionLogDto`) keeps the variable-shape payload fields (`inputs`, `candidates`, `chosen`, `emittedDirective`) as Jackson `JsonNode` rather than the typed `DecisionLog*` record-tree sketched above, and uses `String scopeKind` + `UUID scopeId` + `DecisionLogScale`. `core` deliberately enforces no per-scale payload shape (see the Entities note), so the typed record-tree above is the *design intent*; the `JsonNode` form is what ships. `decisionId` is the optional leading field for idempotency (a backward-compatible 14-arg constructor omits it for callers that don't need idempotency); the serialised-size cap on those `JsonNode` fields is enforced by `DecisionLogTokenBudgetGuard` (§Validation), which Jakarta annotations can't express.
 
 ---
 
@@ -266,16 +276,17 @@ Native CTE because JPQL has no `WITH RECURSIVE`. The 32-row cap prevents a malfo
 
 ### `DecisionLogService`
 
-Write side. Method is `@Transactional` (REQUIRED): callers are inside an existing optimisation-loop transaction and the log row should roll back together with the work it describes.
+Write side. Method is `@Transactional(REQUIRES_NEW)`: the audit row commits in its own inner transaction so it **survives a caller-side rollback** — the log records what was attempted even when the optimisation-loop work it describes rolls back. This matches the AI call-log pattern in [ai.md](ai.md) (audit must not be hostage to caller commit).
 
 ```java
 public interface DecisionLogService {
     /**
-     * Idempotent on decisionId. Caller supplies the UUID so it can carry the value in
-     * downstream events and refine-directives before the row hits the DB. Repeated calls
-     * with the same decisionId return the existing row without a second insert.
+     * Idempotent on decisionId when the caller supplies one: a repeated call with the same
+     * (non-null) decisionId returns the existing row without a second insert. When the caller
+     * leaves decisionId null the service generates a fresh UUID per call (no idempotency).
+     * Returns the persisted decisionId.
      */
-    DecisionLogEntryDto write(WriteDecisionLogRequest request);
+    UUID write(WriteDecisionLogRequest request);
 }
 ```
 
@@ -434,6 +445,41 @@ None. `core` does not subscribe to anything — that would create circular knowl
 
 ---
 
+## Origin-Tracking
+
+`core.origin` is the implementation of the cross-cutting **origin-tracking pattern** ([design/origin-tracking-pattern.md](../design/origin-tracking-pattern.md), built per [tickets/core/02b-origin-tracking-foundation.md](../tickets/core/02b-origin-tracking-foundation.md)). When a system component mutates user data on the user's behalf (feedback apply, AI adaptation, scheduled scanners, re-optimisation, discovery import) it calls the **same** REST endpoints a human would, tagging the call with an `X-Origin` header; the foundation here applies origin-specific policy on top of the endpoint's normal behaviour. This lives in `core` (not a per-module package) because it is the floor every mutating module shares and because the design doc names `core` as its home.
+
+### Surface
+
+| Class | Package | Role |
+|---|---|---|
+| `OriginHeaders` | `core.api` | Canonical header-name constants (`X-Origin`, `X-Origin-Trace`, `X-Origin-Depth`, `X-Acting-As`). The only sanctioned source of these literals (enforced by `ModuleBoundaryTest.onlyOriginFilterReadsOriginHeaders`). |
+| `Origin` | `core.origin` | Enum of inbound origins: `USER` (default when no header), `AI_FEEDBACK`, `AI_ADAPTATION`, `SYSTEM_SCHEDULED`, `SYSTEM_REOPT`, `SYSTEM_DISCOVERY`. `toActorType()` projects onto the coarser `ActorType`. |
+| `ActorType` | `core.origin` | Coarse `USER` / `AI` / `SYSTEM` grouping for audit rows. |
+| `OriginContext` | `core.origin` | `@RequestScope` carrier of `(origin, originTrace, originDepth, confidence, actingAsUserId)`. Populated once by `OriginFilter`; package-private setters so only the filter writes it. Downstream services read it via getters. |
+| `OriginFilter` | `core.origin` | `OncePerRequestFilter` (registered after `SessionAuthenticationFilter`). Parses + validates the headers, applies the policy gates (below), authenticates Pattern-B bearer service tokens, and populates `OriginContext`. Fail-closed: any gate failure throws, routed back through the `@ExceptionHandler` chain via the composite `HandlerExceptionResolver` (a filter runs outside the `DispatcherServlet`). |
+| `OriginAware` | `core.origin` | Marker annotation on controller classes/methods that may legitimately receive non-USER origin. The filter rejects a non-USER origin on an unannotated handler (when `rejectOriginOnNonAnnotatedController`). |
+| `OriginProperties` | `core.origin` | `@ConfigurationProperties("mealprep.origin")` — `aiConfidenceFloor`, `rateLimitWindow`, per-origin `rateLimits` (`RateLimitConfig(limit, scope)` with `Scope` = `PER_USER` / `GLOBAL`), and `rejectOriginOnNonAnnotatedController`. |
+| `InMemoryTokenBucketRateLimiter` | `core.origin.internal` | Process-local per-origin token bucket (single-instance v1; Redis is the multi-node follow-up). `PER_USER` → one bucket per `(origin, actingAsUserId)`; `GLOBAL` → one bucket per origin. Pull-based refill; opportunistic eviction of buckets idle well past their window. |
+| `AuditMetadata` | `core.origin` | `(actorType, originTrace)` projection of `OriginContext` for module audit-row writers; `fromContext(ctx)` / `user()` factories. |
+| `OriginAwareEvent` | `core.events` | `non-sealed` extension of `MealPrepEvent` carrying `origin()` + `originTrace()`. Opt-in: only events whose listeners branch on origin implement it (e.g. notification suppressing self-edits). |
+| `Origin*Exception` | `core.origin.exception` | `OriginValidationException` (400), `OriginDepthExceededException` (422), `ConfidenceBelowThresholdException` (422), `OriginNotPermittedOnEndpointException` (403), `OriginRateLimitExceededException` (429). Mapped centrally in the project-wide `GlobalExceptionHandler`. |
+
+### Policy gates (applied by `OriginFilter` to non-USER requests)
+
+1. **Header validation** — unknown `X-Origin`, or a non-USER origin missing `X-Origin-Trace` → 400 (`OriginValidationException`).
+2. **Recursion guard** — `X-Origin-Depth > 3` → 422 (`OriginDepthExceededException`); prevents an origin-tagged call triggering another unbounded.
+3. **Pattern-B authentication** — `Authorization: Bearer <service-token>` + `X-Acting-As: <userId>` authenticates a scheduled-job caller acting for a user; Pattern A (inherited session) carries no token and the filter trusts the cookie-resolved identity.
+4. **Confidence floor** — AI origins must declare a `confidence` in the body ≥ `aiConfidenceFloor`; below (or absent) → 422 (`ConfidenceBelowThresholdException`). The filter buffers the body via `ContentCachingRequestWrapper` so the controller can still bind it.
+5. **`@OriginAware` endpoint gate** — non-USER origin on an unannotated handler → 403 (`OriginNotPermittedOnEndpointException`).
+6. **Rate limit** — per `OriginProperties.rateLimits`; exhaustion → 429 (`OriginRateLimitExceededException`) with a `Retry-After` header. Origins absent from the map are unlimited.
+
+### Out of scope here
+
+The first production consumer (feedback bridges, `feedback-01g`) calls in-process with explicit `AuditMetadata` rather than self-HTTP, so the filter's gates are reserved for future external automation (see audit `xcut-4`). Multi-instance distributed rate limiting (Redis) is deferred past v1.
+
+---
+
 ## Trace ID Propagation
 
 ### MDC
@@ -468,15 +514,14 @@ so async dispatchers and test fixtures don't have to touch MDC directly.
 
 ### Flow 1: Decision-log write
 
-`DecisionLogService.write(request)` is called from inside an optimisation-loop transaction. `@Transactional` (REQUIRED — joins caller's tx).
+`DecisionLogService.write(request)` is called from inside an optimisation-loop transaction. `@Transactional(REQUIRES_NEW)` — the audit row commits in its own inner transaction and survives a caller-side rollback.
 
-1. Jakarta validation (`@Valid` on parameter).
-2. `DecisionLogTokenBudgetGuard.assertWithinBudget(request)` — serialise via the project `ObjectMapper`, total ≤ 64 KB else `DecisionLogPayloadOversizedException` (422).
-3. **Idempotency check.** `repository.findById(decisionId)` — if present, return mapped existing row. Repeats happen because the planner can hit this method twice if its outer transaction retries on optimistic-lock conflict.
-4. **Parent existence check.** If `parentDecisionId != null`, `repository.existsById(parentDecisionId)`; throw `DecisionLogNotFoundException` if missing.
-5. `mapper.toEntity(request)`. JPA auditing populates `createdAt`. `repository.save(entity)`. Flush deferred to commit — the row appears together with the loop's other writes.
-6. Log INFO: `decisionId`, `traceId`, `scale`, `triggeredBy`, `iteration`, `durationMs`. Full payload at DEBUG only (PII rule).
-7. Return `mapper.toDto(saved)`.
+1. Null-request guard (`IllegalArgumentException`).
+2. `DecisionLogTokenBudgetGuard.assertWithinBudget(request)` — serialise the JSONB payload fields via the project `ObjectMapper`, total ≤ 64 KB else `DecisionLogPayloadOversizedException` (422).
+3. **Idempotency check.** If `request.decisionId() != null`, `repository.findById(decisionId)` — if present, short-circuit and return the existing row's id (no second insert). A retry that reuses the same caller-supplied id is therefore idempotent (the planner can hit this method twice when its outer transaction retries on an optimistic-lock conflict). When `decisionId` is null the service generates a fresh UUID and skips this check.
+4. **Parent existence check.** If `parentDecisionId != null`, `repository.existsById(parentDecisionId)`; throw `DecisionLogNotFoundException` if missing — a clearer upfront error than the deferred FK violation.
+5. Build the entity. JPA auditing (`@CreationTimestamp`) populates `createdAt`. `repository.save(entity)`.
+6. Return the persisted `decisionId`.
 
 No event published. The decision-log write is a side-effect of an existing flow, not an event source.
 
@@ -533,10 +578,10 @@ Background work mirrors this via `TraceContext.runWithTraceId` for the lambda's 
 |---|---|
 | `@Transactional` placement | All service-impl methods. Repositories never. |
 | Read-method propagation | `@Transactional(readOnly = true)`. |
-| Write-method propagation | Default REQUIRED. `DecisionLogService.write` joins the caller's transaction by design — log entry rolls back if the work it describes does. |
+| Write-method propagation | `DecisionLogService.write` is `@Transactional(REQUIRES_NEW)` — the audit row commits in its own inner transaction so it survives a caller-side rollback (records what was attempted). Matches the AI call-log pattern in ai.md. |
 | Optimistic locking | None. Decision log is append-only; no `@Version`. |
 | Pessimistic locking | The advisory-lock service IS the project's pessimistic-locking primitive. The lease lock is the connection-free single-flight primitive (committed marker, not a held lock). No row-level locks anywhere in `core`. |
-| Idempotency | `DecisionLogService.write` is idempotent on `decisionId`; caller responsibility to reuse the same UUID across retries. |
+| Idempotency | `DecisionLogService.write` is idempotent on a caller-supplied `decisionId` (a `findById` short-circuit returns the existing row on a retry that reuses the id); caller responsibility to reuse the same UUID across retries. A null `decisionId` opts out — the service generates a fresh id per call. |
 | MDC cleanup | `TraceIdFilter` and `TraceContext` always clean up in `finally`. Verified by `TraceIdFilterIT` checking thread-local cleanliness after each request. |
 
 ---

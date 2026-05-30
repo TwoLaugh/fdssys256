@@ -50,6 +50,15 @@ class ModuleBoundaryTest {
               // filter-thrown rejections back through @ExceptionHandler all legitimately depend on
               // Spring Web / Servlet types. Same sanctioned carve-out as the SPI exceptions above.
               "com.example.mealprep.core.origin..",
+              // core-1: TraceIdFilter (a OncePerRequestFilter seeding the per-request trace id into
+              // MDC) is the same flavour of cross-cutting HTTP-layer concern as OriginFilter and,
+              // per
+              // lld/core.md §Package Layout, lives in core.audit.trace rather than a per-module
+              // .api.
+              // A servlet filter legitimately depends on the Servlet API; the trace-reading helper
+              // (TraceContext) carries no Spring Web dependency and lives in
+              // core.audit.domain.service.internal. Sanctioned carve-out, same pattern as above.
+              "com.example.mealprep.core.audit.trace..",
               // E2E test-support (e2e-profile only): the stub/seed controllers
               // (E2eAiStubController, E2ePreferenceSeedController, E2eFeedbackSeedController) are
               // HTTP scaffolding for the black-box E2E harness — NOT product API surface — so they

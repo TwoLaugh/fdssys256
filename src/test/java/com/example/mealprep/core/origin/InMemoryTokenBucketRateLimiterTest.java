@@ -106,6 +106,55 @@ class InMemoryTokenBucketRateLimiterTest {
   }
 
   @Test
+  void prune_evicts_stale_buckets_but_retains_live_ones() {
+    InMemoryTokenBucketRateLimiter limiter =
+        new InMemoryTokenBucketRateLimiter(
+            propsWithLimit(Origin.AI_FEEDBACK, 5, Scope.PER_USER), clock);
+    Duration window = Duration.ofHours(1);
+
+    UUID staleUser = UUID.randomUUID();
+    UUID liveUser = UUID.randomUUID();
+
+    // Both users create a bucket now.
+    limiter.tryAcquire(Origin.AI_FEEDBACK, staleUser);
+    limiter.tryAcquire(Origin.AI_FEEDBACK, liveUser);
+    assertThat(limiter.bucketCount()).isEqualTo(2);
+
+    // Advance well past the staleness horizon (2 windows) so the existing buckets' windowEnd is
+    // strictly before the prune cutoff, then touch only the live user so its bucket refreshes to a
+    // current window.
+    clock.advance(Duration.ofHours(4));
+    limiter.tryAcquire(Origin.AI_FEEDBACK, liveUser);
+
+    // Force a deterministic sweep.
+    limiter.pruneStaleBuckets(window);
+
+    // The stale user's bucket is gone; the live user's refreshed bucket survives.
+    assertThat(limiter.bucketCount()).as("only the live bucket remains").isEqualTo(1);
+
+    // A subsequent call for the evicted user simply re-creates a fresh full bucket — transparent.
+    assertThat(limiter.tryAcquire(Origin.AI_FEEDBACK, staleUser)).isEmpty();
+    assertThat(limiter.bucketCount()).isEqualTo(2);
+  }
+
+  @Test
+  void prune_keeps_buckets_within_staleness_horizon() {
+    InMemoryTokenBucketRateLimiter limiter =
+        new InMemoryTokenBucketRateLimiter(
+            propsWithLimit(Origin.AI_FEEDBACK, 5, Scope.PER_USER), clock);
+    Duration window = Duration.ofHours(1);
+    UUID userA = UUID.randomUUID();
+
+    limiter.tryAcquire(Origin.AI_FEEDBACK, userA);
+    // Only just past one window — still within the 2-window horizon, so not prunable.
+    clock.advance(Duration.ofMinutes(90));
+
+    limiter.pruneStaleBuckets(window);
+
+    assertThat(limiter.bucketCount()).as("recent bucket retained").isEqualTo(1);
+  }
+
+  @Test
   void reset_for_testing_clears_state() {
     InMemoryTokenBucketRateLimiter limiter =
         new InMemoryTokenBucketRateLimiter(

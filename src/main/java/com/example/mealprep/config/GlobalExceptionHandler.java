@@ -1,6 +1,8 @@
 package com.example.mealprep.config;
 
 import com.example.mealprep.auth.security.ServiceTokenAuthenticationProvider.OriginNotPermittedByTokenException;
+import com.example.mealprep.core.exception.DecisionLogNotFoundException;
+import com.example.mealprep.core.exception.DecisionLogPayloadOversizedException;
 import com.example.mealprep.core.origin.exception.ConfidenceBelowThresholdException;
 import com.example.mealprep.core.origin.exception.OriginDepthExceededException;
 import com.example.mealprep.core.origin.exception.OriginNotPermittedOnEndpointException;
@@ -144,6 +146,44 @@ public class GlobalExceptionHandler {
       builder.allow(ex.getSupportedHttpMethods().toArray(new HttpMethod[0]));
     }
     return builder.body(pd);
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // Decision log (core.audit). The decision-log write is an in-process command (no POST), but its
+  // two domain exceptions are mapped centrally so any caller — and the admin read surface — gets a
+  // consistent RFC 9457 ProblemDetail. Per lld/core.md §Error responses.
+  // ------------------------------------------------------------------------------------------
+
+  @ExceptionHandler(DecisionLogNotFoundException.class)
+  public ResponseEntity<ProblemDetail> handleDecisionLogNotFound(
+      DecisionLogNotFoundException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.NOT_FOUND,
+            ex.getMessage(),
+            "decision-log-not-found",
+            "Decision log entry not found",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(DecisionLogPayloadOversizedException.class)
+  public ResponseEntity<ProblemDetail> handleDecisionLogPayloadOversized(
+      DecisionLogPayloadOversizedException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "decision-log-payload-oversized",
+            "Decision log payload oversized",
+            req.getRequestURI());
+    pd.setProperty("actualBytes", ex.getActualBytes());
+    pd.setProperty("maxBytes", ex.getMaxBytes());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
   }
 
   // ------------------------------------------------------------------------------------------
