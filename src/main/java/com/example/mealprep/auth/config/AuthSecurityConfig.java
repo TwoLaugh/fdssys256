@@ -3,6 +3,7 @@ package com.example.mealprep.auth.config;
 import com.example.mealprep.auth.domain.repository.ServiceTokenRepository;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
+import com.example.mealprep.auth.domain.service.internal.SessionRevoker;
 import com.example.mealprep.auth.domain.service.internal.SessionTokenGenerator;
 import com.example.mealprep.auth.security.ServiceTokenAuthenticationProvider;
 import com.example.mealprep.core.origin.OriginContext;
@@ -59,10 +60,11 @@ public class AuthSecurityConfig {
       SessionRepository sessionRepository,
       UserRepository userRepository,
       SessionTokenGenerator tokenGenerator,
+      SessionRevoker sessionRevoker,
       AuthProperties authProperties,
       Clock clock) {
     return new SessionAuthenticationFilter(
-        sessionRepository, userRepository, tokenGenerator, authProperties, clock);
+        sessionRepository, userRepository, tokenGenerator, sessionRevoker, authProperties, clock);
   }
 
   @Bean

@@ -33,7 +33,7 @@ class LoginThrottleServiceTest {
   @Mock private LoginAttemptRepository repo;
 
   private final AuthProperties properties =
-      new AuthProperties(null, null, null, null, null, null, null, null, null);
+      new AuthProperties(null, null, null, null, null, null, null, null, null, null, null);
   private final Instant now = Instant.parse("2026-05-07T12:00:00Z");
 
   private LoginThrottleService service() {

@@ -5,6 +5,7 @@ import com.example.mealprep.auth.domain.entity.User;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.domain.service.AuthenticatedPrincipal;
+import com.example.mealprep.auth.domain.service.internal.SessionRevoker;
 import com.example.mealprep.auth.domain.service.internal.SessionTokenGenerator;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -25,7 +26,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * Reads the {@code AUTH_SESSION} cookie, looks up the session by its SHA-256 hash, and attaches an
  * {@link AuthenticatedPrincipal} to the {@code SecurityContext}. Missing / invalid / expired /
  * revoked / soft-deleted-user sessions leave the context anonymous; downstream {@code
- * authorizeHttpRequests} rules then handle the 401.
+ * authorizeHttpRequests} rules then handle the 401. A soft-deleted user's still-active session is
+ * additionally revoked (best-effort, separate tx) so the stale credential cannot be re-presented.
  *
  * <p>Registered before {@code UsernamePasswordAuthenticationFilter} in {@code AuthSecurityConfig}.
  * Runs once per request.
@@ -38,6 +40,7 @@ public class SessionAuthenticationFilter extends OncePerRequestFilter {
   private final SessionRepository sessionRepository;
   private final UserRepository userRepository;
   private final SessionTokenGenerator tokenGenerator;
+  private final SessionRevoker sessionRevoker;
   private final String cookieName;
   private final Clock clock;
 
@@ -45,11 +48,13 @@ public class SessionAuthenticationFilter extends OncePerRequestFilter {
       SessionRepository sessionRepository,
       UserRepository userRepository,
       SessionTokenGenerator tokenGenerator,
+      SessionRevoker sessionRevoker,
       AuthProperties authProperties,
       Clock clock) {
     this.sessionRepository = sessionRepository;
     this.userRepository = userRepository;
     this.tokenGenerator = tokenGenerator;
+    this.sessionRevoker = sessionRevoker;
     this.cookieName = authProperties.cookieName();
     this.clock = clock;
   }
@@ -87,7 +92,17 @@ public class SessionAuthenticationFilter extends OncePerRequestFilter {
       return;
     }
     Optional<User> userOpt = userRepository.findById(session.getUserId());
-    if (userOpt.isEmpty() || userOpt.get().getDeletedAt() != null) {
+    if (userOpt.isEmpty()) {
+      return;
+    }
+    if (userOpt.get().getDeletedAt() != null) {
+      // Soft-deleted user with a still-active session: leave the context anonymous AND revoke the
+      // session so the stale credential can't be presented again (LLD Flow 3 step 3, auth-6). The
+      // revoke runs in its own tx via SessionRevoker (proxied REQUIRES_NEW); the doFilterInternal
+      // catch-all guarantees any failure here never escapes the filter.
+      if (session.getRevokedAt() == null) {
+        sessionRevoker.revoke(session.getId());
+      }
       return;
     }
     AuthenticatedPrincipal principal =

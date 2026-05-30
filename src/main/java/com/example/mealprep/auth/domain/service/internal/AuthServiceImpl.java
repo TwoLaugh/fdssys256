@@ -24,6 +24,7 @@ import com.example.mealprep.auth.exception.AccountLockedException;
 import com.example.mealprep.auth.exception.InvalidCredentialsException;
 import com.example.mealprep.auth.exception.LoginThrottledException;
 import com.example.mealprep.auth.exception.UsernameAlreadyExistsException;
+import com.example.mealprep.auth.exception.WeakPasswordException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -153,7 +154,9 @@ public class AuthServiceImpl implements AuthQueryService, AuthUpdateService {
     // Service-side belt-and-braces — annotation can't see the username so equality lives here.
     var reasons = passwordStrengthValidator.evaluate(request.password(), request.username());
     if (!reasons.isEmpty()) {
-      throw new IllegalArgumentException("Password rejected: " + reasons);
+      // WeakPasswordException → 400 with a machine-readable reasons[] extension and NO block-list
+      // leak in the detail (the old IllegalArgumentException echoed e.g. [BREACHED] into the body).
+      throw new WeakPasswordException(reasons);
     }
 
     Instant now = Instant.now(clock);
@@ -237,14 +240,25 @@ public class AuthServiceImpl implements AuthQueryService, AuthUpdateService {
       throw new AccountLockedException(user.getLockedUntil());
     }
 
+    // 3b) Lockout window has fully expired (lockedUntil set but now past it). Clear the stale
+    // lockout state BEFORE evaluating the next attempt so the counter (left at >= threshold while
+    // locked, where it preserves the audit trail) does not instantly re-lock the account on the
+    // first failed attempt after the window. This is the bug-fix per LLD Flow 2: the count must
+    // not survive the lockout window. (auth-1)
+    if (user.getLockedUntil() != null) {
+      user.setLockedUntil(null);
+      user.setFailedLoginCount(0);
+    }
+
     // 4) Password verify.
     if (!passwordHasher.verify(request.password(), user.getPasswordHash())) {
       int newFailedCount = user.getFailedLoginCount() + 1;
       user.setFailedLoginCount(newFailedCount);
-      // Lockout state machine: count reaches threshold → set lockedUntil. We do NOT reset the
-      // counter to zero here (the LLD says "reset count to 0" on lockout, but that conflicts with
-      // the ticket's 01b spec which says lockedUntil is set; counter is reset only on successful
-      // login). Following the ticket — which is authoritative — and leaving the counter intact.
+      // Lockout state machine: count reaches threshold → set lockedUntil. The counter is NOT reset
+      // to zero here; it stays >= threshold while locked so the user row records how many failures
+      // triggered the lock (audit value). The stale counter is cleared in step 3b once the lockout
+      // window expires, before the next attempt is evaluated, so it cannot cause an instant
+      // re-lock.
       if (newFailedCount >= authProperties.lockout().threshold()) {
         Instant lockedUntil = now.plus(authProperties.lockout().duration());
         user.setLockedUntil(lockedUntil);
@@ -308,7 +322,11 @@ public class AuthServiceImpl implements AuthQueryService, AuthUpdateService {
   // ---------------- Password change ----------------
 
   @Override
-  @Transactional
+  // noRollbackFor InvalidCredentialsException so the BAD_PASSWORD LoginAttempt recorded on a wrong
+  // current-password (Step 1) commits — PUT /password then shares the login throttle surface
+  // (auth-2). No user-row writes happen before any of the InvalidCredentialsException throws, so
+  // committing on that exception cannot leak partial state.
+  @Transactional(noRollbackFor = InvalidCredentialsException.class)
   public LoginOutcome changePassword(
       UUID currentSessionId, PasswordChangeRequest request, LoginContext loginContext) {
     if (currentSessionId == null) {
@@ -328,8 +346,18 @@ public class AuthServiceImpl implements AuthQueryService, AuthUpdateService {
 
     // Step 1 — verify the current password before doing anything else. A wrong currentPassword
     // must surface as 401 with the generic "Invalid credentials", not as a 400 about new-password
-    // shape (no enumeration / probing oracle).
+    // shape (no enumeration / probing oracle). It is also recorded as a BAD_PASSWORD LoginAttempt
+    // so it counts toward the same per-username / per-IP throttle window as login — closing the
+    // throttle-escape gap (auth-2, LLD Flow 5 step 2).
     if (!passwordHasher.verify(request.currentPassword(), user.getPasswordHash())) {
+      String sourceIp = loginContext == null ? "" : nullToEmpty(loginContext.sourceIp());
+      recordAttempt(
+          normalise(user.getUsername()),
+          user.getId(),
+          sourceIp,
+          false,
+          LoginFailureReason.BAD_PASSWORD,
+          Instant.now(clock));
       throw new InvalidCredentialsException();
     }
 
@@ -337,7 +365,8 @@ public class AuthServiceImpl implements AuthQueryService, AuthUpdateService {
     // username). Bean validation already enforced length / whitespace at controller bind.
     var reasons = passwordStrengthValidator.evaluate(request.newPassword(), user.getUsername());
     if (!reasons.isEmpty()) {
-      throw new IllegalArgumentException("Password rejected: " + reasons);
+      // WeakPasswordException → 400 with reasons[] codes only; no block-list leak (auth-5).
+      throw new WeakPasswordException(reasons);
     }
 
     Instant now = Instant.now(clock);

@@ -18,6 +18,8 @@ import com.example.mealprep.auth.testdata.AuthTestData;
 import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
+import java.time.Instant;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -204,6 +206,43 @@ class ThrottlingAndLockoutIT {
     user = userRepository.findByUsernameNormalised(username.toLowerCase()).orElseThrow();
     assertThat(user.getFailedLoginCount()).isEqualTo(4); // not 7
     assertThat(user.getLockedUntil()).isNull(); // still under threshold
+  }
+
+  @Test
+  void
+      afterLockoutWindowExpires_singleBadPasswordDoesNotInstantlyRelock_andCorrectPasswordSucceeds()
+          throws Exception {
+    // auth-1 regression: lock the account, then simulate the lockout window having elapsed by
+    // back-dating lockedUntil. The very next failed attempt must NOT instantly re-lock (the stale
+    // counter is cleared before the attempt is evaluated), and a correct password then succeeds.
+    String username = register();
+    int threshold = authProperties.lockout().threshold();
+    for (int i = 0; i < threshold; i++) {
+      postLogin(username, "the-wrong-password-12345", 401);
+    }
+    var locked = userRepository.findByUsernameNormalised(username.toLowerCase()).orElseThrow();
+    assertThat(locked.getLockedUntil()).isNotNull();
+    assertThat(locked.getFailedLoginCount()).isGreaterThanOrEqualTo(threshold);
+
+    // Window has passed: move lockedUntil into the past. (Login attempts above keep us under the
+    // 10-failure username throttle, so the next single failure is evaluated, not throttled.)
+    locked.setLockedUntil(Instant.now().minus(Duration.ofMinutes(1)));
+    userRepository.saveAndFlush(locked);
+
+    // One more wrong password — must be a normal 401, NOT a 423 re-lock.
+    postLogin(username, "the-wrong-password-12345", 401);
+    var afterExpiry = userRepository.findByUsernameNormalised(username.toLowerCase()).orElseThrow();
+    assertThat(afterExpiry.getLockedUntil()).isNull();
+    // Counter restarted from zero before this attempt → exactly one failure now.
+    assertThat(afterExpiry.getFailedLoginCount()).isEqualTo(1);
+
+    // And the correct password logs in (would be impossible if the account had re-locked).
+    postLogin(username, AuthTestData.DEFAULT_PASSWORD, 200);
+    var afterSuccess =
+        userRepository.findByUsernameNormalised(username.toLowerCase()).orElseThrow();
+    assertThat(afterSuccess.getFailedLoginCount()).isZero();
+    assertThat(afterSuccess.getLockedUntil()).isNull();
+    assertThat(afterSuccess.getLastLoginAt()).isNotNull();
   }
 
   @Test

@@ -29,7 +29,7 @@ import org.mockito.ArgumentCaptor;
 class ValidPasswordValidatorTest {
 
   private final AuthProperties properties =
-      new AuthProperties(null, null, null, null, null, 12, 128, null, null);
+      new AuthProperties(null, null, null, null, null, 12, 128, null, null, null, null);
   private final PasswordStrengthValidator strength = new PasswordStrengthValidator(properties);
   private final ValidPasswordValidator validator = new ValidPasswordValidator(strength);
 

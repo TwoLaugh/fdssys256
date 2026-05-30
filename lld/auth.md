@@ -34,17 +34,22 @@ com.example.mealprep.auth/
 │       ├── CurrentUserResolverImpl.java    Spring Security-backed impl of CurrentUserResolver
 │       └── internal/
 │           ├── PasswordHasher              BCrypt wrapper (cost factor configurable)
-│           ├── PasswordStrengthValidator   policy enforcement (length, character classes, breach list)
+│           ├── PasswordStrengthValidator   policy enforcement (length, whitespace, username-eq, breach list)
 │           ├── SessionTokenGenerator       SecureRandom-backed 256-bit token + lookup hash
 │           ├── LoginThrottleService        per-username + per-IP attempt accounting
-│           └── SessionAuthenticationFilter Spring Security filter — reads cookie, loads session, sets context
-├── event/                                  UserRegisteredEvent, UserLoggedInEvent, UserDeletedEvent
-├── exception/                              module-root + per-failure subclasses (see Errors)
+│           ├── SessionReaper               @Scheduled nightly stale-session hard-delete (Flow 6)
+│           └── SessionRevoker              REQUIRES_NEW single-session revoke (soft-deleted-user cleanup)
+├── event/                                  UserRegisteredEvent, UserLoggedInEvent, UserPasswordChangedEvent
+├── exception/                              module-root + per-failure subclasses (incl. WeakPasswordException — see Errors)
+├── security/                               ServiceTokenAuthenticationProvider (Pattern-B bearer/service-token auth)
 ├── validation/                             @ValidUsername, @ValidPassword + validators
 └── config/
     ├── AuthSecurityConfig.java             SecurityFilterChain bean, password-encoder bean, CORS
-    └── AuthProperties.java                 @ConfigurationProperties (bcrypt cost, session TTL, throttle thresholds, cookie flags)
+    ├── SessionAuthenticationFilter.java    Spring Security filter — reads cookie, loads session, sets context
+    └── AuthProperties.java                 @ConfigurationProperties (bcrypt cost, session TTL/reaper, throttle, lockout, cookie, username policy)
 ```
+
+**Reconcile note (auth-7):** the shipped layout differs from earlier drafts — `SessionAuthenticationFilter` lives in `config/` (not `internal/`), there is a `security/` package for the service-token (Pattern-B) provider, and the event set is `UserRegisteredEvent` / `UserLoggedInEvent` / `UserPasswordChangedEvent` (no `UserDeletedEvent`, since soft-delete is not shipped — see Out of Scope).
 
 `AuthModule.java` re-exports `AuthQueryService`, `AuthUpdateService`, and `CurrentUserResolver` so cross-module code never touches `SecurityContextHolder` — see [Cross-Module Integration](#cross-module-integration). `SessionAuthenticationFilter` is a Spring Security plumbing detail; it is registered on the `SecurityFilterChain` in `AuthSecurityConfig`.
 
@@ -126,7 +131,7 @@ CREATE TABLE auth_login_attempts (
     user_id                     uuid,                            -- null when username didn't match
     source_ip                   inet NOT NULL,
     succeeded                   boolean NOT NULL,
-    failure_reason              varchar(32),                     -- BAD_PASSWORD | UNKNOWN_USER | ACCOUNT_LOCKED | INVALID_REQUEST
+    failure_reason              varchar(32),                     -- BAD_PASSWORD | UNKNOWN_USER | ACCOUNT_LOCKED | THROTTLED | INVALID_REQUEST
     attempted_at                timestamptz NOT NULL
 );
 -- Per-username throttle window query.
@@ -149,7 +154,7 @@ All entities follow the style guide: UUID `@Id` set application-side, `@Version`
 | `Session` | `@ManyToOne(fetch = LAZY) User`. `tokenHash`, `issuedAt`, `expiresAt`, `lastSeenAt`, `revokedAt`, `issuingIp`, `userAgent`. `@Version`. |
 | `LoginAttempt` | Append-only. `usernameNormalised`, optional `userId`, `sourceIp`, `succeeded`, `failureReason`, `attemptedAt`. No `@Version`. |
 
-Local enums: `LoginFailureReason` (`BAD_PASSWORD`, `UNKNOWN_USER`, `ACCOUNT_LOCKED`, `INVALID_REQUEST`).
+Local enums: `LoginFailureReason` (`BAD_PASSWORD`, `UNKNOWN_USER`, `ACCOUNT_LOCKED`, `THROTTLED`, `INVALID_REQUEST`). `BAD_PASSWORD` is recorded both on a wrong login password and on a wrong *current* password in `PUT /password`, so both feed one throttle surface.
 
 `User` does **not** model roles or authorities — single role per user in v1; per-route authorisation rules belong to each controller LLD.
 
@@ -157,45 +162,36 @@ Local enums: `LoginFailureReason` (`BAD_PASSWORD`, `UNKNOWN_USER`, `ACCOUNT_LOCK
 
 ## DTOs
 
-All DTOs are Java records per the style guide.
+All DTOs are Java records per the style guide. **The authoritative DTO contract is the OpenAPI
+spec** (`openapi/schemas/auth.yaml`) — contract tests (`*IT` with swagger-request-validator) pin the
+shipped JSON shapes; this section describes the shipped records (auth-7 reconcile — earlier drafts
+listed `UserDto(id, ...)`, a `LoginResponse(user, sessionExpiresAt)`, and a `ChangePasswordRequest`
+that diverged from what shipped).
 
 ```java
-public record UserDto(
-    UUID id,
-    String username,
-    Instant createdAt,
-    Instant passwordUpdatedAt,
-    Instant lastLoginAt
-) {}
-
-public record SessionDto(
-    UUID id,
-    UUID userId,
-    Instant issuedAt,
-    Instant expiresAt,
-    Instant lastSeenAt
-) {}
+// Outward-facing identity. JSON field is `userId` (not `id`). Excludes all operational fields.
+public record UserDto(UUID userId, String username, Instant createdAt) {}
 
 public record RegisterRequest(
     @NotBlank @ValidUsername String username,
-    @NotBlank @ValidPassword String password
-) {}
+    @NotBlank @ValidPassword String password) {}
 
-public record LoginRequest(
-    @NotBlank String username,
-    @NotBlank String password
-) {}
+public record LoginRequest(@NotBlank String username, @NotBlank String password) {}
 
-public record LoginResponse(
-    UserDto user,
-    Instant sessionExpiresAt          // raw token is delivered via Set-Cookie, never in JSON
-) {}
+// Login response body — raw token is delivered via Set-Cookie, never in JSON.
+public record LoginResponse(UUID userId, String username) {}
 
-public record ChangePasswordRequest(
+public record PasswordChangeRequest(
     @NotBlank String currentPassword,
-    @NotBlank @ValidPassword String newPassword
-) {}
+    @NotBlank @ValidPassword String newPassword) {}
 ```
+
+`register` and `login` both return the internal `LoginOutcome(UserDto user, UUID sessionId, Instant
+expiresAt, String rawSessionToken)` — the only place the raw token is exposed — which the controller
+converts into the response body + `Set-Cookie` and then discards. (Registration auto-logs-in — a
+locked decision; see Flow 1.) There is no separate `SessionDto`/`ChangePasswordRequest` in the
+shipped module: the request record is named `PasswordChangeRequest`, and `/me` + `/password` return
+`UserDto`.
 
 The raw session token is **never** in a JSON response body — only in `Set-Cookie` on the login response, so it is unreachable from JavaScript and not captured by body-logging middleware. **The HLD is silent on cookie-vs-body; choosing cookie-only because it eliminates the most common credential-leak path and matches the cookie-based contract in [technical-architecture.md §Authentication](../design/technical-architecture.md#authentication). Worth user review.**
 
@@ -259,17 +255,19 @@ The bulk JPQL `revokeAllActiveForUser` and `deleteExpiredAndRevokedBefore` queri
 
 Per the style guide, both module interfaces are implemented by a single `AuthServiceImpl`. `CurrentUserResolver` is a separate interface so cross-module callers inject only what they need and so the test-time impl can be a pure stub without booting Spring Security.
 
+**Reconcile note (auth-7):** the signatures below are the *shipped* ones — earlier drafts listed
+`register` returning `UserDto`, session-lookup methods on the query service, a `deleteUser`/
+`logoutAllSessionsForUser` pair, and a `requireCurrentUserId()`/`currentSession()` resolver shape
+that the implementation never grew. Registration auto-logs-in (locked decision), so `register`
+returns the same `LoginOutcome` as `login`.
+
 ### `AuthQueryService`
 
 ```java
 public interface AuthQueryService {
     Optional<UserDto> getUser(UUID userId);
-    List<UserDto> getUsersByIds(List<UUID> userIds);
+    List<UserDto> getUsersByIds(Collection<UUID> userIds);
     Optional<UserDto> getUserByUsername(String username);
-
-    // Session lookup — primarily used by SessionAuthenticationFilter and the /me endpoint.
-    Optional<SessionDto> getActiveSession(UUID sessionId);
-    List<SessionDto> getActiveSessionsForUser(UUID userId);
 }
 ```
 
@@ -277,29 +275,30 @@ public interface AuthQueryService {
 
 ```java
 public interface AuthUpdateService {
-    UserDto register(RegisterRequest request);
+    // Auto-logs-in: returns a LoginOutcome (UserDto + sessionId + expiry + raw token), not a UserDto.
+    LoginOutcome register(RegisterRequest request, LoginContext loginContext);
 
-    // Returns the raw session token alongside the persisted SessionDto.
-    // Caller (controller) is responsible for placing the token in a Set-Cookie header
-    // and discarding it from any other response surface.
+    // The raw token rides on the returned LoginOutcome. The controller places it in a Set-Cookie
+    // header and discards it from every other response surface.
     LoginOutcome login(LoginRequest request, LoginContext loginContext);
 
     void logout(UUID sessionId);
-    void logoutAllSessionsForUser(UUID userId);
 
-    UserDto changePassword(UUID userId, ChangePasswordRequest request);
-
-    // Soft-delete a user. Revokes all active sessions in the same transaction.
-    // Hard-delete and downstream data deletion are out of scope here — see Out of Scope.
-    void deleteUser(UUID userId);
+    // Verifies currentPassword (recording a BAD_PASSWORD LoginAttempt on mismatch so PUT /password
+    // shares the login throttle surface), rotates the hash, bulk-revokes the user's OTHER sessions,
+    // and re-issues the calling session. Returns a fresh LoginOutcome for the re-issued cookie.
+    LoginOutcome changePassword(
+        UUID currentSessionId, PasswordChangeRequest request, LoginContext loginContext);
 }
 
-public record LoginContext(InetAddress sourceIp, String userAgent) {}
+public record LoginContext(String sourceIp, String userAgent) {}
 
-public record LoginOutcome(UserDto user, SessionDto session, String rawSessionToken) {}
+public record LoginOutcome(
+    UserDto user, UUID sessionId, Instant sessionExpiresAt, String rawSessionToken) {}
 ```
 
-`LoginOutcome` is the only place the raw token is exposed. It is not a client-facing DTO — the controller converts the token into a `Set-Cookie` and discards it. Encoding this in a dedicated type makes the boundary auditable.
+`LoginOutcome` is the only place the raw token is exposed. It is not a client-facing DTO — the controller converts the token into a `Set-Cookie` and discards it. Encoding this in a dedicated type makes the boundary auditable. **`sourceIp` is carried as a `String`** (the controller reads `HttpServletRequest.getRemoteAddr()`), not an `InetAddress`. Soft-delete (`deleteUser`) and bulk
+`logoutAllSessionsForUser` are not shipped in v1 — see Out of Scope.
 
 ### `CurrentUserResolver`
 
@@ -308,15 +307,12 @@ public interface CurrentUserResolver {
     // Returns the userId of the currently authenticated principal, or empty for anonymous requests.
     Optional<UUID> currentUserId();
 
-    // Convenience: throws AuthenticationRequiredException (mapped to 401) when missing.
-    UUID requireCurrentUserId();
-
-    // Returns the active session associated with the current request, or empty if none.
-    Optional<SessionDto> currentSession();
+    // Returns the sessionId of the current request's principal, or empty if none.
+    Optional<UUID> currentSessionId();
 }
 ```
 
-`CurrentUserResolverImpl` reads from `SecurityContextHolder` and unwraps the principal placed there by `SessionAuthenticationFilter`. **The architectural rule of this LLD: other modules read `userId` exclusively through `CurrentUserResolver`** — never `SecurityContextHolder`, never any Spring Security type. `userId` then flows downward as an explicit method argument. This contains the Spring Security dependency to the auth module.
+`CurrentUserResolverImpl` reads from `SecurityContextHolder` and unwraps the `AuthenticatedPrincipal` placed there by `SessionAuthenticationFilter` (which carries both `userId` and `sessionId`). Controllers that need a hard 401 call `.orElseThrow(...)` themselves (e.g. `/me`, `/password` throw `ResponseStatusException(401)`) rather than a resolver-level `requireCurrentUserId()`. **The architectural rule of this LLD: other modules read `userId` exclusively through `CurrentUserResolver`** — never `SecurityContextHolder`, never any Spring Security type. `userId` then flows downward as an explicit method argument. This contains the Spring Security dependency to the auth module.
 
 ---
 
@@ -346,17 +342,18 @@ All error responses use RFC 9457 `ProblemDetail`. Module-specific exceptions and
 
 | Exception | Status | `type` URI |
 |---|---|---|
-| `UsernameAlreadyTakenException` | 409 | `https://mealprep.example.com/problems/username-taken` |
+| `UsernameAlreadyExistsException` | 409 | `https://mealprep.example.com/problems/username-taken` |
 | `InvalidCredentialsException` | 401 | `https://mealprep.example.com/problems/invalid-credentials` |
 | `AccountLockedException` | 423 | `https://mealprep.example.com/problems/account-locked` |
 | `LoginThrottledException` | 429 | `https://mealprep.example.com/problems/login-throttled` |
-| `AuthenticationRequiredException` | 401 | `https://mealprep.example.com/problems/authentication-required` |
-| `WeakPasswordException` | 400 | `https://mealprep.example.com/problems/weak-password` |
+| `WeakPasswordException` | 400 | `https://mealprep.example.com/problems/weak-password` (+ `reasons[]` extension) |
 | `MethodArgumentNotValidException` | 400 | `errors[]` extension on ProblemDetail |
 
-`InvalidCredentialsException` carries no detail beyond a generic message — the controller and handler must not expose the underlying reason.
+`InvalidCredentialsException` carries no detail beyond a generic message — the controller and handler must not expose the underlying reason. The auth-specific exceptions above (except `MethodArgumentNotValidException`, which the global handler owns) are mapped in `AuthExceptionHandler` (`@Order(HIGHEST_PRECEDENCE)`). **Reconcile note (auth-7):** the shipped 409 exception is `UsernameAlreadyExistsException` (not `…TakenException`); there is no `AuthenticationRequiredException` type — the missing-auth 401 is produced by the security chain's entry point (`AuthSecurityConfig.writeUnauthorizedProblem`) and by `ResponseStatusException(401)` in `/me` / `/password`.
 
-Module root: `AuthException extends MealPrepException`.
+`WeakPasswordException` carries the machine-readable `reasons[]` (codes only) on a fixed, non-leaking `detail`.
+
+The auth exceptions are plain `RuntimeException`s in `auth/exception` (the shipped module has no `AuthException extends MealPrepException` root — auth-7).
 
 ---
 
@@ -364,10 +361,21 @@ Module root: `AuthException extends MealPrepException`.
 
 ### `@ValidUsername` (custom)
 
-- 3-64 characters
-- ASCII letters, digits, dot, underscore, hyphen — `^[A-Za-z0-9._-]{3,64}$`
-- Must not start or end with a separator
-- Reserved-name list (e.g. `admin`, `root`, `system`, `support`) — configurable via `AuthProperties`
+- 3-32 characters
+- ASCII letters, digits, underscore, hyphen — `^[a-zA-Z0-9_-]{3,32}$`
+- Must not start or end with a separator (`_` / `-`)
+- Reserved-name list (default `admin`, `root`, `system`, `support`) — configurable via
+  `AuthProperties.Username.reservedNames` (`mealprep.auth.username.reserved-names`), matched
+  case-insensitively
+
+**Reconcile note (auth-4):** the shipped pattern is `^[a-zA-Z0-9_-]{3,32}$` — **no dot, 32-char
+ceiling** — to match the OpenAPI contract (`schemas/auth.yaml`: `pattern '^[a-zA-Z0-9_-]+$'`,
+`minLength 3`, `maxLength 32`), which the implementation and contract tests already agree on. (An
+earlier draft of this LLD specified a wider `^[A-Za-z0-9._-]{3,64}$` with a dot — that divergence
+was resolved in favour of the shipped contract rather than widening the surface.) The reserved-name
+and separator-edge rules are enforced server-side in `ValidUsernameValidator`; a reserved name or
+edge-separator surfaces as a `400` with a field-level `errors[]` entry for `username`. The
+underlying migration column is `varchar(64)` for headroom, wider than the validated ceiling.
 
 ### `@ValidPassword` (custom)
 
@@ -383,7 +391,19 @@ HLD silent. Choosing NIST SP 800-63B-aligned defaults, configurable via `AuthPro
 
 ### Standard Jakarta annotations
 
-`@NotBlank` on every credential field. `@Email` is **not** used (HLD says username, not email). Validation failures bubble up as `MethodArgumentNotValidException` → 400. `@ValidPassword` failures throw `WeakPasswordException` mapped to a ProblemDetail with a `reasons[]` extension (`TOO_SHORT`, `MATCHES_USERNAME`, `IN_BLOCKLIST`) so the UI can show actionable feedback without leaking block-list contents.
+`@NotBlank` on every credential field. `@Email` is **not** used (HLD says username, not email).
+Bean-validation failures (including the `@ValidPassword` *shape* checks the annotation can see —
+length / whitespace / breach on the raw value) bubble up as `MethodArgumentNotValidException` → 400
+with the field-level `errors[]` extension.
+
+The strength checks the annotation **cannot** see — `MATCHES_USERNAME` (no access to the username)
+and `BREACHED` — run service-side in `register` / `changePassword` and throw `WeakPasswordException`
+(auth-5), which `AuthExceptionHandler` maps to a `400` of type
+`.../problems/weak-password` carrying a machine-readable `reasons[]` extension. The reason codes are
+the shipped `PasswordStrengthValidator.Reason` enum: `TOO_SHORT`, `TOO_LONG`,
+`LEADING_OR_TRAILING_WHITESPACE`, `MATCHES_USERNAME`, `BREACHED`. The human-readable `detail` is a
+fixed generic string and **never echoes the reasons or block-list contents** — closing the previous
+gap where a raw `IllegalArgumentException` leaked e.g. `[BREACHED]` into the response body.
 
 ---
 
@@ -391,30 +411,32 @@ HLD silent. Choosing NIST SP 800-63B-aligned defaults, configurable via `AuthPro
 
 ### Published
 
+**Reconcile note (auth-7):** the shipped events all implement `ScopeChangedEvent` (scope kind/id +
+`traceId`/`occurredAt`), carry `String` IP/agent fields, and the third event is
+`UserPasswordChangedEvent` — there is no `UserDeletedEvent` (soft-delete is not shipped; see Out of
+Scope).
+
 ```java
 public record UserRegisteredEvent(
-    UUID userId, String username,
-    UUID traceId, Instant occurredAt
-) {}
+    UUID userId, String username, Instant registeredAt,
+    UUID traceId, Instant occurredAt) implements ScopeChangedEvent {}
 
 public record UserLoggedInEvent(
-    UUID userId, UUID sessionId, InetAddress sourceIp,
-    UUID traceId, Instant occurredAt
-) {}
+    UUID userId, UUID sessionId, String ipAddress, String userAgent, Instant loggedInAt,
+    UUID traceId, Instant occurredAt) implements ScopeChangedEvent {}
 
-public record UserDeletedEvent(
-    UUID userId,
-    UUID traceId, Instant occurredAt
-) {}
+public record UserPasswordChangedEvent(
+    UUID userId, int sessionsRevokedCount,
+    UUID traceId, Instant occurredAt) implements ScopeChangedEvent {}
 ```
 
 `UserRegisteredEvent` is consumed by the preference and nutrition modules (seed empty per-user records) and household module (create default single-person household). Those listeners belong to those modules.
 
 `UserLoggedInEvent` exists primarily for observability — keep if a listener materialises, drop on first cleanup otherwise. **Worth user review.**
 
-`UserDeletedEvent` triggers downstream per-user data purge; the actual deletion is each module's concern.
+`UserPasswordChangedEvent` (with the count of other sessions revoked) is emitted on a successful password change for observability / downstream notification.
 
-Published via `ApplicationEventPublisher` after commit. Listeners use `@TransactionalEventListener(phase = AFTER_COMMIT)` per the style guide.
+Published via `ApplicationEventPublisher`. Listeners use `@TransactionalEventListener(phase = AFTER_COMMIT)` per the style guide.
 
 ### Consumed
 
@@ -426,14 +448,14 @@ None. Auth is upstream of every other module's data.
 
 ### Flow 1: Registration
 
-`POST /api/v1/auth/register` → `register(request)`. `@Transactional`.
+`POST /api/v1/auth/register` → `register(request, loginContext)`. `@Transactional`.
 
 1. Normalise username (`trim().toLowerCase(Locale.ROOT)`).
-2. Jakarta validation already passed; reserved-name check is in `@ValidUsername`.
-3. `existsByUsernameNormalised(...)` → `UsernameAlreadyTakenException` (409) on hit.
-4. `passwordHasher.hash(rawPassword)` — BCrypt at `auth.bcrypt.cost-factor` (default **12**, ~250-400ms on modern hardware). HLD says "hashed password (simple)"; applying OWASP floor of 10 with headroom at 12. **Worth user review.**
+2. Jakarta validation already passed; reserved-name + separator-edge checks are in `@ValidUsername`. A service-side belt-and-braces strength check (`password != username`) throws `WeakPasswordException` (400 with `reasons[]`) — the annotation can't see the username.
+3. **Uniqueness via the DB unique index, not a pre-check:** `saveAndFlush` and catch `DataIntegrityViolationException` → `UsernameAlreadyExistsException` (409). This is the canonical "concurrent registration is safe" pattern (auth-7 reconcile — the shipped impl does not call `existsByUsernameNormalised`).
+4. `passwordHasher.hash(rawPassword)` — BCrypt at `mealprep.auth.bcrypt-cost` (default **12**, ~250-400ms on modern hardware). HLD says "hashed password (simple)"; applying OWASP floor of 10 with headroom at 12. **Worth user review.**
 5. Create `User` with `id = UUID.randomUUID()`, `passwordHash`, `passwordUpdatedAt = now`. Persist.
-6. Publish `UserRegisteredEvent` after commit. Return `UserDto`. No session is created.
+6. **Auto-log-in** (locked decision 2026-05-07): issue a session, publish `UserRegisteredEvent`, and return a `LoginOutcome` so the controller writes a `Set-Cookie` and a `201` with `UserDto`. (Earlier drafts said "no session is created" — superseded by the auto-login decision.)
 
 ### Flow 2: Login (with throttling and lockout)
 
@@ -446,7 +468,7 @@ None. Auth is upstream of every other module's data.
 3. Lookup `User` by `usernameNormalised`. If absent → run `passwordHasher.dummyVerify(rawPassword)` (constant-time BCrypt against a fixed dummy hash) so the unknown-user path costs the same as a real verify, record `LoginAttempt(succeeded=false, reason=UNKNOWN_USER)`, throw `InvalidCredentialsException` (401, generic message). **Worth user review** — the dummy-verify is the standard timing-enumeration mitigation; the hasher must expose a constant-cost stub.
 4. **Lockout check.** If `user.lockedUntil > now` → record `LoginAttempt(reason=ACCOUNT_LOCKED)`, throw `AccountLockedException` (423) with unlock time in `Retry-After`.
 5. `passwordHasher.verify(rawPassword, user.passwordHash)`.
-6. **On failure:** record `LoginAttempt(reason=BAD_PASSWORD)`, `failedLoginCount += 1`. When `≥ auth.lockout.threshold` (default **5**), set `lockedUntil = now + auth.lockout.duration-seconds` (default **900s**) and reset count to 0. Persist. Throw `InvalidCredentialsException` (401, generic).
+6. **On failure:** record `LoginAttempt(reason=BAD_PASSWORD)`, `failedLoginCount += 1`. When `≥ mealprep.auth.lockout.threshold` (default **5**), set `lockedUntil = now + mealprep.auth.lockout.duration` (default **900s**). Persist. Throw `InvalidCredentialsException` (401, generic). **The counter is NOT zeroed at lock time** — it stays `≥ threshold` while the account is locked so the user row records how many failures triggered the lock (audit value). Instead, the stale counter is **cleared once the lockout window expires**: step 4 (lockout check) detects `lockedUntil != null && lockedUntil ≤ now`, resets `failedLoginCount = 0` and `lockedUntil = null` *before* the password verify, so the first failed attempt after the window cannot instantly re-lock the account (auth-1). On a successful login the counter and `lockedUntil` are cleared as part of the success path (step 7).
 7. **On success:** `failedLoginCount = 0`, `lastLoginAt = now`, `lastLoginIp = sourceIp`. Generate **256-bit** token via `SessionTokenGenerator` (`SecureRandom` → 32 bytes → base64url). Compute `tokenHash = sha256(rawToken)`. Persist `Session` with `tokenHash`, `expiresAt = now + auth.session.absolute-ttl` (default **30 days**), `lastSeenAt = now`, `issuingIp`, `userAgent`. Record `LoginAttempt(succeeded=true)`. Publish `UserLoggedInEvent` after commit. Return `LoginOutcome(userDto, sessionDto, rawSessionToken)`.
 
 Controller writes `Set-Cookie: AUTH_SESSION=<rawToken>; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=<absolute-ttl-seconds>`. HLD silent on cookie flags; choosing the modern secure default:
@@ -469,7 +491,7 @@ Lockout is distinct from throttling: throttling resets by time alone; lockout wr
 
 1. Read `AUTH_SESSION` cookie. Absent → context stays anonymous.
 2. Compute `tokenHash = sha256(cookieValue)`. Lookup via `findByTokenHash`. Use a constant-time equality helper on the post-lookup check — cheap defence in depth.
-3. Reject (anonymous context) when row missing, `expiresAt < now`, `revokedAt != null`, or `user.deletedAt != null` (also revokes the session in the latter case).
+3. Reject (anonymous context) when row missing, `expiresAt < now`, `revokedAt != null`, or `user.deletedAt != null`. In the soft-deleted-user case the still-active session is additionally **revoked best-effort** via `SessionRevoker.revoke(...)` — a `@Transactional(REQUIRES_NEW)` write on a separate bean (so the proxy actually applies; auth-6) — so the stale credential cannot be re-presented. The filter must never throw, so its catch-all turns any failure here into a plain anonymous pass-through.
 4. (No-op — `lastSeenAt` is populated at session creation only; not updated per-request per the locked decision above.)
 5. Set the Spring Security `Authentication`: principal carries `userId` and `sessionId`; authorities are `[ROLE_USER]` (single role until household-admin lands).
 
@@ -479,21 +501,23 @@ Lockout is distinct from throttling: throttling resets by time alone; lockout wr
 
 ### Flow 4: Logout
 
-`POST /api/v1/auth/logout`. `@Transactional`. Resolves current session via `CurrentUserResolver.currentSession()`; sets `revokedAt = now`. Controller emits `Set-Cookie: AUTH_SESSION=; Max-Age=0`. Idempotent — 204 even when there is no active session. `logoutAllSessionsForUser` is the bulk variant used by Flow 5.
+`POST /api/v1/auth/logout`. `@Transactional`. Resolves the current session via `CurrentUserResolver.currentSessionId()`; sets `revokedAt = now`. Controller emits `Set-Cookie: AUTH_SESSION=; Max-Age=0`. Idempotent — 204 even when there is no active session.
 
 ### Flow 5: Password Change
 
-`PUT /api/v1/auth/password` → `changePassword(userId, request)`. `@Transactional`.
+`PUT /api/v1/auth/password` → `changePassword(currentSessionId, request, loginContext)`.
+`@Transactional(noRollbackFor = InvalidCredentialsException.class)` — so the audit write in step 2
+commits even though the method throws (mirroring `login`'s `noRollbackFor`).
 
-1. Controller resolves `userId` via `CurrentUserResolver.requireCurrentUserId()`.
-2. Verify `currentPassword`. Mismatch → `InvalidCredentialsException` (401). The attempt is recorded as `LoginAttempt(reason=BAD_PASSWORD)` so it counts toward the throttle window — same brute-force surface, same defence.
-3. `@ValidPassword` already passed; re-check `password != username` and not in block-list.
-4. Hash with `passwordHasher.hash`. Update `passwordHash`, `passwordUpdatedAt`.
-5. **Bulk-revoke all other active sessions** via `revokeAllActiveForUser`, then revoke and re-issue the current session so the calling user is not bounced. **HLD silent; choosing global revoke + current re-issue because password change is the canonical "compromise" trigger. Worth user review.**
+1. Controller resolves `currentSessionId` via `CurrentUserResolver.currentSessionId()` (401 if absent); the service resolves the user from the session.
+2. Verify `currentPassword`. Mismatch → record a `LoginAttempt(reason=BAD_PASSWORD)` for this user/username/IP **(committed via `noRollbackFor`)** then throw `InvalidCredentialsException` (401). Recording the attempt makes `PUT /password` share the login throttle surface — same brute-force surface, same defence (auth-2). No user-row writes happen before this throw, so committing is safe.
+3. Re-check the strength rules the annotation can't see (`password != username`, block-list). A failure throws `WeakPasswordException` → `400` with a `reasons[]` extension and no block-list leak (auth-5).
+4. Hash with `passwordHasher.hash`. Update `passwordHash`, `passwordUpdatedAt` (`@Version` on `User` maps a concurrent change to 409).
+5. **Bulk-revoke all other active sessions** via `revokeAllActiveForUserExcept`, then revoke and re-issue the calling session so the user is not bounced. **HLD silent; choosing global revoke + current re-issue because password change is the canonical "compromise" trigger. Worth user review.**
 
 ### Flow 6: Session reaper
 
-`@Scheduled(cron = "0 15 3 * * *")` runs nightly; `deleteExpiredAndRevokedBefore(now - auth.session.retain-revoked-for)` (default retention **7 days**) hard-deletes stale session rows. `LoginAttempt` retains the longer-term audit trail.
+Implemented as `SessionReaper` (auth-3). `@Scheduled(cron = "${mealprep.auth.session.reaper-cron:0 15 3 * * *}")` (`runScheduled()`) runs nightly and delegates to a synchronous, on-demand `sweep()` (driven directly by `SessionReaperIT`; the test profile sets a never-matching cron so the trigger never auto-fires). The sweep calls `deleteExpiredAndRevokedBefore(now − mealprep.auth.session.retain-revoked-for)` (default retention **7 days**), hard-deleting sessions past their absolute expiry and sessions revoked before the cutoff. `LoginAttempt` retains the longer-term audit trail. Safe to run mid-request — every deleted row is already rejected by `SessionAuthenticationFilter`.
 
 ---
 
@@ -514,7 +538,8 @@ public class HardConstraintsController {
 
     @GetMapping("/api/v1/preferences/hard-constraints")
     public HardConstraintsDto get() {
-        UUID userId = currentUserResolver.requireCurrentUserId();
+        UUID userId = currentUserResolver.currentUserId()
+            .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "Authentication required."));
         return preferenceQueryService.getHardConstraints(userId)
             .orElseThrow(HardConstraintsNotFoundException::new);
     }
@@ -568,48 +593,58 @@ Unit tests use `@ExtendWith(MockitoExtension.class)`. Integration tests are `*IT
 | `PasswordStrengthValidatorTest` | Each rejection reason fires as expected: too short, too long, equals username (case-insensitive), in block-list. Accepts a 12-char non-block-listed password. |
 | `SessionTokenGeneratorTest` | Tokens are 256 bits of entropy (32 bytes pre-encoding). Two consecutive tokens never collide in 10 000 generations. `tokenHash` is deterministic SHA-256 of the raw token. |
 | `LoginThrottleServiceTest` | Below-threshold attempts pass. At-threshold username and at-threshold IP both reject. Window expiry reopens (clock-mocked). |
-| `CurrentUserResolverImplTest` | Anonymous context → `currentUserId()` empty, `requireCurrentUserId()` throws. Authenticated context → both return the principal's `userId`. |
-| `UsernameValidatorTest` | Valid characters, length floor/ceiling, separator-edge rejection, reserved-name rejection. |
-| `UserMapperTest`, `SessionMapperTest` | MapStruct round-trips preserve all DTO-visible fields and mask the secret ones. |
+| `CurrentUserResolverImplTest` | Anonymous context → `currentUserId()` / `currentSessionId()` empty. Authenticated context → both return the principal's `userId` / `sessionId`. |
+| `ValidUsernameValidatorTest` | Valid characters, length floor/ceiling, separator-edge rejection, reserved-name rejection (case-insensitive, configurable list). |
+| `AuthExceptionHandlerTest` | Each auth exception → its status / `type` / `title` / Retry-After; `WeakPasswordException` → 400 with `reasons[]`; `InvalidCredentialsException` detail never leaks the underlying reason. |
 
 ### Integration
 
+All ITs use Testcontainers Postgres and assert the response against the OpenAPI contract via
+swagger-request-validator (`openApi().isValid(...)`). **Reconcile note (auth-7):** the shipped
+suite splits the controller cycle across several focused ITs rather than one `AuthControllerIT`.
+
 | Class | Verifies |
 |---|---|
-| `AuthControllerIT` | Full HTTP cycle over MockMvc: `POST /register` (201, 400 on weak password, 409 on duplicate), `POST /login` (200 with `Set-Cookie`, 401 generic on bad password and unknown user, 423 on locked, 429 on throttled), `POST /logout` (204 + cookie cleared), `GET /me` (200 with cookie, 401 without), `PUT /password` (200, revokes other sessions, current session re-issued). Verifies the raw token never appears in any JSON response body. |
-| `AuthSecurityConfigIT` | The security filter chain wires `SessionAuthenticationFilter` correctly. Cookie attributes on the login response: `HttpOnly`, `Secure` (in prod-like profile), `SameSite=Lax`, `Path=/`, `Max-Age` matches absolute TTL. Anonymous request to a protected route returns 401, not 403. |
-| `LoginFlowIT` | Lockout: 5 failures → 6th returns 423 with `Retry-After`; after window, login succeeds and `failed_login_count` resets. Throttle: 10 IP failures across distinct usernames → 11th returns 429. Unknown-user timing: response time within ±20% of a bad-password real-user attempt over 50 trials. |
-| `SessionLifecycleIT` | Login issues a session row with hashed token. Subsequent authenticated request finds it via `tokenHash` (and a request with a tampered cookie does not). Session past `expiresAt` rejects. Soft-deleted user's still-valid session rejects. `lastSeenAt` is populated at creation and **does not change** on subsequent authenticated requests (locked decision). |
-| `PasswordChangeIT` | Successful change revokes all other active sessions for the user. Wrong current-password counts toward throttle. New password fails `@ValidPassword` checks return 400 with `reasons[]`. |
-| `SessionReaperIT` | Schedules a manual run; rows past retention are deleted; rows still in retention remain. |
-| `FlywayMigrationIT` | Boots Postgres, runs all auth migrations, validates schema against the JPA mapping (`spring.jpa.hibernate.ddl-auto=validate`). |
-| `EventPublicationIT` | Registration, login, deletion publish their respective events only after commit. A failing test-scoped listener does not roll back the underlying state. |
+| `RegisterFlowIT` | `POST /register`: 201 + `Set-Cookie` (raw token never in body), 409 on duplicate (unique-index path), 400 on weak password (`errors[]`), 400 + `reasons[]` (`MATCHES_USERNAME`) when password equals username, 400 on reserved username and on leading/trailing-separator username, case-normalised uniqueness. |
+| `LoginFlowIT` | `POST /login` happy path, 401 generic on bad password and unknown user, and the unknown-user timing-parity check (dummy-verify). |
+| `ThrottlingAndLockoutIT` | Per-username (11th → 429) and per-IP (31st → 429) throttle; lockout (5 fails → 6th 423); **after the lockout window expires, a single bad password does not instantly re-lock and a correct password then succeeds (auth-1)**; unknown-user attempts never lock a real user. |
+| `SessionLifecycleIT` | Login issues a hashed-token session; tampered/expired/revoked cookie rejects; soft-deleted user's session rejects **and is revoked best-effort by the filter (auth-6)**; logout revokes + clears cookie. |
+| `PasswordChangeIT` | Happy path re-issues the calling cookie + revokes others (event emitted with count); wrong current-password → 401 with no re-issue; weak new password → 400 `errors[]`; **repeated wrong current-password trips the same per-username throttle as login (auth-2)**. |
+| `SessionReaperIT` | `sweep()` / `runScheduled()` hard-delete expired + long-revoked sessions and keep active + recently-revoked ones (Flow 6 / auth-3). |
+| `SecurityChainTest` | Deny-by-default chain: protected route → 401 (not 403) without a cookie; whitelisted paths reach the dispatcher. |
 
 ---
 
 ## Configuration
 
-`AuthProperties` (`@ConfigurationProperties(prefix = "auth")`):
+`AuthProperties` (`@ConfigurationProperties(prefix = "mealprep.auth")`). **Reconcile note (auth-7):**
+the shipped prefix is `mealprep.auth`, not `auth`; the binding is relaxed-kebab (`mealprep.auth.session.retain-revoked-for` → `AuthProperties.Session.retainRevokedFor`). The block-list
+resource path is a constant in `PasswordStrengthValidator` (`auth/breached-passwords.txt`), not a
+bound property. Shipped keys and defaults:
 
 ```properties
-auth.bcrypt.cost-factor=12
-auth.password.min-length=12
-auth.password.max-length=128
-auth.password.blocklist-resource=classpath:auth/password-blocklist.txt
-auth.username.reserved-names=admin,root,system,support
-auth.session.absolute-ttl=30d
-auth.session.retain-revoked-for=7d
-auth.cookie.name=AUTH_SESSION
-auth.cookie.secure=true
-auth.cookie.same-site=Lax
-auth.throttle.window-seconds=900
-auth.throttle.username-max-failures=10
-auth.throttle.ip-max-failures=30
-auth.lockout.threshold=5
-auth.lockout.duration-seconds=900
+mealprep.auth.bcrypt-cost=12
+mealprep.auth.session-ttl=30d
+mealprep.auth.cookie-name=AUTH_SESSION
+mealprep.auth.cookie-secure=true
+mealprep.auth.cookie-same-site=Lax
+mealprep.auth.password-min-length=12
+mealprep.auth.password-max-length=128
+mealprep.auth.throttle.window=900s
+mealprep.auth.throttle.username-max-failures=10
+mealprep.auth.throttle.ip-max-failures=30
+mealprep.auth.lockout.threshold=5
+mealprep.auth.lockout.duration=900s
+mealprep.auth.session.retain-revoked-for=7d        # reaper retention (Flow 6)
+mealprep.auth.session.reaper-cron=0 15 3 * * *      # nightly reaper schedule (Flow 6)
+mealprep.auth.username.reserved-names=admin,root,system,support
 ```
 
-Defaults documented in this LLD; per-environment overrides via `application-<profile>.properties`. `auth.cookie.secure=false` in `application-dev.yml` only.
+Defaults documented in this LLD and baked into `AuthProperties`' compact constructors; per-environment
+overrides via `application-<profile>.properties`. `mealprep.auth.cookie-secure=false` in the `dev`,
+`test`, and `e2e` profiles. The `test` profile sets `mealprep.auth.session.reaper-cron` to a
+never-matching value so the reaper never auto-fires during a test run (`SessionReaperIT` drives it
+directly).
 
 ---
 

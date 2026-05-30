@@ -9,6 +9,7 @@ import com.example.mealprep.auth.config.AuthSecurityConfig;
 import com.example.mealprep.auth.domain.repository.ServiceTokenRepository;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
+import com.example.mealprep.auth.domain.service.internal.SessionRevoker;
 import com.example.mealprep.auth.domain.service.internal.SessionTokenGenerator;
 import com.example.mealprep.config.GlobalExceptionHandler;
 import com.example.mealprep.core.audit.api.controller.AdminDecisionLogController;
@@ -63,6 +64,9 @@ class SecurityChainTest {
   @MockBean private SessionRepository sessionRepository;
   @MockBean private UserRepository userRepository;
   @MockBean private SessionTokenGenerator sessionTokenGenerator;
+  // SessionRevoker (auth-6) is a @Component the filter now depends on; not in the WebMvcTest slice
+  // scan, so mock it. The no-cookie tests never reach the soft-deleted-user revoke branch anyway.
+  @MockBean private SessionRevoker sessionRevoker;
   @MockBean private ServiceTokenRepository serviceTokenRepository;
 
   /**

@@ -20,8 +20,6 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Authenticates Pattern-B requests: {@code Authorization: Bearer <opaque-token>} where the token is
@@ -106,8 +104,9 @@ public class ServiceTokenAuthenticationProvider {
         new UsernamePasswordAuthenticationToken(principal, null, authorities);
 
     // Fire-and-forget last_used_at bump. Inside the test harness this completes synchronously
-    // (CompletableFuture.runAsync uses the common pool); production runs the same path. The
-    // separate-tx propagation guarantees a failure here cannot poison the inbound auth flow.
+    // (CompletableFuture.runAsync uses the common pool); production runs the same path. The bump
+    // runs on a pool thread with no surrounding transaction; the @Modifying repository method
+    // supplies its own (Spring Data wraps it), and a failure there cannot poison the inbound flow.
     UUID tokenId = token.getId();
     Instant now = Instant.now(clock);
     CompletableFuture.runAsync(() -> bumpLastUsedAt(tokenId, now))
@@ -120,8 +119,14 @@ public class ServiceTokenAuthenticationProvider {
     return auth;
   }
 
-  @Transactional(propagation = Propagation.REQUIRES_NEW)
-  protected void bumpLastUsedAt(UUID tokenId, Instant now) {
+  /**
+   * Bump {@code last_used_at}. Intentionally <b>not</b> {@code @Transactional}: this is
+   * self-invoked from a {@link CompletableFuture} lambda on a pool thread, so a method-level
+   * {@code @Transactional} would be silently bypassed (no proxy on the {@code this} call, no
+   * surrounding tx on the async thread — the auth-8 trap). The transaction it needs is the one
+   * Spring Data already wraps around the {@code @Modifying} {@code updateLastUsedAt} query.
+   */
+  void bumpLastUsedAt(UUID tokenId, Instant now) {
     repository.updateLastUsedAt(tokenId, now);
   }
 

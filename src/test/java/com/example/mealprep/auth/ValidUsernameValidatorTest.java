@@ -10,14 +10,17 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Unit tests for {@link ValidUsernameValidator}. The pattern is {@code ^[a-zA-Z0-9_-]{3,32}$}.
- * Tests pin: null rejected; the 3 and 32 length boundaries (and just-outside 2 / 33); allowed vs
- * disallowed characters; and that the anchors reject internal newlines / leading-trailing junk.
- * This kills the null-branch and the regex literal/quantifier mutants. The context is never used by
- * this validator so a bare mock suffices.
+ * Unit tests for {@link ValidUsernameValidator}. The shape pattern is {@code ^[a-zA-Z0-9_-]{3,32}$}
+ * (matching the OpenAPI contract — no dot, 32-char ceiling). On top of shape, the validator rejects
+ * values that start/end with a separator and reserved names (default {@code admin}/{@code
+ * root}/{@code system}/{@code support}). Tests pin: null rejected; the 3 and 32 length boundaries
+ * (and just-outside 2 / 33); allowed vs disallowed characters; anchors reject internal newlines /
+ * leading-trailing junk; separator-edge rejection; reserved-name rejection (case insensitive). The
+ * context is never used by this validator so a bare mock suffices.
  */
 class ValidUsernameValidatorTest {
 
+  // No-arg constructor falls back to the built-in default reserved-name list.
   private final ValidUsernameValidator validator = new ValidUsernameValidator();
   private final ConstraintValidatorContext context = mock(ConstraintValidatorContext.class);
 
@@ -28,9 +31,52 @@ class ValidUsernameValidatorTest {
 
   @ParameterizedTest
   @ValueSource(
-      strings = {"abc", "a_b", "a-b", "ABC", "user123", "___", "a1234567890123456789012345678901"})
+      strings = {
+        "abc",
+        "a_b",
+        "a-b",
+        "ABC",
+        "user123",
+        "a_b_c",
+        "a1234567890123456789012345678901"
+      })
   void acceptsValidUsernames(String value) {
     assertThat(validator.isValid(value, context)).isTrue();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"_ab", "-ab", "ab_", "ab-", "___", "---", "_a_", "-a-"})
+  void rejectsLeadingOrTrailingSeparator(String value) {
+    assertThat(validator.isValid(value, context)).isFalse();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"admin", "ADMIN", "Root", "system", "SUPPORT", "support"})
+  void rejectsReservedNames_caseInsensitive(String value) {
+    assertThat(validator.isValid(value, context)).isFalse();
+  }
+
+  @Test
+  void respectsConfiguredReservedNameList() {
+    // A configured list replaces the defaults: 'admin' is now allowed, 'banned' is rejected.
+    com.example.mealprep.auth.config.AuthProperties props =
+        new com.example.mealprep.auth.config.AuthProperties(
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            new com.example.mealprep.auth.config.AuthProperties.Username(
+                java.util.Set.of("banned")));
+    ValidUsernameValidator configured = new ValidUsernameValidator(props);
+    assertThat(configured.isValid("admin", context)).isTrue();
+    assertThat(configured.isValid("banned", context)).isFalse();
+    assertThat(configured.isValid("BANNED", context)).isFalse();
   }
 
   @Test

@@ -8,7 +8,10 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Username constraint: 3–32 chars, ASCII alphanumerics plus underscore and hyphen.
+ * Username constraint: 3–32 chars, ASCII alphanumerics plus underscore and hyphen ({@code
+ * ^[a-zA-Z0-9_-]{3,32}$}). Additionally the value must not start or end with a separator ({@code
+ * _}/{@code -}) and must not be a reserved name (configurable block-list — default {@code admin},
+ * {@code root}, {@code system}, {@code support}).
  *
  * <p>The 32-char ceiling is the OpenAPI-spec ceiling; the migration column is wider for headroom.
  */

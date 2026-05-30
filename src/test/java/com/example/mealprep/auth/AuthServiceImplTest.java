@@ -35,6 +35,7 @@ import com.example.mealprep.auth.exception.AccountLockedException;
 import com.example.mealprep.auth.exception.InvalidCredentialsException;
 import com.example.mealprep.auth.exception.LoginThrottledException;
 import com.example.mealprep.auth.exception.UsernameAlreadyExistsException;
+import com.example.mealprep.auth.exception.WeakPasswordException;
 import com.example.mealprep.auth.testdata.AuthTestData;
 import java.time.Clock;
 import java.time.Duration;
@@ -65,7 +66,7 @@ class AuthServiceImplTest {
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final AuthProperties properties =
-      new AuthProperties(12, null, null, null, null, null, null, null, null);
+      new AuthProperties(12, null, null, null, null, null, null, null, null, null, null);
   private final PasswordHasher passwordHasher = new PasswordHasher(properties);
   private final PasswordStrengthValidator strengthValidator =
       new PasswordStrengthValidator(properties);
@@ -157,8 +158,12 @@ class AuthServiceImplTest {
                 service.register(
                     new RegisterRequest("alice-batteryyy", "Alice-Batteryyy"),
                     new LoginContext("ip", "ua")))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("MATCHES_USERNAME");
+        .isInstanceOf(WeakPasswordException.class)
+        // Reason codes live on the exception, NOT in the message (auth-5: no policy leak).
+        .satisfies(
+            ex ->
+                assertThat(((WeakPasswordException) ex).reasons())
+                    .contains(PasswordStrengthValidator.Reason.MATCHES_USERNAME));
 
     verify(userRepository, never()).saveAndFlush(any());
   }
@@ -453,14 +458,24 @@ class AuthServiceImplTest {
                 service.changePassword(
                     sessionId,
                     new PasswordChangeRequest("wrong-current-password", "fresh-new-password-12345"),
-                    new LoginContext("ip", "ua")))
+                    new LoginContext("203.0.113.5", "ua")))
         .isInstanceOf(InvalidCredentialsException.class)
         .hasMessage("Invalid credentials");
 
-    // No mutations on wrong-current.
+    // No user/session mutations on wrong-current.
     verify(userRepository, never()).save(any());
     verify(sessionRepository, never()).save(any());
     verify(eventPublisher, never()).publishEvent(any());
+
+    // BUT a BAD_PASSWORD LoginAttempt IS recorded so PUT /password shares the login throttle
+    // surface (auth-2). The username is normalised and the source IP carried.
+    ArgumentCaptor<LoginAttempt> attempt = ArgumentCaptor.forClass(LoginAttempt.class);
+    verify(loginAttemptRepository).save(attempt.capture());
+    assertThat(attempt.getValue().getFailureReason()).isEqualTo(LoginFailureReason.BAD_PASSWORD);
+    assertThat(attempt.getValue().isSucceeded()).isFalse();
+    assertThat(attempt.getValue().getUsernameNormalised()).isEqualTo("alice");
+    assertThat(attempt.getValue().getUserId()).isEqualTo(userId);
+    assertThat(attempt.getValue().getSourceIp()).isEqualTo("203.0.113.5");
   }
 
   @Test
@@ -484,12 +499,18 @@ class AuthServiceImplTest {
                     sessionId,
                     new PasswordChangeRequest("the-real-current-password", "Alice-Equality"),
                     new LoginContext("ip", "ua")))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("MATCHES_USERNAME");
+        .isInstanceOf(WeakPasswordException.class)
+        // Reason codes live on the exception, NOT in the message (no block-list/policy leak).
+        .satisfies(
+            ex ->
+                assertThat(((WeakPasswordException) ex).reasons())
+                    .contains(PasswordStrengthValidator.Reason.MATCHES_USERNAME));
 
-    // Strength failure happens AFTER currentPassword verify but BEFORE any state mutation.
+    // Strength failure happens AFTER currentPassword verify but BEFORE any state mutation. The
+    // current password was correct, so no BAD_PASSWORD attempt is recorded here.
     verify(userRepository, never()).save(any());
     verify(sessionRepository, never()).save(any());
+    verify(loginAttemptRepository, never()).save(any());
     verify(eventPublisher, never()).publishEvent(any());
   }
 

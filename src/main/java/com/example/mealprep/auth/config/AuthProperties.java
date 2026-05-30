@@ -1,6 +1,9 @@
 package com.example.mealprep.auth.config;
 
 import java.time.Duration;
+import java.util.Locale;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -24,7 +27,9 @@ public record AuthProperties(
     Integer passwordMinLength,
     Integer passwordMaxLength,
     Throttle throttle,
-    Lockout lockout) {
+    Lockout lockout,
+    Session session,
+    Username username) {
 
   public AuthProperties {
     if (bcryptCost == null) {
@@ -62,6 +67,12 @@ public record AuthProperties(
     if (lockout == null) {
       lockout = new Lockout(null, null);
     }
+    if (session == null) {
+      session = new Session(null, null);
+    }
+    if (username == null) {
+      username = new Username(null);
+    }
   }
 
   /** Throttle thresholds — defined here even though enforcement is 01b. */
@@ -87,6 +98,44 @@ public record AuthProperties(
       }
       if (duration == null) {
         duration = Duration.ofMinutes(15);
+      }
+    }
+  }
+
+  /**
+   * Session-reaper config (Flow 6). {@code retainRevokedFor} is how long a revoked/expired session
+   * row is kept before the nightly reaper hard-deletes it; {@code reaperCron} is the reaper's
+   * schedule. Defaults: 7-day retention, {@code 0 15 3 * * *} (03:15 nightly).
+   */
+  public record Session(Duration retainRevokedFor, String reaperCron) {
+    public Session {
+      if (retainRevokedFor == null) {
+        retainRevokedFor = Duration.ofDays(7);
+      }
+      if (reaperCron == null || reaperCron.isBlank()) {
+        reaperCron = "0 15 3 * * *";
+      }
+    }
+  }
+
+  /**
+   * Username-policy config. {@code reservedNames} is the case-insensitive block-list enforced by
+   * {@code @ValidUsername} so well-known handles ({@code admin}, {@code root}, …) cannot be
+   * registered. Stored normalised (trimmed, lower-cased) so the validator can compare directly.
+   */
+  public record Username(Set<String> reservedNames) {
+    private static final Set<String> DEFAULT_RESERVED_NAMES =
+        Set.of("admin", "root", "system", "support");
+
+    public Username {
+      if (reservedNames == null || reservedNames.isEmpty()) {
+        reservedNames = DEFAULT_RESERVED_NAMES;
+      } else {
+        reservedNames =
+            reservedNames.stream()
+                .filter(n -> n != null && !n.isBlank())
+                .map(n -> n.trim().toLowerCase(Locale.ROOT))
+                .collect(Collectors.toUnmodifiableSet());
       }
     }
   }
