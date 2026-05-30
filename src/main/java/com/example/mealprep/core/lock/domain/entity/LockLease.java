@@ -1,4 +1,4 @@
-package com.example.mealprep.core.lock.internal;
+package com.example.mealprep.core.lock.domain.entity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -14,19 +14,20 @@ import java.util.UUID;
  * insert for the same key conflicts while the row exists. A crashed holder's row is reclaimed
  * lazily on the next acquire once {@code expiresAt} has passed.
  *
- * <p>All lease reads/writes go through {@link LockLeaseRepository}'s explicit native/JPQL queries
+ * <p>All lease reads/writes go through {@code LockLeaseRepository}'s explicit native/JPQL queries
  * ({@code insertIfAbsent}, {@code reclaimIfExpired}, {@code deleteByLockKeyAndHolderToken}, {@code
  * renewByLockKeyAndHolderToken}) rather than entity-state persistence — those queries are atomic
  * and conditional in ways a managed-entity save cannot express. This entity exists so {@code
  * JpaRepository<LockLease, String>} resolves and Hibernate validates the schema (field access; no
  * getters/setters needed). It is intentionally a plain mapped type with no behaviour.
  *
- * <p>Package-private to {@code core.lock} — cross-module callers go through {@code
- * com.example.mealprep.core.lock.LockService}.
+ * <p>Lives in {@code core.lock.domain.entity} (with its repository in {@code
+ * core.lock.domain.repository}) per the module-layout convention; cross-module callers go through
+ * {@code com.example.mealprep.core.lock.LockService}.
  */
 @Entity
 @Table(name = "core_lock_leases")
-class LockLease {
+public class LockLease {
 
   @Id
   @Column(name = "lock_key", updatable = false, nullable = false, length = 160)

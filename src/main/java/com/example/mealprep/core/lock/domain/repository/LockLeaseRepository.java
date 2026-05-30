@@ -1,5 +1,6 @@
-package com.example.mealprep.core.lock.internal;
+package com.example.mealprep.core.lock.domain.repository;
 
+import com.example.mealprep.core.lock.domain.entity.LockLease;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -8,11 +9,10 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 /**
- * Spring Data repository for {@link LockLease}.
- *
- * <p>Public so Spring can resolve it, but package-private at the package level — cross-module
- * callers go through {@code com.example.mealprep.core.lock.LockService} ({@code CoreBoundaryTest}
- * forbids reaching into core repository packages).
+ * Spring Data repository for {@link LockLease}. Lives in {@code core.lock.domain.repository} per
+ * the module-layout convention (repositories live in {@code <module>.domain.repository}); {@code
+ * CoreBoundaryTest} forbids other modules importing it — cross-module callers go through {@code
+ * com.example.mealprep.core.lock.LockService}.
  */
 public interface LockLeaseRepository extends JpaRepository<LockLease, String> {
 
