@@ -8,6 +8,7 @@ import com.example.mealprep.core.audit.domain.entity.DecisionLog;
 import com.example.mealprep.core.audit.domain.repository.DecisionLogRepository;
 import com.example.mealprep.core.audit.domain.service.DecisionLogQueryService;
 import com.example.mealprep.core.audit.domain.service.DecisionLogService;
+import com.example.mealprep.core.exception.DecisionLogNotFoundException;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -28,26 +29,64 @@ public class DecisionLogServiceImpl implements DecisionLogService, DecisionLogQu
 
   private final DecisionLogRepository repository;
   private final DecisionLogMapper mapper;
+  private final DecisionLogTokenBudgetGuard tokenBudgetGuard;
 
-  public DecisionLogServiceImpl(DecisionLogRepository repository, DecisionLogMapper mapper) {
+  public DecisionLogServiceImpl(
+      DecisionLogRepository repository,
+      DecisionLogMapper mapper,
+      DecisionLogTokenBudgetGuard tokenBudgetGuard) {
     this.repository = repository;
     this.mapper = mapper;
+    this.tokenBudgetGuard = tokenBudgetGuard;
   }
 
   // ---------------- Write path ----------------
 
+  /**
+   * Persist a decision-log entry. {@code @Transactional(REQUIRES_NEW)} so the row commits in its
+   * own inner transaction and survives a caller-side rollback (records what was attempted). Per
+   * lld/core.md §Flow 1:
+   *
+   * <ol>
+   *   <li>Null-request guard.
+   *   <li>Payload size guard (≤ 64 KB) → {@code DecisionLogPayloadOversizedException} (422).
+   *   <li>Idempotency: a non-null caller-supplied {@code decisionId} that already exists
+   *       short-circuits and returns that id (no second insert). A null id is generated fresh.
+   *   <li>Parent existence: a non-null {@code parentDecisionId} that does not resolve → {@code
+   *       DecisionLogNotFoundException} (404).
+   *   <li>Persist; return the id.
+   * </ol>
+   */
   @Override
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public UUID write(DecisionLogWriteRequest request) {
     if (request == null) {
       throw new IllegalArgumentException("request must not be null");
     }
-    UUID decisionId = UUID.randomUUID();
+
+    // Size guard before any DB work — a runaway payload should fail fast.
+    tokenBudgetGuard.assertWithinBudget(request);
+
+    // Idempotency: reuse a caller-supplied id when it already exists; generate one otherwise.
+    UUID decisionId = request.decisionId();
+    if (decisionId != null && repository.existsById(decisionId)) {
+      return decisionId;
+    }
+    if (decisionId == null) {
+      decisionId = UUID.randomUUID();
+    }
+
+    // Parent-existence check: clearer upfront 404 than the deferred self-FK violation.
+    UUID parentDecisionId = request.parentDecisionId();
+    if (parentDecisionId != null && !repository.existsById(parentDecisionId)) {
+      throw new DecisionLogNotFoundException(parentDecisionId);
+    }
+
     DecisionLog entity =
         new DecisionLog(
             decisionId,
             request.traceId(),
-            request.parentDecisionId(),
+            parentDecisionId,
             request.scopeKind(),
             request.scopeId(),
             request.scale(),
