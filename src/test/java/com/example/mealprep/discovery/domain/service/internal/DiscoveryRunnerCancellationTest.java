@@ -130,7 +130,8 @@ class DiscoveryRunnerCancellationTest {
     DiscoveryCandidate cand =
         new DiscoveryCandidate("src_a", "https://example.test/r/1", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(cand));
-    when(candidateAiFilter.filter(anyList(), any(), any())).thenAnswer(inv -> inv.getArgument(0));
+    when(candidateAiFilter.filter(anyList(), any(), any()))
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     // The cancellation flag is checked BEFORE fetchRecipe / hardConstraint per iteration, so these
     // stubs are unused but declared lenient to document the otherwise-happy-path shape.
     lenient()

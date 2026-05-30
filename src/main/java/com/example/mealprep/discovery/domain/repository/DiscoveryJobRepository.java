@@ -24,8 +24,6 @@ public interface DiscoveryJobRepository extends JpaRepository<DiscoveryJob, UUID
 
   Page<DiscoveryJob> findByUserIdOrderByQueuedAtDesc(UUID userId, Pageable pageable);
 
-  List<DiscoveryJob> findByStatus(DiscoveryJobStatus status);
-
   /**
    * Watchdog: orphan running jobs whose {@code started_at} predates the heartbeat window. The
    * orphan sweep (lands in 01d) transitions these to {@code FAILED}.
@@ -39,6 +37,14 @@ public interface DiscoveryJobRepository extends JpaRepository<DiscoveryJob, UUID
    * DiscoveryJobRunner}'s persistence context when the runner picks the job up between the
    * controller's read and write (round-8 retro: StaleObjectStateException pattern). Bumps
    * optimisticVersion so subsequent JPA reads observe the new state cleanly.
+   *
+   * <p><strong>Status guard (discovery-6).</strong> The {@code WHERE ... AND j.status = 'QUEUED'}
+   * clause makes the flip atomic against a concurrent runner claim: if the async runner already
+   * transitioned the row QUEUED→RUNNING (via {@code DiscoveryJobTransitions.claim}) in the window
+   * between the controller's read and this UPDATE, the guarded UPDATE affects 0 rows rather than
+   * clobbering the now-RUNNING job back to FAILED. {@code cancelJob} treats {@code rows == 0} as
+   * "already claimed/terminal" and falls through to the in-memory cancellation-flag path so the
+   * running job still stops cleanly.
    */
   // clearAutomatically + flushAutomatically: the cancel flow loads the job via
   // findByIdAndUserId (managed, QUEUED) before this bulk UPDATE. Without clearing, the controller's
@@ -48,8 +54,8 @@ public interface DiscoveryJobRepository extends JpaRepository<DiscoveryJob, UUID
   @Query(
       "UPDATE DiscoveryJob j SET j.status = :status, j.completedAt = :completedAt,"
           + " j.errorSummary = :errorSummary, j.optimisticVersion = j.optimisticVersion + 1"
-          + " WHERE j.id = :id")
-  int markCancelled(
+          + " WHERE j.id = :id AND j.status = 'QUEUED'")
+  int markCancelledIfQueued(
       @Param("id") UUID id,
       @Param("status") DiscoveryJobStatus status,
       @Param("completedAt") Instant completedAt,

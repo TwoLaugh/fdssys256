@@ -190,10 +190,11 @@ class DiscoveryServiceImplTest {
     job.setId(jobId);
     job.setStatus(DiscoveryJobStatus.QUEUED);
     when(jobRepository.findByIdAndUserId(jobId, userId)).thenReturn(Optional.of(job));
-    // The QUEUED branch now flips via native UPDATE (round-8 retro: avoids @Version race with the
-    // async runner). Stub the rowcount = 1 and verify the call instead of asserting in-memory
+    // The QUEUED branch now flips via a status-guarded native UPDATE (round-8 retro: avoids
+    // @Version race with the async runner; discovery-6 adds the AND status = 'QUEUED' guard).
+    // Stub the rowcount = 1 (guard matched) and verify the call instead of asserting in-memory
     // entity state (the service no longer mutates the loaded entity).
-    when(jobRepository.markCancelled(
+    when(jobRepository.markCancelledIfQueued(
             org.mockito.ArgumentMatchers.eq(jobId),
             org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.FAILED),
             org.mockito.ArgumentMatchers.any(),
@@ -203,12 +204,61 @@ class DiscoveryServiceImplTest {
     service.cancelJob(userId, jobId);
 
     verify(jobRepository)
-        .markCancelled(
+        .markCancelledIfQueued(
             org.mockito.ArgumentMatchers.eq(jobId),
             org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.FAILED),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("cancelled by user"));
     verify(runner).requestCancellation(jobId);
+  }
+
+  @Test
+  void cancelJob_queuedButRunnerClaimedRunning_fallsThroughToFlagPath_noThrow() {
+    // discovery-6: the runner claimed the job RUNNING in the read→write window. The status-guarded
+    // UPDATE matches 0 rows (it no longer clobbers the now-RUNNING row). With the row still
+    // present,
+    // cancelJob must NOT throw 404 — it falls through to the in-memory cancellation-flag path so
+    // the
+    // running job stops cleanly. The flag is always set; this is the atomicity guarantee.
+    UUID userId = UUID.randomUUID();
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(userId);
+    job.setId(jobId);
+    job.setStatus(DiscoveryJobStatus.QUEUED); // our read still sees QUEUED; the runner claims later
+    when(jobRepository.findByIdAndUserId(jobId, userId)).thenReturn(Optional.of(job));
+    when(jobRepository.markCancelledIfQueued(
+            org.mockito.ArgumentMatchers.eq(jobId),
+            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.FAILED),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq("cancelled by user")))
+        .thenReturn(0); // guard didn't match — runner won the claim race
+    when(jobRepository.existsById(jobId)).thenReturn(true); // row still present (now RUNNING)
+
+    service.cancelJob(userId, jobId); // must not throw
+
+    verify(runner).requestCancellation(jobId);
+  }
+
+  @Test
+  void cancelJob_queuedRowVanished_zeroRows_andAbsent_throws404() {
+    // Complements the fall-through case: rows == 0 AND the row is genuinely gone (e.g. concurrent
+    // hard-delete) → the 404 contract is preserved.
+    UUID userId = UUID.randomUUID();
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(userId);
+    job.setId(jobId);
+    job.setStatus(DiscoveryJobStatus.QUEUED);
+    when(jobRepository.findByIdAndUserId(jobId, userId)).thenReturn(Optional.of(job));
+    when(jobRepository.markCancelledIfQueued(
+            org.mockito.ArgumentMatchers.eq(jobId),
+            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.FAILED),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq("cancelled by user")))
+        .thenReturn(0);
+    when(jobRepository.existsById(jobId)).thenReturn(false);
+
+    assertThatThrownBy(() -> service.cancelJob(userId, jobId))
+        .isInstanceOf(DiscoveryJobNotFoundException.class);
   }
 
   @Test

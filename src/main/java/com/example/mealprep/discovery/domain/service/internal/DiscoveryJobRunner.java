@@ -62,13 +62,22 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * (a separate bean) to avoid Spring's AOP self-invocation trap; this runner method itself has NO
  * {@code @Transactional}.
  *
- * <p><strong>Cross-module hand-off (skeleton mode).</strong> The ticket's persist step should call
- * {@code RecipeWriteApi.saveImportedRecipe(userId, command)} — but that SPI method does NOT yet
- * exist (lands with {@code recipe-01l-save-imported-recipe-spi}). This implementation ships in
- * <em>skeleton mode</em>: post-hard-constraint, post-fingerprint-dedup candidates write an {@code
- * EXTRACTION_FAILED} row with {@code error_class = "saveImportedRecipeNotYetImplemented"} and the
- * job continues. The 5-minute follow-up {@code discovery-01d-real-handoff} flips the stub once
- * recipe-01l merges.
+ * <p><strong>Cross-module persist hand-off.</strong> Each post-hard-constraint,
+ * post-fingerprint-dedup candidate is persisted via the live {@link
+ * RecipeWriteApi#saveImportedRecipe} SPI (catalogue {@code SYSTEM}, {@code WEB_DISCOVERED}). The
+ * result drives the scrape row:
+ *
+ * <ul>
+ *   <li>{@code newlyCreated()} → {@code SUCCESS} row with the new {@code recipe_id}, {@code
+ *       recipes_ingested} bumped, and a {@code DiscoveryRecipeIngestedEvent} published.
+ *   <li>not {@code newlyCreated()} (the SPI matched an existing recipe by content fingerprint) →
+ *       {@code DUPLICATE} row, {@code recipes_skipped_duplicate} bumped.
+ *   <li>SPI throws → {@code EXTRACTION_FAILED} row carrying the recipe-module error class; the job
+ *       continues with the next candidate.
+ * </ul>
+ *
+ * {@code EXTRACTION_FAILED} rows are therefore written only on genuine scrape / extraction /
+ * persist failures — there is no longer any stub that flags every candidate as unimplemented.
  *
  * <p>Package-private — the listener method is the only externally visible surface.
  */
@@ -424,21 +433,47 @@ public class DiscoveryJobRunner {
 
   // ----- Phase: AI filter -----
 
+  /**
+   * Runs the AI candidate filter and writes one {@code AI_FILTER_REJECTED} scrape row per
+   * model-rejected candidate (discovery-4) so the audit log records why candidates vanished between
+   * {@code candidatesSeen} and {@code candidatesAfterFilter}. The filter itself keeps candidates
+   * whose per-candidate AI dispatch fails (skip-and-flag, discovery-3); this outer catch is a
+   * defence-in-depth fallback for a whole-call failure — it proceeds unfiltered (LLD line 584) and
+   * writes no rejection rows, because nothing was rejected.
+   */
   private List<DiscoveryCandidate> aiFilterPhase(
       DiscoveryJob job, List<DiscoveryCandidate> candidates, DiscoveryConstraints constraints) {
     if (candidates.isEmpty()) {
       return candidates;
     }
+    CandidateFilterOutcome outcome;
     try {
-      return candidateAiFilter.filter(candidates, constraints, job.getUserId());
+      outcome = candidateAiFilter.filter(candidates, constraints, job.getUserId());
     } catch (RuntimeException ex) {
-      // Skip-and-flag per LLD line 573 — proceed unfiltered.
+      // Skip-and-flag per LLD line 584 — proceed unfiltered on a whole-call failure.
       log.warn(
           "AI candidate filter unavailable for job {}: {}; proceeding unfiltered",
           job.getId(),
           ex.getMessage());
       return candidates;
     }
+    for (CandidateFilterOutcome.Rejection rejection : outcome.rejected()) {
+      DiscoveryCandidate candidate = rejection.candidate();
+      log.debug(
+          "AI filter rejected candidate {} for job {}: {}",
+          candidate.candidateUrl(),
+          job.getId(),
+          rejection.reason());
+      writeScrapeRow(
+          scrapeRowBuilder(job.getId(), candidate.sourceKey(), candidate.candidateUrl())
+              .status(ScrapeOutcome.SKIPPED)
+              .robotsTxtOutcome(RobotsTxtOutcome.SKIPPED)
+              .skipReason(ScrapeSkipReason.AI_FILTER_REJECTED)
+              .errorMessage(rejection.reason())
+              .occurredAt(Instant.now())
+              .build());
+    }
+    return outcome.kept();
   }
 
   // ----- Phase: fetch -----

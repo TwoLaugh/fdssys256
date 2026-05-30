@@ -62,17 +62,12 @@ class SourceRegistry {
   }
 
   /**
-   * All enabled DB rows whose {@code source_key} matches a registered bean. DB rows without a bean
-   * are logged at WARN and skipped — silent skipping would mask a deploy-time wiring bug.
+   * Enabled DB rows whose {@code source_key} matches both a registered bean and one of {@code
+   * requestedKeys}. DB rows without a bean are logged at WARN and skipped — silent skipping would
+   * mask a deploy-time wiring bug. This is the runner's single resolution entry point (the runner
+   * always supplies the job's requested-source list); a no-arg resolve-all variant was removed as
+   * dead code (discovery-8).
    */
-  List<DiscoverySource> resolveEnabled() {
-    return repository.findByEnabledTrue().stream()
-        .map(this::beanForRowOrWarn)
-        .filter(Objects::nonNull)
-        .collect(Collectors.toList());
-  }
-
-  /** Same as {@link #resolveEnabled()} but additionally filtered to {@code requestedKeys}. */
   List<DiscoverySource> resolveEnabledByKey(Collection<String> requestedKeys) {
     Set<String> requested = new HashSet<>(requestedKeys);
     return repository.findByEnabledTrue().stream()
