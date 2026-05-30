@@ -3,6 +3,7 @@ package com.example.mealprep.core.audit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -15,6 +16,9 @@ import com.example.mealprep.core.audit.api.mapper.DecisionLogMapper;
 import com.example.mealprep.core.audit.domain.entity.DecisionLog;
 import com.example.mealprep.core.audit.domain.repository.DecisionLogRepository;
 import com.example.mealprep.core.audit.domain.service.internal.DecisionLogServiceImpl;
+import com.example.mealprep.core.audit.domain.service.internal.DecisionLogTokenBudgetGuard;
+import com.example.mealprep.core.exception.DecisionLogNotFoundException;
+import com.example.mealprep.core.exception.DecisionLogPayloadOversizedException;
 import com.example.mealprep.core.testdata.DecisionLogTestData;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -33,6 +37,7 @@ class DecisionLogServiceImplTest {
 
   @Mock private DecisionLogRepository repository;
   @Mock private DecisionLogMapper mapper;
+  @Mock private DecisionLogTokenBudgetGuard tokenBudgetGuard;
   @InjectMocks private DecisionLogServiceImpl service;
 
   // ---------------- write ----------------
@@ -60,7 +65,7 @@ class DecisionLogServiceImplTest {
   }
 
   @Test
-  void write_generatesDistinctIds_acrossCalls() {
+  void write_generatesDistinctIds_acrossCalls_whenNoCallerIdSupplied() {
     DecisionLogWriteRequest req = DecisionLogTestData.builder().build();
 
     UUID id1 = service.write(req);
@@ -70,14 +75,77 @@ class DecisionLogServiceImplTest {
   }
 
   @Test
+  void write_usesCallerSuppliedDecisionId_whenNotYetPersisted() {
+    UUID callerId = UUID.randomUUID();
+    DecisionLogWriteRequest req = DecisionLogTestData.builder().withDecisionId(callerId).build();
+    when(repository.existsById(callerId)).thenReturn(false);
+
+    UUID returned = service.write(req);
+
+    assertThat(returned).isEqualTo(callerId);
+    ArgumentCaptor<DecisionLog> captor = ArgumentCaptor.forClass(DecisionLog.class);
+    verify(repository).save(captor.capture());
+    assertThat(captor.getValue().getDecisionId()).isEqualTo(callerId);
+  }
+
+  @Test
+  void write_isIdempotent_returnsExistingId_withoutSecondInsert_whenDecisionIdAlreadyExists() {
+    UUID callerId = UUID.randomUUID();
+    DecisionLogWriteRequest req = DecisionLogTestData.builder().withDecisionId(callerId).build();
+    when(repository.existsById(callerId)).thenReturn(true);
+
+    UUID returned = service.write(req);
+
+    assertThat(returned).isEqualTo(callerId);
+    verify(repository, never()).save(any());
+  }
+
+  @Test
+  void write_throwsNotFound_whenParentDoesNotExist() {
+    UUID parent = UUID.randomUUID();
+    DecisionLogWriteRequest req =
+        DecisionLogTestData.builder().withParentDecisionId(parent).build();
+    when(repository.existsById(parent)).thenReturn(false);
+
+    assertThatThrownBy(() -> service.write(req)).isInstanceOf(DecisionLogNotFoundException.class);
+    verify(repository, never()).save(any());
+  }
+
+  @Test
+  void write_persists_whenParentExists() {
+    UUID parent = UUID.randomUUID();
+    DecisionLogWriteRequest req =
+        DecisionLogTestData.builder().withParentDecisionId(parent).build();
+    when(repository.existsById(parent)).thenReturn(true);
+
+    service.write(req);
+
+    verify(repository).save(any());
+  }
+
+  @Test
+  void write_throwsOversized_whenGuardRejects_andDoesNotPersist() {
+    DecisionLogWriteRequest req = DecisionLogTestData.builder().build();
+    doThrow(new DecisionLogPayloadOversizedException(70_000L, 65_536L))
+        .when(tokenBudgetGuard)
+        .assertWithinBudget(req);
+
+    assertThatThrownBy(() -> service.write(req))
+        .isInstanceOf(DecisionLogPayloadOversizedException.class);
+    verify(repository, never()).save(any());
+  }
+
+  @Test
   void write_passesNullableFields_through() {
+    UUID parent = UUID.randomUUID();
     DecisionLogWriteRequest req =
         DecisionLogTestData.builder()
-            .withParentDecisionId(UUID.randomUUID())
+            .withParentDecisionId(parent)
             .withActorUserId(UUID.randomUUID())
             .withReasoning("user picked option B")
             .withDurationMs(1234)
             .build();
+    when(repository.existsById(parent)).thenReturn(true);
 
     service.write(req);
 

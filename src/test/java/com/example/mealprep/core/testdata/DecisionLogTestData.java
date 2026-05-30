@@ -30,6 +30,7 @@ public final class DecisionLogTestData {
   }
 
   public static class Builder {
+    private UUID decisionId; // null — service generates one unless the caller wants idempotency
     private UUID traceId = UUID.randomUUID();
     private UUID parentDecisionId; // null
     private String scopeKind = "test-scope";
@@ -44,6 +45,11 @@ public final class DecisionLogTestData {
     private JsonNode emittedDirective; // null
     private int iteration = 0;
     private Integer durationMs; // null
+
+    public Builder withDecisionId(UUID decisionId) {
+      this.decisionId = decisionId;
+      return this;
+    }
 
     public Builder withTraceId(UUID traceId) {
       this.traceId = traceId;
@@ -113,6 +119,7 @@ public final class DecisionLogTestData {
 
     public DecisionLogWriteRequest build() {
       return new DecisionLogWriteRequest(
+          decisionId,
           traceId,
           parentDecisionId,
           scopeKind,
