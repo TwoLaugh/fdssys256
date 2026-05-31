@@ -211,7 +211,7 @@ class AdaptationWorkerApplyAndFilterTest {
     assertThat(ev.getValue().outcomeKind()).isEqualTo(OutcomeKind.VERSION_CREATED);
     assertThat(ev.getValue().outcomeTargetId()).isEqualTo(newVersionId);
     // Never staged a pending change — DIRECT applies immediately.
-    verify(w.pendingChangeStore, never()).create(any(), any(), any(), any(), any(), any());
+    verify(w.pendingChangeStore, never()).create(any(), any(), any(), any(), any(), any(), any());
   }
 
   @Test
@@ -342,7 +342,7 @@ class AdaptationWorkerApplyAndFilterTest {
 
     // The pending change IS stored regardless of the NO_CHANGE classification (propose/approve
     // record for the user to review) — this is the regressed invariant.
-    verify(w.pendingChangeStore, times(1)).create(any(), any(), any(), any(), any(), any());
+    verify(w.pendingChangeStore, times(1)).create(any(), any(), any(), any(), any(), any(), any());
     // Outcome is PENDING_CREATED — NOT NO_OP, and crucially NOT any auto-apply.
     ArgumentCaptor<AdaptationJobCompletedEvent> ev =
         ArgumentCaptor.forClass(AdaptationJobCompletedEvent.class);
@@ -824,7 +824,7 @@ class AdaptationWorkerApplyAndFilterTest {
     void stubCommon(AdaptationJob job) {
       when(jobRepository.findById(job.getId())).thenReturn(Optional.of(job));
       when(lockService.tryAcquire(any(LockKey.class))).thenReturn(true);
-      when(pendingChangeStore.create(any(), any(), any(), any(), any(), any()))
+      when(pendingChangeStore.create(any(), any(), any(), any(), any(), any(), any()))
           .thenReturn(UUID.randomUUID());
     }
 

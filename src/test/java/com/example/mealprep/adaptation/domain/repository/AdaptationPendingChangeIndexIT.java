@@ -122,14 +122,26 @@ class AdaptationPendingChangeIndexIT {
     AdaptationJob job1 = saveJobForRecipe(recipeId);
     UUID firstId =
         pendingChangeStore.create(
-            job1, response(), ChangeDimension.GENERAL, UUID.randomUUID(), UUID.randomUUID(), "v1");
+            job1,
+            response(),
+            ChangeDimension.GENERAL,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "v1",
+            null);
 
     // Second create for the SAME (recipe, GENERAL): must supersede #1 and insert a new PENDING with
     // NO DataIntegrityViolationException leaking out.
     AdaptationJob job2 = saveJobForRecipe(recipeId);
     UUID secondId =
         pendingChangeStore.create(
-            job2, response(), ChangeDimension.GENERAL, UUID.randomUUID(), UUID.randomUUID(), "v2");
+            job2,
+            response(),
+            ChangeDimension.GENERAL,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "v2",
+            null);
 
     assertThat(secondId).isNotEqualTo(firstId);
 

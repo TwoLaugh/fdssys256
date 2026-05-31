@@ -9,6 +9,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.mealprep.adaptation.ai.RecipeAdaptationResponse;
+import com.example.mealprep.adaptation.api.dto.AdaptationCandidateDto;
+import com.example.mealprep.adaptation.api.dto.AdaptationRollupDto;
 import com.example.mealprep.adaptation.config.AdaptationConfig;
 import com.example.mealprep.adaptation.domain.entity.AdaptationJob;
 import com.example.mealprep.adaptation.domain.entity.PendingChange;
@@ -54,7 +56,8 @@ class PendingChangeStoreTest {
             ChangeDimension.SALT_LEVEL,
             UUID.randomUUID(),
             UUID.randomUUID(),
-            "v1");
+            "v1",
+            null);
 
     assertThat(newId).isNotNull();
     // The supersession status-flip and the supersededBy back-fill are written via plain
@@ -91,7 +94,8 @@ class PendingChangeStoreTest {
             ChangeDimension.SALT_LEVEL,
             UUID.randomUUID(),
             UUID.randomUUID(),
-            "v1");
+            "v1",
+            null);
 
     assertThat(id).isNotNull();
     verify(repo, never()).save(any(PendingChange.class));
@@ -112,7 +116,13 @@ class PendingChangeStoreTest {
 
     PendingChangeStore store = new PendingChangeStore(repo, events, config());
     store.create(
-        job(), response(), ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), "v1");
+        job(),
+        response(),
+        ChangeDimension.SALT_LEVEL,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "v1",
+        null);
 
     // Kills the VoidMethodCall mutant that removes setResolvedAt(now).
     assertThat(existing.getResolvedAt()).isNotNull();
@@ -140,7 +150,7 @@ class PendingChangeStoreTest {
             List.of());
 
     store.create(
-        job(), resp, ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), "v7");
+        job(), resp, ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), "v7", null);
 
     ArgumentCaptor<PendingChange> cap = ArgumentCaptor.forClass(PendingChange.class);
     verify(repo).saveAndFlush(cap.capture());
@@ -177,7 +187,7 @@ class PendingChangeStoreTest {
             List.of());
 
     store.create(
-        job(), resp, ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), null);
+        job(), resp, ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), null, null);
 
     ArgumentCaptor<PendingChange> cap = ArgumentCaptor.forClass(PendingChange.class);
     verify(repo).saveAndFlush(cap.capture());
@@ -191,6 +201,86 @@ class PendingChangeStoreTest {
     assertThat(saved.getProposedDiff().isEmpty()).isTrue();
     // safe(null) -> BigDecimal.ZERO.
     assertThat(saved.getConfidence()).isEqualByComparingTo("0");
+  }
+
+  @Test
+  void impact_score_derived_from_chosen_candidate_rollup_so_high_delta_outranks_low_delta() {
+    PendingChangeRepository repo = mock(PendingChangeRepository.class);
+    ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    when(repo.findByRecipeIdAndChangeDimensionAndStatus(any(), any(), any()))
+        .thenReturn(Optional.empty());
+    PendingChangeStore store = new PendingChangeStore(repo, events, config());
+
+    // Same confidence on both responses (0.90) so only the rollup magnitude differs.
+    RecipeAdaptationResponse resp =
+        new RecipeAdaptationResponse(
+            0,
+            AdaptationClassification.VERSION,
+            "r",
+            "",
+            BigDecimal.valueOf(0.90),
+            BigDecimal.valueOf(0.8),
+            null,
+            JsonNodeFactory.instance.objectNode(),
+            List.of());
+
+    // High-magnitude candidate: big macro + cost + time deltas (saturating components).
+    AdaptationCandidateDto high = candidate(BigDecimal.valueOf(400), BigDecimal.valueOf(3.0), 30);
+    // Low-magnitude candidate: tiny deltas.
+    AdaptationCandidateDto low = candidate(BigDecimal.valueOf(10), BigDecimal.valueOf(0.05), 1);
+
+    store.create(
+        job(), resp, ChangeDimension.SALT_LEVEL, UUID.randomUUID(), UUID.randomUUID(), "v1", high);
+    store.create(
+        job(), resp, ChangeDimension.PROTEIN, UUID.randomUUID(), UUID.randomUUID(), "v1", low);
+
+    ArgumentCaptor<PendingChange> cap = ArgumentCaptor.forClass(PendingChange.class);
+    verify(repo, times(2)).saveAndFlush(cap.capture());
+    BigDecimal highScore = cap.getAllValues().get(0).getImpactScore();
+    BigDecimal lowScore = cap.getAllValues().get(1).getImpactScore();
+
+    // The big-delta change must rank strictly above the small-delta change — the prior hard-coded
+    // 0.5 made both equal and the rank-at-read budget degenerate to recency/confidence only.
+    assertThat(highScore).isGreaterThan(lowScore);
+    // Neither is the old literal 0.5, and both fit numeric(4,3).
+    assertThat(highScore).isNotEqualByComparingTo("0.5");
+    assertThat(highScore.scale()).isEqualTo(3);
+    assertThat(highScore).isLessThanOrEqualTo(new BigDecimal("0.999"));
+  }
+
+  @Test
+  void impact_score_null_candidate_falls_back_to_half_confidence() {
+    // No chosen candidate (NO_CHANGE / older wiring): score = confidence * 0.5, still confidence-
+    // ordered rather than a flat constant.
+    BigDecimal score = PendingChangeStore.deriveImpactScore(null, BigDecimal.valueOf(0.80));
+    assertThat(score).isEqualByComparingTo("0.400");
+  }
+
+  private static AdaptationCandidateDto candidate(
+      BigDecimal kcalDelta, BigDecimal costDelta, int timeDelta) {
+    AdaptationRollupDto rollup =
+        new AdaptationRollupDto(
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            kcalDelta,
+            java.util.Map.of(),
+            costDelta,
+            timeDelta,
+            0,
+            BigDecimal.valueOf(0.8),
+            java.util.Set.of(),
+            List.of());
+    return new AdaptationCandidateDto(
+        0,
+        AdaptationClassification.VERSION,
+        JsonNodeFactory.instance.objectNode(),
+        rollup,
+        "culinary",
+        "nutrition",
+        BigDecimal.valueOf(0.9),
+        BigDecimal.valueOf(0.9),
+        List.of());
   }
 
   private static AdaptationJob job() {

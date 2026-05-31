@@ -123,7 +123,7 @@ class AdaptationServiceImplProcessJobSmokeTest {
     when(w.jobRepository.findById(job.getId())).thenReturn(Optional.of(job));
     when(w.lockService.tryAcquire(any(LockKey.class))).thenReturn(true);
     when(w.scoringEngine.shouldAutoSkipStageC(any())).thenReturn(true);
-    when(w.pendingChangeStore.create(any(), any(), any(), any(), any(), any()))
+    when(w.pendingChangeStore.create(any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(UUID.randomUUID());
 
     w.service.processJob(job);

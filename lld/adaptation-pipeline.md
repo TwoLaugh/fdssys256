@@ -130,7 +130,8 @@ CREATE TABLE adaptation_pending_changes (
     base_version_id          uuid NOT NULL, base_branch_id uuid NOT NULL,
     reasoning                text NOT NULL, nutritional_notes text,
     confidence               numeric(4,3) NOT NULL,
-    impact_score             numeric(4,3) NOT NULL,          -- ranking-pool sort key
+    impact_score             numeric(4,3) NOT NULL,          -- ranking-pool sort key:
+                                                             -- normalised macro/cost/time delta magnitude × confidence
     prompt_template_version  varchar(40) NOT NULL,
     status                   varchar(16) NOT NULL DEFAULT 'PENDING',  -- PENDING | ACCEPTED | REJECTED |
                                                              -- MODIFIED | SUPERSEDED | EXPIRED
@@ -153,6 +154,10 @@ CREATE INDEX idx_adaptation_pending_recipe_time
 ```
 
 14-day expiry per HLD, enforced by a daily sweep. The 3-per-week user budget is enforced at **surface time** — the list endpoint caps + ranks; the row exists, it just isn't surfaced beyond rank 3. **Worth user review** — the alternative is a `QUEUED` status, but rank-at-read lets newly fresh proposals overtake stale ones automatically.
+
+`impact_score` is derived at write time (`PendingChangeStore`) from the chosen candidate's `AdaptationRollupDto`: a normalised, saturating magnitude of its macro-kcal (sat. 400 kcal), cost (sat. £3.00), and time (sat. 30 min) deltas, averaged and multiplied by the response confidence, clamped to `[0.000, 0.999]`. When no candidate/rollup is available (NO_CHANGE, older wirings) it falls back to `confidence × 0.5`. This makes the rank-at-read budget order by real impact rather than a flat constant.
+
+`acceptPendingChange` honours the row's `proposed_classification`: **BRANCH** forks via `RecipeWriteApi.saveAdaptedBranch` + `FingerprintRefresher` (the branch's v1 version becomes `accepted_version_id`); **VERSION** appends via `saveAdaptedVersion` on the base branch. Both writes route through `RebaseOrchestrator`, so if the catalogue head moved between proposal and accept the conflict is rebased up to `maxRebaseAttempts` and then surfaces `REBASE_EXHAUSTED` rather than a raw `RecipeVersionConflictException`.
 
 The partial unique index on `(recipe_id, change_dimension) WHERE status = 'PENDING'` enforces supersession atomically: in one tx the existing row flips `SUPERSEDED` (with `superseded_by = newId`), then the new row inserts. Concurrent supersessions: second writer hits the unique-constraint violation, retries, succeeds.
 
