@@ -100,6 +100,35 @@ public interface RecipeRepository extends JpaRepository<Recipe, UUID> {
   List<Recipe> findPlannableForUser(@Param("userId") UUID userId, Pageable page);
 
   /**
+   * Count of SYSTEM-catalogue recipe rows (any state — archived/deleted included). E2E test-support
+   * uses this to assert the global SYSTEM catalogue is empty between scenarios (see {@code
+   * E2eRecipeCatalogueController}); it has no production caller. Accessible only within the recipe
+   * module per {@code RecipeBoundaryTest}.
+   */
+  long countByCatalogue(com.example.mealprep.recipe.domain.entity.Catalogue catalogue);
+
+  /**
+   * Hard-delete EVERY SYSTEM-catalogue recipe row. Used ONLY by the {@code e2e}-profile
+   * test-support cleanup ({@code E2eRecipeCatalogueController}) to reset the global, cross-scenario
+   * SYSTEM catalogue that the cold-start discovery fill populates — there is no production caller
+   * (SYSTEM rows are never bulk-purged in prod; they are archived via {@code
+   * ArchiveEligibilityScanner}).
+   *
+   * <p>FK-safe: every recipe child table ({@code recipe_versions}, {@code recipe_branches}, {@code
+   * recipe_ingredients}, {@code recipe_method_steps}, {@code recipe_metadata}, {@code recipe_tags},
+   * {@code recipe_imports}, {@code recipe_substitutions}, {@code recipe_ratings}) references {@code
+   * recipe_recipes(id)} (directly or via {@code recipe_versions}/{@code recipe_branches}) with
+   * {@code ON DELETE CASCADE}, so this single statement sweeps the whole aggregate. Cross-module
+   * references (e.g. {@code planner_scheduled_recipes.recipe_id}) are soft refs with no DB FK, so
+   * they are not affected. Returns the count of recipe roots deleted.
+   */
+  @Modifying
+  @Query(
+      "delete from Recipe r"
+          + " where r.catalogue = com.example.mealprep.recipe.domain.entity.Catalogue.SYSTEM")
+  int deleteAllSystemCatalogue();
+
+  /**
    * Affected-set read for the adaptation module (Trigger 3). Returns one {@code (recipeId,
    * ingredientMappingKey)} row per ingredient on the <b>current version</b> of each <b>active</b>
    * {@code USER}-catalogue recipe owned by {@code userId}. The service assembles these into a

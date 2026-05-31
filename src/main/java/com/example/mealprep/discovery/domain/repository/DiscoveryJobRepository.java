@@ -25,6 +25,21 @@ public interface DiscoveryJobRepository extends JpaRepository<DiscoveryJob, UUID
   Page<DiscoveryJob> findByUserIdOrderByQueuedAtDesc(UUID userId, Pageable pageable);
 
   /**
+   * Hard-delete EVERY discovery job. Used ONLY by the {@code e2e}-profile test-support cleanup
+   * ({@code E2eDiscoveryResetController}) to reset the cross-scenario discovery dedup memory —
+   * there is no production caller (discovery jobs are an append-only audit in prod). {@code
+   * discovery_scrape_log.job_id} references {@code discovery_jobs(id)} {@code ON DELETE CASCADE},
+   * so this single statement also sweeps every scrape-log row — and with it the content-fingerprint
+   * dedup window the runner consults ({@code existsByContentFingerprintAndOccurredAtAfter}).
+   * Without this reset, a SUCCESS scrape row from one scenario's cold-start fill makes the
+   * deterministic seed recipes look like DUPLICATEs in a later scenario's cold-start, so discovery
+   * ingests nothing. Returns the count of jobs deleted.
+   */
+  @Modifying
+  @Query("delete from DiscoveryJob j")
+  int deleteAllJobs();
+
+  /**
    * Watchdog: orphan running jobs whose {@code started_at} predates the heartbeat window. The
    * orphan sweep (lands in 01d) transitions these to {@code FAILED}.
    */
