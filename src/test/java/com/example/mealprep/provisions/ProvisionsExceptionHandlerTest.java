@@ -6,7 +6,6 @@ import static org.mockito.Mockito.when;
 import com.example.mealprep.provisions.api.ProvisionsExceptionHandler;
 import com.example.mealprep.provisions.api.dto.UnderflowFlagDto;
 import com.example.mealprep.provisions.domain.entity.ItemSource;
-import com.example.mealprep.provisions.exception.BatchCookNotSupportedException;
 import com.example.mealprep.provisions.exception.BudgetCurrencyChangeException;
 import com.example.mealprep.provisions.exception.BudgetNotFoundException;
 import com.example.mealprep.provisions.exception.DuplicateGroceryImportException;
@@ -172,17 +171,6 @@ class ProvisionsExceptionHandlerTest {
         "Insufficient inventory for cook event",
         "1 ingredient(s) underflowed");
     assertThat(resp.getBody().getProperties()).containsEntry("underflows", underflows);
-  }
-
-  @Test
-  void batchCookNotSupported_maps_to_422() {
-    var resp = handler.handleBatchCookNotSupported(new BatchCookNotSupportedException(), request);
-    assertProblem(
-        resp,
-        HttpStatus.UNPROCESSABLE_ENTITY,
-        "batch-cook-not-supported",
-        "Batch cook is not supported in v1",
-        "Batch cook is not supported");
   }
 
   @Test

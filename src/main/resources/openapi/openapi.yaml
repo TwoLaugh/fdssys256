@@ -110,6 +110,8 @@ paths:
     $ref: 'paths/provisions.yaml#/inventory'
   /api/v1/provisions/inventory/{itemId}:
     $ref: 'paths/provisions.yaml#/inventoryItem'
+  /api/v1/provisions/inventory/{itemId}/quantity:
+    $ref: 'paths/provisions.yaml#/inventoryItemQuantity'
   /api/v1/provisions/inventory/{itemId}/mark-spoiled:
     $ref: 'paths/provisions.yaml#/inventoryItemMarkSpoiled'
   /api/v1/provisions/inventory/{itemId}/mark-exhausted:
@@ -582,6 +584,7 @@ components:
     InventoryItemDto: { $ref: 'schemas/provisions.yaml#/InventoryItemDto' }
     CreateInventoryItemRequest: { $ref: 'schemas/provisions.yaml#/CreateInventoryItemRequest' }
     UpdateInventoryItemRequest: { $ref: 'schemas/provisions.yaml#/UpdateInventoryItemRequest' }
+    AdjustInventoryQuantityRequest: { $ref: 'schemas/provisions.yaml#/AdjustInventoryQuantityRequest' }
     EquipmentDto: { $ref: 'schemas/provisions.yaml#/EquipmentDto' }
     UpsertEquipmentRequest: { $ref: 'schemas/provisions.yaml#/UpsertEquipmentRequest' }
     AuditActor: { $ref: 'schemas/provisions.yaml#/AuditActor' }

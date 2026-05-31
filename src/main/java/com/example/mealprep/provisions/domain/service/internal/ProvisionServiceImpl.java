@@ -3,6 +3,10 @@ package com.example.mealprep.provisions.domain.service.internal;
 import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.api.dto.HouseholdMemberDto;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
+import com.example.mealprep.preference.api.dto.LifestyleConfigDto;
+import com.example.mealprep.preference.domain.document.LifestyleConfigDocument;
+import com.example.mealprep.preference.domain.service.LifestyleConfigQueryService;
+import com.example.mealprep.provisions.api.dto.AdjustInventoryQuantityRequest;
 import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.BundleStaleness;
 import com.example.mealprep.provisions.api.dto.CookEventCommand;
@@ -71,8 +75,8 @@ import com.example.mealprep.provisions.event.ItemQuantityAdjustedEvent;
 import com.example.mealprep.provisions.event.ItemRanOutEvent;
 import com.example.mealprep.provisions.event.ItemSpoiledEvent;
 import com.example.mealprep.provisions.event.SubstitutionAcceptedEvent;
-import com.example.mealprep.provisions.exception.BatchCookNotSupportedException;
 import com.example.mealprep.provisions.exception.BudgetCurrencyChangeException;
+import com.example.mealprep.provisions.exception.InvalidInventoryQuantityException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
 import com.example.mealprep.provisions.exception.InventoryUnderflowException;
 import com.example.mealprep.provisions.exception.SupplierProductNotFoundException;
@@ -116,16 +120,29 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Single implementation of {@link ProvisionQueryService} and {@link ProvisionUpdateService}.
+ * Single implementation of {@link ProvisionQueryService}, {@link ProvisionUpdateService}, and
+ * {@link ProvisionForPlannerService} — the fully-built provisions surface: inventory CRUD +
+ * quantity adjust, mark-spoiled/exhausted, the cook-event / meal-consumption /
+ * standalone-consumption flows (FIFO-by-expiry deduction via {@link InventoryDeductionEngine},
+ * batch-cook fridge/freezer split via {@link BatchCookSplitter}), grocery import (via {@link
+ * GroceryImportProcessor}), waste logging, equipment / budget / supplier-product upserts, and the
+ * planner bundle aggregate read.
  *
  * <p>Reads run with {@code readOnly = true}; writes run REQUIRED (top-level transactions). The
  * update path field-diffs — one audit row per genuinely changed field; if the request is a no-op
  * the row stays unmodified, no audit row is written, no event is published, and the
  * {@code @Version} does not bump.
  *
- * <p>{@link InventoryItemUpsertedEvent} is published synchronously inside the transaction; the
- * event is captured by {@code @TransactionalEventListener(phase = AFTER_COMMIT)} listeners — none
- * in 01a.
+ * <p>Events ({@link InventoryItemUpsertedEvent}, {@link ItemQuantityAdjustedEvent}, {@link
+ * ItemSpoiledEvent}, {@link ItemRanOutEvent}, the grocery / equipment / budget events) are
+ * published inside the write transaction and captured by {@code @TransactionalEventListener(phase =
+ * AFTER_COMMIT)} listeners (the planner re-opt listener, notification fan-out). Multi-row
+ * operations coalesce to a single event per kind via {@link ProvisionEventBatcher}.
+ *
+ * <p>The project-wide {@code pantry_tracking_enabled} lifestyle flag is read once per invocation
+ * via the public {@link LifestyleConfigQueryService} preference SPI and gates the planner-bundle
+ * inventory/staples lists, the cook/grocery write paths, and the staples-needing-replenishment read
+ * (LLD §Pantry tracking disable).
  */
 @Service
 public class ProvisionServiceImpl
@@ -178,6 +195,8 @@ public class ProvisionServiceImpl
   private final InventoryDeductionEngine deductionEngine;
   private final ProvisionEventBatcher eventBatcher;
   private final GroceryImportProcessor groceryImportProcessor;
+  private final BatchCookSplitter batchCookSplitter;
+  private final LifestyleConfigQueryService lifestyleConfigQueryService;
 
   public ProvisionServiceImpl(
       InventoryItemRepository inventoryItemRepository,
@@ -199,7 +218,9 @@ public class ProvisionServiceImpl
       HouseholdQueryService householdQueryService,
       InventoryDeductionEngine deductionEngine,
       ProvisionEventBatcher eventBatcher,
-      GroceryImportProcessor groceryImportProcessor) {
+      GroceryImportProcessor groceryImportProcessor,
+      BatchCookSplitter batchCookSplitter,
+      LifestyleConfigQueryService lifestyleConfigQueryService) {
     this.inventoryItemRepository = inventoryItemRepository;
     this.auditLogRepository = auditLogRepository;
     this.equipmentRepository = equipmentRepository;
@@ -220,6 +241,8 @@ public class ProvisionServiceImpl
     this.deductionEngine = deductionEngine;
     this.eventBatcher = eventBatcher;
     this.groceryImportProcessor = groceryImportProcessor;
+    this.batchCookSplitter = batchCookSplitter;
+    this.lifestyleConfigQueryService = lifestyleConfigQueryService;
   }
 
   // ---------------- Query ----------------
@@ -271,6 +294,10 @@ public class ProvisionServiceImpl
   @Override
   @Transactional(readOnly = true)
   public List<InventoryItemDto> getStaplesNeedingReplenishment(UUID userId) {
+    // Staple replenishment list is empty when pantry tracking is disabled (LLD line 141).
+    if (!pantryTrackingEnabled(userId)) {
+      return List.of();
+    }
     return inventoryItemRepository
         .findActiveStaplesForUserByStatusIn(userId, List.of(StapleStatus.LOW, StapleStatus.OUT))
         .stream()
@@ -347,11 +374,20 @@ public class ProvisionServiceImpl
   @Override
   @Transactional(readOnly = true)
   public ProvisionForPlannerBundleDto getBundle(UUID userId) {
+    // pantry_tracking_enabled gating (LLD lines 136-141): when disabled the planner bundle's
+    // inventory + staples lists are empty (reads are not consumed downstream), but equipment,
+    // budget, and supplier prices still flow.
+    boolean pantryEnabled = pantryTrackingEnabled(userId);
     List<InventoryItem> activeRows =
-        inventoryItemRepository.findAllByUserIdAndItemStatus(userId, ItemLifecycleStatus.ACTIVE);
+        pantryEnabled
+            ? inventoryItemRepository.findAllByUserIdAndItemStatus(
+                userId, ItemLifecycleStatus.ACTIVE)
+            : List.of();
     List<InventoryItem> staples =
-        inventoryItemRepository.findAllByUserIdAndIsStapleTrueAndStatusIn(
-            userId, Set.of(StapleStatus.LOW, StapleStatus.OUT));
+        pantryEnabled
+            ? inventoryItemRepository.findAllByUserIdAndIsStapleTrueAndStatusIn(
+                userId, Set.of(StapleStatus.LOW, StapleStatus.OUT))
+            : List.of();
     List<Equipment> equipment = equipmentRepository.findAllByUserIdAndAvailableTrue(userId);
     BudgetDto budget = budgetRepository.findByUserId(userId).map(budgetMapper::toDto).orElse(null);
 
@@ -450,6 +486,30 @@ public class ProvisionServiceImpl
     }
     return Duration.between(membershipCreatedAt, Instant.now(clock)).toDays()
         < PLANNER_BUNDLE_RAMP_UP_DAYS;
+  }
+
+  /**
+   * Read the project-wide {@code pantry_tracking_enabled} lifestyle flag for {@code userId} via the
+   * public preference SPI ({@link LifestyleConfigQueryService}). Per LLD §Pantry tracking disable
+   * (lines 130-143) this gates {@code getBundle}'s inventory list, the cook/grocery write paths,
+   * and the staples-needing-replenishment read.
+   *
+   * <p>Default semantics: tracking is treated as ENABLED when the user has no lifestyle config, no
+   * pantry-tracking section, or the SPI is unavailable — only an explicit {@code enabled = false}
+   * disables it. This preserves the module's historical always-track behaviour for users who never
+   * touched the flag, and mirrors the {@code LifestyleConfigDocument.PantryTracking} contract that
+   * grocery / planner consume. Read once per service-method invocation (LLD line 143).
+   */
+  private boolean pantryTrackingEnabled(UUID userId) {
+    LifestyleConfigDocument document =
+        lifestyleConfigQueryService
+            .getLifestyleConfig(userId)
+            .map(LifestyleConfigDto::document)
+            .orElse(null);
+    if (document == null || document.pantryTracking() == null) {
+      return true; // unset → enabled (non-breaking default; only explicit false disables)
+    }
+    return document.pantryTracking().enabled();
   }
 
   // ---------------- Update ----------------
@@ -567,6 +627,73 @@ public class ProvisionServiceImpl
         saved.getId(),
         requestingUserId,
         changedFields,
+        saved.getVersion());
+    return mapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public InventoryItemDto adjustQuantity(
+      UUID itemId, UUID requestingUserId, AdjustInventoryQuantityRequest request) {
+    InventoryItem item =
+        inventoryItemRepository
+            .findByIdAndUserId(itemId, requestingUserId)
+            .orElseThrow(() -> new InventoryItemNotFoundException(itemId));
+
+    // Optimistic-lock pre-check: surface 409 immediately rather than waiting for flush-time
+    // increment (which only fires when fields are actually dirtied).
+    if (item.getVersion() != request.expectedVersion()) {
+      throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
+          InventoryItem.class, itemId);
+    }
+    if (item.getTrackingMode() != TrackingMode.QUANTITY) {
+      throw new InvalidInventoryQuantityException(
+          "adjustQuantity is only valid for QUANTITY-tracked items");
+    }
+
+    BigDecimal previous = item.getQuantity() == null ? BigDecimal.ZERO : item.getQuantity();
+    BigDecimal next = request.newQuantity();
+    if (previous.compareTo(next) == 0) {
+      // No-op PATCH: no audit row, no event, no version bump.
+      log.info(
+          "inventory quantity PATCH was a no-op itemId={} userId={} quantity={}",
+          itemId,
+          requestingUserId,
+          next);
+      return mapper.toDto(item);
+    }
+
+    item.setQuantity(next);
+    if (next.signum() == 0) {
+      item.setItemStatus(ItemLifecycleStatus.EXHAUSTED);
+    }
+    InventoryItem saved = inventoryItemRepository.saveAndFlush(item);
+
+    Instant now = Instant.now(clock);
+    auditLogRepository.save(
+        new InventoryAuditLog(
+            UUID.randomUUID(),
+            saved.getId(),
+            requestingUserId,
+            AuditActor.USER,
+            requestingUserId,
+            FIELD_QUANTITY,
+            objectMapper.valueToTree(Map.of(FIELD_QUANTITY, previous)),
+            objectMapper.valueToTree(Map.of(FIELD_QUANTITY, next)),
+            now));
+    eventPublisher.publishEvent(
+        new ItemQuantityAdjustedEvent(
+            requestingUserId,
+            List.of(saved.getId()),
+            ItemAdjustmentSource.MANUAL,
+            currentTraceId(),
+            now));
+    log.info(
+        "inventory quantity adjusted itemId={} userId={} from={} to={} version={}",
+        saved.getId(),
+        requestingUserId,
+        previous,
+        next,
         saved.getVersion());
     return mapper.toDto(saved);
   }
@@ -1166,8 +1293,11 @@ public class ProvisionServiceImpl
     cookEventDedupeRepository.save(
         new ProvisionCookEventDedupe(command.mealSlotId(), dedupeKey, Instant.now(clock)));
 
-    if (Boolean.TRUE.equals(command.isBatchCook())) {
-      throw new BatchCookNotSupportedException();
+    // pantry_tracking_enabled gating (LLD line 138): auto-deduct on cook is a no-op when the user
+    // has pantry tracking disabled. The order itself still happened; provisions just doesn't track.
+    if (!pantryTrackingEnabled(userId)) {
+      log.info("cook event skipped — pantry tracking disabled userId={}", userId);
+      return new InventoryDeductionResultDto(List.of(), List.of(), List.of());
     }
 
     BigDecimal proportion =
@@ -1190,6 +1320,19 @@ public class ProvisionServiceImpl
 
     if (strict && !underflows.isEmpty()) {
       throw new InventoryUnderflowException(underflows);
+    }
+
+    // Batch cook (LLD §Flow 1 step 4): split the cooked batch into fridge/freezer prepared rows.
+    // The new portion ids join the same coalesced ItemQuantityAdjustedEvent via the batcher.
+    if (Boolean.TRUE.equals(command.isBatchCook())) {
+      List<UUID> portionIds =
+          batchCookSplitter.split(
+              userId,
+              command.recipeId(),
+              command.batchLabel(),
+              command.servingsCooked(),
+              command.batchSplit());
+      deductedIds.addAll(portionIds);
     }
 
     List<InventoryItemDto> updatedItems =
@@ -1291,6 +1434,13 @@ public class ProvisionServiceImpl
   @Override
   @Transactional
   public GroceryImportResultDto applyGroceryOrder(UUID userId, GroceryOrderImportCommand command) {
+    // pantry_tracking_enabled gating (LLD line 139): auto-add on grocery confirm is a no-op when
+    // the user has pantry tracking disabled — the order still happened, provisions just doesn't
+    // track stock. Returns an empty (but valid) import result; nothing persisted, no event.
+    if (!pantryTrackingEnabled(userId)) {
+      log.info("grocery import skipped — pantry tracking disabled userId={}", userId);
+      return new GroceryImportResultDto(List.of(), List.of(), List.of(), List.of());
+    }
     return groceryImportProcessor.process(userId, command, AuditActor.GROCERY_IMPORT);
   }
 

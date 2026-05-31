@@ -159,6 +159,12 @@ UpdateInventoryItemRequest:
         defrostLeadTimeHours: { type: integer, minimum: 0, nullable: true }
         sourceRecipeId: { type: string, format: uuid, nullable: true }
     expectedVersion: { type: integer, format: int64 }
+AdjustInventoryQuantityRequest:
+  type: object
+  required: [newQuantity, expectedVersion]
+  properties:
+    newQuantity: { type: number, minimum: 0 }
+    expectedVersion: { type: integer, format: int64 }
 EquipmentDto:
   type: object
   required: [id, userId, name, available, version]

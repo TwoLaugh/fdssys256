@@ -68,6 +68,10 @@ class ProvisionForPlannerServiceTest {
   @Mock private ApplicationEventPublisher eventPublisher;
   @Mock private HouseholdQueryService householdQueryService;
 
+  @Mock
+  private com.example.mealprep.preference.domain.service.LifestyleConfigQueryService
+      lifestyleConfigQueryService;
+
   private final InventoryItemMapper mapper =
       new com.example.mealprep.provisions.api.mapper.InventoryItemMapperImpl();
   private final EquipmentMapper equipmentMapper =
@@ -104,7 +108,9 @@ class ProvisionForPlannerServiceTest {
         householdQueryService,
         null,
         null,
-        null);
+        null,
+        null,
+        lifestyleConfigQueryService);
   }
 
   // ---------------- empty user ----------------

@@ -12,8 +12,8 @@ import java.util.UUID;
 
 /**
  * Cook-event idempotency row. Inserted at the start of {@code applyCookEvent}; the unique key
- * {@code (meal_slot_id, dedupe_key)} fences duplicate {@code MealCookedEvent} replays. Rows older
- * than 24h are swept by {@link
+ * {@code (meal_slot_id, dedupe_key)} fences duplicate cook-event replays (a re-POST of {@code POST
+ * /cook-event} for the same meal slot). Rows older than 24h are swept by {@link
  * com.example.mealprep.provisions.domain.service.internal.CookEventDedupeSweeper}.
  *
  * <p>See LLD line 620 / 623.

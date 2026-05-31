@@ -3,6 +3,7 @@ package com.example.mealprep.provisions;
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -453,6 +454,94 @@ class InventoryFlowIT {
                 .content(json))
         .andExpect(status().isNotFound())
         .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+  }
+
+  // ---------------- PATCH /inventory/{itemId}/quantity (provisions-3) ----------------
+
+  @Test
+  void patchQuantity_returns200_bumpsVersion_andValidatesAgainstOpenApiContract() throws Exception {
+    AuthedUser user = registerUser();
+    InventoryItemDto created =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), ProvisionsTestData.createQuantityTrackedRequest(), AuditActor.USER);
+
+    String json =
+        """
+        { "newQuantity": 300.000, "expectedVersion": 0 }
+        """;
+
+    mvc.perform(
+            patch("/api/v1/provisions/inventory/" + created.id() + "/quantity")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json))
+        .andExpect(status().isOk())
+        .andExpect(openApi().isValid(openApiValidator))
+        .andExpect(jsonPath("$.quantity").value(300.000))
+        .andExpect(jsonPath("$.version").value(1));
+  }
+
+  @Test
+  void patchQuantity_returns409_whenStaleExpectedVersion() throws Exception {
+    AuthedUser user = registerUser();
+    InventoryItemDto created =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), ProvisionsTestData.createQuantityTrackedRequest(), AuditActor.USER);
+
+    String json =
+        """
+        { "newQuantity": 300.000, "expectedVersion": 99 }
+        """;
+
+    mvc.perform(
+            patch("/api/v1/provisions/inventory/" + created.id() + "/quantity")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json))
+        .andExpect(status().isConflict())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+  }
+
+  @Test
+  void patchQuantity_returns404_whenOwnedByOtherUser() throws Exception {
+    AuthedUser owner = registerUser();
+    AuthedUser intruder = registerUser();
+    InventoryItemDto created =
+        provisionUpdateService.createInventoryItem(
+            owner.userId(), ProvisionsTestData.createQuantityTrackedRequest(), AuditActor.USER);
+
+    String json =
+        """
+        { "newQuantity": 10.000, "expectedVersion": 0 }
+        """;
+
+    mvc.perform(
+            patch("/api/v1/provisions/inventory/" + created.id() + "/quantity")
+                .cookie(intruder.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json))
+        .andExpect(status().isNotFound())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+  }
+
+  @Test
+  void patchQuantity_returns400_whenNegativeQuantity() throws Exception {
+    AuthedUser user = registerUser();
+    InventoryItemDto created =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), ProvisionsTestData.createQuantityTrackedRequest(), AuditActor.USER);
+
+    String json =
+        """
+        { "newQuantity": -5, "expectedVersion": 0 }
+        """;
+
+    mvc.perform(
+            patch("/api/v1/provisions/inventory/" + created.id() + "/quantity")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json))
+        .andExpect(status().isBadRequest());
   }
 
   @Test

@@ -87,8 +87,8 @@ Similarly, the Feedback System processing a single multi-destination feedback en
 
 | Event | Published by | Listened by | Downstream action |
 |---|---|---|---|
-| `MealCookedEvent` | UI/Planner (user marks meal cooked) | Provisions (deduct ingredients), Nutrition Logger (auto-confirm intake) | Inventory deduction, nutrition tracking |
-| `MealConsumedEvent` | UI (user confirms eating pre-made meal) | Provisions (deduct one portion) | Portion deduction from fridge/freezer |
+| `MealCookedEvent` *(v1: not built as an event — see note)* | — | — | Cooking is a direct call in v1: `POST /api/v1/provisions/cook-event` → `ProvisionUpdateService.applyCookEvent` (FIFO-by-expiry deduction + batch-cook split). The event-driven seam (and the Nutrition Logger auto-confirm-on-cook leg) is **deferred**: the planner publishes no `MealCookedEvent`. |
+| `MealConsumedEvent` *(v1: not built as an event — see note)* | — | — | Direct call in v1: `POST /api/v1/provisions/meal-consumption` → `ProvisionUpdateService.applyMealConsumption` (single-row portion decrement). |
 | `ProvisionChangedEvent` (sealed) | Provisions — sub-kinds: `ItemSpoiledEvent`, `ItemRanOutEvent`, `ItemAddedFromGroceryEvent`, `SubstitutionAcceptedEvent`. Batched per operation. | Planner | Offers mid-week re-optimisation for remaining days |
 | `EquipmentChangedEvent` | Provisions | Planner (cache invalidation) | Plan re-eligibility check |
 | `BudgetChangedEvent` | Provisions | Planner (cache invalidation) | Re-score under new budget |
@@ -98,7 +98,7 @@ Similarly, the Feedback System processing a single multi-destination feedback en
 | `FeedbackProcessedEvent` | Feedback System (after AI classifies and routes — **one event per feedback entry**) | Notification System | Confirms to user what was updated (payload includes which destinations) |
 | `RecipeImportedEvent` | Recipe Engine (new recipe added to either catalogue) | Optimiser (Trigger 1) | Run adaptation against data models |
 | `RecipeEvolvedEvent` | Optimiser or Recipe Engine (version/branch created) | Nutrition Engine | Recalculate nutrition for new version |
-| `GroceryOrderConfirmedEvent` | Grocery Module (order confirmed by user) | Provisions | Add items to inventory, update supplier cache |
+| `GroceryOrderConfirmedEvent` | Grocery Module (order confirmed by user) | *(no inventory consumer in v1 — lifecycle/notification signal only)* | Inventory is added by grocery's own `OrderReconciler` at **reconcile** time (not confirm) via a direct, idempotent `ProvisionUpdateService.applyGroceryOrder` call. The event is published as a lifecycle fan-out point; provisions does not consume it. |
 | `DataModelChangedEvent` | Any data model (significant change to constraints/targets — **distinct from the per-model events above**) | Optimiser (Trigger 3) | Batch re-optimise affected system catalogue recipes. Note: `PreferenceChangedEvent` etc. target the Planner for mid-week re-opt; `DataModelChangedEvent` targets the Optimiser for recipe catalogue maintenance. A single data model change may publish both — they serve different consumers with different responses. |
 | `ItemNearingExpiryEvent` | Scheduled check on Provisions (`@Scheduled`) | Notification System | Alert user about expiring items |
 | `HealthDirectiveReceivedEvent` | Health Platform integration | Notification System, Nutrition/Preference | Alert user to review proposed directive |
@@ -644,6 +644,13 @@ User can correct: expiry dates, reject substitutions, adjust quantities
 ```
 
 ### Flow 4: Cook Event
+
+> **v1 implementation note.** The cook flow ships as a **direct REST/service call**, not an event:
+> `POST /api/v1/provisions/cook-event` → `ProvisionUpdateService.applyCookEvent`. The planner does
+> not publish `MealCookedEvent` (it ships `PlanCompletedEvent` etc.), and the diagram's
+> Nutrition-Logger auto-confirm-on-cook leg is deferred. The provisions deduction + batch-cook split
+> below are built and live behind that endpoint. The event-fan-out diagram is retained as the target
+> design.
 
 ```
 User marks meal as cooked

@@ -1,5 +1,6 @@
 package com.example.mealprep.provisions.domain.service;
 
+import com.example.mealprep.provisions.api.dto.AdjustInventoryQuantityRequest;
 import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.CookEventCommand;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
@@ -23,9 +24,10 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Write API for the provisions module — partial in 01a (inventory create/update only). The
- * cook-event and grocery-import flows, the {@code mark-spoiled}/{@code mark-exhausted} lifecycle
- * endpoints, and the quantity-adjust patch land in 01b/01g/01h.
+ * Write API for the provisions module — fully built: inventory create / update / quantity-adjust,
+ * mark-spoiled / mark-exhausted / soft-delete, the cook-event + meal/standalone-consumption flows,
+ * grocery import, equipment / budget / supplier-product upserts, substitution recording, and waste
+ * logging. Implemented by {@code ProvisionServiceImpl}.
  */
 public interface ProvisionUpdateService {
 
@@ -45,6 +47,18 @@ public interface ProvisionUpdateService {
    */
   InventoryItemDto updateInventoryItem(
       UUID itemId, UUID requestingUserId, UpdateInventoryItemRequest request);
+
+  /**
+   * Focused quantity edit for a QUANTITY-tracked inventory item (LLD endpoint table line 500 —
+   * {@code PATCH /inventory/{itemId}/quantity}). The caller must own the item (else 404) and supply
+   * the latest {@code expectedVersion} (else 409). Sets the row's quantity to {@code
+   * request.newQuantity} (absolute, non-negative), writing one {@code actor = USER} audit row and
+   * publishing {@code ItemQuantityAdjustedEvent(source = MANUAL)} at AFTER_COMMIT. A no-op (same
+   * quantity) writes nothing and does not bump {@code version}. Throws {@code
+   * InvalidInventoryQuantityException} (400) when the row is STATUS-tracked (no quantity to edit).
+   */
+  InventoryItemDto adjustQuantity(
+      UUID itemId, UUID requestingUserId, AdjustInventoryQuantityRequest request);
 
   /**
    * Create or update an equipment row keyed by {@code (userId, name)}. {@code expectedVersion} is
@@ -162,8 +176,12 @@ public interface ProvisionUpdateService {
    * dedupeKey)}: a duplicate replay returns an empty result and writes nothing.
    *
    * <p>Throws {@code InventoryUnderflowException} (422) when {@code command.strict == true} and the
-   * pantry can't cover. Throws {@code BatchCookNotSupportedException} (422) when {@code
-   * command.isBatchCook == true} (v1 stop-gap; full split lands in 01j).
+   * pantry can't cover. When {@code command.isBatchCook == true} the {@code BatchCookSplitter}
+   * creates fridge/freezer prepared-portion rows from {@code command.batchSplit} (LLD §Flow 1 step
+   * 4); those new ids ride the same coalesced {@code ItemQuantityAdjustedEvent}.
+   *
+   * <p>When the user has {@code pantry_tracking_enabled = false} the whole flow is a no-op and
+   * returns an empty result (LLD line 138).
    */
   InventoryDeductionResultDto applyCookEvent(UUID userId, CookEventCommand command);
 

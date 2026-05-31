@@ -3,6 +3,7 @@ package com.example.mealprep.provisions;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -79,6 +80,10 @@ class ProvisionServiceImplTest {
   @Mock
   private com.example.mealprep.household.domain.service.HouseholdQueryService householdQueryService;
 
+  @Mock
+  private com.example.mealprep.preference.domain.service.LifestyleConfigQueryService
+      lifestyleConfigQueryService;
+
   private final InventoryItemMapper mapper =
       new com.example.mealprep.provisions.api.mapper.InventoryItemMapperImpl();
   private final EquipmentMapper equipmentMapper =
@@ -118,7 +123,9 @@ class ProvisionServiceImplTest {
         householdQueryService,
         null,
         null,
-        null);
+        null,
+        null,
+        lifestyleConfigQueryService);
   }
 
   // ---------------- getInventoryItem ----------------
@@ -1086,5 +1093,127 @@ class ProvisionServiceImplTest {
         .thenReturn(java.util.List.of());
 
     assertThat(service().getActiveInventoryByMappingKey(userId, "soy_sauce")).isEmpty();
+  }
+
+  // ---------------- pantry_tracking_enabled gating (provisions-2) ----------------
+
+  private void stubPantryTracking(UUID userId, boolean enabled) {
+    var document =
+        new com.example.mealprep.preference.domain.document.LifestyleConfigDocument(
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            new com.example.mealprep.preference.domain.document.LifestyleConfigDocument
+                .PantryTracking(enabled));
+    var dto =
+        new com.example.mealprep.preference.api.dto.LifestyleConfigDto(
+            UUID.randomUUID(),
+            userId,
+            document,
+            null,
+            0L,
+            java.time.Instant.parse("2026-05-01T00:00:00Z"),
+            java.time.Instant.parse("2026-05-01T00:00:00Z"));
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId)).thenReturn(Optional.of(dto));
+  }
+
+  @Test
+  void getStaplesNeedingReplenishment_pantryDisabled_returnsEmpty_withoutQueryingRepo() {
+    UUID userId = UUID.randomUUID();
+    stubPantryTracking(userId, false);
+
+    assertThat(service().getStaplesNeedingReplenishment(userId)).isEmpty();
+    verify(inventoryItemRepository, never()).findActiveStaplesForUserByStatusIn(any(), any());
+  }
+
+  @Test
+  void getStaplesNeedingReplenishment_pantryEnabled_queriesRepo() {
+    UUID userId = UUID.randomUUID();
+    stubPantryTracking(userId, true);
+    when(inventoryItemRepository.findActiveStaplesForUserByStatusIn(eq(userId), any()))
+        .thenReturn(java.util.List.of());
+
+    service().getStaplesNeedingReplenishment(userId);
+    verify(inventoryItemRepository).findActiveStaplesForUserByStatusIn(eq(userId), any());
+  }
+
+  @Test
+  void getStaplesNeedingReplenishment_noLifestyleConfig_defaultsToEnabled() {
+    UUID userId = UUID.randomUUID();
+    when(lifestyleConfigQueryService.getLifestyleConfig(userId)).thenReturn(Optional.empty());
+    when(inventoryItemRepository.findActiveStaplesForUserByStatusIn(eq(userId), any()))
+        .thenReturn(java.util.List.of());
+
+    service().getStaplesNeedingReplenishment(userId);
+    // Unset flag → tracking ENABLED (non-breaking default) → repo IS queried.
+    verify(inventoryItemRepository).findActiveStaplesForUserByStatusIn(eq(userId), any());
+  }
+
+  @Test
+  void applyCookEvent_pantryDisabled_isNoOp_returnsEmptyResult() {
+    UUID userId = UUID.randomUUID();
+    stubPantryTracking(userId, false);
+    UUID mealSlotId = UUID.randomUUID();
+    var cmd =
+        new com.example.mealprep.provisions.api.dto.CookEventCommand(
+            UUID.randomUUID(),
+            null,
+            mealSlotId,
+            1,
+            false,
+            null,
+            false,
+            "dk",
+            java.util.List.of(
+                new com.example.mealprep.provisions.api.dto.RecipeIngredientUsage(
+                    "cheese:cheddar", new BigDecimal("50"), "g")),
+            null,
+            null,
+            null);
+
+    // Inject a dedupe-repo mock just for this no-op path (the early-return needs it).
+    var dedupeRepo =
+        org.mockito.Mockito.mock(
+            com.example.mealprep.provisions.domain.repository.CookEventDedupeRepository.class);
+    when(dedupeRepo.existsByIdMealSlotIdAndIdDedupeKey(mealSlotId, "dk")).thenReturn(false);
+    ProvisionServiceImpl svc =
+        new ProvisionServiceImpl(
+            inventoryItemRepository,
+            auditLogRepository,
+            equipmentRepository,
+            budgetRepository,
+            supplierProductRepository,
+            wasteEntryRepository,
+            dedupeRepo,
+            mapper,
+            equipmentMapper,
+            budgetMapper,
+            inventoryAuditMapper,
+            supplierProductMapper,
+            wasteEntryMapper,
+            eventPublisher,
+            objectMapper,
+            fixedClock,
+            householdQueryService,
+            null,
+            null,
+            null,
+            null,
+            lifestyleConfigQueryService);
+
+    var result = svc.applyCookEvent(userId, cmd);
+    assertThat(result.updatedItems()).isEmpty();
+    assertThat(result.exhaustedItems()).isEmpty();
+    assertThat(result.underflows()).isEmpty();
+    // No deduction engine touched (it's null) — proves the gate short-circuited before deduction.
+    verify(inventoryItemRepository, never()).findActiveByMappingKeyOrderByExpiryAsc(any(), any());
   }
 }

@@ -383,6 +383,8 @@ public final class ProvisionsTestData {
         false,
         null,
         List.of(new RecipeIngredientUsage(ingredientKey, quantity, unit)),
+        null,
+        null,
         null);
   }
 
