@@ -9,6 +9,7 @@ import com.example.mealprep.preference.domain.service.PreferenceQueryService;
 import com.example.mealprep.preference.domain.service.PreferenceUpdateService;
 import com.example.mealprep.preference.domain.service.TasteProfileQueryService;
 import com.example.mealprep.preference.domain.service.TasteProfileUpdateService;
+import com.example.mealprep.preference.domain.service.TasteSimilarityQueryService;
 import org.springframework.stereotype.Component;
 
 /**
@@ -33,6 +34,7 @@ public class PreferenceModule {
   private final TasteProfileUpdateService tasteProfileUpdateService;
   private final PreferenceArchiveQueryService preferenceArchiveQueryService;
   private final PreferenceArchiveUpdateService preferenceArchiveUpdateService;
+  private final TasteSimilarityQueryService tasteSimilarityQueryService;
 
   public PreferenceModule(
       PreferenceQueryService preferenceQueryService,
@@ -43,7 +45,8 @@ public class PreferenceModule {
       TasteProfileQueryService tasteProfileQueryService,
       TasteProfileUpdateService tasteProfileUpdateService,
       PreferenceArchiveQueryService preferenceArchiveQueryService,
-      PreferenceArchiveUpdateService preferenceArchiveUpdateService) {
+      PreferenceArchiveUpdateService preferenceArchiveUpdateService,
+      TasteSimilarityQueryService tasteSimilarityQueryService) {
     this.preferenceQueryService = preferenceQueryService;
     this.preferenceUpdateService = preferenceUpdateService;
     this.hardConstraintFilterService = hardConstraintFilterService;
@@ -53,6 +56,7 @@ public class PreferenceModule {
     this.tasteProfileUpdateService = tasteProfileUpdateService;
     this.preferenceArchiveQueryService = preferenceArchiveQueryService;
     this.preferenceArchiveUpdateService = preferenceArchiveUpdateService;
+    this.tasteSimilarityQueryService = tasteSimilarityQueryService;
   }
 
   public PreferenceQueryService query() {
@@ -89,5 +93,10 @@ public class PreferenceModule {
 
   public PreferenceArchiveUpdateService preferenceArchiveUpdate() {
     return preferenceArchiveUpdateService;
+  }
+
+  /** Taste-vector similarity surface (preference-5) — cosine queries over the pgvector index. */
+  public TasteSimilarityQueryService tasteSimilarity() {
+    return tasteSimilarityQueryService;
   }
 }

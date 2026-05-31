@@ -59,7 +59,14 @@ class TestAiServiceIT {
     String result = aiService.execute(task);
     assertThat(result).isEqualTo("canned-text");
 
-    List<AiCallLog> rows = repository.findAll();
+    // Scope to the chat-execute path under test (FEEDBACK_CLASSIFICATION). The shared Failsafe fork
+    // boots the full context, so an @Async AFTER_COMMIT taste-embedding from a prior IT can leave a
+    // late-committing EMBEDDING_* audit row in ai_call_log; filtering by this task's type keeps the
+    // assertion about THIS execute call's recorded model id, robust to such cross-IT rows.
+    List<AiCallLog> rows =
+        repository.findAll().stream()
+            .filter(r -> r.getTaskType() == TaskType.FEEDBACK_CLASSIFICATION)
+            .toList();
     assertThat(rows).hasSize(1);
     AiCallLog row = rows.get(0);
     assertThat(row.getStatus()).isEqualTo(CallStatus.SUCCEEDED);
