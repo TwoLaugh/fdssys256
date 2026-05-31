@@ -335,9 +335,8 @@ public final class PlanTestData {
   }
 
   /**
-   * Default cold-start sub-config (recipe-pool Tier-2): enabled, 3× distinct-slot-kind threshold,
-   * 50 recipe quota, PT20S timeout, empty source-keys (all enabled) — matches
-   * application.properties.
+   * Default cold-start sub-config (recipe-pool Tier-2): enabled, 3× slot-count threshold, 50 recipe
+   * quota, PT20S timeout, empty source-keys (all enabled) — matches application.properties.
    */
   public static PlannerProperties.ColdStart defaultColdStart() {
     return new PlannerProperties.ColdStart(true, 3, 50, Duration.ofSeconds(20), List.of());

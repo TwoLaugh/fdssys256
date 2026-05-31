@@ -75,8 +75,15 @@ com.example.mealprep.planner/
 │           │   └── ReoptScopeBuilder            from a trigger event, computes the scope
 │           ├── lifecycle/
 │           │   ├── PlanStateMachine             pure transition logic
-│           │   └── PlanGenerationCounter        per-(household, week) generation increment
-│           ├── PlanComposer                     top-level orchestrator: A → B → C → D loop
+│           │   ├── PlanGenerationCounter        per-(household, week) generation increment
+│           │   ├── PlanWriteServiceImpl         accept/reject/abandon/slot-state + suggestion accept/
+│           │   │                                reject + the two scheduled sweeps
+│           │   └── PlannerSweepScheduler        @Scheduled weekly PlanCompleted (planner-3) +
+│           │                                    daily re-opt expiry (planner-10) sweeps
+│           ├── composer/
+│           │   ├── PlanComposer                 top-level orchestrator: A → B → C → D loop
+│           │   ├── ConstraintFeasibilityCheck   pre-A pool-size + conflict classify + resolution rank
+│           │   └── ColdStartGate                Tier-2 catalogue fill (threshold = 3 × slot COUNT)
 │           └── PlanReader                       hydrates entities into PlanDto
 ├── event/
 │   ├── PlannerEvent.java                    sealed marker (extends MealPrepEvent)
@@ -580,44 +587,49 @@ public interface PlanQueryService {
 
 Returning `Page<PlanDto>` from `getPlansBetween` deviates from the HLD's `List<PlanDto>` shape because the UI's history view paginates; **worth user review** but defended on UI grounds. Single-page fetch is `getPlansBetween(household, from, to, PageRequest.of(0, 100))`.
 
-### `PlannerService`
+### Write surface — shipped split (reconciled, planner-12)
+
+> **Shipped vs designed.** The original design named one `PlannerService` with a `reoptimisePlan(ReoptRequest)` write entry and a matching `POST /reoptimise` endpoint. The module that shipped instead splits the write surface across three beans and **replaces** `reoptimisePlan`/`POST /reoptimise` with the **re-opt suggestion accept/reject** flow (planner-12, DESIGN_DIVERGENCE — reconciled to reality, no redundant endpoint added):
+>
+> - **`PlanComposer.compose(...)`** owns generation (it carries the Stage A→D wiring + the start-of-generation lease); the controller's `POST /generate` calls it.
+> - **`RevertToPlanCoordinator.revertToPlan(UUID userId, RevertToPlanRequest)`** owns copy-forward revert (it needs the same AI-outside-tx structure as the composer); `POST /revert` calls it.
+> - **`PlanWriteService`** owns the rest of the post-generation lifecycle.
+>
+> The designed mid-week `reoptimisePlan` is realised as: an upstream event → `MidWeekReoptCoordinator` materialises a `MealPrepPlanReoptSuggestion` (the concrete proposed slot diff) → the user accepts it via `POST /{planId}/reopt-suggestions/{suggestionId}/accept` (`PlanWriteService.acceptReoptSuggestion`, which supersedes the current plan and writes the new generation) or rejects via `.../reject`. There is **no** `POST /reoptimise` endpoint and **no** `reoptimisePlan` method — the suggestion accept/reject pair IS the re-opt write surface.
 
 ```java
-public interface PlannerService {
-    /** Stage A→B→C→D pipeline. Start-of-generation single-flight per (householdId, weekStartDate)
-     *  via core.LockService.acquireLease/releaseLease (connection-free lease). */
-    PlanDto generatePlan(GeneratePlanRequest request);
+public interface PlanWriteService {
+    /** generated → active. Supersedes any incumbent ACTIVE plan for (household, week) in-tx, then
+     *  touches the partial unique index. (planner-9) */
+    UUID acceptPlan(UUID planId);
 
-    /** Mid-week re-opt scoped from `fromDate` onward. Pinned slots preserved per PinningRules. */
-    PlanDto reoptimisePlan(ReoptRequest request);
-
-    /** generated → active. Touches the partial unique index. */
-    PlanDto acceptPlan(AcceptPlanRequest request);
-
-    /** generated → rejected. Terminal. */
-    PlanDto rejectPlan(RejectPlanRequest request);
-
-    /** Copy-forward revert TO a chosen historical plan (see §Flow 4). New plan created with
-     *  generation = 1 + count(household, week), replaces_plan_id = current active (or the target
-     *  when none is active). The caller id is resolved server-side; the as-built surface is
-     *  {@code RevertToPlanCoordinator.revertToPlan(UUID userId, RevertToPlanRequest request)}
-     *  returning the new plan id (the controller maps it to PlanDto via the read service). It lives
-     *  on a dedicated coordinator, not PlanWriteServiceImpl, so the re-filter + refill run outside
-     *  the persistence tx (AI-outside-tx rule), mirroring PlanComposer. */
-    PlanDto revertToPlan(RevertToPlanRequest request);
+    /** generated → rejected. Terminal. Idempotent (re-rejecting a REJECTED plan is a 200 no-op). */
+    UUID rejectPlan(UUID planId, String reason);
 
     /** active → abandoned. Terminal. */
-    PlanDto abandonPlan(AbandonPlanRequest request);
+    UUID abandonPlan(UUID planId, String reason);
 
-    /** Slot-level state machine: planned → cooking → cooked → eaten | skipped. */
-    void markSlotState(MarkSlotStateRequest request);
+    /** Slot-level state machine: planned → cooking → cooked → eaten | skipped. Force-increments the
+     *  parent Plan.version via OPTIMISTIC_FORCE_INCREMENT so concurrent re-opt aborts (planner-7). */
+    UUID changeSlotState(UUID planId, UUID slotId, SlotState newState);
 
-    /** User dismisses a re-opt suggestion. Pure status transition. */
-    void dismissSuggestion(UUID suggestionId);
+    /** Accept a re-opt suggestion: apply the proposed slot diff onto a new GENERATED generation,
+     *  supersede the current plan, mark the suggestion ACCEPTED. (replaces reoptimisePlan) */
+    PlanReoptSuggestionDto acceptReoptSuggestion(UUID planId, UUID suggestionId);
+
+    /** Reject a re-opt suggestion: mark REJECTED; no plan change. */
+    PlanReoptSuggestionDto rejectReoptSuggestion(UUID planId, UUID suggestionId);
+
+    /** Daily expiry sweep (planner-10): PENDING re-opt suggestions past weekStartDate+7d → EXPIRED. */
+    int sweepExpiredReoptSuggestions();
+
+    /** Weekly sweep (planner-3): prior-week ACTIVE plans with all-terminal slots → COMPLETED +
+     *  PlanCompletedEvent. */
+    int sweepCompletedPlans();
 }
 ```
 
-Update methods return the updated `PlanDto` per the style guide. Cross-module update services (`PreferenceUpdateService`, `NutritionUpdateService`, …) are deliberately **not** injected — the planner is read-only against the data models.
+The write methods return the plan id (or the suggestion DTO); the controller re-reads via the query service so the `Plan` entity never crosses the `api` boundary. Cross-module update services (`PreferenceUpdateService`, `NutritionUpdateService`, …) are deliberately **not** injected — the planner is read-only against the data models.
 
 ---
 
@@ -642,7 +654,7 @@ interface ConstraintFeasibilityCheck {
 3. Best-possible-plan simulation (single beam-search pass with width 1, no scoring) to test whether daily nutrition floors are clearable at all.
 4. Resolution ranking — for each conflict, compute candidate resolutions (split slot, drop protein floor, raise budget, widen preference) and the slots/score recovered.
 
-Returned to the controller via `checkFeasibility`. Also called *inside* `generatePlan` — if `feasible = false`, the planner does not attempt Stage A unless the user has already chosen a resolution path (carried in `GeneratePlanRequest` via a future-extension field; for v1, `feasible = false` returns immediately with `quality_warning = true` and an empty plan, leaving the user to either edit constraints or retry).
+Returned to the controller via `PlanQueryService.checkFeasibility` (`GET /api/v1/plans/feasibility`). **Implemented (planner-6):** `ConstraintFeasibilityCheckImpl` reuses `HardFilterRunner.filterPool(context)` to build the exact per-slot post-hard-filter pool the beam search would see, then runs passes 1-2 (under-pool detection + `ConflictType` classification, slots coalesced per type) and pass 4 (ranked resolutions, best-first by slots recovered). Pass 3 ("best-possible-plan") is folded into pass 1: a fully empty per-slot pool is the strongest infeasibility signal. The composer's existing empty-Stage-A path still persists a `qualityWarning = true` plan when no candidates emerge; `GET /feasibility` is the up-front surface the UI calls so the resolution dialog renders *before* generation. (The earlier `PlanQueryService` javadoc deferral to "01j" is superseded.)
 
 ### `BeamSearchEngine` (Stage A)
 
@@ -1020,25 +1032,33 @@ All endpoints under `/api/v1/plans/...` and `/api/v1/meal-slots/...`. `userId` r
 | GET    | `?householdId=&from=&to=&page=&size=` | — | `Page<PlanDto>` | 200 |
 | GET    | `/{planId}` | — | `PlanDto` | 200 / 404 |
 | POST   | `/generate` | `GeneratePlanRequest` | `PlanDto` | 201 / 400 / 409 / 422 |
-| POST   | `/reoptimise` | `ReoptRequest` | `PlanDto` | 200 / 400 / 404 / 409 / 422 |
 | POST   | `/{planId}/accept` | — | `PlanDto` | 200 / 404 / 409 |
 | POST   | `/{planId}/reject` | `RejectPlanRequest` | `PlanDto` | 200 / 404 / 409 |
 | POST   | `/{planId}/abandon` | `AbandonPlanRequest` | `PlanDto` | 200 / 404 / 409 |
 | POST   | `/revert` | `RevertToPlanRequest` | `PlanDto` | 201 / 404 / 409 / 422 |
-| GET    | `/feasibility?householdId=&weekStartDate=` | — | `FeasibilityCheckResultDto` | 200 |
+| PATCH  | `/{planId}/slots/{slotId}/state` | `SlotStateChangeRequest` | `PlanDto` | 200 / 400 / 404 / 409 |
+| POST   | `/{planId}/reopt-suggestions/{suggestionId}/accept` | — | `PlanReoptSuggestionDto` | 200 / 404 |
+| POST   | `/{planId}/reopt-suggestions/{suggestionId}/reject` | — | `PlanReoptSuggestionDto` | 200 / 404 |
+| GET    | `/feasibility?householdId=&weekStartDate=` | — | `FeasibilityCheckResultDto` | 200 / 401 / 403 |
 | GET    | `/suggestions?householdId=&page=&size=` | — | `Page<ReoptSuggestionDto>` | 200 |
-| POST   | `/suggestions/{suggestionId}/dismiss` | — | — | 204 / 404 |
 
-`POST /generate` returns 201 because it creates a new resource. `POST /reoptimise` creates a new resource too but the URL doesn't carry the new ID — keeping the response 200 with the new plan in the body matches the pattern in [lld/preference.md](preference.md) where `apply…` returns 200 with the post-apply DTO. **Worth user review.**
+> **Reconciled (planner-12).** `POST /reoptimise` was **removed** — mid-week re-opt is the
+> `reopt-suggestions/{id}/accept|reject` pair above (the suggestion-accept flow writes the new
+> generation; see §Write surface). Slot-state is `PATCH /{planId}/slots/{slotId}/state` (under the
+> plan resource), not a separate `meal-slots` controller. `GET /feasibility` is implemented
+> (planner-6). The suggestion `dismiss` POST is realised as the `reject` endpoint above.
 
-### `MealSlotsController` — `/api/v1/meal-slots`
+`POST /generate` returns 201 because it creates a new resource. `POST /revert` likewise returns 201 (a new generation). The re-opt suggestion accept endpoint returns 200 with the suggestion DTO (the new generation is read back via the query service). **Worth user review.**
+
+### Slot-state endpoint (shipped on `PlansController`, reconciled)
+
+> The original design placed slot-state on a separate `MealSlotsController` at `/api/v1/meal-slots/{slotId}/state` returning 204. The module that shipped exposes slot-state on `PlansController` as **`PATCH /api/v1/plans/{planId}/slots/{slotId}/state`** returning **200 + `PlanDto`** (the reloaded plan). There is no standalone `MealSlotsController` and no `GET /meal-slots/{slotId}`.
 
 | Method | Path | Request | Response | Status |
 |---|---|---|---|---|
-| GET    | `/{slotId}` | — | `MealSlotDto` | 200 / 404 |
-| POST   | `/{slotId}/state` | `MarkSlotStateRequest` | — | 204 / 404 / 409 / 422 |
+| PATCH  | `/{planId}/slots/{slotId}/state` | `SlotStateChangeRequest` | `PlanDto` | 200 / 400 / 404 / 409 |
 
-Slot state is the only slot-level write. State transitions other than `markSlotState` are not exposed — slot recipe content is immutable per the lifecycle, and the only path to change a slot's recipe is plan regeneration.
+Slot state is the only slot-level write. The transition force-increments the parent `Plan.version` (planner-7). Slot recipe content is otherwise immutable per the lifecycle; the only path to change a slot's recipe is plan regeneration or accepting a re-opt suggestion.
 
 ### `AdminPlannerController` — `/api/v1/admin/planner`
 
@@ -1149,7 +1169,7 @@ public record ReoptSuggestedEvent(
 
 `PlannerEvent` extends `MealPrepEvent` (sealed marker in `core.events` per [style-guide §core](style-guide.md#module-package-structure)) so cross-cutting infrastructure (decision log, notification listeners) can pattern-match on the planner family.
 
-`PlanCompletedEvent` is fired by a `@Scheduled` weekly sweep that runs every Monday morning and transitions the previous week's `ACTIVE` plans whose all slots are in terminal state to `COMPLETED`. If any slot is still `PLANNED` after the week's end, the plan stays `ACTIVE` until the user marks it explicitly — the sweep does not auto-abandon.
+`PlanCompletedEvent` is fired by the `@Scheduled` weekly sweep (planner-3, now implemented): `PlannerSweepScheduler.runPlanCompletedSweep` (cron `mealprep.planner.plan-completed-sweep-cron`, default `0 0 3 * * MON`) → `PlanWriteService.sweepCompletedPlans`, which loads prior-week (`weekStartDate` before the current week's start day) `ACTIVE` plans and transitions to `COMPLETED` any whose slots are *all* terminal (`EATEN`/`SKIPPED`), publishing `PlanCompletedEvent`. If any slot is still non-terminal the plan stays `ACTIVE` until the user marks it explicitly — the sweep does not auto-abandon.
 
 Listeners across the system: notification (alerts the household), grocery (handles regenerated plans — invalidates the shopping list), nutrition (auto-confirm intake on `MealCookedEvent`, which is *not* a planner event but is published by the cook listener that the planner installs).
 
@@ -1221,7 +1241,7 @@ No update-service injections — the planner is read-only against the data model
 2. Determine generation number and predecessor: `generation = max(existing) + 1`, `replacesPlanId = findActiveByHouseholdAndWeek(...)`.
 3. Build `PlanCompositionContext` (one round trip per service via the bundle DTOs — see [Read pattern](#read-pattern)).
 4. Run `ConstraintFeasibilityCheck.check(context)`. If `feasible = false` and `request.forceRegenerateIfActive = false`, return early with a draft plan flagged `qualityWarning = true`. The user-facing flow runs the feasibility check *first* via `GET /feasibility` so this in-flight branch is rare.
-5. Run cold-start gate: catalogue-size check. If below threshold, trigger `RecipeDiscovery` + `RecipeGeneration` pre-step via the recipe module ([adaptation-pipeline.md](adaptation-pipeline.md) — concurrent agent; reference at the interface level). Sets `coldStart = true`.
+5. Run cold-start gate (`ColdStartGate`): catalogue-size check against the threshold `slotCountMultiplier × total slot COUNT` (default 3 × slots, e.g. 3 × 21 = 63 for a full week — planner-4 corrects an earlier per-distinct-kind reading). If below threshold, trigger discovery via `DiscoveryService.runJobSync` to fill the SYSTEM catalogue, then re-read the pool. Sets `coldStart = true`.
 6. **Decision-log row 1.** Write to `decision_log` via `core.DecisionLogService.write(...)` with `scale = "week"`, `triggered_by = "user"`, iteration 1.
 7. **Stage A.** `BeamSearchEngine.search(context, config)` returns `List<CandidatePlan>` of length up to `topN`.
 8. **Stage B.** `RollupBuilder.build(plan, context)` for each candidate.
@@ -1235,23 +1255,24 @@ No update-service injections — the planner is read-only against the data model
 
 Steps 7–11 are deterministic + AI; steps 12–13 are the only DB write boundary. Trace ID is set once at step 1 and threaded via `MDC` and method args across every helper.
 
-### Flow 2: Mid-week re-optimisation
+### Flow 2: Mid-week re-optimisation (shipped as suggestion accept/reject — reconciled, planner-12)
 
-`POST /api/v1/plans/reoptimise` → `reoptimisePlan(request)`. Same outer shape as Flow 1.
+> **Reconciled to shipped reality.** There is no `POST /reoptimise` / `reoptimisePlan(...)`. Mid-week re-opt is computed up front by `MidWeekReoptCoordinator` (triggered by an upstream materiality event, §Listeners) which materialises a `MealPrepPlanReoptSuggestion` carrying the concrete proposed slot diff; the user then accepts or rejects that suggestion.
 
-1. Acquire single-flight lock on `(householdId, weekStartDate)`.
-2. Load the current active plan with `findWithDaysByHouseholdIdAndWeekStartDateAndStatus(..., ACTIVE)`.
-3. Build `PlanCompositionContext`.
-4. `MidWeekReoptCoordinator.reoptimise(request, currentActive, context)` — drives the same A→B→C→D pipeline but:
-   - `PinningRules.derive(currentActive, request.fromDate)` produces the pinned-slot map.
-   - `BeamSearchEngine.search(context, config)` is called with the pinned slots' scheduled recipes pre-filled — the search runs only over regenerable slots.
-   - Stage C's task context carries `"trigger" = "MID_WEEK_REOPT"` so the prompt knows the reasoning frame is "preserve continuity, fix the disruption."
-5. Persist the new plan with `generation = current + 1`, `replacesPlanId = current.id`.
-6. Transition the current plan: `ACTIVE → SUPERSEDED`. Updated in the same write tx. Partial unique index allows the new plan to take `ACTIVE` immediately after.
-7. Publish `PlanSupersededEvent` for the old, `PlanGeneratedEvent` (via `acceptPlan` if the user pre-confirmed the suggestion, otherwise the new plan stays in `GENERATED` awaiting accept) for the new.
-8. If `request.reoptSuggestionId` is non-null, transition the suggestion to `ACCEPTED`.
+**Suggestion materialisation** (`MidWeekReoptCoordinator.requestReopt`, driven by the listener):
 
-The HLD is intentionally explicit ("user always confirms"). For v1, `reoptimisePlan` produces a `GENERATED` plan and the user clicks accept to promote it. The notification-driven flow is: event → suggestion → user clicks "regenerate" in UI → `reoptimisePlan` → `GENERATED` → user clicks "accept" → `acceptPlan` → `ACTIVE`. Two confirmations is the safe default; collapsing them into one is **worth user review** (the HLD is silent).
+1. Load the plan; assert it is re-optable (`GENERATED` / `ACTIVE`).
+2. `PinningRules` derive the pinned-slot set from current slot state (EATEN/COOKED/COOKING/SKIPPED + the `lockHoursBeforeSlot` window); the search runs only over regenerable slots.
+3. Build the re-opt `PlanCompositionContext` (scoped to non-pinned slots) and run Stage A→B→C (the same beam-search/score/LLM-pick pipeline) with `"trigger" = "MID_WEEK_REOPT"`.
+4. Compute the slot-level diff vs the original; if non-empty, persist a `MealPrepPlanReoptSuggestion` (`status = PENDING`, `expiresAt = weekStartDate + 7 days` — planner-10) and publish `ReoptSuggestedEvent` for the notification module + UI.
+
+**Suggestion accept** (`PlanWriteService.acceptReoptSuggestion`, `POST /{planId}/reopt-suggestions/{suggestionId}/accept`):
+
+1. Copy-forward the current plan to a fresh `GENERATED` generation (`generation = current + 1`, `replacesPlanId = current.id`), applying the suggestion's proposed slot changes.
+2. Transition the current plan `ACTIVE/GENERATED → SUPERSEDED`; the partial unique index lets the new generation be accepted afterwards.
+3. Mark the suggestion `ACCEPTED`; publish `PlanSupersededEvent` (old) + `PlanGeneratedEvent` (new). The new generation is `GENERATED` — the user still clicks **accept** on it to promote it to `ACTIVE` (two-confirmation safe default).
+
+**Suggestion reject** (`PlanWriteService.rejectReoptSuggestion`, `.../reject`): mark `REJECTED`; no plan change. Stale `PENDING` suggestions auto-expire via the daily sweep (Flow 6 / planner-10).
 
 ### Flow 3: Accept / reject / abandon
 
@@ -1308,19 +1329,44 @@ Listener fires (Flow per [§Listeners](#listeners--converting-external-events-to
 4. Otherwise insert a new `ReoptSuggestion` with `status = PENDING`, `expiresAt = weekStartDate + 7 days`.
 5. Publish `ReoptSuggestedEvent`. The notification module surfaces it.
 
-User clicks "regenerate" in the UI → `reoptimisePlan(...)` (Flow 2). User clicks "dismiss" → `dismissSuggestion(...)` → status `DISMISSED`. A `@Scheduled` job sweeps `findAllByStatusAndExpiresAtBefore(PENDING, now)` daily and transitions stale suggestions to `EXPIRED`.
+User accepts a suggestion → `acceptReoptSuggestion(...)` (Flow 2). User rejects → `rejectReoptSuggestion(...)` → status `REJECTED`. A daily `@Scheduled` sweep (`PlannerSweepScheduler.runReoptExpirySweep` → `PlanWriteService.sweepExpiredReoptSuggestions`, cron `mealprep.planner.reopt-expiry-sweep-cron`, default `0 0 4 * * *`) scans `findAllByStatusAndSweptFalseAndExpiresAtBefore(PENDING, now)` and transitions stale suggestions to `EXPIRED` (and marks them `swept`). **TTL reconciled (planner-10):** `expiresAt = weekStartDate + 7 days` (the LLD value) — the materialised `MealPrepPlanReoptSuggestion` written by `MidWeekReoptCoordinator` uses this, replacing an earlier flat 24h window.
 
-### Flow 7: Stage D refine-directive
+### Flow 7: Stage D refine-directive — **v1-DEFERRED (planner-11)**
 
-Inside Flow 1 step 11. Pre-conditions: Phase 2 emitted at least one `RefineDirectiveDto` and the iteration count is below 3.
+> **Shipped reality + decision (planner-11): the Stage D refine loop is deferred to v2; the routing
+> mechanism is built and exercised but inert in production.** The composer (`PlanComposer`) *does*
+> route any emitted refine-directive to the adaptation pipeline via
+> `AdaptationService.runPlanTimeRefineJob(...)`, applying the adapted recipe back onto the chosen
+> plan and bounding the pass by `mealprep.planner.max-refine-directives`. **However**, the directive
+> *list is always empty in production*: `Phase2AugmenterImpl.parseRefineDirectives` returns
+> `List.of()` because the cross-module `RefineDirectiveDto` contract it would map onto does not exist
+> as a resolvable top-level type — the adaptation pipeline (merged through adaptation-01b/01e)
+> defines `RefineDirectiveDto` as a *nested* record inside `PlanTimeRefineDirectiveRequest` with an
+> incompatible shape (`DirectiveKind kind, String description, JsonNode targetDelta`), reached only
+> via `runPlanTimeRefineJob`. So Stage D never iterates in production (only `PlanComposerIT` exercises
+> the routing with a stubbed `AdaptationService`).
+>
+> **Two consequences, both accepted for v1:**
+> - The 3-cycle **`iterationBudget` is not enforced by any fixed-point loop** — there is no
+>   re-run-Stage-A-on-the-affected-slot cycle. The composer makes a single bounded pass over the
+>   (empty) directive list; `mealprep.planner.iteration-budget` is currently unconsumed by a real
+>   loop and is reserved for the v2 wiring.
+> - Phase 2's `emittedDirectives` is structurally always empty.
+>
+> **Why deferred, not wired now:** emitting real directives requires reconciling the cross-module
+> `RefineDirectiveDto` contract (planner ↔ adaptation) — a non-trivial cross-module change touching
+> the adaptation pipeline's request shape, out of scope for a planner-only conformance sweep and
+> explicitly carved out by the brief. The seam is left intact (`isRefineDirectiveDtoOnClasspath`
+> probe + the composer's routing loop) so a future v2 ticket flips it on by introducing the shared
+> contract; no behaviour changes for v1.
 
-1. For each directive, `OptimiserService.adapt(directive)` is called *synchronously*. The optimiser belongs to the adaptation pipeline ([lld/adaptation-pipeline.md](adaptation-pipeline.md)).
-2. The optimiser returns either an adapted recipe ID (success) or an `InfeasibleDirective` signal. On success, swap the affected slot's `scheduledRecipe.recipeVersionId` to the adapted version.
-3. Re-run `BeamSearchEngine.search(...)` *only over the affected slot* (single-slot beam-search, width 1) to pick up the new recipe in scoring context.
-4. Decision-log row written for the iteration.
-5. Loop until budget (3 cycles) exhausted or no more directives emitted.
+The designed loop (kept here for the v2 target):
 
-`OptimiserService` injection is the only update-service-shaped dependency; it is *not* a data-model update — it produces an adapted *recipe*, not a constraint mutation.
+1. For each directive, `AdaptationService.runPlanTimeRefineJob(directive)` is called *synchronously*.
+2. On success, swap the affected slot's recipe to the adapted version/branch.
+3. Re-run `BeamSearchEngine.search(...)` over the affected slot to re-score (the unimplemented cycle).
+4. Decision-log `STAGE_D_OUTCOME` row written per routed directive (this *is* implemented).
+5. Loop until the 3-cycle budget is exhausted or no more directives emitted (the loop/budget is the deferred part).
 
 ---
 
@@ -1383,7 +1429,8 @@ Unit tests use `@ExtendWith(MockitoExtension.class)`. Integration tests are `*IT
 | `ProvisionsSubScoreTest` | Pantry coverage formula. PantryTracking off → returns 0.5. |
 | `TimeSubScoreTest` | Fraction of slots within budget. Edge: zero slots returns 1.0 (vacuous truth). |
 | `RollupBuilderTest` | Daily totals sum to weekly. Cost confidence aggregated correctly. Stale-ingredient count populated. |
-| `ConstraintFeasibilityCheckTest` | Pool-size threshold detects under-3-candidates slots. Conflict-type classification deterministic. Resolution ranking. |
+| `ConstraintFeasibilityCheckImplTest` | (planner-6) Pool-size threshold detects under-`minPoolPerSlot` slots. Conflict-type classification deterministic (household-hard-collision / over-specified-preferences / provisions-bottleneck / nutrition-vs-budget). Resolution ranking best-first by slots recovered. |
+| `ColdStartGateTest` | (planner-4) Threshold = `slotCountMultiplier × slot COUNT` (not distinct kinds): a 7-slot same-kind week with pool 10 < 21 fires, where the old per-kind threshold of 3 would have wrongly skipped. |
 | `AugmentationVerifierTest` | Allergen-introducing augmentation discarded. Time-budget-exceeding augmentation discarded. Valid augmentation passes. |
 | `PinningRulesTest` | Eaten/cooked/cooking → pinned. Past planned → pinned. Future planned → regenerable. Skipped → pinned-skipped. |
 | `PlannerReoptListenersTest` | Materiality filter for each event type. Idempotency on duplicate triggerEventId. Debounce window updates existing suggestion. |
@@ -1395,8 +1442,8 @@ Unit tests use `@ExtendWith(MockitoExtension.class)`. Integration tests are `*IT
 
 | Class | Verifies |
 |---|---|
-| `PlansControllerIT` | Full HTTP cycle over MockMvc: GET active/by-id/history/range (200/404), generate (201), accept/reject/abandon (200/404/409), revert (201), pagination, ProblemDetail shape, single-flight 409 on concurrent generate. |
-| `MealSlotsControllerIT` | GET (200/404), state transitions (204/409 illegal transition/422 cross-aggregate), parent-version bump observed. |
+| `PlansControllerIT` | Full HTTP cycle over MockMvc against the OpenAPI validator: GET active/by-id/history/range (200/404), generate (201), accept/reject/abandon (200/404/409), revert (201), `PATCH /{planId}/slots/{slotId}/state` (200/409), reopt-suggestion accept/reject (200), **`GET /feasibility` (200 + validated FeasibilityCheckResultDto shape; 401 anon)** (planner-6), pagination, ProblemDetail shape. |
+| `PlannerSweepIT` | (planner-3 + planner-10) Weekly sweep: prior-week ACTIVE plan with all-terminal slots → COMPLETED (+completedAt); prior-week plan with a PLANNED slot stays ACTIVE; current/future-week plan untouched. Daily expiry sweep: stale PENDING suggestion → EXPIRED + swept, future-dated PENDING untouched, idempotent on a second run. |
 | `AdminPlannerControllerIT` | Decision-log queries return rows tied to the plan's trace. Auth-gating (admin only). |
 | `PlannerServiceIT` | Service-layer end-to-end against real DB: full A→B→C→D pipeline with `TestAiService` returning canned candidates. Plan persisted with all four nested levels. `PlanGeneratedEvent` published exactly once after commit. |
 | `MidWeekReoptIT` | Mid-week re-opt preserves pinned slots; new plan replaces active; `PlanSupersededEvent` payload carries old + new IDs. |
@@ -1476,9 +1523,9 @@ These are the spots where the LLD has chosen something the HLD didn't pin, or wh
 2. **Sub-score formulas (seven of them).** All locked 2026-05-07. Numerical constants tunable via `PlannerProperties` without redeploy; weights remain on the post-launch calibration track.
 3. **Stage C and Phase 2 prompt content.** `StageCPickTask` and `Phase2AugmentationTask` types specified; prompt bodies deferred under `prompts/planner/*.txt`. **Out of scope.**
 4. **`getPlansBetween` returning `Page<PlanDto>` instead of `List<PlanDto>`.** UI paginates. **Worth user review.**
-5. **`POST /reoptimise` returning 200 instead of 201.** Mirrors the apply-pattern in [lld/preference.md](preference.md) (return updated DTO). **Worth user review.**
+5. **Re-opt write surface is suggestion accept/reject, not `POST /reoptimise` (planner-12).** The designed `reoptimisePlan`/`POST /reoptimise` was replaced by the materialised-suggestion accept/reject flow; the accept endpoint returns 200 with the suggestion DTO. **Reconciled to shipped reality.**
 6. **`AdminPlannerController` location.** Decision-log queries scoped to plans live in this module rather than core. **Worth user review.**
-7. **Two-step re-opt confirmation (suggestion → reoptimise → accept).** v1 default; collapsing to one step is **worth user review.**
+7. **Two-step re-opt confirmation (suggestion → accept-suggestion → accept-plan).** v1 default; collapsing to one step is **worth user review.**
 8. **`HardConstraintsChangedEvent` always material; `PreferenceChangedEvent` always material at low priority.** Per HLD safety wording. The remaining filters use the materiality threshold from properties.
 
 ---

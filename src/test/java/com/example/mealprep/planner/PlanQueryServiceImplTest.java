@@ -63,6 +63,15 @@ class PlanQueryServiceImplTest {
   @Mock private HouseholdQueryService householdQueryService;
   @Mock private LifestyleConfigQueryService lifestyleConfigQueryService;
 
+  @Mock
+  private com.example.mealprep.planner.domain.service.internal.composer
+          .PlanCompositionContextBuilder
+      contextBuilder;
+
+  @Mock
+  private com.example.mealprep.planner.domain.service.internal.composer.ConstraintFeasibilityCheck
+      feasibilityCheck;
+
   @InjectMocks private PlannerServiceImpl service;
 
   // ---------------- getActivePlan ----------------
@@ -398,5 +407,32 @@ class PlanQueryServiceImplTest {
     assertThat(views).hasSize(6);
     verify(householdQueryService, times(1)).getById(householdId);
     verify(lifestyleConfigQueryService, times(1)).getLifestyleConfig(ownerId);
+  }
+
+  // ---------------- checkFeasibility (planner-6) ----------------
+
+  @Test
+  void checkFeasibility_buildsContextForOwner_andDelegatesToCheck() {
+    UUID householdId = UUID.randomUUID();
+    UUID ownerId = UUID.randomUUID();
+    LocalDate week = LocalDate.of(2026, 6, 15);
+    when(householdQueryService.getById(householdId))
+        .thenReturn(
+            Optional.of(
+                new com.example.mealprep.household.api.dto.HouseholdDto(
+                    householdId, "h", ownerId, List.of(), java.time.Instant.EPOCH, 0L)));
+    com.example.mealprep.planner.api.dto.PlanCompositionContext ctx =
+        Mockito.mock(com.example.mealprep.planner.api.dto.PlanCompositionContext.class);
+    when(contextBuilder.build(any(), eq(ownerId), any(), any())).thenReturn(ctx);
+    com.example.mealprep.planner.api.dto.FeasibilityCheckResultDto expected =
+        new com.example.mealprep.planner.api.dto.FeasibilityCheckResultDto(
+            true, List.of(), List.of());
+    when(feasibilityCheck.check(ctx)).thenReturn(expected);
+
+    var result = service.checkFeasibility(householdId, week);
+
+    assertThat(result).isSameAs(expected);
+    verify(contextBuilder).build(any(), eq(ownerId), any(), any());
+    verify(feasibilityCheck).check(ctx);
   }
 }

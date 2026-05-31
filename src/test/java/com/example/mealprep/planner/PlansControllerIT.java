@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -116,6 +117,10 @@ class PlansControllerIT {
   @MockBean private RollupBuilder rollupBuilder;
   @MockBean private StageCInvoker stageCInvoker;
   @MockBean private Phase2Augmenter phase2Augmenter;
+
+  @MockBean
+  private com.example.mealprep.planner.domain.service.internal.composer.ConstraintFeasibilityCheck
+      feasibilityCheck;
 
   @MockBean
   private com.example.mealprep.adaptation.domain.service.AdaptationService adaptationService;
@@ -578,5 +583,54 @@ class PlansControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(reqBody))
         .andExpect(status().isForbidden());
+  }
+
+  // ============================================================================================
+  // Feasibility (planner-6) — contract test against the OpenAPI validator
+  // ============================================================================================
+
+  @Test
+  void feasibility_returns200_infeasibleWithConflictsAndResolutions_validatesAgainstOpenApi()
+      throws Exception {
+    AuthedUser user = registerUser();
+    UUID household = UUID.randomUUID();
+    grantMembership(household, user.userId());
+    UUID slotId = UUID.randomUUID();
+    when(feasibilityCheck.check(any()))
+        .thenReturn(
+            new com.example.mealprep.planner.api.dto.FeasibilityCheckResultDto(
+                false,
+                List.of(
+                    new com.example.mealprep.planner.api.dto.ConstraintConflictDto(
+                        com.example.mealprep.planner.api.dto.ConflictType
+                            .OVER_SPECIFIED_PREFERENCES,
+                        List.of(slotId),
+                        "1 slot has a candidate pool below the planning minimum.")),
+                List.of(
+                    new com.example.mealprep.planner.api.dto.ResolutionOptionDto(
+                        "widen_preferences",
+                        "Widen soft preferences so more recipes qualify.",
+                        1,
+                        new BigDecimal("0.15")))));
+
+    mvc.perform(
+            get("/api/v1/plans/feasibility")
+                .cookie(user.cookie())
+                .param("householdId", household.toString())
+                .param("weekStartDate", mondayWeek().toString()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.feasible").value(false))
+        .andExpect(jsonPath("$.conflicts[0].type").value("OVER_SPECIFIED_PREFERENCES"))
+        .andExpect(jsonPath("$.resolutions[0].key").value("widen_preferences"))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void feasibility_returns401_whenAnonymous() throws Exception {
+    mvc.perform(
+            get("/api/v1/plans/feasibility")
+                .param("householdId", UUID.randomUUID().toString())
+                .param("weekStartDate", mondayWeek().toString()))
+        .andExpect(status().isUnauthorized());
   }
 }

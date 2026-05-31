@@ -29,9 +29,12 @@ import org.hibernate.annotations.Type;
 import org.hibernate.annotations.UpdateTimestamp;
 
 /**
- * Aggregate root for a plan. Owns {@code days} via {@code cascade=ALL, orphanRemoval=true}; child
- * write paths bump this row's {@code @Version} via {@code OPTIMISTIC_FORCE_INCREMENT} (the locking
- * scheme lands with 01b/01j — 01a only sets up the optimistic-version column).
+ * Aggregate root for a plan. Owns {@code days} via {@code cascade=ALL, orphanRemoval=true}. The
+ * per-slot state write path ({@code PlanWriteServiceImpl.changeSlotState}) bumps this row's
+ * {@code @Version} via {@code entityManager.lock(plan, OPTIMISTIC_FORCE_INCREMENT)} (planner-7), so
+ * a concurrent mid-week re-opt that read the slot graph aborts with an {@code
+ * OptimisticLockException} (→ 409) if a slot transitions mid-flight, per LLD §Flow 5 /
+ * §Concurrency.
  *
  * <p>The {@code @EntityGraph(attributePaths = {"days", "days.slots",
  * "days.slots.scheduledRecipe"})} shortcut would trigger {@code MultipleBagFetchException} on

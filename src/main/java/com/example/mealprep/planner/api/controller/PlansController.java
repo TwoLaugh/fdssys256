@@ -3,6 +3,7 @@ package com.example.mealprep.planner.api.controller;
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
 import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.planner.api.dto.AbandonPlanRequest;
+import com.example.mealprep.planner.api.dto.FeasibilityCheckResultDto;
 import com.example.mealprep.planner.api.dto.GeneratePlanRequest;
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.api.dto.PlanReoptSuggestionDto;
@@ -288,6 +289,21 @@ public class PlansController {
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
     return ResponseEntity.ok(
         planQueryService.getPendingSuggestions(householdId, PageRequest.of(page, size)));
+  }
+
+  @GetMapping(path = "/feasibility", produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Pre-Stage-A constraint feasibility check for a (household, week). Returns the conflicts"
+              + " + ranked resolutions the UI shows before triggering generation. 200.")
+  public ResponseEntity<FeasibilityCheckResultDto> getFeasibility(
+      @RequestParam UUID householdId,
+      @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate weekStartDate) {
+    UUID userId = requireUser();
+    if (!plannerAuth.canAccessHousehold(userId, householdId)) {
+      throw forbidden();
+    }
+    return ResponseEntity.ok(planQueryService.checkFeasibility(householdId, weekStartDate));
   }
 
   @GetMapping(path = "/{planId}", produces = MediaType.APPLICATION_JSON_VALUE)

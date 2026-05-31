@@ -89,4 +89,13 @@ public interface PlanRepository extends JpaRepository<Plan, UUID> {
    * listener forces the lazy day/slot/recipe graph inside its own {@code REQUIRES_NEW} read tx.
    */
   List<Plan> findByHouseholdIdAndStatusIn(UUID householdId, Collection<PlanStatus> statuses);
+
+  /**
+   * All plans in a given status whose {@code weekStartDate} is strictly before a cutoff date. The
+   * weekly PlanCompleted sweep (planner-3) uses this with {@code status = ACTIVE} and {@code cutoff
+   * = the current week's Monday} to find prior-week ACTIVE plans that are candidates for transition
+   * to COMPLETED. {@code @EntityGraph} is intentionally absent (Hibernate-6 multi-bag trap — see
+   * class Javadoc); the sweep forces the lazy slot graph inside its own read tx.
+   */
+  List<Plan> findByStatusAndWeekStartDateBefore(PlanStatus status, LocalDate cutoff);
 }
