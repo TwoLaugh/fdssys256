@@ -33,6 +33,7 @@ import com.example.mealprep.household.domain.service.internal.InviteCodeGenerato
 import com.example.mealprep.household.domain.service.internal.SlotConfigurationResolver;
 import com.example.mealprep.household.event.HouseholdInviteAcceptedEvent;
 import com.example.mealprep.household.event.HouseholdInviteCreatedEvent;
+import com.example.mealprep.household.event.HouseholdMemberAddedEvent;
 import com.example.mealprep.household.exception.HouseholdInviteAlreadyAcceptedException;
 import com.example.mealprep.household.exception.HouseholdInviteExpiredException;
 import com.example.mealprep.household.exception.HouseholdInviteNotFoundException;
@@ -78,7 +79,8 @@ class HouseholdInvitesServiceTest {
       new com.example.mealprep.household.api.mapper.HouseholdSettingsAuditMapperImpl();
   private final HouseholdInviteMapper inviteMapper =
       new com.example.mealprep.household.api.mapper.HouseholdInviteMapperImpl();
-  private final HouseholdSettingsDiffer differ = new HouseholdSettingsDiffer(new ObjectMapper());
+  private final HouseholdSettingsDiffer differ =
+      new HouseholdSettingsDiffer(new ObjectMapper(), Clock.systemUTC());
   private final SlotConfigurationResolver slotConfigurationResolver =
       new SlotConfigurationResolver();
   private final InviteCodeGenerator inviteCodeGenerator = new InviteCodeGenerator();
@@ -300,11 +302,29 @@ class HouseholdInvitesServiceTest {
     assertThat(invite.getAcceptedAt()).isEqualTo(fixedNow);
     assertThat(invite.getAcceptedByUserId()).isEqualTo(accepterId);
 
-    ArgumentCaptor<HouseholdInviteAcceptedEvent> ec =
-        ArgumentCaptor.forClass(HouseholdInviteAcceptedEvent.class);
-    verify(eventPublisher).publishEvent(ec.capture());
-    assertThat(ec.getValue().acceptedByUserId()).isEqualTo(accepterId);
-    assertThat(ec.getValue().grantedRole()).isEqualTo(HouseholdRole.member);
+    // household-4: accept now emits BOTH HouseholdMemberAddedEvent (for the planner / member-add
+    // consumers) AND HouseholdInviteAcceptedEvent (for invite-flow consumers).
+    ArgumentCaptor<Object> ec = ArgumentCaptor.forClass(Object.class);
+    verify(eventPublisher, times(2)).publishEvent(ec.capture());
+
+    HouseholdMemberAddedEvent memberAdded =
+        ec.getAllValues().stream()
+            .filter(HouseholdMemberAddedEvent.class::isInstance)
+            .map(HouseholdMemberAddedEvent.class::cast)
+            .findFirst()
+            .orElseThrow();
+    assertThat(memberAdded.householdId()).isEqualTo(householdId);
+    assertThat(memberAdded.userId()).isEqualTo(accepterId);
+    assertThat(memberAdded.role()).isEqualTo(HouseholdRole.member);
+
+    HouseholdInviteAcceptedEvent inviteAccepted =
+        ec.getAllValues().stream()
+            .filter(HouseholdInviteAcceptedEvent.class::isInstance)
+            .map(HouseholdInviteAcceptedEvent.class::cast)
+            .findFirst()
+            .orElseThrow();
+    assertThat(inviteAccepted.acceptedByUserId()).isEqualTo(accepterId);
+    assertThat(inviteAccepted.grantedRole()).isEqualTo(HouseholdRole.member);
   }
 
   @Test

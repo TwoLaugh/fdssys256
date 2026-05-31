@@ -25,40 +25,44 @@ com.example.mealprep.household/
 ├── HouseholdModule.java                facade re-exporting public service interfaces
 ├── api/
 │   ├── controller/                     HouseholdsController, HouseholdMembersController,
-│   │                                    HouseholdSettingsController, HouseholdInvitesController
+│   │                                    HouseholdSettingsController, HouseholdInvitesController,
+│   │                                    HouseholdMergeController, HouseholdSlotConfigurationPlannerViewController
 │   ├── dto/                            records (see DTOs)
 │   └── mapper/                         MapStruct mappers (see Mappers)
 ├── domain/
 │   ├── entity/                         JPA entities (see Entities)
-│   ├── repository/                     Spring Data interfaces — package-private
+│   ├── repository/                     Spring Data interfaces (public; boundary fenced by ArchUnit)
 │   └── service/
 │       ├── HouseholdQueryService.java, HouseholdUpdateService.java, HouseholdMergeService.java
-│       ├── HouseholdServiceImpl.java   single impl of all three
-│       └── internal/                   SoftPreferenceMerger, SlotConfigurationResolver, InviteCodeGenerator
-├── event/                              5 event records (see Events)
+│       ├── internal/HouseholdServiceImpl.java   single impl of all three
+│       └── internal/                   SoftPreferenceMerger, SlotConfigurationResolver,
+│                                        InviteCodeGenerator, HouseholdSettingsDiffer
+├── event/                              7 event records (see Events)
 ├── exception/                          module root + per-failure subclasses
-└── validation/                         @ValidSlotKey, @ValidHeadcount + validators
+├── spi/                                SoftPreferencesReader (preference SPI; Noop until preference-01c)
+└── validation/                         @ValidSlotKey, @ValidHeadcount + validators (household-2)
 ```
 
-The four-controller split mirrors the URL surface (`/households`, `/.../members`, `/.../settings`, `/.../invites`) — resource shapes differ enough that one omnibus controller would be awkward to OpenAPI-tag.
+The controller split mirrors the URL surface; the merge + planner-view controllers (01e/01f) were added beyond the original four. `HouseholdServiceImpl` lives in `domain.service.internal`.
 
 ---
 
 ## Database
 
-Migrations live under `src/main/resources/db/migration/` per [technical-architecture.md §Migrations](../design/technical-architecture.md#migrations); one concern per file:
+Migrations live under `src/main/resources/db/migration/` per [technical-architecture.md §Migrations](../design/technical-architecture.md#migrations); one concern per file. Shipped filenames (reconciled — household-6; the settings-audit table is its own migration rather than bundled into the settings migration):
 
 ```
-V20260501130000__household_create_household.sql
-V20260501130100__household_create_household_member.sql
-V20260501130200__household_create_household_settings.sql
-V20260501130300__household_create_household_invite.sql
+V20260601500000__household_create_household.sql
+V20260601500100__household_create_household_member.sql
+V20260601500200__household_create_household_settings.sql
+V20260601500300__household_create_household_settings_audit.sql
+V20260601500400__household_create_household_invite.sql
 ```
 
 Audit columns (`created_at`, `updated_at`, `optimistic_version`) are present on every mutable table and elided below for brevity.
 
 ```sql
--- V20260501130000
+-- V20260601500000
 CREATE TABLE household (
     id                  uuid PRIMARY KEY,
     name                varchar(128) NOT NULL,
@@ -66,7 +70,7 @@ CREATE TABLE household (
 );
 CREATE INDEX idx_household_created_by_user ON household (created_by_user_id);
 
--- V20260501130100
+-- V20260601500100
 CREATE TABLE household_member (
     id                  uuid PRIMARY KEY,
     household_id        uuid NOT NULL REFERENCES household(id) ON DELETE CASCADE,
@@ -83,12 +87,13 @@ CREATE INDEX idx_household_member_household ON household_member (household_id);
 CREATE UNIQUE INDEX idx_household_member_one_primary
     ON household_member (household_id) WHERE role = 'primary';
 
--- V20260501130200
+-- V20260601500200
 CREATE TABLE household_settings (
     id                  uuid PRIMARY KEY,
     household_id        uuid NOT NULL UNIQUE REFERENCES household(id) ON DELETE CASCADE,
     document            jsonb NOT NULL                   -- mirrored by HouseholdSettingsDocument
 );
+-- V20260601500300 (separate migration — household-6)
 CREATE TABLE household_settings_audit (
     id                      uuid PRIMARY KEY,
     household_settings_id   uuid NOT NULL REFERENCES household_settings(id) ON DELETE CASCADE,
@@ -101,7 +106,7 @@ CREATE TABLE household_settings_audit (
 CREATE INDEX idx_household_settings_audit_hs_time
     ON household_settings_audit (household_settings_id, occurred_at DESC);
 
--- V20260501130300
+-- V20260601500400
 CREATE TABLE household_invite (
     id                       uuid PRIMARY KEY,
     household_id             uuid NOT NULL REFERENCES household(id) ON DELETE CASCADE,
@@ -204,7 +209,9 @@ public record MergedSoftPreferencesDto(
 ) { public enum MergeStrategy { MEAN_WEIGHTED_BY_PRIORITY } }
 ```
 
-Re-using `TasteProfileDocument` means the planner has no special-case rendering path for shared slots. `mergedLifestyleConfig` is the **structurally-mergeable subset** (meal_timing windows, novelty tolerance, batch cooking flags) — free-text notes dropped, per-field rule most-restrictive. HLD specifies only the taste-profile merge — **worth user review.**
+`mergedLifestyleConfig` is the **structurally-mergeable subset** (meal_timing windows, novelty tolerance, batch cooking flags) — free-text notes dropped, per-field rule most-restrictive. HLD specifies only the taste-profile merge — **worth user review.**
+
+> **Shipped note (household-6).** `TasteProfileDocument` / `LifestyleConfigDocument` here are **household-local stub records** in `household.api.dto`, NOT the preference module's canonical records. The original design said this DTO re-uses the preference record shapes; in practice `PreferenceSoftPreferencesReader` (the SPI impl) projects the canonical preference records down to these smaller household-local projections (likes/dislikes/avoid scores + the mergeable lifestyle subset), and the planner's `PlanCompositionContext` consumes the household type. Functionally equivalent; rationalising the two shapes into one is a deferred follow-up.
 
 `SlotConfigurationDto` is the planner-friendly view of the settings document — called once per planning run:
 
@@ -226,20 +233,18 @@ MapStruct interfaces, `@Mapper(componentModel = "spring")`, one per entity-DTO p
 
 ## Repositories
 
-Package-private; cross-module access via service interfaces only.
+Cross-module access via service interfaces only — enforced by `HouseholdBoundaryTest` (ArchUnit), not Java visibility (the interfaces are `public` so the in-module `domain.service.internal` package can inject them; the boundary test fences cross-module reach-through). The shipped finder set (reconciled — household-6):
 
 ```java
 interface HouseholdRepository extends JpaRepository<Household, UUID> {
-    @EntityGraph(attributePaths = {"members", "settings"})
-    Optional<Household> findWithMembersAndSettingsById(UUID id);
     @EntityGraph(attributePaths = {"members"})
     Optional<Household> findWithMembersById(UUID id);
 }
 interface HouseholdMemberRepository extends JpaRepository<HouseholdMember, UUID> {
     Optional<HouseholdMember> findByUserId(UUID userId);
-    List<HouseholdMember> findAllByHouseholdId(UUID householdId);
-    List<HouseholdMember> findAllByHouseholdIdAndRole(UUID householdId, HouseholdRole role);
     boolean existsByHouseholdIdAndRole(UUID householdId, HouseholdRole role);
+    long countByHouseholdId(UUID householdId);                              // last-primary guard
+    long countByHouseholdIdAndRole(UUID householdId, HouseholdRole role);   // last-primary guard
 }
 interface HouseholdSettingsRepository extends JpaRepository<HouseholdSettings, UUID> {
     Optional<HouseholdSettings> findByHouseholdId(UUID householdId);
@@ -249,11 +254,11 @@ interface HouseholdSettingsAuditLogRepository extends JpaRepository<HouseholdSet
 }
 interface HouseholdInviteRepository extends JpaRepository<HouseholdInvite, UUID> {
     Optional<HouseholdInvite> findByInviteCode(String inviteCode);
-    List<HouseholdInvite> findByHouseholdIdAndAcceptedAtIsNullAndRevokedAtIsNull(UUID householdId);
+    List<HouseholdInvite> findByHouseholdIdAndAcceptedAtIsNullAndRevokedAtIsNullOrderByCreatedAtDesc(UUID householdId);
 }
 ```
 
-`@EntityGraph` keeps the most common UI read to one JOIN — no N+1.
+Notes on the divergence from the original design: there is no `findWithMembersAndSettingsById` (settings are loaded separately via `HouseholdSettingsRepository.findByHouseholdId`); the member repo uses `countByHouseholdId*` for the last-primary guard rather than `findAll*` list reads; the pending-invites finder is suffixed `OrderByCreatedAtDesc` (newest-first). `@EntityGraph` keeps the common members read to one JOIN — no N+1.
 
 ---
 
@@ -263,22 +268,17 @@ Per the style guide, all three module interfaces are implemented by a single `Ho
 
 ### `HouseholdQueryService`
 
+Reconciled to the shipped interface (household-6): the speculative batch methods (`getByIds`, `listMembersByHouseholdIds`, `getSettingsByHouseholdIds`, `getMember`, `getMembershipForUser`, `listMembers`) were never built — members ride along on `HouseholdDto.members`, so a separate `listMembers` read was unnecessary. Settings/audit/slot-config reads carry a `callerUserId` for the member-only authorisation gate (non-members get empty/404, no existence leak). The planner-view reader (01f) lives here.
+
 ```java
 public interface HouseholdQueryService {
-    Optional<HouseholdDto> getById(UUID householdId);
-    List<HouseholdDto> getByIds(List<UUID> householdIds);
-    Optional<HouseholdDto> getByUserId(UUID userId);                       // v1: at most one
+    Optional<HouseholdDto> getById(UUID householdId);                 // members eager
+    Optional<HouseholdDto> getByUserId(UUID userId);                  // v1: at most one
 
-    List<HouseholdMemberDto> listMembers(UUID householdId);
-    List<HouseholdMemberDto> listMembersByHouseholdIds(List<UUID> ids);    // batch sibling
-    Optional<HouseholdMemberDto> getMember(UUID memberId);
-    Optional<HouseholdMemberDto> getMembershipForUser(UUID userId);
-
-    Optional<HouseholdSettingsDto> getSettings(UUID householdId);
-    List<HouseholdSettingsDto> getSettingsByHouseholdIds(List<UUID> ids);
-    Page<HouseholdSettingsAuditEntryDto> getSettingsAuditLog(UUID householdId, Pageable pageable);
-
-    SlotConfigurationDto getSlotConfiguration(UUID householdId);
+    Optional<HouseholdSettingsDto> getSettings(UUID householdId, UUID callerUserId);
+    Page<HouseholdSettingsAuditEntryDto> getSettingsAuditLog(UUID householdId, UUID callerUserId, Pageable pageable);
+    SlotConfigurationDto getSlotConfiguration(UUID householdId, UUID callerUserId);
+    SlotConfigurationPlannerViewDto getSlotConfigurationPlannerView(UUID householdId);   // 01f planner-facing
 
     List<HouseholdInviteDto> listPendingInvites(UUID householdId);
     Optional<HouseholdInviteDto> getInviteByCode(String inviteCode);
@@ -329,26 +329,30 @@ Injects `PreferenceQueryService.getSoftPreferencesByUserIds` — one round-trip 
 
 ## REST Controllers
 
-All endpoints under `/api/v1/households/...`. `actorUserId` resolved server-side from auth context per [technical-architecture.md §REST API](../design/technical-architecture.md#rest-api-with-json) — never in the URL. OpenAPI: `@Tag(name = "Households")` on Households + Settings, `@Tag(name = "Household Members")` on Members, `@Tag(name = "Household Invites")` on Invites.
+All endpoints under `/api/v1/...`. `actorUserId` is resolved server-side from the auth context via `CurrentUserResolver` per [technical-architecture.md §REST API](../design/technical-architecture.md#rest-api-with-json) — never in the URL. All controllers carry `@Tag(name = "Households")` (single OpenAPI tag for the whole module).
 
-| Method | Path | Body → Response |
-|---|---|---|
-| POST   | `/households` | `CreateHouseholdRequest` → `HouseholdDto` (201) |
-| GET    | `/households/current`, `/households/{id}` | → `HouseholdDto` (200/404) |
-| GET    | `/households/{id}/members` | → `List<HouseholdMemberDto>` (200) |
-| POST   | `/households/{id}/members` | `AddMemberRequest` → `HouseholdMemberDto` (201) |
-| PATCH  | `/households/{id}/members/{memberId}` | `UpdateMemberRequest` → `HouseholdMemberDto` (200) |
-| DELETE | `/households/{id}/members/{memberId}` | → 204 |
-| POST   | `/households/{id}/members/{memberId}/role` | `ChangeRoleRequest` → `HouseholdMemberDto` (200) |
-| GET    | `/households/{id}/settings` | → `HouseholdSettingsDto` (200/404) |
-| PUT    | `/households/{id}/settings` | `UpdateHouseholdSettingsRequest` → `HouseholdSettingsDto` (200) |
-| GET    | `/households/{id}/settings/audit-log?page=&size=` | → `Page<HouseholdSettingsAuditEntryDto>` |
-| GET    | `/households/{id}/slot-configuration` | → `SlotConfigurationDto` (200/404) |
-| GET    | `/households/{id}/invites`, POST same path | `CreateInviteRequest` → `List<…>` / `HouseholdInviteDto` |
-| DELETE | `/households/{id}/invites/{inviteId}` | → 204 |
-| POST   | `/households/invites/accept` | `AcceptInviteRequest` → `HouseholdMemberDto` (200/404/409/410) |
+**Shipped URL scheme (reconciled — household-5/6).** Member, invite, merge and planner-view endpoints are rooted at `/households/current/...` (the caller's own household is resolved from the session, so no `{householdId}` in the path); settings + slot-configuration are rooted at `/households/{householdId}/...`. Invite accept is `/invites/accept` (a bearer accepting a code does not yet have a "current household"). This is the surface the OpenAPI spec (`openapi/openapi.yaml` + `openapi/paths/household.yaml`) declares and the `*FlowIT` swagger-request-validator tests pin; the table below matches both. (The original design used `/households/{id}/...` uniformly; the `/current/...` convention shipped instead and is the contract of record.)
 
-All paths prefixed `/api/v1`. Mutations may also return 400 (validation), 403 (insufficient role), 409 (stale version, single-household / last-primary conflicts). `HouseholdMergeService` is **not** exposed via REST — invoked in-process by the planner.
+| Method | Path | Body → Response | Controller |
+|---|---|---|---|
+| POST   | `/households` | `CreateHouseholdRequest` → `HouseholdDto` (201) | `HouseholdsController` |
+| GET    | `/households/current` | → `HouseholdDto` (200/404) | `HouseholdsController` |
+| GET    | `/households/{householdId}/settings` | → `HouseholdSettingsDto` (200/404) | `HouseholdSettingsController` |
+| PUT    | `/households/{householdId}/settings` | `UpdateHouseholdSettingsRequest` → `HouseholdSettingsDto` (200) | `HouseholdSettingsController` |
+| GET    | `/households/{householdId}/settings/audit-log?page=&size=` | → `Page<HouseholdSettingsAuditEntryDto>` | `HouseholdSettingsController` |
+| GET    | `/households/{householdId}/slot-configuration` | → `SlotConfigurationDto` (200/404) | `HouseholdSettingsController` |
+| GET    | `/households/current/invites` | → `List<HouseholdInviteDto>` (codes redacted) | `HouseholdInvitesController` |
+| POST   | `/households/current/invites` | `CreateInviteRequest` → `HouseholdInviteDto` (201, code surfaced) | `HouseholdInvitesController` |
+| DELETE | `/households/current/invites/{inviteId}` | → 204 | `HouseholdInvitesController` |
+| POST   | `/invites/accept` | `AcceptInviteRequest` → `HouseholdMemberDto` (200/404/409/410) | `HouseholdInvitesController` |
+| POST   | `/households/current/members` | `AddMemberRequest` → `HouseholdMemberDto` (201) | `HouseholdMembersController` |
+| PATCH  | `/households/current/members/{memberId}` | `UpdateMemberRequest` → `HouseholdMemberDto` (200) | `HouseholdMembersController` |
+| DELETE | `/households/current/members/{memberId}` | → 204 | `HouseholdMembersController` |
+| POST   | `/households/current/members/{memberId}/role` | `ChangeRoleRequest` → `HouseholdMemberDto` (200) | `HouseholdMembersController` |
+| POST   | `/households/current/merge` | `MergeSoftPreferencesRequest` → `MergedSoftPreferencesDto` (200) | `HouseholdMergeController` |
+| GET    | `/households/current/slot-configuration/planner-view` | → `SlotConfigurationPlannerViewDto` (200/404) | `HouseholdSlotConfigurationPlannerViewController` |
+
+All paths prefixed `/api/v1`. Mutations may also return 400 (validation), 403 (insufficient role), 409 (stale version, single-household / last-primary conflicts). The `/households/current/merge` endpoint validates that every supplied `eaterUserId` is in the caller's household (403 otherwise) and 422s an empty household. Note: the design originally said `HouseholdMergeService` is "not exposed via REST"; a thin `HouseholdMergeController` shipped anyway as a planner-reachable / debug seam (it is also invoked in-process). The planner-view endpoint is the planner-facing flattened slot view (01f).
 
 ### Error responses
 
@@ -368,10 +372,12 @@ Module root: `HouseholdException extends MealPrepException`.
 
 ## Validation
 
-Standard Jakarta annotations on request records (`@NotNull`, `@NotBlank`, `@Size`, `@Min`/`@Max`, `@Future`, `@Valid`). Custom validators in `validation/`:
+Standard Jakarta annotations on request records (`@NotNull`, `@NotBlank`, `@Size`, `@Min`/`@Max`, `@Future`, `@Valid`). Custom validators in `household.validation/` (implemented — household-2), applied to the `HouseholdSettingsDocument` record components and reached via the `@Valid` cascade from `UpdateHouseholdSettingsRequest`:
 
-- **`@ValidSlotKey`** — kebab-case, 1–48 chars, no collision with built-in slot kind names.
-- **`@ValidHeadcount`** — between 1 and 16 (matches the planner's per-eater sanity check).
+- **`@ValidSlotKey`** (`SlotKeyValidator`) — kebab-case (`^[a-z0-9-]+$`), 1–48 chars, no collision with a built-in `SlotKind` name (breakfast/lunch/dinner/snack/custom). Applied to `CustomSlotDefinition.key`. A null key is left to the schema's required-ness; the collision/format rules are the rule this validator adds (a kebab-case key like `dinner` passes the OpenAPI pattern but is rejected here).
+- **`@ValidHeadcount`** (`HeadcountValidator`) — null accepted (optional, falls back at resolve time); otherwise 1–16 (matches the planner's per-eater sanity check and the OpenAPI bound). Applied to `SlotDefault.headcount`, `CustomSlotDefinition.headcount`, and `HouseholdSettingsDocument.defaultHeadcount`.
+
+Bounds are kept identical to the OpenAPI schema so a contract-valid request is never rejected by bean-validation; the validators add the same enforcement on the in-process service path (where there is no OpenAPI gate) plus the slot-key collision rule the schema pattern alone cannot express.
 
 Cross-field rules enforced **service-layer** (need DB state): removing the last primary → `LastPrimaryRemovalException` (409); adding a user already in a household → `UserAlreadyInHouseholdException` (409); demoting yourself when no other primary exists → reject (promote someone else first). Detailed admin escalation beyond primary/member is deferred.
 
@@ -381,17 +387,23 @@ Cross-field rules enforced **service-layer** (need DB state): removing the last 
 
 ### Published
 
-The technical-architecture catalogue lists a single `HouseholdConfigChangedEvent`. The LLD splits it into five — membership and settings churn have different planner consequences. **Worth user review.**
+The technical-architecture catalogue lists a single `HouseholdConfigChangedEvent`. The LLD splits it into per-concern events — membership and settings churn have different planner consequences. **Worth user review.** All implement `core.events.ScopeChangedEvent` with `scopeKind = "household"`, `scopeId = householdId`. The shipped set (reconciled — household-6) is **seven**: the original five plus the two invite events:
 
 ```java
-public record HouseholdCreatedEvent       (UUID householdId, UUID createdByUserId, UUID traceId, Instant occurredAt) {}
-public record HouseholdMemberAddedEvent   (UUID householdId, UUID memberId, UUID userId, HouseholdRole role, UUID traceId, Instant occurredAt) {}
-public record HouseholdMemberRemovedEvent (UUID householdId, UUID memberId, UUID userId, HouseholdRole roleAtRemoval, UUID traceId, Instant occurredAt) {}
+public record HouseholdCreatedEvent        (UUID householdId, UUID createdByUserId, UUID traceId, Instant occurredAt) {}
+public record HouseholdMemberAddedEvent    (UUID householdId, UUID memberId, UUID userId, HouseholdRole role, UUID traceId, Instant occurredAt) {}
+public record HouseholdMemberRemovedEvent  (UUID householdId, UUID memberId, UUID userId, HouseholdRole roleAtRemoval, UUID traceId, Instant occurredAt) {}
 public record HouseholdSettingsChangedEvent(UUID householdId, UUID settingsId, Set<String> changedFieldPaths, UUID traceId, Instant occurredAt) {}
-public record HouseholdRoleChangedEvent   (UUID householdId, UUID memberId, UUID userId, HouseholdRole previousRole, HouseholdRole newRole, UUID traceId, Instant occurredAt) {}
+public record HouseholdRoleChangedEvent    (UUID householdId, UUID memberId, UUID userId, HouseholdRole previousRole, HouseholdRole newRole, UUID traceId, Instant occurredAt) {}
+public record HouseholdInviteCreatedEvent  (UUID householdId, UUID inviteId, UUID issuedByUserId, UUID issuedForUserId, HouseholdRole intendedRole, Instant expiresAt, UUID traceId, Instant occurredAt) {}
+public record HouseholdInviteAcceptedEvent (UUID householdId, UUID inviteId, UUID acceptedByUserId, HouseholdRole grantedRole, UUID traceId, Instant occurredAt) {}
 ```
 
-Published via `ApplicationEventPublisher` after the relevant write transaction; listeners use `@TransactionalEventListener(phase = AFTER_COMMIT)`. The planner is the primary downstream — settings changes may invalidate the active plan's slot configuration; member events change the eater set for shared slots. The planner's response (re-opt suggestion) is its concern.
+Published via `ApplicationEventPublisher` after the relevant write transaction; listeners use `@TransactionalEventListener(phase = AFTER_COMMIT)`. The planner is the primary downstream — settings changes may invalidate the active plan's slot configuration; member events change the eater set for shared slots.
+
+**Member-event emission (household-4).** Both the direct-add admin path AND the invite-accept path emit `HouseholdMemberAddedEvent`; the accept path ALSO emits `HouseholdInviteAcceptedEvent` for invite-flow-specific consumers. (The earlier "accept emits only the invite event" decision was reversed: the most common onboarding path must raise the member-added event so the planner reacts to the new eater — see household-7.)
+
+**Planner reaction (household-7).** `PlannerEventListener` consumes `HouseholdSettingsChangedEvent` (gated by `HouseholdMaterialityFilter` on the changed field paths) AND the three membership/role events (`HouseholdMemberAddedEvent` / `HouseholdMemberRemovedEvent` / `HouseholdRoleChangedEvent`), routing each to the mid-week re-opt path under `ReoptTriggerKind.HOUSEHOLD_SETTINGS`. A membership/role change is always treated as material (it changes the shared-slot eater set), so it bypasses the field-path materiality filter; the filter no longer carries `members*` prefixes (those paths never appear on a settings event).
 
 ### Consumed
 
@@ -403,19 +415,19 @@ None at v1.
 
 ### Flow 1: Create household
 
-`POST /api/v1/households` → `createHousehold(creatorUserId, request)`. `@Transactional`. In one tx: reject if creator already in any household (409); insert `Household`; insert primary `HouseholdMember` (`priority = 100`); insert default `HouseholdSettings` — built-in slot kinds with `shared = true`, `headcount = 1`, time budgets cribbed from [meal-planner.md §Slot configuration](../design/meal-planner.md#slot-configuration). The HLD does not specify default-shared-vs-not; **choosing shared = true** (typical onboarding is "I cook for my household"). **Worth user review.** Publish `HouseholdCreatedEvent` after commit.
+`POST /api/v1/households` → `createHousehold(creatorUserId, request)`. `@Transactional`. In one tx: reject if creator already in any household (409); insert `Household`; insert primary `HouseholdMember` (`priority = 100`); insert default `HouseholdSettings` — built-in slot kinds with `shared = true`, `headcount = 1`, and per-kind time budgets cribbed from [meal-planner.md §Slot configuration](../design/meal-planner.md#slot-configuration): **breakfast 15, lunch 20, dinner 45, snack 5** (household-3; previously a flat 30 for all kinds). The HLD does not specify default-shared-vs-not; **choosing shared = true** (typical onboarding is "I cook for my household"). **Worth user review.** Publish `HouseholdCreatedEvent` after commit.
 
 ### Flow 2: Invite a member
 
-`POST /api/v1/households/{id}/invites`. `@Transactional`. Authorisation: `PRIMARY` only. Generate a 16-char opaque code via `InviteCodeGenerator` (alphanumeric, secure-random); persist with `expiresAt` from the request (Jakarta `@Future`; service caps at 30 days — **worth user review**). Return `HouseholdInviteDto` **including the code** — the only response that ever surfaces it. No `HouseholdInviteCreatedEvent` at v1 (no listener cares yet).
+`POST /api/v1/households/current/invites` (shipped path — household-5). `@Transactional`. Authorisation: `PRIMARY` only. Generate a 16-char opaque code via `InviteCodeGenerator` (alphanumeric, secure-random); persist with `expiresAt` from the request (Jakarta `@Future`; service caps at 30 days — **worth user review**), retrying on code collision. Return `HouseholdInviteDto` **including the code** — the only response that ever surfaces it. Publish `HouseholdInviteCreatedEvent` after commit (shipped — household-6; the original "no event at v1" note is stale).
 
 ### Flow 3: Accept invite
 
-`POST /api/v1/households/invites/accept`. `@Transactional`. Look up by `inviteCode` — missing → 404; revoked/expired → 410; already accepted → 409. If invite specifies `issuedForUserId ≠ accepterUserId` → 403. If accepter already in any household → 409. Insert `HouseholdMember` (`role = invite.intendedRole`, `priority = 100`); stamp `acceptedAt` / `acceptedByUserId` on the invite. Publish `HouseholdMemberAddedEvent` after commit.
+`POST /api/v1/invites/accept` (shipped path — household-5). `@Transactional`. Look up by `inviteCode` — missing → 404; revoked/expired → 410; already accepted → 409. If invite specifies `issuedForUserId ≠ accepterUserId` → 403. If accepter already in any household → 409. Insert `HouseholdMember` (`role = invite.intendedRole`, `priority = 100`); stamp `acceptedAt` / `acceptedByUserId` on the invite. After commit, publish **both** `HouseholdMemberAddedEvent` (household-4 — so the planner reacts to the new eater) **and** `HouseholdInviteAcceptedEvent` (for invite-flow consumers).
 
 ### Flow 4: Remove member
 
-`DELETE /api/v1/households/{id}/members/{memberId}`. `@Transactional`. Authorisation: actor must be `PRIMARY`, OR `actorUserId == member.userId` (self-remove). 404 if not found. If only `PRIMARY` and other members exist → `LastPrimaryRemovalException` (409): promote first. If target is the only member, **delete the member row but keep the household** — empty households are preserved (the user can rejoin later or invite new members without re-creating). Delete the member row only. Publish `HouseholdMemberRemovedEvent` after commit. **Locked decision (2026-05-07).**
+`DELETE /api/v1/households/current/members/{memberId}` (shipped path — household-5). `@Transactional`. Authorisation: actor must be `PRIMARY`, OR `actorUserId == member.userId` (self-remove). 404 if not found. If only `PRIMARY` and other members exist → `LastPrimaryRemovalException` (409): promote first. If target is the only member, **delete the member row but keep the household** — empty households are preserved (the user can rejoin later or invite new members without re-creating). Delete the member row only. Publish `HouseholdMemberRemovedEvent` after commit. **Locked decision (2026-05-07).**
 
 **Leaver's per-user data — Orphan model (locked 2026-05-07).** Per-user data (preferences, nutrition logs, feedback, journal) stays attached to the user's account. The household removes only its own member row and emits the event; downstream modules read the event but do not scrub the user's data. Rationale: data follows the user, household is a sharing context not an identity scope. Future paths kept open:
 
@@ -426,7 +438,7 @@ Listeners on `HouseholdMemberRemovedEvent` are free to no-op or perform module-s
 
 ### Flow 5: Role escalation
 
-`POST /api/v1/households/{id}/members/{memberId}/role`. `@Transactional`. Authorisation: `PRIMARY` only. Stale `expectedVersion` → 409. Demoting the only primary → 409 (promote another member first; multi-primary is rare but legal at v1). No dedicated audit table — transitions captured in the event payload (`previousRole` → `newRole`). Publish `HouseholdRoleChangedEvent` after commit.
+`POST /api/v1/households/current/members/{memberId}/role` (shipped path — household-5). `@Transactional`. Authorisation: `PRIMARY` only. Stale `expectedVersion` → 409. Demoting the only primary → 409 (promote another member first; multi-primary is rare but legal at v1). No dedicated audit table — transitions captured in the event payload (`previousRole` → `newRole`). Publish `HouseholdRoleChangedEvent` after commit (the planner consumes it — household-7).
 
 ### Flow 6: Update settings
 
@@ -436,7 +448,7 @@ Listeners on `HouseholdMemberRemovedEvent` are free to no-op or perform module-s
 
 The canonical merge. Called in-process by the planner once per shared slot per planning run. **Read-only**, `@Transactional(readOnly = true)`. `HouseholdMergeService.mergeSoftPreferencesForSlot(householdId, eaterUserIds)`:
 
-1. Resolve eaters: null/empty → all current household members; otherwise every supplied id must be a current member (else `HouseholdMemberNotFoundException`). Look up each eater's `priority` from `HouseholdMember` (single batch query).
+1. Resolve eaters: null/empty → all current household members; otherwise every supplied id must be a current member (else `HouseholdMemberNotFoundException`, mapped 404). This membership check is enforced in `mergeSoftPreferencesForSlot` itself (household-1) — i.e. on the planner's in-process call path, not only at the REST seam (the `/households/current/merge` controller also pre-checks, surfacing 403 for the HTTP caller). Look up each eater's `priority` from `HouseholdMember`.
 2. Call `PreferenceQueryService.getSoftPreferencesByUserIds(...)` — one round-trip returns each user's `SoftPreferenceBundleDto` per [preference.md](preference.md). Hard constraints deliberately not bundled — the planner calls the hard-constraint filter directly.
 3. `SoftPreferenceMerger.merge(bundles, priorities)` returns `MergedSoftPreferencesDto` with these per-section rules:
    - **Taste-profile vectors** (flavour, cuisine, ingredient preference scores): mean weighted by priority.
@@ -451,7 +463,7 @@ The canonical merge. Called in-process by the planner once per shared slot per p
 
 - **`@Transactional`** placed on all service-impl methods (never on repositories). Reads use `readOnly = true`; the merge service's calls into `PreferenceQueryService` participate in that read-only tx. Writes default REQUIRED — all household writes are top-level (no joining other modules' transactions).
 - **Optimistic locking** via `@Version` on `Household`, `HouseholdMember`, `HouseholdSettings`, `HouseholdInvite`. The audit log is append-only and has none.
-- **Pessimistic locking — none.** The single-primary partial unique index (V20260501130100) is sufficient for race-free promotion/demotion: two concurrent demotions both succeed only if both insert a successor first; otherwise one fails the constraint and 409s.
+- **Pessimistic locking — none.** The single-primary partial unique index (`V20260601500100`) is sufficient for race-free promotion/demotion: two concurrent demotions both succeed only if both insert a successor first; otherwise one fails the constraint and 409s.
 - **Cascades.** DB `ON DELETE CASCADE` on member, settings, audit, invite → household. JPA `cascade = ALL, orphanRemoval = true` on `Household → members` and `Household → settings`.
 - **Single-flight not required.** The planner's single-flight per `(household_id, week_start_date)` is the planner's concern.
 
@@ -475,16 +487,19 @@ Unit tests: `@ExtendWith(MockitoExtension.class)`. Integration tests: `*IT.java`
 
 ### Integration
 
+Shipped IT classes are named `*FlowIT` (swagger-request-validator-backed MockMvc flows) rather than `*ControllerIT`:
+
 | Class | Verifies |
 |---|---|
-| `HouseholdsControllerIT` | Full MockMvc cycle: POST creates household + primary member + default settings in one tx; GET `/current` resolves; 409 when creator already in a household. `HouseholdCreatedEvent` and `HouseholdMemberAddedEvent` published exactly once after commit. |
-| `HouseholdMembersControllerIT` | Add / update / change role / remove — happy paths plus 409 on stale version and 409 on last-primary removal. |
-| `HouseholdSettingsControllerIT` | GET/PUT happy paths; validation rejection; 409 stale version; audit log pagination; `HouseholdSettingsChangedEvent` payload carries changed field paths. |
-| `HouseholdInvitesControllerIT` | Create (code returned only at creation); list pending (code omitted); revoke; accept (200 + member + event); 409 already-in-household; 410 expired/revoked. |
-| `HouseholdMergeServiceIT` | Real DB + real `PreferenceQueryService`: two-user household with distinct profiles produces expected mean-weighted document; avoid-list union verified; lifestyle merge takes more-restrictive eating window; merge does not write. |
-| `SinglePrimaryConstraintIT` | Two concurrent demotions on the same primary produce exactly one success and one 409. |
-| `FlywayMigrationIT` | Boots Postgres, runs all household migrations, validates schema against JPA (`ddl-auto=validate`). |
-| `EventPublicationIT` | Each mutation publishes its event only after commit; a failing test-scoped listener does not roll back the underlying state. |
+| `HouseholdsFlowIT` | Full MockMvc cycle: POST creates household + primary member + default settings in one tx; GET `/current` resolves; 409 when creator already in a household. `HouseholdCreatedEvent` published after commit. |
+| `HouseholdMembersFlowIT` | Add / update / change role / remove — happy paths plus 409 on stale version and 409 on last-primary removal; the accept path emits BOTH `HouseholdMemberAddedEvent` and `HouseholdInviteAcceptedEvent` (household-4). |
+| `HouseholdSettingsFlowIT` | GET/PUT happy paths; validation rejection (incl. `@ValidSlotKey` collision + `@ValidHeadcount` bound → 400, household-2); 409 stale version; audit log pagination; `HouseholdSettingsChangedEvent` payload carries changed field paths. |
+| `HouseholdInvitesFlowIT` | Create (code returned only at creation); list pending (code omitted); revoke; accept (200 + member + event); 409 already-in-household; 410 expired/revoked. |
+| `HouseholdMergeFlowIT` / `HouseholdMergeWithFakeReaderIT` | Real DB + `SoftPreferencesReader`: two-user household with distinct profiles produces expected mean-weighted document; avoid-list union verified; lifestyle merge takes more-restrictive eating window; merge does not write. |
+| `HouseholdSlotConfigurationPlannerViewFlowIT` | Planner-view (01f) returns flattened slots (per-kind budgets) + priority-ordered eaters; 401/404 ladder. |
+| Planner `PlannerEventListenerIT` (cross-module) | A `HouseholdMemberAddedEvent` writes a re-opt suggestion with `HOUSEHOLD_SETTINGS` trigger (household-7). |
+
+Unit-level mutation/kill coverage lives in `HouseholdMutationKillsTest`; validator coverage in `SlotKeyValidatorTest` / `HeadcountValidatorTest`.
 
 ---
 

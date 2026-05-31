@@ -11,6 +11,9 @@ import com.example.mealprep.household.domain.entity.SlotKind;
 import com.example.mealprep.household.domain.service.internal.HouseholdSettingsDiffer;
 import com.example.mealprep.household.testdata.HouseholdTestData;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -26,7 +29,10 @@ import org.junit.jupiter.api.Test;
  */
 class HouseholdSettingsDifferTest {
 
-  private final HouseholdSettingsDiffer differ = new HouseholdSettingsDiffer(new ObjectMapper());
+  private static final Instant FIXED_NOW = Instant.parse("2026-05-30T08:15:00Z");
+  private final Clock fixedClock = Clock.fixed(FIXED_NOW, ZoneOffset.UTC);
+  private final HouseholdSettingsDiffer differ =
+      new HouseholdSettingsDiffer(new ObjectMapper(), fixedClock);
   private final UUID settingsId = UUID.randomUUID();
   private final UUID actorUserId = UUID.randomUUID();
 
@@ -46,8 +52,10 @@ class HouseholdSettingsDifferTest {
   @Test
   void diff_whenSingleNestedFieldFlipped_emitsOneRow() {
     HouseholdSettingsDocument prev = HouseholdTestData.defaultDocument();
+    // Flip ONLY `shared` on dinner; keep headcount/timeBudgetMin equal to the default-dinner values
+    // (1, 45) so exactly one field changes.
     Map<SlotKind, SlotDefault> nextSlots = new LinkedHashMap<>(prev.slotDefaults());
-    nextSlots.put(SlotKind.dinner, new SlotDefault(false, 1, 30));
+    nextSlots.put(SlotKind.dinner, new SlotDefault(false, 1, 45));
     HouseholdSettingsDocument next =
         new HouseholdSettingsDocument(
             nextSlots, prev.customSlots(), prev.defaultHeadcount(), prev.scheduling());
@@ -205,5 +213,25 @@ class HouseholdSettingsDifferTest {
             .orElseThrow();
     assertThat(sharedRow.getNewValueJson().isNull()).isTrue();
     assertThat(sharedRow.getPreviousValueJson().asBoolean()).isTrue();
+  }
+
+  /**
+   * household-8: audit rows must be stamped from the injected {@link Clock}, not {@code
+   * Instant.now()}. Asserting equality to the fixed instant kills the mutant that reverts to
+   * wall-clock time (which would never equal {@link #FIXED_NOW}).
+   */
+  @Test
+  void diff_stampsOccurredAtFromInjectedClock_notWallClock() {
+    HouseholdSettingsDocument prev = HouseholdTestData.defaultDocument();
+    HouseholdSettingsDocument next =
+        new HouseholdSettingsDocument(
+            prev.slotDefaults(), prev.customSlots(), 4, prev.scheduling());
+    Set<String> changed = new LinkedHashSet<>();
+
+    List<HouseholdSettingsAuditLog> rows =
+        differ.diff(settingsId, actorUserId, prev, next, changed);
+
+    assertThat(rows).hasSize(1);
+    assertThat(rows.get(0).getOccurredAt()).isEqualTo(FIXED_NOW);
   }
 }

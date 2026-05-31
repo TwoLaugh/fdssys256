@@ -502,9 +502,7 @@ public class HouseholdServiceImpl
             .findWithMembersById(invite.getHouseholdId())
             .orElseThrow(() -> new HouseholdNotFoundException(invite.getHouseholdId()));
 
-    // 01d refactor: share the member-insert helper with the direct-add path. The accept path still
-    // emits HouseholdInviteAcceptedEvent (NOT HouseholdMemberAddedEvent) — 01c locked that
-    // decision and 01d preserves it.
+    // 01d refactor: share the member-insert helper with the direct-add path.
     HouseholdMember persistedMember =
         addMemberInternal(household, accepterUserId, invite.getIntendedRole(), 100, null);
 
@@ -513,13 +511,25 @@ public class HouseholdServiceImpl
     invite.setAcceptedByUserId(accepterUserId);
     HouseholdInvite savedInvite = householdInviteRepository.saveAndFlush(invite);
 
+    UUID traceId = currentTraceId();
+    // household-4: emit HouseholdMemberAddedEvent on accept per LLD Flow 3 — the most common
+    // onboarding path must raise the member-added event so the planner reacts to the new eater set
+    // (see household-7). HouseholdInviteAcceptedEvent is retained for invite-flow consumers.
+    eventPublisher.publishEvent(
+        new HouseholdMemberAddedEvent(
+            savedInvite.getHouseholdId(),
+            persistedMember.getId(),
+            persistedMember.getUserId(),
+            persistedMember.getRole(),
+            traceId,
+            now));
     eventPublisher.publishEvent(
         new HouseholdInviteAcceptedEvent(
             savedInvite.getHouseholdId(),
             savedInvite.getId(),
             accepterUserId,
             savedInvite.getIntendedRole(),
-            currentTraceId(),
+            traceId,
             Instant.now(clock)));
 
     log.info(
@@ -837,16 +847,28 @@ public class HouseholdServiceImpl
     if (members == null || members.isEmpty()) {
       throw new EmptyHouseholdMergeException(householdId);
     }
-    List<UUID> resolved =
-        (eaterUserIds == null || eaterUserIds.isEmpty())
-            ? members.stream().map(HouseholdMember::getUserId).toList()
-            : List.copyOf(eaterUserIds);
 
     Map<UUID, Integer> priorityByUser =
         members.stream()
             .collect(
                 Collectors.toMap(
                     HouseholdMember::getUserId, HouseholdMember::getPriority, (a, b) -> a));
+
+    List<UUID> resolved;
+    if (eaterUserIds == null || eaterUserIds.isEmpty()) {
+      resolved = members.stream().map(HouseholdMember::getUserId).toList();
+    } else {
+      // LLD Flow 7 step 1: every supplied eaterUserId MUST be a current member of the household —
+      // otherwise the merge would silently fetch and blend a non-member's soft preferences. This
+      // guards the planner's in-process call path, not just the REST seam.
+      for (UUID eaterUserId : eaterUserIds) {
+        if (!priorityByUser.containsKey(eaterUserId)) {
+          throw new HouseholdMemberNotFoundException(
+              "user " + eaterUserId + " is not a member of household " + householdId);
+        }
+      }
+      resolved = List.copyOf(eaterUserIds);
+    }
     List<Integer> priorities =
         resolved.stream().map(u -> priorityByUser.getOrDefault(u, 100)).toList();
 
@@ -980,16 +1002,17 @@ public class HouseholdServiceImpl
 
   /**
    * Build the default settings document for a newly-created household: every built-in slot-kind
-   * (breakfast/lunch/dinner/snack) seeded with {@code shared=true, headcount=1, timeBudgetMin=30};
-   * empty {@code customSlots}; null {@code defaultHeadcount}; empty {@link
+   * seeded with {@code shared=true, headcount=1} and a per-kind default time budget cribbed from
+   * the planner HLD (meal-planner.md §Slot configuration): breakfast 15, lunch 20, dinner 45, snack
+   * 5. Empty {@code customSlots}; null {@code defaultHeadcount}; empty {@link
    * HouseholdSchedulingPreferences} marker.
    */
   private HouseholdSettings buildDefaultSettings(UUID householdId) {
     Map<SlotKind, SlotDefault> slotDefaults = new LinkedHashMap<>();
-    slotDefaults.put(SlotKind.breakfast, new SlotDefault(true, 1, 30));
-    slotDefaults.put(SlotKind.lunch, new SlotDefault(true, 1, 30));
-    slotDefaults.put(SlotKind.dinner, new SlotDefault(true, 1, 30));
-    slotDefaults.put(SlotKind.snack, new SlotDefault(true, 1, 30));
+    slotDefaults.put(SlotKind.breakfast, new SlotDefault(true, 1, 15));
+    slotDefaults.put(SlotKind.lunch, new SlotDefault(true, 1, 20));
+    slotDefaults.put(SlotKind.dinner, new SlotDefault(true, 1, 45));
+    slotDefaults.put(SlotKind.snack, new SlotDefault(true, 1, 5));
     HouseholdSettingsDocument document =
         new HouseholdSettingsDocument(
             slotDefaults, new ArrayList<>(), null, new HouseholdSchedulingPreferences());

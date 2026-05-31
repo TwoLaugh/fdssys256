@@ -100,7 +100,8 @@ class HouseholdMutationKillsTest {
       new com.example.mealprep.household.api.mapper.HouseholdSettingsAuditMapperImpl();
   private final HouseholdInviteMapper inviteMapper =
       new com.example.mealprep.household.api.mapper.HouseholdInviteMapperImpl();
-  private final HouseholdSettingsDiffer differ = new HouseholdSettingsDiffer(new ObjectMapper());
+  private final HouseholdSettingsDiffer differ =
+      new HouseholdSettingsDiffer(new ObjectMapper(), Clock.systemUTC());
   private final SlotConfigurationResolver slotConfigurationResolver =
       new SlotConfigurationResolver();
   private final InviteCodeGenerator inviteCodeGenerator = new InviteCodeGenerator();
@@ -624,9 +625,10 @@ class HouseholdMutationKillsTest {
     Map<SlotKind, SlotDefault> slots = savedSettings.getDocument().slotDefaults();
     assertThat(slots)
         .containsKeys(SlotKind.breakfast, SlotKind.lunch, SlotKind.dinner, SlotKind.snack);
-    // Defaults pinned per LLD: shared=true, headcount=1, timeBudgetMin=30.
-    assertThat(slots.get(SlotKind.breakfast)).isEqualTo(new SlotDefault(true, 1, 30));
-    assertThat(slots.get(SlotKind.dinner)).isEqualTo(new SlotDefault(true, 1, 30));
+    // Defaults pinned per LLD: shared=true, headcount=1, per-kind time budgets from the planner
+    // HLD (breakfast 15, dinner 45).
+    assertThat(slots.get(SlotKind.breakfast)).isEqualTo(new SlotDefault(true, 1, 15));
+    assertThat(slots.get(SlotKind.dinner)).isEqualTo(new SlotDefault(true, 1, 45));
     assertThat(savedSettings.getDocument().customSlots()).isEmpty();
     assertThat(savedSettings.getDocument().defaultHeadcount()).isNull();
     assertThat(savedSettings.getDocument().scheduling())

@@ -11,7 +11,11 @@ import static org.mockito.Mockito.when;
 
 import com.example.mealprep.ai.exception.AiUnavailableException;
 import com.example.mealprep.household.api.dto.HouseholdDto;
+import com.example.mealprep.household.domain.entity.HouseholdRole;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
+import com.example.mealprep.household.event.HouseholdMemberAddedEvent;
+import com.example.mealprep.household.event.HouseholdMemberRemovedEvent;
+import com.example.mealprep.household.event.HouseholdRoleChangedEvent;
 import com.example.mealprep.household.event.HouseholdSettingsChangedEvent;
 import com.example.mealprep.nutrition.event.NutritionIntakeDivergedEvent;
 import com.example.mealprep.planner.domain.entity.Plan;
@@ -277,6 +281,76 @@ class PlannerEventListenerTest {
             HOUSEHOLD, UUID.randomUUID(), Set.of("scheduling"), UUID.randomUUID(), NOW));
 
     verifyNoInteractions(reoptCoordinator);
+  }
+
+  // ---------- household-7: membership / role change listeners ----------
+
+  @Test
+  void onHouseholdMemberAdded_alwaysMaterial_routesHouseholdSettingsTrigger_noFilterNoUserLookup() {
+    Plan plan = activePlan();
+    when(planRepository.findByHouseholdIdAndStatusIn(eq(HOUSEHOLD), any()))
+        .thenReturn(List.of(plan));
+    when(decisionLogWriter.write(any())).thenReturn(UUID.randomUUID());
+    when(reoptCoordinator.requestReopt(any(), any(), any(), any(), any()))
+        .thenReturn(Optional.of(UUID.randomUUID()));
+
+    listener.onHouseholdMemberAdded(
+        new HouseholdMemberAddedEvent(
+            HOUSEHOLD, UUID.randomUUID(), USER, HouseholdRole.member, UUID.randomUUID(), NOW));
+
+    // householdId comes off the event; membership is always material so the filter is not
+    // consulted.
+    verifyNoInteractions(householdQueryService, householdMaterialityFilter);
+    verify(reoptCoordinator)
+        .requestReopt(
+            eq(plan.getId()), eq(ReoptTriggerKind.HOUSEHOLD_SETTINGS), any(), any(), any());
+  }
+
+  @Test
+  void onHouseholdRoleChanged_routesHouseholdSettingsTrigger() {
+    Plan plan = activePlan();
+    when(planRepository.findByHouseholdIdAndStatusIn(eq(HOUSEHOLD), any()))
+        .thenReturn(List.of(plan));
+    when(decisionLogWriter.write(any())).thenReturn(UUID.randomUUID());
+    when(reoptCoordinator.requestReopt(any(), any(), any(), any(), any()))
+        .thenReturn(Optional.empty());
+
+    listener.onHouseholdRoleChanged(
+        new HouseholdRoleChangedEvent(
+            HOUSEHOLD,
+            UUID.randomUUID(),
+            USER,
+            HouseholdRole.member,
+            HouseholdRole.primary,
+            UUID.randomUUID(),
+            NOW));
+
+    verify(reoptCoordinator)
+        .requestReopt(
+            eq(plan.getId()), eq(ReoptTriggerKind.HOUSEHOLD_SETTINGS), any(), any(), any());
+  }
+
+  @Test
+  void onHouseholdMemberRemoved_runtimeError_swallowed() {
+    when(planRepository.findByHouseholdIdAndStatusIn(eq(HOUSEHOLD), any()))
+        .thenThrow(new IllegalStateException("db down"));
+
+    listener.onHouseholdMemberRemoved(
+        new HouseholdMemberRemovedEvent(
+            HOUSEHOLD, UUID.randomUUID(), USER, HouseholdRole.member, UUID.randomUUID(), NOW));
+
+    verifyNoInteractions(reoptCoordinator);
+  }
+
+  @Test
+  void onHouseholdMemberAdded_noActivePlans_noCoordinatorCall() {
+    when(planRepository.findByHouseholdIdAndStatusIn(eq(HOUSEHOLD), any())).thenReturn(List.of());
+
+    listener.onHouseholdMemberAdded(
+        new HouseholdMemberAddedEvent(
+            HOUSEHOLD, UUID.randomUUID(), USER, HouseholdRole.member, UUID.randomUUID(), NOW));
+
+    verify(reoptCoordinator, never()).requestReopt(any(), any(), any(), any(), any());
   }
 
   // ---------- idempotent trigger-event-id derivation ----------

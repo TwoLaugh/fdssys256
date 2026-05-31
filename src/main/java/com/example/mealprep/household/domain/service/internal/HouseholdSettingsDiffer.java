@@ -8,6 +8,7 @@ import com.example.mealprep.household.domain.entity.SlotKind;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.NullNode;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -42,9 +43,11 @@ import org.springframework.stereotype.Component;
 public class HouseholdSettingsDiffer {
 
   private final ObjectMapper objectMapper;
+  private final Clock clock;
 
-  public HouseholdSettingsDiffer(ObjectMapper objectMapper) {
+  public HouseholdSettingsDiffer(ObjectMapper objectMapper, Clock clock) {
     this.objectMapper = objectMapper;
+    this.clock = clock;
   }
 
   /**
@@ -62,7 +65,10 @@ public class HouseholdSettingsDiffer {
     Objects.requireNonNull(next, "next");
     Objects.requireNonNull(changedFieldPaths, "changedFieldPaths");
 
-    Instant occurredAt = Instant.now();
+    // Stamp every audit row in one diff pass with the same Clock-derived instant, so timestamps are
+    // deterministic in tests and consistent with the HouseholdSettingsChangedEvent the caller
+    // emits.
+    Instant occurredAt = Instant.now(clock);
     List<HouseholdSettingsAuditLog> rows = new ArrayList<>();
 
     // ---- top-level: defaultHeadcount ----

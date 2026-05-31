@@ -26,6 +26,7 @@ import com.example.mealprep.household.domain.service.internal.InviteCodeGenerato
 import com.example.mealprep.household.domain.service.internal.SlotConfigurationResolver;
 import com.example.mealprep.household.domain.service.internal.SoftPreferenceMerger;
 import com.example.mealprep.household.exception.EmptyHouseholdMergeException;
+import com.example.mealprep.household.exception.HouseholdMemberNotFoundException;
 import com.example.mealprep.household.exception.HouseholdNotFoundException;
 import com.example.mealprep.household.testdata.HouseholdTestData;
 import com.example.mealprep.household.testdata.SoftPreferencesReaderTestSupport;
@@ -65,7 +66,8 @@ class HouseholdMergeServiceTest {
       new com.example.mealprep.household.api.mapper.HouseholdSettingsAuditMapperImpl();
   private final HouseholdInviteMapper inviteMapper =
       new com.example.mealprep.household.api.mapper.HouseholdInviteMapperImpl();
-  private final HouseholdSettingsDiffer differ = new HouseholdSettingsDiffer(new ObjectMapper());
+  private final HouseholdSettingsDiffer differ =
+      new HouseholdSettingsDiffer(new ObjectMapper(), Clock.systemUTC());
   private final SlotConfigurationResolver slotConfigurationResolver =
       new SlotConfigurationResolver();
   private final InviteCodeGenerator inviteCodeGenerator = new InviteCodeGenerator();
@@ -175,6 +177,31 @@ class HouseholdMergeServiceTest {
 
     assertThat(out.mergedTasteProfile().ingredientLikes().get("onion").doubleValue())
         .isEqualTo(0.7d, org.assertj.core.data.Offset.offset(0.0001d));
+  }
+
+  @Test
+  void mergeSoftPreferencesForSlot_suppliedEaterNotAMember_throws404() {
+    UUID hh = UUID.randomUUID();
+    UUID member = UUID.randomUUID();
+    UUID stranger = UUID.randomUUID();
+    Household household =
+        HouseholdTestData.household()
+            .withId(hh)
+            .withMember(
+                HouseholdTestData.member()
+                    .withUserId(member)
+                    .withRole(HouseholdRole.primary)
+                    .withPriority(100)
+                    .build())
+            .build();
+    when(householdRepository.findWithMembersById(hh)).thenReturn(Optional.of(household));
+
+    // household-1: a supplied eaterUserId that is not a current member must be rejected, not
+    // silently fetched + merged with a default priority.
+    assertThatThrownBy(
+            () -> service(List.of()).mergeSoftPreferencesForSlot(hh, List.of(member, stranger)))
+        .isInstanceOf(HouseholdMemberNotFoundException.class)
+        .hasMessageContaining(stranger.toString());
   }
 
   @Test

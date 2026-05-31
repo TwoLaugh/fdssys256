@@ -20,14 +20,20 @@ import org.springframework.stereotype.Component;
  *   <li>slot structure — {@code slotDefaults.*}, {@code mealStructure.*}, {@code slots.*} (a meal
  *       type added/removed reshapes the plan skeleton),
  *   <li>batch-cook policy — {@code batch*} (changes how cook sessions are grouped),
- *   <li>eating window — {@code eatingWindow.*} (constrains slot timing),
- *   <li>household membership — {@code members.*} / {@code member*} (a user added/removed changes
- *       the eaters and the merged-preference set).
+ *   <li>eating window — {@code eatingWindow.*} (constrains slot timing).
  * </ul>
  *
  * <p>Purely cosmetic changes — {@code displayName}, {@code timezone}, {@code locale} — are NOT
  * material; surfacing a re-opt for a rename would be thrash. An empty path set is a defensive no-op
  * (household-01b already suppresses identical-document re-submits).
+ *
+ * <p><strong>household-7:</strong> membership / role changes do NOT flow through {@link
+ * HouseholdSettingsChangedEvent} (the household differ only emits {@code slotDefaults} / {@code
+ * customSlots} / {@code defaultHeadcount} / {@code scheduling} paths). They arrive as dedicated
+ * {@code HouseholdMemberAddedEvent} / {@code HouseholdMemberRemovedEvent} / {@code
+ * HouseholdRoleChangedEvent} events, which {@code PlannerEventListener} routes directly to re-opt
+ * (a membership change is always material), so the previously-dead {@code members*} prefixes were
+ * removed from {@link #MATERIAL_PREFIXES}.
  *
  * <p>Prefix matching is case-insensitive and segment-aware ({@code foo} matches {@code foo} and
  * {@code foo.bar} but not {@code foobar}).
@@ -37,7 +43,11 @@ class HouseholdMaterialityFilter {
 
   private static final Logger log = LoggerFactory.getLogger(HouseholdMaterialityFilter.class);
 
-  /** Dotted-path prefixes whose change reshapes the plan and warrants a re-opt suggestion. */
+  /**
+   * Dotted-path prefixes whose change reshapes the plan and warrants a re-opt suggestion. Note: no
+   * {@code members*} prefix — membership changes arrive as dedicated member events, not settings
+   * paths (household-7).
+   */
   private static final Set<String> MATERIAL_PREFIXES =
       Set.of(
           "slotdefaults",
@@ -47,10 +57,7 @@ class HouseholdMaterialityFilter {
           "batch",
           "batchpolicy",
           "batchcook",
-          "eatingwindow",
-          "members",
-          "member",
-          "membership");
+          "eatingwindow");
 
   boolean isMaterial(HouseholdSettingsChangedEvent event, Plan plan) {
     Set<String> paths = event.changedFieldPaths();

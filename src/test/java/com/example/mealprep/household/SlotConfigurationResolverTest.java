@@ -52,11 +52,18 @@ class SlotConfigurationResolverTest {
     assertThat(result.householdId()).isEqualTo(household.getId());
     assertThat(result.allEaterUserIds()).containsExactlyInAnyOrder(userA, userB);
     assertThat(result.slots()).hasSize(4);
+    // Per-kind default time budgets cribbed from the planner HLD (household-3).
+    Map<SlotKind, Integer> expectedBudgets =
+        Map.of(
+            SlotKind.breakfast, 15,
+            SlotKind.lunch, 20,
+            SlotKind.dinner, 45,
+            SlotKind.snack, 5);
     for (SlotConfigEntryDto slot : result.slots()) {
       assertThat(slot.shared()).isTrue();
       assertThat(slot.eaterUserIdsIfPerPerson()).isNull();
       assertThat(slot.headcount()).isEqualTo(1);
-      assertThat(slot.timeBudgetMin()).isEqualTo(30);
+      assertThat(slot.timeBudgetMin()).isEqualTo(expectedBudgets.get(slot.kind()));
     }
   }
 
