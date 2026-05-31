@@ -135,7 +135,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/q", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
     runner.run(startedEvent(jobId));
@@ -174,7 +174,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/1", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
     when(hardConstraintFilter.check(eq(USER_ID), anyList()))
         .thenReturn(new FilterResult(true, List.of()));
@@ -215,7 +215,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/2", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(robotsTxtGate.check(any(URI.class), anyString()))
         .thenThrow(new RuntimeException("network blew up"));
     // userAgentFor + respectsRobots both read by source key — source row exists,
@@ -257,7 +257,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/3", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(robotsTxtGate.check(any(URI.class), anyString())).thenReturn(RobotsTxtOutcome.UNAVAILABLE);
     com.example.mealprep.discovery.domain.entity.DiscoverySource row =
         DiscoveryTestData.sampleSource("src_a");
@@ -296,7 +296,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/3", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(robotsTxtGate.check(any(URI.class), anyString())).thenReturn(RobotsTxtOutcome.DISALLOWED);
     com.example.mealprep.discovery.domain.entity.DiscoverySource row =
         DiscoveryTestData.sampleSource("src_a");
@@ -333,7 +333,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/r", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
     runner.run(startedEvent(jobId));
@@ -368,7 +368,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/x", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenThrow(new IllegalStateException("kaboom"));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
@@ -403,7 +403,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/d", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
     when(hardConstraintFilter.check(eq(USER_ID), anyList()))
         .thenReturn(new FilterResult(true, List.of()));
@@ -444,7 +444,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/bc", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.5")));
     when(hardConstraintFilter.check(eq(USER_ID), anyList()))
         .thenReturn(new FilterResult(true, List.of()));
@@ -483,7 +483,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/i", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     ParsedRecipe parsed =
         new ParsedRecipe(
             "https://example.test/r/i",
@@ -566,7 +566,7 @@ class DiscoveryRunnerMutationKillsTest {
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of());
     lenient()
         .when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
     // Real DiscoveryJobTransitions.finaliseTo returns Optional.of(job) on a successful
     // (non-terminal) transition. Runner gates downstream publish on this — must stub.
@@ -751,7 +751,7 @@ class DiscoveryRunnerMutationKillsTest {
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of());
     lenient()
         .when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
     // Stub the populated transition so the runner's publish path actually runs.
     when(transitions.finaliseTo(eq(jobId), any(), any(), anyList(), anyList()))
@@ -892,7 +892,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/c", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
     CompletableFuture<DiscoveryJobStatus> waiter = new CompletableFuture<>();
@@ -930,7 +930,7 @@ class DiscoveryRunnerMutationKillsTest {
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(c1, c2));
     // AI filter keeps both candidates → filtered.size() == 2.
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
     runner.run(startedEvent(jobId));
@@ -962,7 +962,7 @@ class DiscoveryRunnerMutationKillsTest {
                 "src_a", "5xx storm", null));
     lenient()
         .when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
     runner.run(startedEvent(jobId));
@@ -994,7 +994,7 @@ class DiscoveryRunnerMutationKillsTest {
     when(source.search(any(DiscoveryQuery.class))).thenThrow(new RuntimeException("unexpected"));
     lenient()
         .when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
     runner.run(startedEvent(jobId));
@@ -1027,7 +1027,7 @@ class DiscoveryRunnerMutationKillsTest {
     when(rateLimiterRegistry.tryAcquire("src_a")).thenReturn(false);
     lenient()
         .when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
     runner.run(startedEvent(jobId));
@@ -1079,7 +1079,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/2", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(c1, c2));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     // Make any fetch return a recipe so the fetch loop walks once per surviving candidate.
     lenient()
         .when(source.fetchRecipe(any(DiscoveryCandidate.class)))
@@ -1115,7 +1115,7 @@ class DiscoveryRunnerMutationKillsTest {
     when(sourceRegistry.resolveEnabledByKey(List.of())).thenReturn(List.of());
     lenient()
         .when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
     runner.run(startedEvent(jobId));
@@ -1200,7 +1200,7 @@ class DiscoveryRunnerMutationKillsTest {
     DiscoveryCandidate candidate = new DiscoveryCandidate("src_a", longUrl, "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
     when(hardConstraintFilter.check(eq(USER_ID), anyList()))
         .thenReturn(new FilterResult(true, List.of()));
@@ -1243,7 +1243,7 @@ class DiscoveryRunnerMutationKillsTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/l", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
     when(hardConstraintFilter.check(eq(USER_ID), anyList()))
         .thenReturn(new FilterResult(true, List.of()));

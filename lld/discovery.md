@@ -39,7 +39,7 @@ com.example.mealprep.discovery/
 │       ├── DiscoveryServiceImpl.java    single impl of both query + update
 │       └── internal/                    DiscoveryJobRunner, SourceRegistry, RobotsTxtGate,
 │                                          RateLimiterRegistry, ContentFingerprintHasher,
-│                                          CandidateAiFilter (pass-through in v1)
+│                                          CandidateAiFilter (AiCandidateAiFilter — real AI gate)
 ├── source/                              concrete DiscoverySource implementations (empty in v1 — hard pocket)
 ├── event/                               DiscoveryJobStartedEvent, DiscoveryJobCompletedEvent, DiscoveryRecipeIngestedEvent
 ├── exception/                           module-root + per-failure subclasses
@@ -418,7 +418,7 @@ interface CandidateAiFilter {
 }
 ```
 
-`CandidateAiFilter` lives behind a Spring bean that, in v1, is a no-op pass-through (returns input unchanged). When the prompt and integration land, the bean is replaced — no caller change. The pass-through is intentional so the rest of the framework can be implemented and tested against the user's hard constraints alone, with the AI filter slotted in later.
+`CandidateAiFilter` lives behind a Spring bean. The live implementation (`AiCandidateAiFilter`, wired unconditionally by `AiCandidateAiFilterConfiguration`) issues one cheap-tier AI call per candidate and partitions the input into a kept set and a model-rejected set (relevant=false, or below the configured confidence floor). The runner writes an `AI_FILTER_REJECTED` scrape row per rejection. The earlier framework iteration shipped a no-op pass-through so the rest of the pipeline could be built and tested against the user's hard constraints alone; that scaffold has been superseded by the real filter, but the hard-constraint filter (Flow 2 step 4) remains the deterministic safety net and never trusts the AI verdict. **Skip-and-flag on outage:** a per-candidate AI-dispatch failure keeps the candidate (passed through, logged), never silently dropping it — see [§Failure Modes](#failure-modes).
 
 ---
 
@@ -519,9 +519,9 @@ Nothing in v1 — cold-start is a direct service call. **Worth user review:** a 
 `DiscoveryJobRunner.run(jobId)`. Each step is its own short transaction so a partial run survives a crash.
 
 1. **Claim:** transition `QUEUED → RUNNING`, set `startedAt`. Optimistic-version mismatch → another runner won; return.
-2. **Search phase** — per requested source, parallel up to a small pool: acquire rate-limit token (Resilience4j `@RateLimiter` keyed by `source_key`); call `source.search(query)`; collect candidates capped at `constraints.maxRecipesPerSource`. `DiscoverySourceUnavailableException` → add to `sourcesFailed`, summary scrape-log row, continue. Token starvation → `RATE_LIMITED` row, skip.
-3. **AI filter** — pass merged candidates through `CandidateAiFilter.filter(...)`. v1 is pass-through. `AiUnavailableException` is non-fatal (skip-and-flag): log warning, proceed unfiltered.
-4. **Fetch phase** — per surviving candidate, sequential within a source, parallel across sources:
+2. **Search phase** — iterate the requested sources (**v1: single-threaded per job — see [§Concurrency](#concurrency-and-transactions)**): acquire rate-limit token (Resilience4j `@RateLimiter` keyed by `source_key`); call `source.search(query)`; collect candidates capped at `constraints.maxRecipesPerSource`. `DiscoverySourceUnavailableException` → add to `sourcesFailed`, summary scrape-log row, continue. Token starvation → `RATE_LIMITED` row, skip.
+3. **AI filter** — pass merged candidates through `CandidateAiFilter.filter(...)`, which returns the kept set plus the model-rejected set. The runner writes one `AI_FILTER_REJECTED` scrape row per rejection so the audit log explains the `candidatesSeen → candidatesAfterFilter` drop. `AiUnavailableException` is non-fatal (skip-and-flag): a per-candidate AI-dispatch failure keeps the candidate (passed through, flagged); a whole-call failure proceeds unfiltered with a warning. See [§Failure Modes](#failure-modes).
+4. **Fetch phase** — iterate the surviving candidates (**v1: single-threaded per job — see [§Concurrency](#concurrency-and-transactions)**):
     - Robots.txt gate: `DISALLOWED` → `ROBOTS_DISALLOWED` skip. `UNAVAILABLE` with `respectRobotsTxt = true` → `SKIPPED`. Source with no robots URI → `SKIPPED`, proceed.
     - Rate-limit token; starvation → `RATE_LIMITED` skip.
     - `source.fetchRecipe(candidate)`. `ExtractionFailedException` or `extractionConfidence < 0.5` → `EXTRACTION_FAILED` / `LOW_CONFIDENCE` skip.
@@ -558,6 +558,7 @@ Idempotent at the job level: re-entry on the same `jobId` short-circuits at step
 |---|---|
 | `@Transactional` placement | All service-impl methods. Repositories never. Read methods `readOnly = true`. |
 | Runner method propagation | The per-step transitions in `DiscoveryJobRunner` are top-level (default REQUIRED). The runner deliberately does not run the whole job in one transaction — each candidate is a fresh tx so a partial run survives a crash. |
+| Within-job source/candidate iteration | **v1 ships single-threaded per job by design.** The search phase iterates requested sources sequentially and the fetch phase iterates surviving candidates sequentially on the single runner thread; the `discoveryRunnerExecutor` pool parallelises *across* jobs (one `run()` per job), not *within* a job. This is acceptable at the two locked v1 sources, and it keeps the order-dependent invariants simple and race-free: the quota stop (`recipesIngested == requestedCount`), the per-candidate cancellation check, and the `sourcesSucceeded` / `sourcesFailed` / `recipesIngested` accumulators are all mutated from one thread with no shared-state hazard. Cross-source parallelism (bounded by the pool) is a deferred optimisation — revisit only if the source count or per-job latency grows enough to matter (it would require making those accumulators and the quota gate thread-safe). |
 | `RecipeWriteApi` calls from the runner | Top-level transactions in the recipe module (per the recipe LLD). The runner does not pass a transaction to it. |
 | Optimistic locking | `@Version` on `DiscoveryJob` and `DiscoverySource`. Append-only `DiscoveryScrapeLog` has no `@Version`. The runner uses optimistic locking to detect concurrent claim attempts on the same job. |
 | Pessimistic locking | None. |
@@ -570,7 +571,7 @@ Idempotent at the job level: re-entry on the same `jobId` short-circuits at step
 
 ## Failure Modes
 
-Per the style guide's AI degradation contract: discovery's per-feature behaviour on `AiUnavailable` is **skip-and-flag** for the AI candidate filter (proceed with unfiltered candidates, log a warning) and irrelevant for the AI extraction step (handled inside the source implementation — the runner sees only `ExtractionFailedException`).
+Per the style guide's AI degradation contract: discovery's per-feature behaviour on `AiUnavailable` is **skip-and-flag** for the AI candidate filter and irrelevant for the AI extraction step (handled inside the source implementation — the runner sees only `ExtractionFailedException`). Skip-and-flag means an AI fault never silently shrinks the candidate set: a per-candidate dispatch failure (outage / parse error) **keeps** that candidate (passed through, logged at WARN), and a whole-call failure proceeds unfiltered with `candidatesAfterFilter = candidatesSeen`. The deterministic hard-constraint filter downstream is the safety net regardless.
 
 | Failure | Response |
 |---|---|
@@ -581,7 +582,9 @@ Per the style guide's AI degradation contract: discovery's per-feature behaviour
 | Extraction garbage / low confidence | `EXTRACTION_FAILED` / `LOW_CONFIDENCE` skip. Recipe not written — discovery's bar is higher than URL-import's because no user is in the loop to correct. |
 | Duplicate fingerprint | `DUPLICATE` skip. Lookback configurable via `DiscoveryProperties.duplicateLookbackDays`. **Worth user review:** the recipe module also does its own ingredient-set dedup; discovery's content-fingerprint is a cheaper pre-check for republished identical pages. Both are kept. |
 | Hard-constraint violation in extracted ingredients | `HARD_CONSTRAINT_VIOLATION` skip. Discovery's stricter policy than user-initiated URL import — autonomous fetch raises the safety bar. |
-| AI candidate filter unavailable | Skip-and-flag: unfiltered candidates proceed, `candidatesAfterFilter = candidatesSeen`. |
+| AI candidate filter — per-candidate dispatch failure | Skip-and-flag: the affected candidate is **kept** (passed through, WARN-logged), never dropped. It still passes the downstream hard-constraint + dedup + extraction gates. |
+| AI candidate filter — whole-call failure | Skip-and-flag: unfiltered candidates proceed, `candidatesAfterFilter = candidatesSeen`, no `AI_FILTER_REJECTED` rows written (nothing was rejected). |
+| AI candidate filter — model rejection (relevant=false / below confidence floor) | Candidate dropped from the kept set; one `SKIPPED` / `AI_FILTER_REJECTED` scrape row written per rejection with the model's reason. NOT a degradation — the intended filtering behaviour. |
 | `RecipeWriteApi` write fails | `EXTRACTION_FAILED` row carrying the recipe-module error class. Job continues. |
 | Runner crash mid-job | Orphan sweep finalises as `FAILED`. Already-ingested recipes remain valid. |
 | Cold-start sync timeout | Job continues; planner returns partial result and degrades per [meal-planner.md §Cold start](../design/meal-planner.md#cold-start). |
@@ -600,7 +603,7 @@ Unit tests use `@ExtendWith(MockitoExtension.class)`. Integration tests are `*IT
 | `DiscoveryJobRunnerTest` | Claim mutex via optimistic version; one source failing → `PARTIAL`, all failing → `FAILED`; robots-disallowed candidates produce `SKIPPED` rows and never reach the recipe module; hard-constraint filter rejects pre-write; quota terminates fetches; cancellation short-circuits between candidates. |
 | `RobotsTxtGateTest` | `ALLOWED` / `DISALLOWED` / `UNAVAILABLE` outcomes; per-host caching within a job. |
 | `ContentFingerprintHasherTest` | Identical content yields equal fingerprints regardless of HTML formatting; stable under ingredient reordering. |
-| `CandidateAiFilterPassThroughTest` | v1 returns input unchanged; logs a warning. |
+| `AiCandidateAiFilterTest` | Model-relevant candidates kept; relevant=false / below-floor candidates surfaced in the rejected set with a reason; **per-candidate AI-dispatch failure keeps the candidate (skip-and-flag), never dropped**. |
 | `DiscoveryConstraintValidatorTest` | Custom validator rejects negative time, unknown meal types, per-source budget exceeding total. |
 | `DiscoveryJobMapperTest`, `DiscoverySourceMapperTest`, `DiscoveryScrapeLogMapperTest` | MapStruct round-trips preserve all fields including `text[]` and JSONB. |
 
@@ -626,7 +629,7 @@ Hard pockets — deferred deliberately.
 
 - **The actual list of search engines and recipe sources.** One row in `discovery_sources` + one Spring bean per source. Framework here is source-agnostic. **User-decided.**
 - **HTML extraction templates per source.** Microdata, JSON-LD, site selectors, AI-fallback choreography — inside each `DiscoverySource.fetchRecipe`. Separate engineering exercise.
-- **AI prompt for filtering candidates against user preferences.** `CandidateAiFilter` SPI is in place; v1 is pass-through. Prompt design (system message, structured output, eval cases, cost budget) is separate prompt-engineering work — see [README.md §LLM prompts](README.md#llm-prompts-to-design-9-distinct-prompt-engineering-exercises).
+- **AI prompt for filtering candidates against user preferences.** The `CandidateAiFilter` integration is wired and live (`AiCandidateAiFilter` → `AiService`, cheap-tier per-candidate dispatch). The remaining out-of-scope work is the prompt-engineering itself (system message, structured-output schema, eval cases, cost budget) — see [README.md §LLM prompts](README.md#llm-prompts-to-design-9-distinct-prompt-engineering-exercises).
 - **AI extraction call for parsing arbitrary recipe HTML.** Lives inside `DiscoverySource.fetchRecipe`, not in the runner. May share the recipe module's URL-import extraction prompt (also deferred — per [recipe.md §Flow 2](recipe.md#flow-2-url-import--data-path)) or be source-specific.
 - **Robots.txt parser library choice.** `RobotsTxtGate` interface is the project's stable surface. Recommendation: Crawler-Commons (Java, mature, longest-match `User-agent`/`Allow`/`Disallow` semantics) — not locked. **Worth user review.**
 - **Frontend / UI concerns.** "Find me more recipes" button, admin job view, scrape-log explorer — Figma phase.

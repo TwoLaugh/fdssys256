@@ -48,7 +48,7 @@ class SourceRegistryTest {
     SourceRegistry registry = new SourceRegistry(List.of(), repo, fixedClock);
     registry.index();
 
-    assertThat(registry.resolveEnabled()).isEmpty();
+    assertThat(registry.resolveEnabledByKey(List.of("src_a"))).isEmpty();
   }
 
   @Test
@@ -62,7 +62,7 @@ class SourceRegistryTest {
     registry.index();
 
     List<com.example.mealprep.discovery.domain.service.DiscoverySource> resolved =
-        registry.resolveEnabled();
+        registry.resolveEnabledByKey(List.of("src_a", "src_missing"));
 
     assertThat(resolved).containsExactly(a);
   }
@@ -157,12 +157,11 @@ class SourceRegistryTest {
 
   @Test
   void resolveEnabledByRowKey_beanPresent_returnedNotNullFromHelper() {
-    // kills NegateConditionalsMutator at SourceRegistry.java:130 (bean == null check inside
-    // beanForRowOrWarn). With a bean registered, the helper must return it; the public
-    // resolveEnabled() path filters out null returns, so a non-empty list proves bean != null
-    // branch was taken (mutation `bean != null` → if-block log fires + still returns the bean,
-    // but mutation `bean == null → false` would let null reach the caller and the list would
-    // contain a null entry, failing the containsExactly).
+    // kills NegateConditionalsMutator at SourceRegistry beanForRowOrWarn (bean == null check).
+    // With a bean registered, the helper must return it; resolveEnabledByKey filters out null
+    // returns, so a non-empty list proves the bean != null branch was taken (mutation
+    // `bean == null → false` would let null reach the caller and the list would contain a null
+    // entry, failing the containsExactly).
     StubSource a = new StubSource("src_a");
     DiscoverySource row = DiscoveryTestData.sampleSource("src_a");
     DiscoverySourceRepository repo = Mockito.mock(DiscoverySourceRepository.class);
@@ -170,7 +169,7 @@ class SourceRegistryTest {
     SourceRegistry registry = new SourceRegistry(List.of(a), repo, fixedClock);
     registry.index();
 
-    assertThat(registry.resolveEnabled()).containsExactly(a);
+    assertThat(registry.resolveEnabledByKey(List.of("src_a"))).containsExactly(a);
   }
 
   @Test

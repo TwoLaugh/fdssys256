@@ -150,7 +150,7 @@ class DiscoveryJobRunnerTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/1", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
     when(hardConstraintFilter.check(eq(USER_ID), anyList()))
         .thenReturn(new FilterResult(true, List.of()));
@@ -265,7 +265,7 @@ class DiscoveryJobRunnerTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/1", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(parsed);
     when(hardConstraintFilter.check(eq(USER_ID), anyList()))
         .thenReturn(new FilterResult(true, List.of()));
@@ -300,7 +300,7 @@ class DiscoveryJobRunnerTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/1", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
     when(hardConstraintFilter.check(eq(USER_ID), anyList()))
         .thenReturn(
@@ -341,7 +341,7 @@ class DiscoveryJobRunnerTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/lc", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.3")));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
@@ -375,7 +375,7 @@ class DiscoveryJobRunnerTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/bad", "T", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate))
         .thenThrow(new ExtractionFailedException("https://example.test/r/bad", "garbage"));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
@@ -422,6 +422,59 @@ class DiscoveryJobRunnerTest {
     verify(source).fetchRecipe(candidate);
   }
 
+  // -------- discovery-4: AI-filter rejections logged as AI_FILTER_REJECTED scrape rows --------
+
+  @Test
+  void run_aiFilterRejectsCandidate_writesAiFilterRejectedScrapeRow_notFetched() {
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
+    job.setId(jobId);
+    job.setRequestedCount(2);
+    job.setSourcesRequested(new ArrayList<>(List.of("src_a")));
+
+    DiscoverySource source = stubSource("src_a", Optional.empty());
+    when(transitions.claim(jobId)).thenReturn(Optional.of(job));
+    when(sourceRegistry.resolveEnabledByKey(anyList())).thenReturn(List.of(source));
+    when(sourceRegistry.isCircuitOpen(eq(source), any())).thenReturn(false);
+    when(rateLimiterRegistry.tryAcquire("src_a")).thenReturn(true);
+    DiscoveryCandidate kept =
+        new DiscoveryCandidate("src_a", "https://example.test/r/keep", "K", "D", Map.of());
+    DiscoveryCandidate rejected =
+        new DiscoveryCandidate("src_a", "https://example.test/r/reject", "R", "D", Map.of());
+    when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(kept, rejected));
+    // Filter keeps one, rejects the other with a reason.
+    when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
+        .thenReturn(
+            new CandidateFilterOutcome(
+                List.of(kept),
+                List.of(
+                    new CandidateFilterOutcome.Rejection(
+                        rejected, "not relevant (confidence=0.1)"))));
+    when(source.fetchRecipe(kept)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
+    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+        .thenReturn(new FilterResult(true, List.of()));
+    when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
+    lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+    runner.run(startedEvent(jobId));
+
+    // The rejected candidate produced exactly one AI_FILTER_REJECTED scrape row carrying its URL
+    // and the reason, and was never fetched.
+    ArgumentCaptor<DiscoveryScrapeLog> rows = ArgumentCaptor.forClass(DiscoveryScrapeLog.class);
+    verify(transitions, atLeastOnce()).writeScrapeRow(rows.capture());
+    List<DiscoveryScrapeLog> aiRejectRows =
+        rows.getAllValues().stream()
+            .filter(r -> r.getSkipReason() == ScrapeSkipReason.AI_FILTER_REJECTED)
+            .toList();
+    assertThat(aiRejectRows).hasSize(1);
+    assertThat(aiRejectRows.get(0).getStatus()).isEqualTo(ScrapeOutcome.SKIPPED);
+    assertThat(aiRejectRows.get(0).getCandidateUrl()).isEqualTo("https://example.test/r/reject");
+    assertThat(aiRejectRows.get(0).getErrorMessage()).contains("not relevant");
+    // candidatesAfterFilter records only the kept candidate.
+    verify(transitions).recordCandidatesAfterFilter(jobId, 1);
+    verify(source, never()).fetchRecipe(rejected);
+  }
+
   // -------- DiscoverySourceUnavailableException from source.search --------
 
   @Test
@@ -441,7 +494,7 @@ class DiscoveryJobRunnerTest {
         .thenThrow(new DiscoverySourceUnavailableException("src_a", "5xx storm", null));
     lenient()
         .when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
     runner.run(startedEvent(jobId));
@@ -467,7 +520,7 @@ class DiscoveryJobRunnerTest {
     when(sourceRegistry.isCircuitOpen(eq(source), any())).thenReturn(true);
     lenient()
         .when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
     runner.run(startedEvent(jobId));
@@ -513,7 +566,7 @@ class DiscoveryJobRunnerTest {
         new DiscoveryCandidate("src_a", "https://example.test/r/2", "T2", "D", Map.of());
     when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(c1, c2));
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
-        .thenAnswer(inv -> inv.getArgument(0));
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
     // Stub the transitions mock to mirror the real terminal-state guard contract: the FIRST

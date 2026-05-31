@@ -196,13 +196,23 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
     // pick this job up between our read above and the write; a load+setStatus+saveAndFlush races
     // its persistence context and throws StaleObjectStateException (@Version on DiscoveryJob).
     // The native UPDATE bumps optimisticVersion in one statement, side-stepping the dirty-check.
+    //
+    // discovery-6: always set the in-memory flag FIRST, then run a status-guarded UPDATE
+    // (... AND j.status = 'QUEUED'). If the runner claimed the job RUNNING in the read→write
+    // window, the guard matches 0 rows rather than clobbering the now-RUNNING row back to FAILED;
+    // we then fall through to the RUNNING flag path (the flag is already set above), so the runner
+    // stops cleanly on its next iteration. We re-verify the row still exists to preserve the 404
+    // contract for a genuinely vanished job.
     runner.requestCancellation(jobId);
     int rows =
-        jobRepository.markCancelled(
+        jobRepository.markCancelledIfQueued(
             jobId, DiscoveryJobStatus.FAILED, Instant.now(), "cancelled by user");
-    if (rows == 0) {
+    if (rows == 0 && !jobRepository.existsById(jobId)) {
+      // Neither flipped (already claimed/terminal) nor present — genuinely gone.
       throw new DiscoveryJobNotFoundException(jobId);
     }
+    // rows == 0 with the row still present → the runner won the claim race; the cancellation flag
+    // we set above drives the running job to a clean stop. No exception: cancellation is honoured.
   }
 
   @Override
