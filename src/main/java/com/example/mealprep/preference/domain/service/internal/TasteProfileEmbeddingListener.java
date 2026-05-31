@@ -8,6 +8,7 @@ import com.example.mealprep.preference.spi.internal.TasteProfileEmbeddingTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
@@ -41,8 +42,23 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * short-lived transaction ({@code TasteProfileEmbeddingInputBuilder.loadAndCompose}'s {@code
  * REQUIRES_NEW readOnly} load; the {@code storeTasteVector} write tx on the impl), neither held
  * across the OpenAI HTTP round-trip.
+ *
+ * <p><b>Enablement gate.</b> {@code mealprep.preference.embedding.listener-enabled} (default {@code
+ * true}, so the bean is registered in prod/dev) drives a {@link ConditionalOnProperty} on this bean
+ * — mirroring the {@code PreferenceDeltaTriggerScheduler}'s {@code weekly-enabled} idiom. The
+ * general test profile sets it {@code false} so this {@code @Async} listener does not fire on every
+ * IT that seeds/changes a taste profile: its background {@code ai_call_log} write would otherwise
+ * land on a separate thread and, because Hibernate {@code Statistics} is SessionFactory-global and
+ * {@code ai_call_log} rows persist across ITs in the reused Testcontainer, pollute unrelated
+ * statement-count / row-count assertions in other ITs sharing the Failsafe fork. ITs that
+ * specifically exercise the embedding pipeline re-enable it via {@code @TestPropertySource}.
  */
 @Component
+@ConditionalOnProperty(
+    prefix = "mealprep.preference.embedding",
+    name = "listener-enabled",
+    havingValue = "true",
+    matchIfMissing = true)
 public class TasteProfileEmbeddingListener {
 
   private static final Logger log = LoggerFactory.getLogger(TasteProfileEmbeddingListener.class);
