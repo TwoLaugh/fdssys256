@@ -4,6 +4,7 @@ import com.example.mealprep.adaptation.api.dto.AdaptationJobDto;
 import com.example.mealprep.adaptation.api.dto.AdaptationTraceDto;
 import com.example.mealprep.adaptation.domain.enums.JobSource;
 import com.example.mealprep.adaptation.domain.service.AdaptationQueryService;
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
@@ -24,9 +25,10 @@ import org.springframework.web.bind.annotation.RestController;
  * Quality-dashboard data feed for the adaptation pipeline — two admin-gated read endpoints (run
  * history by source + time window; traces by prompt-template version).
  *
- * <p>{@code @PreAuthorize("hasRole('ROLE_ADMIN')")} per LLD line 578 (enforcement owned by the auth
- * module — out of scope per ticket 01f §What's NOT in scope; mirrors {@code
- * AdminDecisionLogController}).
+ * <p><b>Authorisation.</b> {@code @PreAuthorize("hasRole('ROLE_ADMIN')")} per LLD line 578 is the
+ * published contract but inert in v1; enforcement is done imperatively via the shared {@link
+ * AdminAccessGuard#requireAdmin()} (config key {@code mealprep.admin.user-ids}): anonymous ⇒ 401,
+ * authenticated-but-not-allowlisted ⇒ 403, fail-closed. Mirrors {@code AdminDecisionLogController}.
  *
  * <p>Per ticket 01f §AdapterRunHistoryController and {@code lld/adaptation-pipeline.md} lines
  * 613-618.
@@ -38,9 +40,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdapterRunHistoryController {
 
   private final AdaptationQueryService queryService;
+  private final AdminAccessGuard adminGuard;
 
-  public AdapterRunHistoryController(AdaptationQueryService queryService) {
+  public AdapterRunHistoryController(
+      AdaptationQueryService queryService, AdminAccessGuard adminGuard) {
     this.queryService = queryService;
+    this.adminGuard = adminGuard;
   }
 
   @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
@@ -52,6 +57,7 @@ public class AdapterRunHistoryController {
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    adminGuard.requireAdmin();
     return queryService.getRunHistory(source, from, to, PageRequest.of(page, size));
   }
 
@@ -63,6 +69,7 @@ public class AdapterRunHistoryController {
       @RequestParam String version,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    adminGuard.requireAdmin();
     return queryService.getTracesForPromptVersion(name, version, PageRequest.of(page, size));
   }
 }

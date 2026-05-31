@@ -1,6 +1,6 @@
 package com.example.mealprep.ops.api.controller;
 
-import com.example.mealprep.ai.api.AiAdminGuard;
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import com.example.mealprep.ops.api.dto.AdminStatusDto;
 import com.example.mealprep.ops.domain.service.AdminStatusService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -15,14 +15,13 @@ import org.springframework.web.bind.annotation.RestController;
  * Aggregates DB connectivity, last AI / USDA call timestamps, and month-to-date AI cost into one
  * snapshot for an operator dashboard.
  *
- * <p><b>Authorisation.</b> Gated by {@link AiAdminGuard#requireAdmin()} — deliberately reusing the
- * AI module's established admin-allowlist convention ({@code mealprep.ai.admin.user-ids}) rather
- * than inventing a parallel one. As with {@code AdminAiController}, the {@code @PreAuthorize} is
- * the published contract but inert in v1 (no project-wide method-security yet); the imperative
- * guard is the real gate. Anonymous ⇒ 401 (also enforced by the deny-by-default security chain),
- * authenticated-but-not-allowlisted ⇒ 403, fail-closed on an empty allowlist. When project-wide
- * admin auth lands (handled separately by the orchestrator) the guard can be retired in favour of
- * the annotation.
+ * <p><b>Authorisation.</b> Gated by the shared {@link AdminAccessGuard#requireAdmin()} — the single
+ * project-wide admin-allowlist mechanism ({@code mealprep.admin.user-ids}). As with {@code
+ * AdminAiController}, the {@code @PreAuthorize} is the published contract but inert in v1 (no
+ * project-wide method-security yet); the imperative guard is the real gate. Anonymous ⇒ 401 (also
+ * enforced by the deny-by-default security chain), authenticated-but-not-allowlisted ⇒ 403,
+ * fail-closed on an empty allowlist. When project-wide method-security lands the guard can be
+ * retired in favour of the annotation.
  */
 @RestController
 @RequestMapping("/api/v1/admin")
@@ -30,9 +29,9 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminStatusController {
 
   private final AdminStatusService statusService;
-  private final AiAdminGuard adminGuard;
+  private final AdminAccessGuard adminGuard;
 
-  public AdminStatusController(AdminStatusService statusService, AiAdminGuard adminGuard) {
+  public AdminStatusController(AdminStatusService statusService, AdminAccessGuard adminGuard) {
     this.statusService = statusService;
     this.adminGuard = adminGuard;
   }

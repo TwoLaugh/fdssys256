@@ -8,6 +8,7 @@ import com.example.mealprep.adaptation.domain.service.AdaptationQueryService;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
 import com.example.mealprep.adaptation.exception.AdaptationJobNotFoundException;
 import com.example.mealprep.adaptation.exception.AdaptationTraceNotFoundException;
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -31,10 +32,12 @@ import org.springframework.web.bind.annotation.RestController;
  * Admin / debug surface for the adaptation pipeline. Seven endpoints, all gated to {@code
  * ROLE_ADMIN} per LLD line 578.
  *
- * <p>{@code @PreAuthorize("hasRole('ROLE_ADMIN')")} is declared on every method. Method-security
- * enforcement is owned by the auth module (out of scope per ticket 01f §What's NOT in scope —
- * mirrors {@code AdminDecisionLogController}); the annotation is the contract this controller
- * publishes regardless of current enforcement state.
+ * <p><b>Authorisation.</b> {@code @PreAuthorize("hasRole('ROLE_ADMIN')")} is the published contract
+ * but inert in v1 (the project does not enable method-security). Enforcement is done imperatively
+ * via the shared {@link AdminAccessGuard#requireAdmin()} (config key {@code
+ * mealprep.admin.user-ids}) at the top of every handler: anonymous ⇒ 401 (also enforced by the
+ * deny-by-default security chain), authenticated-but-not-allowlisted ⇒ 403, fail-closed on an empty
+ * allowlist. Mirrors {@code AdminDecisionLogController}.
  *
  * <p>Per ticket 01f §AdaptationAdminController and {@code lld/adaptation-pipeline.md} lines
  * 599-609.
@@ -47,17 +50,22 @@ public class AdaptationAdminController {
 
   private final AdaptationService adaptationService;
   private final AdaptationQueryService queryService;
+  private final AdminAccessGuard adminGuard;
 
   public AdaptationAdminController(
-      AdaptationService adaptationService, AdaptationQueryService queryService) {
+      AdaptationService adaptationService,
+      AdaptationQueryService queryService,
+      AdminAccessGuard adminGuard) {
     this.adaptationService = adaptationService;
     this.queryService = queryService;
+    this.adminGuard = adminGuard;
   }
 
   @GetMapping(path = "/jobs/{jobId}", produces = MediaType.APPLICATION_JSON_VALUE)
   @PreAuthorize("hasRole('ROLE_ADMIN')")
   @Operation(summary = "Admin: fetch a job by id.")
   public AdaptationJobDto getJob(@PathVariable("jobId") UUID jobId) {
+    adminGuard.requireAdmin();
     return queryService
         .getJob(jobId)
         .orElseThrow(
@@ -68,6 +76,7 @@ public class AdaptationAdminController {
   @PreAuthorize("hasRole('ROLE_ADMIN')")
   @Operation(summary = "Admin: fetch the trace for a job.")
   public AdaptationTraceDto getJobTrace(@PathVariable("jobId") UUID jobId) {
+    adminGuard.requireAdmin();
     return queryService
         .getTraceForJob(jobId)
         .orElseThrow(() -> new AdaptationTraceNotFoundException("no trace for job: " + jobId));
@@ -80,6 +89,7 @@ public class AdaptationAdminController {
       @PathVariable("recipeId") UUID recipeId,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    adminGuard.requireAdmin();
     return queryService.getJobsForRecipe(recipeId, PageRequest.of(page, size));
   }
 
@@ -90,6 +100,7 @@ public class AdaptationAdminController {
       @PathVariable("recipeId") UUID recipeId,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    adminGuard.requireAdmin();
     return queryService.getTracesForRecipe(recipeId, PageRequest.of(page, size));
   }
 
@@ -97,6 +108,7 @@ public class AdaptationAdminController {
   @PreAuthorize("hasRole('ROLE_ADMIN')")
   @Operation(summary = "Admin: ad-hoc invoke the expired-pending-change sweep.")
   public SweepExpiredPendingResponse sweepExpiredPending() {
+    adminGuard.requireAdmin();
     return new SweepExpiredPendingResponse(adaptationService.sweepExpiredPendingChanges());
   }
 
@@ -107,6 +119,7 @@ public class AdaptationAdminController {
   @PreAuthorize("hasRole('ROLE_ADMIN')")
   @Operation(summary = "Admin: re-enqueue a fresh copy of a FAILED job.")
   public AdaptationJobDto retryFailedJob(@Valid @RequestBody RetryFailedJobRequest body) {
+    adminGuard.requireAdmin();
     return adaptationService.retryFailedJob(body.jobId());
   }
 
@@ -120,6 +133,7 @@ public class AdaptationAdminController {
       @PathVariable("version") String version,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    adminGuard.requireAdmin();
     return queryService.getTracesForPromptVersion(name, version, PageRequest.of(page, size));
   }
 }

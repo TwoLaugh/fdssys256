@@ -1,5 +1,6 @@
 package com.example.mealprep.discovery.api.controller;
 
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
 import com.example.mealprep.discovery.api.dto.DiscoveryJobDto;
 import com.example.mealprep.discovery.api.dto.DiscoverySourceDto;
@@ -35,6 +36,13 @@ import org.springframework.web.server.ResponseStatusException;
  * runJobSync} + CompletableFuture plumbing that ships with discovery-01f. The {@code
  * run-orphan-sweep} endpoint exists in 01b but the underlying logic is a placeholder (01d wires the
  * real sweep).
+ *
+ * <p><b>Authorisation.</b> Every endpoint is admin-only, enforced imperatively via the shared
+ * {@link AdminAccessGuard#requireAdmin()} (config key {@code mealprep.admin.user-ids}): anonymous ⇒
+ * 401 (also enforced by the deny-by-default security chain), authenticated-but-not-allowlisted ⇒
+ * 403, fail-closed on an empty allowlist. {@code runJobSync} additionally resolves the caller's id
+ * via {@link CurrentUserResolver} to attribute the job. (Supersedes the prior {@code
+ * requireAuthenticated()} which only gated anonymous, not non-admin.)
  */
 @RestController
 @RequestMapping("/api/v1/discovery/admin")
@@ -44,17 +52,21 @@ public class DiscoveryAdminController {
 
   private final DiscoveryService discoveryService;
   private final CurrentUserResolver currentUserResolver;
+  private final AdminAccessGuard adminGuard;
 
   public DiscoveryAdminController(
-      DiscoveryService discoveryService, CurrentUserResolver currentUserResolver) {
+      DiscoveryService discoveryService,
+      CurrentUserResolver currentUserResolver,
+      AdminAccessGuard adminGuard) {
     this.discoveryService = discoveryService;
     this.currentUserResolver = currentUserResolver;
+    this.adminGuard = adminGuard;
   }
 
   @PostMapping(path = "/sources/{sourceKey}/enable", produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "Enable a discovery source (idempotent).")
   public DiscoverySourceDto enable(@PathVariable String sourceKey) {
-    requireAuthenticated();
+    adminGuard.requireAdmin();
     return discoveryService.enableSource(sourceKey);
   }
 
@@ -64,7 +76,7 @@ public class DiscoveryAdminController {
           "Disable a discovery source administratively. Does NOT set userDisabled — distinct"
               + " from the user-Settings toggle.")
   public DiscoverySourceDto disable(@PathVariable String sourceKey) {
-    requireAuthenticated();
+    adminGuard.requireAdmin();
     return discoveryService.disableSource(sourceKey);
   }
 
@@ -82,6 +94,7 @@ public class DiscoveryAdminController {
       @RequestParam(name = "timeoutSeconds", defaultValue = "60") @Min(1) @Max(300)
           int timeoutSeconds,
       @RequestParam(name = "strictTimeout", defaultValue = "false") boolean strictTimeout) {
+    adminGuard.requireAdmin();
     UUID userId = requireUserId();
     Duration timeout = Duration.ofSeconds(timeoutSeconds);
     DiscoveryJobDto result = discoveryService.runJobSync(userId, request, timeout);
@@ -118,12 +131,8 @@ public class DiscoveryAdminController {
           "Run the orphan-sweep over RUNNING jobs with stale heartbeats. 01b returns 0; the"
               + " real implementation ships with discovery-01d.")
   public OrphanSweepResultDto runOrphanSweep() {
-    requireAuthenticated();
+    adminGuard.requireAdmin();
     return discoveryService.runOrphanSweep();
-  }
-
-  private void requireAuthenticated() {
-    requireUserId();
   }
 
   private UUID requireUserId() {

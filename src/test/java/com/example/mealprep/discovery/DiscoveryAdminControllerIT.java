@@ -2,12 +2,14 @@ package com.example.mealprep.discovery;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
+import com.example.mealprep.auth.config.AdminAccessProperties;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
@@ -27,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -50,6 +53,10 @@ class DiscoveryAdminControllerIT {
   @Autowired private AuthProperties authProperties;
   @Autowired private DiscoverySourceRepository sourceRepository;
 
+  // Only the allowlist config record is mocked (default: everyone non-admin ⇒ fail-closed 403). The
+  // shared AdminAccessGuard bean is the real production component.
+  @MockBean private AdminAccessProperties adminProperties;
+
   @AfterEach
   void cleanup() {
     jdbcTemplate.update("DELETE FROM discovery_scrape_log");
@@ -61,7 +68,7 @@ class DiscoveryAdminControllerIT {
 
   private record AuthedUser(UUID userId, Cookie cookie) {}
 
-  private AuthedUser registerUser() throws Exception {
+  private AuthedUser register() throws Exception {
     String username = "adm-" + AuthTestData.shortId();
     RegisterRequest body = AuthTestData.registerRequest(username);
     MvcResult result =
@@ -75,6 +82,13 @@ class DiscoveryAdminControllerIT {
     String userIdJson =
         objectMapper.readTree(result.getResponse().getContentAsString()).get("userId").asText();
     return new AuthedUser(UUID.fromString(userIdJson), cookie);
+  }
+
+  /** Register a user and designate it an allowlisted admin. */
+  private AuthedUser registerUser() throws Exception {
+    AuthedUser user = register();
+    given(adminProperties.isAdmin(user.userId())).willReturn(true);
+    return user;
   }
 
   private DiscoverySource seedSource(String key, boolean enabled) {
@@ -134,6 +148,14 @@ class DiscoveryAdminControllerIT {
   void runOrphanSweep_anonymous_returns401() throws Exception {
     mvc.perform(post("/api/v1/discovery/admin/run-orphan-sweep"))
         .andExpect(status().isUnauthorized());
+  }
+
+  @Test
+  void runOrphanSweep_authenticatedButNotAdmin_returns403() throws Exception {
+    // Registered but NOT allowlisted (default mock isAdmin ⇒ false): fail-closed 403.
+    AuthedUser user = register();
+    mvc.perform(post("/api/v1/discovery/admin/run-orphan-sweep").cookie(user.cookie()))
+        .andExpect(status().isForbidden());
   }
 
   // ===== sync endpoint (01f) =====

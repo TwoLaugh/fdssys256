@@ -1,5 +1,6 @@
 package com.example.mealprep.core.audit.api.controller;
 
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.example.mealprep.core.audit.api.dto.AncestryResponse;
 import com.example.mealprep.core.audit.api.dto.DecisionLogDto;
@@ -24,11 +25,13 @@ import org.springframework.web.server.ResponseStatusException;
 /**
  * Admin observability endpoints for the decision log.
  *
- * <p>{@code @PreAuthorize("hasRole('ADMIN')")} is present on every method but is not yet enforced.
- * Auth-01a wires the filter chain so anonymous requests now return 401, but role gating still
- * passes for any authenticated user — the flat user model has no ROLE_ADMIN authority yet.
- * <strong>TODO(auth-roles-followup):</strong> introduce ROLE_ADMIN once the household-admin model
- * lands and verify these endpoints reject non-admin authenticated users.
+ * <p><b>Authorisation.</b> {@code @PreAuthorize("hasRole('ADMIN')")} is the published contract but
+ * inert in v1 (the project does not enable method-security; the flat user model has no {@code
+ * ROLE_ADMIN} authority). Enforcement is done imperatively via the shared {@link
+ * AdminAccessGuard#requireAdmin()} (config key {@code mealprep.admin.user-ids}): anonymous ⇒ 401
+ * (also enforced by the deny-by-default security chain), authenticated-but-not-allowlisted ⇒ 403,
+ * fail-closed on an empty allowlist. When project-wide method-security lands the guard can be
+ * retired in favour of the annotation.
  */
 @RestController
 @RequestMapping("/api/v1/admin/decision-log")
@@ -39,15 +42,19 @@ import org.springframework.web.server.ResponseStatusException;
 public class AdminDecisionLogController {
 
   private final DecisionLogQueryService queryService;
+  private final AdminAccessGuard adminGuard;
 
-  public AdminDecisionLogController(DecisionLogQueryService queryService) {
+  public AdminDecisionLogController(
+      DecisionLogQueryService queryService, AdminAccessGuard adminGuard) {
     this.queryService = queryService;
+    this.adminGuard = adminGuard;
   }
 
   @GetMapping("/{decisionId}")
   @PreAuthorize("hasRole('ADMIN')")
   @Operation(summary = "Get a single decision-log entry by ID.")
   public ResponseEntity<DecisionLogDto> getById(@PathVariable UUID decisionId) {
+    adminGuard.requireAdmin();
     return queryService
         .getById(decisionId)
         .map(ResponseEntity::ok)
@@ -63,6 +70,7 @@ public class AdminDecisionLogController {
   @Operation(summary = "Get all decision-log entries for a trace, ordered by creation time.")
   @BoundedCollection("bounded-by-trace; a trace is a single request's decision chain")
   public List<DecisionLogDto> getByTraceId(@PathVariable UUID traceId) {
+    adminGuard.requireAdmin();
     return queryService.getByTraceId(traceId);
   }
 
@@ -78,6 +86,7 @@ public class AdminDecisionLogController {
       @PathVariable UUID decisionId,
       @RequestParam(defaultValue = "32") @Min(1) @Max(DecisionLogServiceImpl.ANCESTRY_DEPTH_CAP)
           int maxDepth) {
+    adminGuard.requireAdmin();
     return queryService.getAncestry(decisionId, maxDepth);
   }
 }
