@@ -96,4 +96,32 @@ public interface TasteProfileUpdateService {
    */
   TasteProfileDto rollbackTasteProfile(
       UUID userId, int targetDocumentVersion, long expectedVersion, UUID actorUserId);
+
+  /**
+   * Store a freshly-computed taste embedding (preference-5). Called in-process by {@code
+   * TasteProfileEmbeddingListener} on its {@code @Async} thread after {@code AiService.embed}
+   * returns. Writes the {@code float[]} vector, model id, and {@code embedded_at} via a native
+   * UPDATE that does NOT touch the JSONB document or bump {@code @Version}, and flips {@code
+   * taste_vector_status} to {@code EMBEDDED} — but only if the profile is still at {@code
+   * docVersion}. If the document has moved on (a newer delta-apply has already flipped the status
+   * back to PENDING for a fresher version) the write is a no-op and the newer change's embed wins;
+   * the listener logs the skip. Idempotent: re-storing the same {@code docVersion} simply
+   * overwrites the vector. Best-effort — never throws on a vanished/stale row (logs and returns).
+   *
+   * @param userId the owner of the profile.
+   * @param vector the embedding ({@code text-embedding-3-small} → 1536 dims).
+   * @param modelId the embedding model id stamped onto {@code taste_vector_model_id}.
+   * @param docVersion the {@code documentVersion} the vector was computed from (the freshness key).
+   */
+  void storeTasteVector(UUID userId, float[] vector, String modelId, int docVersion);
+
+  /**
+   * Mark the taste embedding terminally failed (preference-5) — called by the listener when {@code
+   * AiService.embed} fails after retries are exhausted (e.g. {@code AiUnavailableException}). Flips
+   * {@code taste_vector_status} to {@code FAILED} (leaving the vector NULL) only if the profile is
+   * still at {@code docVersion}; a newer change that is already re-embedding is not clobbered. The
+   * next document change re-flags PENDING and retries — the embedding is best-effort and an outage
+   * must NOT brick the taste-profile update. Best-effort — never throws on a vanished/stale row.
+   */
+  void markTasteVectorFailed(UUID userId, int docVersion);
 }

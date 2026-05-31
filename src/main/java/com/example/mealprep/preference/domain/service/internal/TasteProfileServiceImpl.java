@@ -558,7 +558,81 @@ public class TasteProfileServiceImpl
     return mapper.toDto(saved);
   }
 
+  @Override
+  @Transactional
+  public void storeTasteVector(UUID userId, float[] vector, String modelId, int docVersion) {
+    Optional<TasteProfile> profile = tasteProfileRepository.findByUserId(userId);
+    if (profile.isEmpty()) {
+      log.info("storeTasteVector skipped — no profile for userId={}", userId);
+      return;
+    }
+    // Native UPDATE: touches only the taste-vector columns, casts the pgvector text literal at the
+    // SQL layer, and is conditional on document_version still == docVersion so a stale embedding
+    // (the document moved on while the embed was in flight) does not clobber a fresher PENDING
+    // state.
+    String pgVectorText = formatPgVector(vector);
+    Instant now = Instant.now(clock);
+    int rows =
+        tasteProfileRepository.updateTasteVector(
+            profile.get().getId(), pgVectorText, modelId, docVersion, now);
+    if (rows == 0) {
+      log.info(
+          "storeTasteVector no-op (stale or vanished) userId={} docVersion={} — a newer change"
+              + " will re-embed",
+          userId,
+          docVersion);
+      return;
+    }
+    log.info(
+        "taste vector stored userId={} docVersion={} modelId={} dim={}",
+        userId,
+        docVersion,
+        modelId,
+        vector != null ? vector.length : 0);
+  }
+
+  @Override
+  @Transactional
+  public void markTasteVectorFailed(UUID userId, int docVersion) {
+    Optional<TasteProfile> profile = tasteProfileRepository.findByUserId(userId);
+    if (profile.isEmpty()) {
+      log.info("markTasteVectorFailed skipped — no profile for userId={}", userId);
+      return;
+    }
+    int rows = tasteProfileRepository.markTasteVectorFailed(profile.get().getId(), docVersion);
+    if (rows == 0) {
+      log.info(
+          "markTasteVectorFailed no-op (stale or vanished) userId={} docVersion={}",
+          userId,
+          docVersion);
+      return;
+    }
+    log.info("taste vector marked FAILED userId={} docVersion={}", userId, docVersion);
+  }
+
   // ---------------- helpers ----------------
+
+  /**
+   * Render a {@code float[]} as the pgvector text literal {@code '[v1,v2,...,vN]'}. Mirrors {@link
+   * com.example.mealprep.preference.domain.entity.TasteVectorConverter} — kept here because the
+   * native UPDATE bypasses the JPA {@code AttributeConverter} pipeline. {@code null} → {@code null}
+   * (clears the column).
+   */
+  static String formatPgVector(float[] v) {
+    if (v == null) {
+      return null;
+    }
+    StringBuilder sb = new StringBuilder(v.length * 8 + 2);
+    sb.append('[');
+    for (int i = 0; i < v.length; i++) {
+      if (i > 0) {
+        sb.append(',');
+      }
+      sb.append(Float.toString(v[i]));
+    }
+    sb.append(']');
+    return sb.toString();
+  }
 
   private void writeVersionSnapshot(
       TasteProfile profile,

@@ -16,10 +16,14 @@ import org.springframework.stereotype.Component;
  *
  * <ul>
  *   <li>{@code RecipeVersionDto} (recipe-01h) carries an {@code embeddingStatus} string but NO
- *       {@code float[] embedding} field — the pgvector column is not surfaced on the read DTO.
- *   <li>{@code SoftPreferenceBundleDto.tasteProfile()} ({@code TasteProfileDocument}) carries
- *       {@code ingredientLikes / cuisineLikes / avoidList} maps, NOT a dense {@code tasteVector}
- *       (preference-01g's embedding ticket is not merged on this branch).
+ *       {@code float[] embedding} field — the pgvector column is not surfaced on the read DTO. This
+ *       is the remaining blocker (recipe-01i): the planner has no per-recipe vector to cosine
+ *       against, so wiring similarity here would still need recipe-side exposure.
+ *   <li><b>RESOLVED (preference-5):</b> the per-user taste vector + cosine surface now ship via
+ *       {@code preference.domain.service.TasteSimilarityQueryService} (re-exported on {@code
+ *       PreferenceModule#tasteSimilarity()}: {@code getTasteVector(userId)} / {@code
+ *       cosineSimilarity(a,b)} mapped {@code (cos+1)/2}). The preference half of the LOCKED formula
+ *       is therefore available; only the recipe-side embedding exposure remains.
  * </ul>
  *
  * <p>Per ticket items 11 / 59 ("If preference doesn't expose tasteVector yet, 01e returns 0.5
@@ -29,10 +33,12 @@ import org.springframework.stereotype.Component;
  * applied, so preference contributes a constant {@code 0.5 × w_preference} until the embedding
  * contracts ship.
  *
- * <p><b>TODO(user / planner-01j wiring)</b>: when {@code RecipeVersionDto.embedding} and {@code
- * SoftPreferenceBundleDto.tasteVector()} (or merged-household equivalent) land, implement the
- * LOCKED per-recipe cosine formula: {@code dot(a,b) / (norm(a) × norm(b))}, NaN-guarded to {@code
- * 0.5} on a zero-norm vector, mapped {@code [-1,1] → [0,1]}, averaged across slots; shared slots
+ * <p><b>TODO(recipe-01i wiring — preference side now ready)</b>: when {@code
+ * RecipeVersionDto.embedding} (recipe-01i) surfaces the per-recipe vector into the candidate pool /
+ * {@code PlanCompositionContext}, implement the LOCKED per-recipe cosine formula: {@code dot(a,b) /
+ * (norm(a) × norm(b))}, NaN-guarded to {@code 0.5} on a zero-norm vector, mapped {@code [-1,1] →
+ * [0,1]}, averaged across slots. The per-user/household taste vector half is already available via
+ * {@code PreferenceModule#tasteSimilarity().getTasteVector(userId)} (preference-5); shared slots
  * use the merged household taste vector, per-person slots the eater's vector (element-wise mean for
  * multi-eater slots).
  */

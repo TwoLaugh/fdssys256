@@ -5,9 +5,9 @@
 -- Two version fields, intentionally: document_version (HLD monotonic, used for history + rollback) and
 -- optimistic_version (JPA @Version for concurrent-write safety).
 --
--- The taste_vector vector(1536) column + HNSW index are deferred to a follow-up ticket (per the LLD's
--- async embedding pipeline); only the status scalar fields ship here so the follow-up adds the vector
--- column + index without back-touching the row shape.
+-- The taste_vector vector(1536) column + partial HNSW index ship in the follow-up migrations
+-- V20260616100000 / V20260616100100 (preference-5 embedding pipeline); only the status scalar fields
+-- ship here so the follow-up adds the vector column + index without back-touching this row shape.
 
 CREATE TABLE preference_taste_profile (
     id                       uuid        PRIMARY KEY,

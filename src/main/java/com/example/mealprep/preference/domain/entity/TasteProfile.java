@@ -33,10 +33,14 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
  * other → second writer sees an {@code OptimisticLockingFailureException} → 409). They serve
  * different purposes and are not interchangeable.
  *
- * <p>The {@code taste_vector} pgvector column itself is deferred to a follow-up ticket; only the
- * scalar status fields ({@link #tasteVectorStatus}, {@link #tasteVectorDocVersion}, {@link
- * #tasteVectorModelId}, {@link #tasteVectorEmbeddedAt}) ship in 01c so the future ticket adds only
- * the vector column + HNSW index.
+ * <p>The {@code taste_vector} pgvector column (preference-5) holds the OpenAI {@code
+ * text-embedding-3-small} embedding (1536 dims), populated asynchronously by {@code
+ * TasteProfileEmbeddingListener} after each document change; the scalar status fields ({@link
+ * #tasteVectorStatus}, {@link #tasteVectorDocVersion}, {@link #tasteVectorModelId}, {@link
+ * #tasteVectorEmbeddedAt}) track its lifecycle. The vector is written via a native UPDATE (see
+ * {@code TasteProfileRepository#updateTasteVector}) that bypasses Hibernate's full-entity
+ * dirty-check; the {@link #tasteVector} mapping below is used for reads (and is intentionally NOT
+ * dirty-tracked on the listener's write path).
  */
 @Entity
 @Table(name = "preference_taste_profile")
@@ -86,6 +90,19 @@ public class TasteProfile {
 
   @Column(name = "taste_vector_embedded_at")
   private Instant tasteVectorEmbeddedAt;
+
+  /**
+   * The pgvector {@code vector(1536)} taste embedding. NULL until the async embedding listener
+   * succeeds. Persisted via {@link TasteVectorConverter} (renders the {@code float[]} as the
+   * pgvector text literal {@code '[v1,...,v1536]'}) with {@code @ColumnTransformer(write =
+   * "?::vector")} casting the bound varchar to {@code vector} server-side. The listener writes it
+   * through a native UPDATE, not this mapping, to avoid colliding with the JSONB document
+   * dirty-check; this mapping carries the read side.
+   */
+  @jakarta.persistence.Convert(converter = TasteVectorConverter.class)
+  @Column(name = "taste_vector", columnDefinition = "vector(1536)")
+  @org.hibernate.annotations.ColumnTransformer(write = "?::vector")
+  private float[] tasteVector;
 
   @Version
   @Column(name = "optimistic_version", nullable = false)

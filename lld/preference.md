@@ -141,7 +141,11 @@ CREATE TABLE preference_taste_profile (
     based_on_feedback_count  integer NOT NULL DEFAULT 0,
     last_delta_applied_at    timestamptz,
     last_token_estimate      integer,
-    -- Embedding pipeline (locked 2026-05-07): vector populated async after document changes
+    -- Embedding pipeline (IMPLEMENTED preference-5): vector populated async after document changes.
+    -- The vector(1536) column + partial HNSW index ship in V20260616100000 / V20260616100100
+    -- (the scalar status fields shipped in 01c). Mapped via TasteVectorConverter (float[] <-> pgvector
+    -- text literal) + @ColumnTransformer(write = "?::vector"); written by the async listener through a
+    -- native conditional UPDATE (TasteProfileRepository.updateTasteVector).
     taste_vector             vector(1536),                    -- pgvector; OpenAI text-embedding-3-small
     taste_vector_status      varchar(16) NOT NULL DEFAULT 'pending', -- pending | embedded | failed
     taste_vector_doc_version integer,                         -- doc_version this vector was computed from
@@ -764,7 +768,7 @@ The AI prompt itself is **out of scope for this LLD** (deferred — see Out of S
 7. Persists a `TasteProfileVersion` snapshot (deltas applied, trigger, model tier, feedback range). JPA increments parent's `optimisticVersion`.
 8. **Anomaly detection.** If more than 3 archive/remove ops in this batch, logs WARN per HLD §Versioning. The feedback module surfaces this to the user; the preference module's role is to log and allow.
 9. Publishes `PreferenceChangedEvent(tier=TASTE_PROFILE)` after commit. Returns the updated DTO.
-10. **Trigger taste-vector re-embed.** A `@Async` listener on `PreferenceChangedEvent(tier=TASTE_PROFILE)` debounces and re-embeds: composes input text from the document's structured fields + free-text notes, calls `aiService.embed(new TasteProfileEmbeddingTask(profileId, inputText))`, writes the result back via `PreferenceUpdateService.storeTasteVector(profileId, vector, modelId, docVersion)`. Debounce window: 5 minutes — coalesces rapid delta-apply bursts. On `AiUnavailable`: status flips to `pending` and the next change retries; the planner falls back to neutral 0.5 in `PreferenceSubScore` if no vector is available yet. Cold start: a newly-created taste profile has `taste_vector_status = 'pending'` until the first delta-apply or onboarding-derived embedding lands.
+10. **Trigger taste-vector re-embed (IMPLEMENTED — preference-5).** A `@Async @TransactionalEventListener(AFTER_COMMIT)` listener (`TasteProfileEmbeddingListener`) on `TasteProfileChangedEvent` re-embeds: `TasteProfileEmbeddingInputBuilder.loadAndCompose(userId)` (a `REQUIRES_NEW readOnly` tx, since the async thread has no inherited tx) composes a stable, label-prefixed feature string from the document's structured signals + free-text notes (excluding volatile fields like evidence counts / cursors / versions, so an evidence-count-only delta re-uses the AI-module embedding cache), then `aiService.embed(new TasteProfileEmbeddingTask(userId, inputText, traceId))` returns the `float[]`, written back via `TasteProfileUpdateService.storeTasteVector(userId, vector, modelId, docVersion)`. **Coalescing instead of an explicit debounce window:** the embed input carries the `documentVersion` it was composed from, and `storeTasteVector` writes only if the profile is still at that `documentVersion` (native conditional `UPDATE ... WHERE document_version = :docVersion`). Rapid delta-apply bursts therefore self-coalesce — in-flight embeds for superseded versions no-op at store time and only the latest version's embed sticks; no debounce state is held. (The original LLD 5-minute debounce window was simplified to this version-freshness guard, which subsumes it and is stateless.) On `AiUnavailable` (or any embed failure): the listener calls `markTasteVectorFailed(userId, docVersion)` → status `FAILED`; the next document change re-flags `PENDING` and retries. **Resilience:** the listener runs AFTER_COMMIT on a fresh thread, so an embedding-provider outage never bricks the taste-profile write (document, version history, and event are already committed); the vector is best-effort. The planner falls back to neutral `0.5` in `PreferenceSubScore` when no vector is available. Cold start: a newly-initialised taste profile has no embeddable signals, so the listener leaves it `PENDING` until the first delta-apply adds real signals.
 
 ### Flow 4: Lifestyle config update
 
@@ -775,6 +779,30 @@ The AI prompt itself is **out of scope for this LLD** (deferred — see Out of S
 The planner injects `PreferenceQueryService` and calls `getSoftPreferences(userId)` once per planning run, before composition — one round trip returns taste profile, lifestyle config, and profile metadata. The planner does **not** receive hard constraints in this bundle; it calls `getHardConstraints` (or, more commonly, invokes `HardConstraintFilterService` directly during composition). This split is deliberate: soft data is amenable to short-lived caching at the planner side; hard data must always be fresh because the user may have just edited their allergies.
 
 For shared meals, the planner fetches per-eater bundles via `getSoftPreferencesByUserIds` (one batch round trip) and the household module's merge logic combines them — the preference module exposes per-user data, not merged data.
+
+---
+
+## Taste-vector embedding pipeline (preference-5)
+
+The audit finding's taste-vector leg is built on top of the AI module's provider-agnostic embedding stack — the preference module owns the *consumer* side (compute-on-change, storage, similarity); the AI module owns the *provider* side (SPI, real client, stub, cache, cost).
+
+**Provider + config (AI module).** The embedding provider is an OpenAI-compatible endpoint reached via the official `openai-java` SDK (`OpenAiEmbeddingClient` + `OpenAiSdkConfig`), dispatched through `AiService.embed(EmbeddingTask)` (`AiServiceImpl`). Model defaults to `text-embedding-3-small` (**1536 dims**). Config lives under `mealprep.ai.*`: `openai-api-key` (the gate), `embedding.model`, `embedding.cache-size`, `embedding.cache-ttl-hours`. The `OpenAIClient` bean is `@ConditionalOnProperty("mealprep.ai.openai-api-key")` — **with no key configured it is never created and no network call is made.** Retry/backoff mirrors `AnthropicClient` (3 attempts, 200/400/800 ms); 4xx surfaces immediately, transient failures retry then surface `AiUnavailableException`. Identical input text is cached (Caffeine) so repeat embeds of an unchanged document cost nothing.
+
+**Deterministic stub (AI module).** Under the `test` / `e2e` profiles, `TestAiService` (`@Primary`) replaces the dispatcher entirely and `embed(...)` returns a reproducible 1536-dim vector seeded from `inputText.hashCode()` (xorshift) — same input, same vector, never an HTTP call. **CI, ITs, Pitest, and e2e run GREEN with no live key** through this stub; production with a key uses the real client. The preference embedding input deliberately omits volatile fields (evidence counts, cursors, versions, dates) so an evidence-count-only delta hashes to the same input and the cache/stub return the same vector.
+
+**Storage + mapping.** `taste_vector vector(1536)` on `preference_taste_profile`, with a partial HNSW index `idx_pref_taste_vector USING hnsw (taste_vector vector_cosine_ops) WHERE taste_vector IS NOT NULL` (migrations `V20260616100000` / `V20260616100100`; `pgvector` is installed by core's first migration). Mapped on `TasteProfile.tasteVector` via `TasteVectorConverter` (`float[]` ↔ pgvector text literal `'[v1,…,v1536]'`) + `@ColumnTransformer(write = "?::vector")` for the server-side cast — the same pattern as `recipe_versions.embedding`. The async listener writes via a native conditional UPDATE (`TasteProfileRepository.updateTasteVector`) that bypasses Hibernate full-entity dirty-checking (so it never rewrites the JSONB document or bumps `@Version`); the `float[]` mapping carries the read side.
+
+**Compute-on-change.** See Flow 3 step 10 — `TasteProfileEmbeddingListener` subscribes to `TasteProfileChangedEvent` (the real event published AFTER_COMMIT by every taste-profile write, which already flips `taste_vector_status = PENDING`). Async, best-effort, version-freshness-guarded; an outage cannot brick the update.
+
+### Similarity surface
+
+`TasteSimilarityQueryService` (re-exported on `PreferenceModule#tasteSimilarity()`) is the cosine surface over the pgvector index — recommendation / planner consumers call it rather than reaching into the repository. All operations are user-scoped (callers pass a `userId`; the service reads that user's stored vector — the model + dimension stay internal):
+
+- `Optional<float[]> getTasteVector(userId)` — the user's embedded vector, or empty when status is PENDING/FAILED. The cross-module read seam the planner's `PreferenceSubScore` consumes once recipe-side embeddings are surfaced.
+- `List<TasteSimilarUserDto> findSimilarUsers(userId, limit)` — nearest profiles by cosine distance (`<=>`) over the partial HNSW index, excluding the querying user, similarity remapped to `[0,1]`.
+- `OptionalDouble cosineSimilarity(userIdA, userIdB)` — pairwise cosine mapped `(cos+1)/2` to match the planner's `PreferenceSubScore` convention; empty when either lacks a vector (caller falls back to neutral `0.5`).
+
+**Planner wiring — exposed, hook flagged.** `PreferenceSubScore`'s LOCKED formula needs *both* (a) per-recipe embeddings and (b) the per-user taste vector. Half (b) now ships here; half (a) — surfacing `RecipeVersionDto.embedding` into the candidate pool / `PlanCompositionContext` — is recipe-01i and is NOT yet on this branch. Wiring full cosine into the planner is therefore deferred until the recipe-side vector flows through (`PreferenceSubScore` keeps its neutral `0.5` fallback; its TODO is updated to flag the recipe-side dependency and that the preference half is ready). Forcing a planner change now would mean scoring against absent recipe vectors — misleading and out of scope for this ticket.
 
 ---
 
