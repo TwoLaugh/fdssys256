@@ -204,7 +204,7 @@ class CorrectMisclassificationServiceTest {
             FeedbackTestData.classificationOutput(
                 Destination.PROVISIONS, "1.0", "txt", FeedbackTestData.samplePayload()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(any(), eq(req))).thenReturn(scored);
+    when(correctionReplayer.buildSynthetic(any(), any(), eq(req))).thenReturn(scored);
     when(correctionReplayer.replay(any(), eq(scored)))
         .thenReturn(
             new FeedbackRouter.RouteReplayResult(newRoutingId, RoutingStatus.APPLIED, null));
@@ -266,7 +266,7 @@ class CorrectMisclassificationServiceTest {
             FeedbackTestData.classificationOutput(
                 Destination.NUTRITION, "1.0", "t", FeedbackTestData.samplePayload()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(any(), any())).thenReturn(scored);
+    when(correctionReplayer.buildSynthetic(any(), any(), any())).thenReturn(scored);
     when(correctionReplayer.replay(any(), any()))
         .thenReturn(
             new FeedbackRouter.RouteReplayResult(newRoutingId, RoutingStatus.APPLIED, null));
@@ -296,7 +296,7 @@ class CorrectMisclassificationServiceTest {
             FeedbackTestData.classificationOutput(
                 Destination.NUTRITION, "1.0", "t", FeedbackTestData.samplePayload()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(any(), any())).thenReturn(scored);
+    when(correctionReplayer.buildSynthetic(any(), any(), any())).thenReturn(scored);
     when(correctionReplayer.replay(any(), any()))
         .thenReturn(
             new FeedbackRouter.RouteReplayResult(
@@ -555,7 +555,7 @@ class CorrectMisclassificationServiceTest {
             FeedbackTestData.classificationOutput(
                 Destination.PROVISIONS, "1.0", "txt", FeedbackTestData.samplePayload()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(any(), eq(req))).thenReturn(scored);
+    when(correctionReplayer.buildSynthetic(any(), any(), eq(req))).thenReturn(scored);
     when(correctionReplayer.replay(any(), eq(scored)))
         .thenReturn(
             new FeedbackRouter.RouteReplayResult(newRoutingId, RoutingStatus.APPLIED, null));
@@ -617,7 +617,7 @@ class CorrectMisclassificationServiceTest {
             FeedbackTestData.classificationOutput(
                 Destination.PREFERENCE, "1.0", "txt", FeedbackTestData.samplePayload()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(any(), eq(req))).thenReturn(scored);
+    when(correctionReplayer.buildSynthetic(any(), any(), eq(req))).thenReturn(scored);
     when(correctionReplayer.replay(any(), eq(scored)))
         .thenReturn(
             new FeedbackRouter.RouteReplayResult(newRoutingId, RoutingStatus.APPLIED, null));
@@ -654,7 +654,7 @@ class CorrectMisclassificationServiceTest {
             FeedbackTestData.classificationOutput(
                 newDest, "1.0", "txt", FeedbackTestData.samplePayload()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(any(), eq(req))).thenReturn(scored);
+    when(correctionReplayer.buildSynthetic(any(), any(), eq(req))).thenReturn(scored);
     when(correctionReplayer.replay(any(), eq(scored)))
         .thenReturn(
             new FeedbackRouter.RouteReplayResult(newRoutingId, RoutingStatus.APPLIED, null));
@@ -698,7 +698,7 @@ class CorrectMisclassificationServiceTest {
             FeedbackTestData.classificationOutput(
                 Destination.PROVISIONS, "1.0", "txt", FeedbackTestData.samplePayload()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(any(), eq(req))).thenReturn(scored);
+    when(correctionReplayer.buildSynthetic(any(), any(), eq(req))).thenReturn(scored);
     when(correctionReplayer.replay(any(), eq(scored)))
         .thenReturn(
             new FeedbackRouter.RouteReplayResult(newRoutingId, RoutingStatus.APPLIED, null));
@@ -745,7 +745,7 @@ class CorrectMisclassificationServiceTest {
             FeedbackTestData.classificationOutput(
                 Destination.PROVISIONS, "1.0", "txt", FeedbackTestData.samplePayload()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(any(), eq(req))).thenReturn(scored);
+    when(correctionReplayer.buildSynthetic(any(), any(), eq(req))).thenReturn(scored);
     when(correctionReplayer.replay(any(), eq(scored)))
         .thenReturn(
             new FeedbackRouter.RouteReplayResult(
@@ -796,7 +796,7 @@ class CorrectMisclassificationServiceTest {
             FeedbackTestData.classificationOutput(
                 Destination.PROVISIONS, "1.0", "txt", FeedbackTestData.samplePayload()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(any(), eq(req))).thenReturn(scored);
+    when(correctionReplayer.buildSynthetic(any(), any(), eq(req))).thenReturn(scored);
     when(correctionReplayer.replay(any(), eq(scored)))
         .thenReturn(
             new FeedbackRouter.RouteReplayResult(
@@ -843,7 +843,7 @@ class CorrectMisclassificationServiceTest {
             FeedbackTestData.classificationOutput(
                 Destination.RECIPE, "1.0", "txt", FeedbackTestData.samplePayload()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(any(), eq(req))).thenReturn(scored);
+    when(correctionReplayer.buildSynthetic(any(), any(), eq(req))).thenReturn(scored);
     when(correctionReplayer.replay(any(), eq(scored)))
         .thenReturn(
             new FeedbackRouter.RouteReplayResult(newRoutingId, RoutingStatus.APPLIED, null));

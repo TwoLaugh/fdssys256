@@ -44,7 +44,14 @@ com.example.mealprep.feedback/
 │                                             FeedbackMisclassificationCorrectedEvent
 ├── exception/                               module-root + per-failure subclasses
 ├── validation/                              @ValidUiContext, @ValidDestination
-└── config/                                  FeedbackJsonConfig, FeedbackAsyncConfig
+├── config/                                  FeedbackJsonConfig, FeedbackAsyncConfig
+└── ai/                                       preference taste-profile DELTA pipeline
+    │                                          (cross-cutting placement — see below)
+    ├── config/                              PreferenceDeltaProperties
+    ├── dto/                                 AiTasteProfileDelta, TasteProfileDeltaResponse, ...
+    ├── task/                                PreferenceTasteProfileDeltaTask (mid-tier AiTask)
+    └── internal/                            PreferenceDeltaBatchTrigger, PreferenceDeltaCursorService,
+                                              TasteProfileDeltaOrchestrator, AiToApplyDeltaMapper, ...
 ```
 
 `FeedbackModule.java` carries no business logic — it gives other modules a one-line view of what's exposed.
@@ -52,6 +59,17 @@ com.example.mealprep.feedback/
 The `internal/` subpackage holds the two seams that are most likely to change as the system learns: the classifier (today: one cheap-tier AiTask; tomorrow: multi-turn or a learned classifier per [feedback-system.md §Core Design Principle](../design/feedback-system.md#core-design-principle-interface-everything-for-upgrade)) and the router (today: synchronous fan-out; tomorrow: per-destination retry, async fan-out, or batched apply). Keeping them package-private behind `FeedbackUpdateService` makes that swap a one-package change.
 
 `DestinationDispatcher` is one interface with four implementations (`RecipeDestinationDispatcher`, `PreferenceDestinationDispatcher`, `NutritionDestinationDispatcher`, `ProvisionsDestinationDispatcher`). Each translates a `(extractedFeedback, uiContext, structured fields)` triple into the destination's specific update call. Spring picks all four up via an injected `Map<Destination, DestinationDispatcher>`. New destinations are added by introducing a new enum constant and a new dispatcher bean; the router code does not change.
+
+### `ai/` — preference taste-profile delta pipeline (cross-cutting placement) — ⚠️ HLD-boundary deviation, needs user review
+
+The `com.example.mealprep.feedback.ai` subpackage hosts a **second** AI pipeline beyond the classifier: the batched **preference taste-profile delta update** (built under tickets preference-01g et al.). Its parts:
+
+- `PreferenceDeltaBatchTrigger` — `@TransactionalEventListener(AFTER_COMMIT) @Async` on `FeedbackProcessedEvent`; increments a per-user PREFERENCE-routed counter and, on every `batchThreshold`-th processed feedback, kicks off a delta run.
+- `PreferenceDeltaCursorService` — owns the per-user batch counter/cursor (`REQUIRES_NEW`).
+- `TasteProfileDeltaOrchestrator` — gathers the PREFERENCE-routed feedback batch, runs the **mid-tier** `PreferenceTasteProfileDeltaTask` via `AiService` outside any DB tx, maps the AI output (`AiToApplyDeltaMapper`) and calls the **preference** module's `applyDeltas` (`ApplyTasteProfileDeltasRequest`) to persist the result; handles `AiUnavailable`/budget (entries sit `pending_delta`), invalid-delta corrective re-prompt, and rollback-replay.
+- Supporting DTOs/config (`AiTasteProfileDelta`, `TasteProfileDeltaResponse`, `PreferenceDeltaProperties`, `ClassifiedFeedbackEvent`) and listeners (`PreferenceRefreshRequestedListener`, `TasteProfileRollbackReplayListener`).
+
+> **⚠️ Deviation from the HLD boundary — flagged for user review.** [feedback-system.md §What It's Not](../design/feedback-system.md) (line 435) states: *"The delta update pipeline, evidence tracking, and experiment management are preference concerns. The Feedback System just delivers the signal."* As shipped, the **delta-computation pipeline for the PREFERENCE destination lives inside the feedback module**, not behind a preference-module seam — so *"feedback delivers the signal only"* no longer holds for PREFERENCE. The placement was a deliberate implementation decision: the preference module does **not** consume `FeedbackProcessedEvent` (a decision locked at lld/preference.md:692), so the batch counter/cursor and the AI-orchestration glue were put on the feedback side, calling into preference only at the final `applyDeltas` boundary. This sweep **documents** the placement (it was previously undescribed in this LLD) but does **not** relocate the pipeline — moving it behind a preference seam is a larger refactor (cursor ownership, event subscription, AI-task ownership) than this conformance pass should attempt. **Decision needed:** accept the cross-cutting placement as the v1 contract (and amend the HLD boundary statement to carve out the PREFERENCE delta orchestration), or schedule a follow-up to relocate the pipeline behind the preference module.
 
 ---
 
@@ -394,7 +412,9 @@ public interface MisclassificationCorrectionMapper {
 }
 ```
 
-`destinationResult` is a custom-mapped field via `@Named("readDestinationResult")` — it deserialises the JSONB into a typed shell when the destination is known. On unknown shapes (e.g. an old row whose schema has drifted) it falls back to a generic `Map<String, Object>`.
+`destinationResult` is a custom-mapped field via `@Named("readDestinationResult")`.
+
+> **Shipped vs designed (feedback-3):** the originally-designed typed-shell deserialisation — switch on the row's destination to materialise each destination's `Result` record, falling back to a generic `Map<String, Object>` on unknown/drifted shapes — was **not** built. In v1 `readDestinationResult` deliberately passes the **raw `JsonNode` through verbatim**. This is acceptable because the DTO surface (`RoutingDecisionDto.destinationResult`) is typed `Object`: Jackson serialises whatever the destination dispatcher placed in the JSONB column straight back to the client, with no information loss versus a typed shell. The typed-shell decode is deferred — see the [`RoutingLogMapper` javadoc](../src/main/java/com/example/mealprep/feedback/api/mapper/RoutingLogMapper.java); revisit it only if a consumer needs server-side access to typed fields of `destinationResult`.
 
 ---
 
@@ -693,15 +713,9 @@ Published via the standard `ApplicationEventPublisher` after the relevant write 
 
 ### Consumed
 
-The feedback module is the publisher of its main events; it does **not** listen to its own. It does, however, consume one cross-module event:
+The feedback module is the publisher of its main events; it does **not** listen to its own, and the shipped module consumes **no cross-module event**.
 
-```java
-@TransactionalEventListener(phase = AFTER_COMMIT)
-@Async
-public void onAiCallSucceeded(AiCallSucceededEvent event) { ... }
-```
-
-This is purely for **telemetry**: when the classifier call lands, the listener stamps the `lastClassifiedAt` field on the feedback entry by joining `event.traceId()` against `feedback_entries.trace_id`. The listener never alters classification outcome — that path runs synchronously inside Flow 2.
+> **Shipped vs designed (feedback-5):** an earlier draft of this section specified a telemetry-only `@TransactionalEventListener` on `AiCallSucceededEvent` that would join `event.traceId()` against `feedback_entries.trace_id` to stamp `lastClassifiedAt`. No such listener was built. Instead, `lastClassifiedAt` is stamped **inline inside Flow 2's classification DB writes** — `FeedbackClassificationListener` calls the `updateSubmissionStatusAndLastClassifiedAt` (and the decrement-and-stamp variant on the revert-to-`RECEIVED` path) repository methods on every classification transition. Stamping it on the synchronous write rather than via an async telemetry event is simpler and keeps the field honest for the [feedback-01i retry sweep](#flow-2-classification), which measures time-since-last-attempt. The `AiCallSucceededEvent` listener is therefore not part of the shipped contract.
 
 ---
 

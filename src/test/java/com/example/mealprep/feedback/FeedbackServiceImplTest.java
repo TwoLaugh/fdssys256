@@ -296,7 +296,7 @@ class FeedbackServiceImplTest {
   }
 
   @Test
-  void getByIds_omitsMissingIds_silently() {
+  void getByIds_omitsMissingIds_silently_viaBatchedQuery() {
     UUID userId = UUID.randomUUID();
     UUID hitId = UUID.randomUUID();
     UUID missId = UUID.randomUUID();
@@ -316,19 +316,67 @@ class FeedbackServiceImplTest {
             null,
             Instant.now(),
             Instant.now());
-    when(feedbackEntryRepository.findWithRoutingByIdAndUserId(hitId, userId))
-        .thenReturn(Optional.of(hit));
-    when(feedbackEntryRepository.findWithRoutingByIdAndUserId(missId, userId))
-        .thenReturn(Optional.empty());
+    // Batched finder returns only the owned/present entry; the missing id is simply absent (no
+    // per-id round-trip). feedback-7: getByIds must not fan out to findWithRoutingByIdAndUserId.
+    when(feedbackEntryRepository.findByIdInAndUserId(List.of(hitId, missId), userId))
+        .thenReturn(List.of(hit));
     when(entryMapper.toDto(hit)).thenReturn(hitDto);
-    when(clarificationQueryRepository.findFirstByFeedbackEntryIdAndStatus(
-            eq(hitId), eq(ClarificationStatus.PENDING)))
-        .thenReturn(Optional.empty());
+    when(clarificationQueryRepository.findClarificationRefsByFeedbackEntryIdInAndStatus(
+            eq(List.of(hitId)), eq(ClarificationStatus.PENDING)))
+        .thenReturn(List.of());
 
     List<FeedbackEntryDto> result = queryService().getByIds(userId, List.of(hitId, missId));
 
     assertThat(result).hasSize(1);
     assertThat(result.get(0).id()).isEqualTo(hitId);
+    // No N+1: the per-id detail loader is never touched.
+    verify(feedbackEntryRepository, never()).findWithRoutingByIdAndUserId(any(), any());
+  }
+
+  @Test
+  void getByIds_populatesPendingClarificationId_fromBatchedLookup() {
+    UUID userId = UUID.randomUUID();
+    UUID hitId = UUID.randomUUID();
+    UUID pendingQueryId = UUID.randomUUID();
+    FeedbackEntry hit = FeedbackTestData.feedbackEntry(userId, "ambiguous");
+    hit.setId(hitId);
+    FeedbackEntryDto baseDto =
+        new FeedbackEntryDto(
+            hitId,
+            userId,
+            "ambiguous",
+            null,
+            SubmissionStatus.CLARIFICATION_PENDING,
+            0,
+            null,
+            null,
+            List.of(),
+            null,
+            Instant.now(),
+            Instant.now());
+    when(feedbackEntryRepository.findByIdInAndUserId(List.of(hitId), userId))
+        .thenReturn(List.of(hit));
+    when(entryMapper.toDto(hit)).thenReturn(baseDto);
+    ClarificationQueryRepository.PendingClarificationRef ref =
+        new ClarificationQueryRepository.PendingClarificationRef() {
+          @Override
+          public UUID getFeedbackEntryId() {
+            return hitId;
+          }
+
+          @Override
+          public UUID getQueryId() {
+            return pendingQueryId;
+          }
+        };
+    when(clarificationQueryRepository.findClarificationRefsByFeedbackEntryIdInAndStatus(
+            eq(List.of(hitId)), eq(ClarificationStatus.PENDING)))
+        .thenReturn(List.of(ref));
+
+    List<FeedbackEntryDto> result = queryService().getByIds(userId, List.of(hitId));
+
+    assertThat(result).hasSize(1);
+    assertThat(result.get(0).pendingClarificationQueryId()).isEqualTo(pendingQueryId);
   }
 
   // ---------------- listByUser ----------------
@@ -824,7 +872,8 @@ class FeedbackServiceImplTest {
                 "the salt was too much",
                 com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(eq(entry), eq(request))).thenReturn(synthetic);
+    when(correctionReplayer.buildSynthetic(eq(entry), eq(original), eq(request)))
+        .thenReturn(synthetic);
     UUID replayLogId = UUID.randomUUID();
     var replayResult =
         new com.example.mealprep.feedback.domain.service.internal.FeedbackRouter.RouteReplayResult(
@@ -914,7 +963,8 @@ class FeedbackServiceImplTest {
                 "x",
                 com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(eq(entry), eq(request))).thenReturn(synthetic);
+    when(correctionReplayer.buildSynthetic(eq(entry), eq(original), eq(request)))
+        .thenReturn(synthetic);
     UUID replayLogId = UUID.randomUUID();
     when(correctionReplayer.replay(eq(entry), eq(synthetic)))
         .thenReturn(
@@ -972,7 +1022,8 @@ class FeedbackServiceImplTest {
                 "x",
                 com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()),
             com.example.mealprep.feedback.domain.entity.RoutingDecision.AUTO_ROUTED);
-    when(correctionReplayer.buildSynthetic(eq(entry), eq(request))).thenReturn(synthetic);
+    when(correctionReplayer.buildSynthetic(eq(entry), eq(original), eq(request)))
+        .thenReturn(synthetic);
     UUID replayLogId = UUID.randomUUID();
     when(correctionReplayer.replay(eq(entry), eq(synthetic)))
         .thenReturn(

@@ -71,7 +71,8 @@ public final class ToolDefinitions {
     itemRequired.add("extractedFeedback");
     itemRequired.add("structuredPayload");
 
-    // overallConfidence
+    // overallConfidence — optional aggregate the classifier MAY emit (LLD §DTOs line 276); not in
+    // the required list, so a classifier that omits it still produces a valid tool-use payload.
     ObjectNode overall = properties.putObject("overallConfidence");
     overall.put("type", "number");
     overall.put("minimum", 0.0);
@@ -83,7 +84,6 @@ public final class ToolDefinitions {
 
     ArrayNode required = schema.putArray("required");
     required.add("classifications");
-    required.add("overallConfidence");
 
     return new ToolDefinition(
         CLASSIFY_FEEDBACK_TOOL_NAME,

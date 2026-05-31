@@ -103,10 +103,12 @@ class FeedbackMutationKillsTest {
     assertThat(schema.get("type").asText()).isEqualTo("object");
     JsonNode properties = schema.get("properties");
     assertThat(properties).isNotNull();
-    // Top-level required: classifications + overallConfidence.
+    // Top-level required: classifications only. overallConfidence is the optional aggregate the
+    // classifier MAY emit (LLD §DTOs line 276 / feedback-1), so it must NOT be in `required`.
     List<String> requiredTop = new ArrayList<>();
     schema.get("required").forEach(n -> requiredTop.add(n.asText()));
-    assertThat(requiredTop).containsExactlyInAnyOrder("classifications", "overallConfidence");
+    assertThat(requiredTop).containsExactly("classifications");
+    assertThat(requiredTop).doesNotContain("overallConfidence");
 
     // classifications is an array bounded [0..4].
     JsonNode classifications = properties.get("classifications");
@@ -432,6 +434,47 @@ class FeedbackMutationKillsTest {
       assertThat(validator.validate(new Holder(Destination.RECIPE))).isEmpty();
       java.util.Set<ConstraintViolation<Holder>> withNull = validator.validate(new Holder(null));
       assertThat(withNull).isNotEmpty();
+    } finally {
+      factory.close();
+    }
+  }
+
+  /**
+   * feedback-1: {@code overallConfidence} is the optional aggregate the classifier MAY emit (LLD
+   * §DTOs line 276). A null value must validate (no {@code @NotNull}); a present value is still
+   * range-checked [0,1]. Asserting both branches kills any future re-introduction of
+   * {@code @NotNull} on the field and pins the range guard.
+   */
+  @Test
+  void classificationResult_overallConfidenceIsOptional_butRangeCheckedWhenPresent() {
+    var classifications =
+        List.of(
+            new com.example.mealprep.feedback.api.dto.ClassificationOutput(
+                Destination.PREFERENCE,
+                new java.math.BigDecimal("0.90"),
+                "no cream sauces",
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()));
+    ValidatorFactory factory = Validation.buildDefaultValidatorFactory();
+    try {
+      Validator validator = factory.getValidator();
+      // null overallConfidence → valid (optional, no @NotNull).
+      assertThat(
+              validator.validate(
+                  new com.example.mealprep.feedback.api.dto.ClassificationResult(
+                      classifications, null, "notes")))
+          .isEmpty();
+      // present, in-range → valid.
+      assertThat(
+              validator.validate(
+                  new com.example.mealprep.feedback.api.dto.ClassificationResult(
+                      classifications, new java.math.BigDecimal("0.42"), null)))
+          .isEmpty();
+      // present, out-of-range → still rejected by @DecimalMax.
+      assertThat(
+              validator.validate(
+                  new com.example.mealprep.feedback.api.dto.ClassificationResult(
+                      classifications, new java.math.BigDecimal("1.5"), null)))
+          .isNotEmpty();
     } finally {
       factory.close();
     }

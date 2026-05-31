@@ -11,6 +11,7 @@ import com.example.mealprep.feedback.domain.entity.CorrectionReplayStatus;
 import com.example.mealprep.feedback.domain.entity.FeedbackEntry;
 import com.example.mealprep.feedback.domain.entity.RoutingDecision;
 import com.example.mealprep.feedback.domain.entity.RoutingFailureKind;
+import com.example.mealprep.feedback.domain.entity.RoutingLogEntry;
 import com.example.mealprep.feedback.domain.entity.RoutingStatus;
 import com.example.mealprep.feedback.domain.service.internal.ConfidenceGate;
 import com.example.mealprep.feedback.domain.service.internal.CorrectionReplayer;
@@ -18,6 +19,7 @@ import com.example.mealprep.feedback.domain.service.internal.FeedbackRouter;
 import com.example.mealprep.feedback.spi.Destination;
 import com.example.mealprep.feedback.testdata.FeedbackTestData;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -36,6 +38,22 @@ class CorrectionReplayerTest {
     return new CorrectionReplayer(router, objectMapper);
   }
 
+  /** Original routing-log row carrying the given structuredPayload JSON. */
+  private RoutingLogEntry originalWithPayload(FeedbackEntry entry, ObjectNode payload) {
+    return RoutingLogEntry.builder()
+        .id(UUID.randomUUID())
+        .feedbackEntry(entry)
+        .destination(Destination.PREFERENCE)
+        .confidence(new BigDecimal("0.900"))
+        .extractedFeedback("x")
+        .structuredPayload(payload)
+        .routingDecision(RoutingDecision.AUTO_ROUTED)
+        .status(RoutingStatus.APPLIED)
+        .classificationAttempt(1)
+        .routedAt(java.time.Instant.now())
+        .build();
+  }
+
   @Test
   void buildSynthetic_setsConfidenceOne_fullText_autoRouted_payloadFromUiContext() {
     UUID recipeId = UUID.randomUUID();
@@ -44,11 +62,14 @@ class CorrectionReplayerTest {
     FeedbackEntry entry = FeedbackTestData.feedbackEntry(UUID.randomUUID(), "full feedback text");
     entry.setUiContext(
         new UiContextDocument(Screen.PLAN_MEAL_DETAIL, recipeId, 2, mealSlotId, planId, null));
+    RoutingLogEntry original = originalWithPayload(entry, objectMapper.createObjectNode());
 
     ConfidenceGate.ScoredClassification scored =
         replayer()
             .buildSynthetic(
-                entry, FeedbackTestData.correctionRequest(Destination.PROVISIONS, "note"));
+                entry,
+                original,
+                FeedbackTestData.correctionRequest(Destination.PROVISIONS, "note"));
 
     assertThat(scored.classification().destination()).isEqualTo(Destination.PROVISIONS);
     assertThat(scored.classification().confidence()).isEqualByComparingTo(BigDecimal.ONE);
@@ -61,24 +82,74 @@ class CorrectionReplayerTest {
   }
 
   @Test
-  void buildSynthetic_omitsNullUiContextFields() {
+  void buildSynthetic_omitsNullUiContextFields_whenOriginalPayloadAlsoEmpty() {
     FeedbackEntry entry = FeedbackTestData.feedbackEntry(UUID.randomUUID(), "t");
     entry.setUiContext(new UiContextDocument(Screen.GENERAL, null, null, null, null, null));
+    RoutingLogEntry original = originalWithPayload(entry, objectMapper.createObjectNode());
 
     ConfidenceGate.ScoredClassification scored =
         replayer()
             .buildSynthetic(
-                entry, FeedbackTestData.correctionRequest(Destination.PREFERENCE, null));
+                entry, original, FeedbackTestData.correctionRequest(Destination.PREFERENCE, null));
 
     assertThat(scored.classification().structuredPayload().isEmpty()).isTrue();
+  }
+
+  /**
+   * feedback-2: when the recipeId lived only in the <i>original</i> routing payload (not in the UI
+   * context), buildSynthetic must lift it so the replay payload matches what the precondition
+   * accepted. Without the back-fill the synthetic would carry an empty payload.
+   */
+  @Test
+  void buildSynthetic_liftsRecipeIdFromOriginalPayload_whenAbsentFromUiContext() {
+    UUID recipeId = UUID.randomUUID();
+    FeedbackEntry entry = FeedbackTestData.feedbackEntry(UUID.randomUUID(), "redo this");
+    // UI context has NO recipeId.
+    entry.setUiContext(new UiContextDocument(Screen.GENERAL, null, null, null, null, null));
+    ObjectNode originalPayload = objectMapper.createObjectNode();
+    originalPayload.put("recipeId", recipeId.toString());
+    RoutingLogEntry original = originalWithPayload(entry, originalPayload);
+
+    ConfidenceGate.ScoredClassification scored =
+        replayer()
+            .buildSynthetic(
+                entry,
+                original,
+                FeedbackTestData.correctionRequest(Destination.RECIPE, "to recipe"));
+
+    assertThat(scored.classification().structuredPayload().get("recipeId").asText())
+        .isEqualTo(recipeId.toString());
+  }
+
+  /** UI context wins over the original payload when both carry a recipeId (more recent truth). */
+  @Test
+  void buildSynthetic_uiContextRecipeIdWins_overOriginalPayload() {
+    UUID uiRecipeId = UUID.randomUUID();
+    UUID payloadRecipeId = UUID.randomUUID();
+    FeedbackEntry entry = FeedbackTestData.feedbackEntry(UUID.randomUUID(), "redo");
+    entry.setUiContext(
+        new UiContextDocument(Screen.RECIPE_DETAIL, uiRecipeId, 1, null, null, null));
+    ObjectNode originalPayload = objectMapper.createObjectNode();
+    originalPayload.put("recipeId", payloadRecipeId.toString());
+    RoutingLogEntry original = originalWithPayload(entry, originalPayload);
+
+    ConfidenceGate.ScoredClassification scored =
+        replayer()
+            .buildSynthetic(
+                entry, original, FeedbackTestData.correctionRequest(Destination.RECIPE, null));
+
+    assertThat(scored.classification().structuredPayload().get("recipeId").asText())
+        .isEqualTo(uiRecipeId.toString());
   }
 
   @Test
   void replay_delegatesToRouter() {
     FeedbackEntry entry = FeedbackTestData.feedbackEntry(UUID.randomUUID(), "t");
+    RoutingLogEntry original = originalWithPayload(entry, objectMapper.createObjectNode());
     ConfidenceGate.ScoredClassification scored =
         replayer()
-            .buildSynthetic(entry, FeedbackTestData.correctionRequest(Destination.NUTRITION, null));
+            .buildSynthetic(
+                entry, original, FeedbackTestData.correctionRequest(Destination.NUTRITION, null));
     FeedbackRouter.RouteReplayResult expected =
         new FeedbackRouter.RouteReplayResult(UUID.randomUUID(), RoutingStatus.APPLIED, null);
     when(router.routeOneForReplay(eq(entry.getId()), any())).thenReturn(expected);
