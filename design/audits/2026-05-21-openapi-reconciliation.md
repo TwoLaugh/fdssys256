@@ -1,5 +1,21 @@
 # OpenAPI Spec / Controller Reconciliation Audit
 
+> **⚠️ SUPERSEDED — point-in-time snapshot (2026-05-21). Counts below are stale as of 2026-05-31.**
+>
+> This is a frozen snapshot taken at the 2026-05-21 spec state (134 paths). Whole modules and
+> dozens of endpoints have shipped since — the spec now carries **189 distinct paths** (notification,
+> grocery, recipe-image, recipe-rating, taste-profile, lifestyle-config, preference-archive, and the
+> recipe import preview/confirm + version-history surfaces, among others). **The Headline metrics and
+> coverage tables in this document are therefore out of date and must NOT be cited as the current
+> count.**
+>
+> Crucially, the audit's *core finding still holds*: the spec ↔ controller set-difference is **0 in
+> both directions** (every controller path is in the spec and vice-versa) — only the counts/coverage
+> table here are stale, not the spec's completeness. Per finding `xcut-contract-1`
+> (`design/audits/2026-05-29-v1-backend-conformance-audit.md`). For the live count run the
+> path-coverage check against `src/main/resources/openapi/openapi.yaml`; do not trust the numbers
+> below for anything other than historical context.
+
 **Ticket:** `tickets/infra/01c-openapi-spec-audit.md`
 **Date:** 2026-05-21
 **Scope:** Verification + spec-only corrections. No controller changes.

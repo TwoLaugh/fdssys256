@@ -2,6 +2,8 @@
 
 A cross-cutting architectural pattern for how AI-driven and other non-user-originated traffic interacts with the system's REST API surface.
 
+> **v1 status (2026-05-31).** The `OriginFilter` foundation described below shipped in full (`core.origin`, see `lld/core.md §Origin-Tracking` and `tickets/core/02b`), but **the v1 system-driven mutations do not route through it.** The only system-driven consumers that exist — the feedback bridges (`feedback.bridge.*`) — apply classifier output via **in-process service calls** carrying explicit `AuditMetadata` (origin `ai-feedback`, `actor_type = AI`, `origin_trace = feedback-<id>`), *not* via a self-issued HTTP request through the filter. The filter's confidence-floor, rate-limit, depth-guard, and idempotency policies are re-implemented at the bridge seam (`FeedbackBridgeSupport`) for these in-process callers; the `OriginFilter` itself is **reserved for future external automation** (scheduled jobs / Pattern-B service-token traffic) that does cross the HTTP boundary. So the "one endpoint, two callers, one filter" framing below describes the *target* shape; in v1 it is the endpoint + the bridge seam that share the policy, not the filter. See `§v1 deviations (load-bearing)` near the bottom and findings `xcut-4` / `xcut-6` in `design/audits/2026-05-29-v1-backend-conformance-audit.md`.
+
 ## The pattern in one paragraph
 
 When the system needs to mutate user data on the user's behalf — feedback application, AI-driven preference learning, system-triggered re-optimisation — **it calls the same REST endpoints a human user would call**, with a header (and parallel audit metadata) identifying the origin as non-user. The endpoint applies origin-specific policies on top of its usual behaviour: confidence-floor checks, separate audit trail, rate limiting, recursion guard. Tests of the endpoint cover both code paths simultaneously.
@@ -73,7 +75,11 @@ Inside controllers (or, better, a filter), origin-tracking applies these policie
 
 3. **Audit attribution.** Audit log rows record `actor_type` (USER / AI / SYSTEM) and `origin_trace`. Decision-log rows similarly. This makes "who changed this" answerable.
 
-4. **Event metadata.** Domain events fired downstream carry the original `X-Origin` and `X-Origin-Trace`. Listeners can filter (e.g. notification service might suppress "we updated your preferences" notifications when origin was the user themselves directly editing).
+4. **Event metadata.** Domain events fired downstream MAY carry the original `X-Origin` and `X-Origin-Trace`. Listeners can filter (e.g. notification service might suppress "we updated your preferences" notifications when origin was the user themselves directly editing).
+
+   **v1 design (opt-in, not on the base interface).** Origin metadata is carried by an opt-in sub-interface `OriginAwareEvent { Origin origin(); String originTrace(); }` (in `core.events`), *not* by the base `MealPrepEvent`. Only the events that actually need provenance — the system-driven mutation events from `feedback-01g` / adaptation / notification — implement `OriginAwareEvent`; USER-origin events from earlier modules stay on `MealPrepEvent` and surface no origin fields. Cross-cutting listeners (audit, debug, trace-id) accept the base `MealPrepEvent` and ignore origin.
+
+   *Implication for notification listeners:* a listener can distinguish "you changed this" vs "AI changed this" **only for events that implement `OriginAwareEvent`** — it cannot do so uniformly across *all* event types, because the base interface carries no origin. A listener that wants the user-vs-AI distinction must subscribe to (or `instanceof`-narrow on) `OriginAwareEvent`. Widening origin onto every event was considered and deliberately deferred: most events are unambiguously user-origin and gain nothing from an always-null origin field. See finding `xcut-6`.
 
 ### Recursion guard
 
@@ -90,7 +96,7 @@ Defence in depth:
 |---|---|
 | Audit log rows (per-module) | `actor_type` column (USER / AI / SYSTEM), `origin_trace` column |
 | Decision log | `triggered_by` field (already exists per `core.audit.DecisionLog`); extend with `origin` if not already represented |
-| Domain events | Add `origin` and `originTrace` to base event interface |
+| Domain events | `origin` + `originTrace` on the opt-in `OriginAwareEvent` sub-interface (NOT the base `MealPrepEvent`); only system-driven mutation events implement it — see §"Authorization differential" item 4 |
 | Notification log | `origin` field — distinguishes "AI updated your preferences" from "Partner updated your preferences" |
 
 ## Concrete examples
@@ -145,7 +151,7 @@ A minimal implementation needs:
 3. **`@OriginAware` annotation (optional)** — on controllers to mark "this endpoint can receive non-user origin"; absence means user-only (defense-in-depth).
 4. **`AuditLogWriter`** — extended to accept the OriginContext and persist actor_type + origin_trace.
 5. **Service token table + auth provider** — for Pattern B authentication.
-6. **Event-base interface extension** — `OriginAwareEvent { Origin getOrigin(); String getOriginTrace(); }` that domain events implement.
+6. **Opt-in event sub-interface** — `OriginAwareEvent extends MealPrepEvent { Origin origin(); String originTrace(); }` that *origin-bearing* domain events implement (NOT a field on the base event interface — see §"Authorization differential" item 4 for the rationale and its UX implication).
 
 Roughly 3-5 days of work for the foundation; then each feedback bridge / scheduler / SPI applies it.
 
@@ -184,6 +190,16 @@ These are decisions deferred to the LLD / implementation PR:
 
 These belong in the LLD for the OriginFilter implementation, not this pattern doc.
 
+## v1 deviations (load-bearing)
+
+Recorded here so the doc and the shipped system agree (audit 2026-05-29, findings xcut-4 / xcut-6):
+
+1. **Feedback bridges call in-process, not through `OriginFilter`.** The only system-driven mutations in v1 are the feedback bridges (`feedback.bridge.NutritionFeedbackBridgeImpl` etc.). They run as AFTER_COMMIT listeners under a `REQUIRES_NEW` `TransactionTemplate` and invoke the destination module's update service directly (e.g. `NutritionUpdateService.applyFeedbackAdjustment`), passing explicit `AuditMetadata` (origin `ai-feedback`, `actor_type = AI`, `origin_trace = feedback-<id>`). They do **not** issue a self-HTTP request, so `OriginFilter` never sees them. This is a deliberate v1 simplification — an in-process call avoids the self-HTTP round-trip and keeps the bridge inside one transaction with its idempotency row. The cost: the filter's confidence-floor / rate-limit / depth-guard / idempotency policies are **re-implemented at the bridge seam** (`FeedbackBridgeSupport.belowConfidenceFloor`, the idempotency table), not enforced centrally. The `OriginFilter` is therefore **not yet load-bearing for any production traffic**; it is reserved for future external automation (Pattern-B service-token / scheduled jobs) that genuinely crosses the HTTP boundary. When such a consumer lands, the filter's policies become the single enforcement point as the pattern intends.
+
+2. **Origin on events is opt-in (`OriginAwareEvent`), not on the base interface.** See §"Authorization differential" item 4.
+
 ## Bottom line
 
-One endpoint surface, two callers (user + system), one set of tests, differential policies enforced by a single filter. The pattern collapses what would otherwise be a parallel API duplication problem. First consumer: feedback bridges (Tier B1.4 in the frontend-readiness roadmap). Subsequent consumers: scheduled jobs, AI adaptation pipeline, future automation surfaces.
+*Target shape:* one endpoint surface, two callers (user + system), one set of tests, differential policies enforced by a single filter — collapsing what would otherwise be a parallel API duplication problem.
+
+*v1 reality:* the foundation (`OriginFilter`, `OriginContext`, service-token auth) shipped, but the only system-driven consumer (feedback bridges) applies via in-process service calls + explicit `AuditMetadata`, with the filter's policies mirrored at the bridge seam (see §"v1 deviations" above). The filter awaits its first HTTP-crossing consumer (scheduled jobs / external automation), at which point it becomes load-bearing.

@@ -42,6 +42,9 @@ paths:
     $ref: 'paths/core.yaml#/decisionsByTrace'
   /api/v1/admin/decision-log/{decisionId}/ancestry:
     $ref: 'paths/core.yaml#/decisionAncestry'
+  # ===== ops / admin status =====
+  /api/v1/admin/status:
+    $ref: 'paths/core.yaml#/adminStatus'
   # ===== admin / ai =====
   /api/v1/admin/ai/cost-summary:
     $ref: 'paths/ai.yaml#/costSummary'
@@ -509,6 +512,7 @@ components:
     # core
     DecisionLogDto: { $ref: 'schemas/core.yaml#/DecisionLogDto' }
     AncestryResponse: { $ref: 'schemas/core.yaml#/AncestryResponse' }
+    AdminStatusDto: { $ref: 'schemas/core.yaml#/AdminStatusDto' }
     # preference
     DietaryIdentityExceptionDto: { $ref: 'schemas/preference.yaml#/DietaryIdentityExceptionDto' }
     DietaryIdentityDto: { $ref: 'schemas/preference.yaml#/DietaryIdentityDto' }

@@ -706,7 +706,7 @@ Deferred deliberately — these belong elsewhere or to a later phase:
 - **Frontend / UI / API consumer concerns** — inbox layout, badge UI, in-context toasts.
 - **Notification digest / weekly summary** — a possible future kind.
 - **Per-household shared inbox** — v1 routes to primary user only; see [Household routing](#household-routing).
-- **Retention / archival policy** — HLD silent. Tentative plan: hard-delete `READ`/`DISMISSED`/`ACTIONED` rows after 90 days via a `@Scheduled` job. Not committing until volume estimates land. **Worth user review.**
+- **Retention / archival / aging of user-facing `notification` rows (GAP-39)** — **DEFERRED to v2** (decision recorded 2026-05-31; audit finding `xcut-5` / `xcut-completeness-5`, rated LOW). v1 ships **no** aging/archival sweep for the `notification` table and **no** `is_archived` flag or age cutoff: rows accumulate indefinitely. This is an accepted v1 position — notification rows grow slowly (one row per delivered notification, bundled where possible) and unbounded growth is a gradual *operational* concern, not a correctness or safety issue, so it does not gate the v1 test pass. NOTE: `DispatchLogCleanupScheduler` (in `notification.scanner.internal`) sweeps the **scanner dispatch-log** tables only — it does **not** touch the user-facing `notification` rows; do not mistake it for a notification-row retention policy. v2 plan (not committed): hard-delete or archive `READ`/`DISMISSED`/`ACTIONED` rows past a ~90-day cutoff via a `@Scheduled` job once volume estimates land. **Worth user review** for the exact cutoff + delete-vs-archive choice.
 - **Admin / support visibility** of delivery logs — v1 scopes to the notification's owner only.
 
 ## Open Questions

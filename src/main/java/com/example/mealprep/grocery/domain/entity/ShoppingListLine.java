@@ -27,8 +27,9 @@ import org.hibernate.annotations.UpdateTimestamp;
  * boughtPricePence} are populated by Tier 2 mark-bought / Tier 3 order reconciliation. {@code
  * fulfilmentStatus} is a per-line marker, not a soft-delete; the line stays for history.
  *
- * <p>TODO(core-03): a write boundary that should normalise {@code ingredientMappingKey} via {@code
- * IngredientMappingKeys.normalise()} once core-03 lands. 01a writes nothing — forward note only.
+ * <p>Mapping-key normalisation is enforced at the write boundary: {@code ShoppingListCalculator}
+ * (and the mark-bought / reconciliation paths) normalise {@code ingredientMappingKey} via {@code
+ * IngredientMappingKeys.normalise()} before persisting, so rows always carry normalised keys.
  */
 @Entity
 @Table(name = "shopping_list_lines")

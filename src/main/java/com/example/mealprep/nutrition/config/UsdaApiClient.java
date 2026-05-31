@@ -1,5 +1,6 @@
 package com.example.mealprep.nutrition.config;
 
+import com.example.mealprep.nutrition.domain.service.internal.UsdaCallTracker;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import io.github.resilience4j.retry.annotation.Retry;
 import java.util.Optional;
@@ -25,10 +26,13 @@ public class UsdaApiClient {
 
   private final RestClient restClient;
   private final String apiKey;
+  private final UsdaCallTracker callTracker;
 
-  public UsdaApiClient(RestClient.Builder builder, UsdaApiConfig config) {
+  public UsdaApiClient(
+      RestClient.Builder builder, UsdaApiConfig config, UsdaCallTracker callTracker) {
     this.restClient = builder.baseUrl(config.getBaseUrl()).build();
     this.apiKey = config.getApiKey();
+    this.callTracker = callTracker;
   }
 
   /**
@@ -40,6 +44,9 @@ public class UsdaApiClient {
   @Retry(name = "usda", fallbackMethod = "searchFallback")
   @RateLimiter(name = "usda")
   public Optional<UsdaSearchResultDto> search(String searchTerm) {
+    // Record the outbound-call attempt for the admin/status liveness signal (C-G-032), stamped
+    // before dispatch so a timed-out/failed call still counts as "we touched USDA".
+    callTracker.recordCall();
     try {
       UsdaSearchResultDto result =
           restClient

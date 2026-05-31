@@ -31,8 +31,10 @@ import org.hibernate.annotations.UpdateTimestamp;
  * automationFailureLog} is mapped to {@code List<AutomationFailureRecord>} via JSONB.
  * {@code @Version} guards the aggregate.
  *
- * <p>TODO(core-03): provider-line writes should normalise mapping keys via {@code
- * IngredientMappingKeys.normalise()} once core-03 lands. 01a writes nothing — forward note only.
+ * <p>Mapping-key normalisation is enforced at the write boundary: order/provider-line writes
+ * normalise via {@code IngredientMappingKeys.normalise()} in {@code GroceryServiceImpl} / {@code
+ * ShoppingListCalculator} before persistence, so persisted rows always carry normalised keys (this
+ * entity does not re-normalise on read).
  */
 @Entity
 @Table(name = "grocery_orders")

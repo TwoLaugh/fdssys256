@@ -96,6 +96,13 @@ public interface AiCallLogRepository extends JpaRepository<AiCallLog, UUID> {
   long sumCostSince(@Param("since") Instant since);
 
   /**
+   * Timestamp of the newest call-log row (any status) — backs the {@code admin/status} "last AI
+   * call" signal. {@code null} when the table is empty.
+   */
+  @Query("select max(c.createdAt) from AiCallLog c")
+  Instant findMaxCreatedAt();
+
+  /**
    * Per-user rollup of calls + cost for non-system rows since a cutoff. Returns rows of [userId,
    * count, costSum] sorted by costSum DESC, ties broken by count DESC.
    */

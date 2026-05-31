@@ -29,6 +29,36 @@ DecisionLogDto:
     iteration: { type: integer, minimum: 0 }
     durationMs: { type: integer, nullable: true }
     createdAt: { type: string, format: date-time }
+AdminStatusDto:
+  type: object
+  required: [status, checkedAt, dbConnected, aiMonthToDatePence]
+  properties:
+    status:
+      type: string
+      enum: [UP, DEGRADED]
+      description: UP when the database is reachable; DEGRADED otherwise.
+    checkedAt:
+      type: string
+      format: date-time
+      description: When this snapshot was taken (UTC).
+    dbConnected:
+      type: boolean
+      description: True when a validation probe against the primary datasource succeeded.
+    lastAiCallAt:
+      type: string
+      format: date-time
+      nullable: true
+      description: Most recent AI provider call attempt, or null if none logged.
+    lastUsdaCallAt:
+      type: string
+      format: date-time
+      nullable: true
+      description: >-
+        Most recent USDA call this process made, or null if none since startup
+        (in-memory, single-instance signal; resets on restart).
+    aiMonthToDatePence:
+      type: number
+      description: System-wide AI spend in pence from the start of the current calendar month (UTC).
 AncestryResponse:
   type: object
   required: [ancestors, cycleDetected]
