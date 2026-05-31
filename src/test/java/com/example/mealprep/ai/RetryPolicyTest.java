@@ -103,4 +103,60 @@ class RetryPolicyTest {
     assertThat(RetryPolicy.backoffFor(RetryPolicy.Category.RATE_LIMIT, -3))
         .isEqualTo(Duration.ofMillis(RetryPolicy.RATE_LIMIT_BASE_BACKOFF_MS));
   }
+
+  // ---- jitter (ai-9) ----
+
+  @ParameterizedTest
+  @CsvSource({"1,1000", "2,2000", "3,4000"})
+  void backoffWithJitter_staysInHalfCeilingToCeilingBand_rateLimit(int attempt, long ceilingMs) {
+    java.util.random.RandomGenerator rng = new java.util.Random(123);
+    // Sample many times — every draw must land in [ceiling/2, ceiling] and never collapse to zero.
+    for (int i = 0; i < 200; i++) {
+      long ms =
+          RetryPolicy.backoffWithJitter(RetryPolicy.Category.RATE_LIMIT, attempt, rng).toMillis();
+      assertThat(ms).isBetween(ceilingMs / 2, ceilingMs);
+    }
+  }
+
+  @Test
+  void backoffWithJitter_minDraw_isHalfCeiling_maxDraw_isCeiling() {
+    // A generator returning 0 → exactly ceiling/2; returning bound-1 → exactly ceiling.
+    java.util.random.RandomGenerator min =
+        new java.util.random.RandomGenerator() {
+          @Override
+          public long nextLong() {
+            return 0;
+          }
+
+          @Override
+          public long nextLong(long bound) {
+            return 0;
+          }
+        };
+    java.util.random.RandomGenerator max =
+        new java.util.random.RandomGenerator() {
+          @Override
+          public long nextLong() {
+            return Long.MAX_VALUE;
+          }
+
+          @Override
+          public long nextLong(long bound) {
+            return bound - 1;
+          }
+        };
+    assertThat(RetryPolicy.backoffWithJitter(RetryPolicy.Category.TIMEOUT, 1, min))
+        .isEqualTo(Duration.ofMillis(100)); // 200/2
+    assertThat(RetryPolicy.backoffWithJitter(RetryPolicy.Category.TIMEOUT, 1, max))
+        .isEqualTo(Duration.ofMillis(200)); // full ceiling
+  }
+
+  @Test
+  void backoffWithJitter_nonRetryableCategories_areZero() {
+    java.util.random.RandomGenerator rng = new java.util.Random(1);
+    assertThat(RetryPolicy.backoffWithJitter(RetryPolicy.Category.AUTH, 1, rng))
+        .isEqualTo(Duration.ZERO);
+    assertThat(RetryPolicy.backoffWithJitter(RetryPolicy.Category.POLICY, 1, rng))
+        .isEqualTo(Duration.ZERO);
+  }
 }

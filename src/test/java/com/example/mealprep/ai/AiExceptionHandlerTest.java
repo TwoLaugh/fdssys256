@@ -62,6 +62,7 @@ class AiExceptionHandlerTest {
     var ex =
         new AiCostBudgetExceededException(
             userId,
+            com.example.mealprep.ai.event.BudgetScope.DAILY_USER,
             new BigDecimal("100.00"),
             new BigDecimal("50.00"),
             Duration.ofHours(24),
@@ -79,6 +80,7 @@ class AiExceptionHandlerTest {
     assertThat(resp.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("5401");
     ProblemDetail pd = resp.getBody();
     assertThat(pd.getProperties())
+        .containsEntry("scope", "DAILY_USER")
         .containsEntry("spentPence", new BigDecimal("100.00"))
         .containsEntry("limitPence", new BigDecimal("50.00"))
         .containsEntry("windowSeconds", Duration.ofHours(24).toSeconds());
@@ -90,6 +92,7 @@ class AiExceptionHandlerTest {
     var ex =
         new AiCostBudgetExceededException(
             userId,
+            com.example.mealprep.ai.event.BudgetScope.DAILY_USER,
             new BigDecimal("10.00"),
             new BigDecimal("5.00"),
             Duration.ofHours(1),

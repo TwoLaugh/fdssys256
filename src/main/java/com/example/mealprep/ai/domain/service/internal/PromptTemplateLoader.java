@@ -40,11 +40,24 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>Default source location is the classpath ({@code classpath:prompts/*.md}); a Maven {@code
  * <resource>} block in {@code pom.xml} copies {@code lld/prompts/} into the JAR under {@code
- * /prompts/}. Override for tests via {@code mealprep.ai.prompt-templates-source-path=classpath
- * :test-prompts/} or a filesystem path.
+ * /prompts/}. The {@code *.md} glob matches the structured wiring documents in {@code lld/prompts/}
+ * (each carrying an {@code AiTask name} / {@code Tier} / {@code ## System Prompt} / {@code ## User
+ * Prompt Template} table) — these are what this loader parses and audits. The per-module
+ * hand-assembled {@code *.txt} prompts under {@code prompts/<module>/} are <em>not</em> scanned;
+ * they are the v1 dispatch path (each {@code AiTask} ships its fully-rendered prompt under the
+ * conventional {@code "prompt"} variable). Override for tests via {@code
+ * mealprep.ai.prompt-templates-source-path=classpath:test-prompts/} or a filesystem path.
  *
- * <p>Failures are logged at WARN and the application continues — production callers fall back to
- * in-memory templates supplied via {@code AiTask.getSystemPrompt()}.
+ * <p>This loader records the template <em>body</em> (system + user) for audit / observability; it
+ * does <strong>not</strong> render placeholders at dispatch. Full Handlebars-style template
+ * rendering ({@code {{#if}}} etc.) wired into dispatch is finding {@code ai-1}, <strong>deferred to
+ * v1.5</strong> (see {@code lld/ai.md} Flow 1 steps 2–3). In v1 the {@code system_prompt} / {@code
+ * user_prompt_template} columns are the durable record of the designed prompt, not a live render
+ * source — the {@code AiTask} SPI has no {@code getSystemPrompt()} member; the calling module
+ * hand-assembles its prompt.
+ *
+ * <p>Failures are logged at WARN and the application continues — a missing/unreadable prompt file
+ * never blocks startup.
  */
 @Component
 public class PromptTemplateLoader {

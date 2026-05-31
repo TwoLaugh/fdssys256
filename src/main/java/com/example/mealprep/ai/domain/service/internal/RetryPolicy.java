@@ -1,6 +1,7 @@
 package com.example.mealprep.ai.domain.service.internal;
 
 import java.time.Duration;
+import java.util.random.RandomGenerator;
 
 /**
  * Pure, side-effect-free classifier mapping an Anthropic Messages failure (HTTP status, or a
@@ -97,12 +98,13 @@ public final class RetryPolicy {
   }
 
   /**
-   * Backoff delay before the next attempt of a retryable failure.
+   * The <em>nominal</em> (un-jittered) exponential backoff ceiling before the next attempt of a
+   * retryable failure: {@code base << (attempt-1)}. This is the deterministic upper bound; the
+   * actual wait applied by the dispatcher is {@link #backoffWithJitter} over this ceiling.
    *
    * @param category the failure category (must be retryable for a meaningful value).
    * @param attempt 1-based attempt number that just failed.
-   * @return the wait duration before the next attempt; {@link Duration#ZERO} for non-retryable
-   *     categories.
+   * @return the nominal wait duration; {@link Duration#ZERO} for non-retryable categories.
    */
   public static Duration backoffFor(Category category, int attempt) {
     int shift = Math.max(0, attempt - 1);
@@ -111,5 +113,28 @@ public final class RetryPolicy {
       case TIMEOUT, SEMANTIC -> Duration.ofMillis(TRANSIENT_BASE_BACKOFF_MS << shift);
       case AUTH, POLICY, UNKNOWN -> Duration.ZERO;
     };
+  }
+
+  /**
+   * Equal-jitter backoff (lld/ai.md Flow 2 — "exponential backoff + jitter"). Takes the nominal
+   * exponential ceiling from {@link #backoffFor} and returns {@code ceiling/2 + random(0,
+   * ceiling/2]}, so the wait is in {@code [ceiling/2, ceiling]}. Jitter de-synchronises retry
+   * storms (many clients rate-limited at the same instant must not all back off in lockstep)
+   * without ever collapsing to zero, which would defeat the backoff on a 429.
+   *
+   * @param category the failure category.
+   * @param attempt 1-based attempt number that just failed.
+   * @param random the randomness source (injected so tests are deterministic).
+   * @return the jittered wait; {@link Duration#ZERO} for non-retryable categories.
+   */
+  public static Duration backoffWithJitter(Category category, int attempt, RandomGenerator random) {
+    long ceilingMs = backoffFor(category, attempt).toMillis();
+    if (ceilingMs <= 0) {
+      return Duration.ZERO;
+    }
+    long half = ceilingMs / 2;
+    // half + uniform[0, half] → wait in [half, ceiling].
+    long jittered = half + (half > 0 ? random.nextLong(half + 1) : 0);
+    return Duration.ofMillis(jittered);
   }
 }

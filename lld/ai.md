@@ -12,6 +12,24 @@ Cross-module references: cheap-tier classification ([feedback-system.md](../desi
 
 ---
 
+## Shipped vs Designed — v1 delta (reconciliation, 2026-05-31)
+
+> **Read this first.** The sections below were written as the *forward* design. The shipped `ai` module is the 01a/01b/01d subset, and several names / shapes diverge. This section is the authoritative map of what actually shipped; where it conflicts with a later section, **this section wins for v1**. (Resolves audit findings ai-5, ai-6, ai-7, ai-8; records the ai-4 and ai-10 builds.)
+>
+> **SPI shape (ai-7).** The shipped `AiTask<T>` SPI is `type()`, `tier()`, `prompt()` (a `PromptRef(String name, int version)`), `outputType()`, `variables()` (`Map<String,Object>`), `tools()` (`Optional<List<ToolDefinition>>`), `userId()`/`traceId()` (`Optional<UUID>`). The idealised `getTaskType()/getSystemPrompt()/getUserPromptRef()/getContext()/getToolSchema()/getResponseType()/getTimeoutOverride()` member names in §SPI are the *designed* shape, **not** the shipped one. In particular there is **no `getSystemPrompt()`** — see Flow 1 note on ai-1 (v1.5). `TaskType` values shipped: `PREFERENCE_DELTA_UPDATE, INGREDIENT_MAPPING, INTAKE_PARSE, FEEDBACK_CLASSIFICATION, RECIPE_ADAPTATION, RECIPE_HTML_EXTRACTION, DISCOVERY_FILTERING, PLANNER_STAGE_C, PLANNER_PHASE2_AUGMENTATION` + three `EMBEDDING_*` sources. `ModelTier` shipped as `CHEAP | MID | HIGH` (not `FRONTIER/MID/CHEAP`).
+>
+> **Package / class names (ai-7).** Shipped config is `AiProperties` (`@ConfigurationProperties("mealprep.ai")`), not `AiConfig`; the admin REST surface is a single `AdminAiController` under `/api/v1/admin/ai/**` (not three controllers under `/api/v1/ai/...`); the read service is `AdminAiQueryService` returning `CostSummaryDto` / `AiCallLogDto` / `PromptTemplateDto` (not `AiCostTrackingService` / `CostAggregateDto` / `AiCallRecord`). The completion client is `AnthropicClient` + programmatic Resilience4j (ai-2); embeddings via `OpenAiEmbeddingClient`. Exceptions shipped: `AiException` (root), `AiUnavailableException`, `AiRateLimitException`, `AiInvalidRequestException`, `AiInvalidResponseException`, `AiCircuitOpenException`, `AiCostBudgetExceededException`, `AiTokenCapExceededException`. The `@ValidPromptRef` / `@ValidToolDefinition` validators and the `victools` tool-schema generator are **not** shipped (deferred with ai-1).
+>
+> **Cost model (ai-6, BUILT).** The two-scope model in Flow 1 step 5 / §Events / Decisions §7 **is** the shipped behaviour: a **soft DAILY_USER** scope (`mealprep.ai.budget.daily-*`, default soft → alert-and-proceed, publishing `CostBudgetExceededEvent`) and a **hard MONTHLY_TOTAL** system scope (`mealprep.ai.budget.monthly-*`, default hard → reject). `CostBudgetGuard` checks monthly first (system protection), then per-user. **Exception/status correction:** a hard breach throws **`AiCostBudgetExceededException` → HTTP 429** with a `Retry-After` header and a `scope` extension property — **not** `AiUnavailableException`/503 as the older Flow 1 step 5 prose said. 429 is correct because a cost cap is a rate concept (cost per unit time); calling modules still treat it as the same expected graceful-degrade signal. The `MONTHLY_TOTAL` event carries `userId = null` and a stable `SYSTEM_SCOPE_ID`. (Where Flow 1 step 5 says "throw `AiUnavailableException`", read "throw `AiCostBudgetExceededException` (429)".)
+>
+> **Token cap / Stage-C guard (ai-4, BUILT).** `TokenCapGuard` runs pre-dispatch (Flow 1 step 4 / Flow 6): it estimates input tokens from the rendered prompt's character length (`mealprep.ai.token-cap.chars-per-token`, default ~4 chars/token — a deliberate coarse proxy, no tokenizer dependency) and throws **`AiTokenCapExceededException` → HTTP 422** when the estimate exceeds the per-task cap (`mealprep.ai.token-cap.per-task.<TASK_TYPE>`, default `default-tokens=200000`; `PLANNER_STAGE_C` defaults tight at 32000). This is the AI-module enforcement of "candidates + rollups, never the pool" — a caller that shoves the underlying pool in trips the cap before the wire call. A true tokenizer-based count is a v1.5 refinement.
+>
+> **Admin authorisation (ai-10, BUILT — enforced, flagged cross-cutting).** `@PreAuthorize("hasRole('ADMIN')")` on `AdminAiController` is **inert** in v1 (the project does not enable `@EnableMethodSecurity` and the flat user model attaches only `ROLE_USER` — there is no `ROLE_ADMIN`). Rather than enabling method-security project-wide (which would simultaneously 403 every other module's admin endpoint), the admin AI surface is gated **imperatively** by `AiAdminGuard.requireAdmin()` against a config allowlist `mealprep.ai.admin.user-ids` — **fail-closed** (empty default ⇒ no non-admin reaches it): anonymous → 401, authenticated-non-admin → 403. This mirrors the `PlannerAuth` / `DiscoveryAdminController` idiom. When project-wide method-security lands, the `@PreAuthorize` annotations activate and this guard can retire.
+>
+> **API-key rotation log (ai-5, DEFERRED to v2).** The `api_key_rotation_log` table (`V20260501110200`), its entity, `ApiKeyRotationLog*` repository/mapper/DTO, the `/api/v1/ai/api-key-rotations` endpoint, and the startup `ApiKeyRotationDetector` (§Flow 7, §Decisions 6, the §Database / §SPI / §REST rows that mention them) are **not shipped and are deferred to v2** — see §Out of Scope. This is operations/security-audit hygiene with low v1 functional value (v1 rotates by redeploy; the key is already redacted everywhere and never logged) and a non-trivial build (table + entity + fingerprint detector + admin read surface). Treat every rotation-log mention below as a v2 target, not a v1 contract.
+
+---
+
 ## Package Layout
 
 ```
@@ -465,10 +483,14 @@ Concrete model ids (`claude-sonnet-4-20261001`, `claude-haiku-3.5-20250301`) liv
 2. PromptTemplateService.loadCurrent(ref) → LoadedTemplate (cache hit).
 3. Render: PromptTemplateRenderer.render(template, context).
 4. Token-cap: count(rendered) + 2x est. output > cap → AiTokenCapExceededException.
-5. Cost-cap evaluation:
-   - If daily cap reached → publish CostBudgetExceededEvent (soft alert), proceed with the call.
-   - If monthly cap reached → publish CostBudgetExceededEvent + throw AiUnavailableException.
-     **Calling modules treat this as expected and degrade per their LLD contract** (skip-and-flag,
+5. Cost-cap evaluation (two scopes — see the v1-delta §Cost model; `CostBudgetGuard` checks monthly first):
+   - If monthly (system-wide) hard cap reached → publish CostBudgetExceededEvent(MONTHLY_TOTAL, hardBlock) +
+     throw **`AiCostBudgetExceededException` (HTTP 429, `Retry-After`)**. *(Shipped: 429, not the 503
+     `AiUnavailableException` an earlier draft of this step named — a cost cap is a rate concept.)*
+   - If daily (per-user) cap reached → publish CostBudgetExceededEvent(DAILY_USER) (soft alert by default),
+     proceed with the call. (Configurable hard via `mealprep.ai.budget.daily-hard-block`, which then also
+     throws `AiCostBudgetExceededException`/429.)
+     **Calling modules treat the hard rejection as expected and degrade per their LLD contract** (skip-and-flag,
      defer-and-pending, or block-and-prompt — see [style-guide.md §AI Service — Graceful Degradation]).
      System never bricks; specific AI-only features surface "AI features paused" with a path to
      raise the cap (with friction).
@@ -627,7 +649,10 @@ Deferred deliberately — these belong elsewhere or to a later phase.
 - **Multi-provider abstraction.** Anthropic only in v1.
 - **Frontend / UI concerns.** Cost dashboard, prompt-viewer UI, call-log search UI — frontend LLD.
 - **Automated quality evaluation.** v1 ships mechanical metrics only. Golden-set CI job owned by the prompts repo when it lands.
+- **API-key rotation audit log (ai-5, deferred to v2).** The `api_key_rotation_log` table, entity, repository/mapper/DTO, startup `ApiKeyRotationDetector`, and the `/api/v1/ai/api-key-rotations` admin endpoint described in §Database (`V20260501110200`), §Flow 7, and §Decisions 6 are **not shipped**. This is ops/security-audit hygiene with low v1 functional value — the key is already redacted everywhere and never logged, and v1 rotates by redeploy — against a non-trivial build. Deferred to v2; the §Flow 7 / §Decisions 6 prose is the v2 target, not a v1 contract.
 - **Manual API-key rotation through an admin endpoint.** v1 rotates by redeploy.
+- **Full prompt-template rendering at dispatch (ai-1, deferred to v1.5).** Flow 1 steps 2–3 and the `getSystemPrompt()`/`getUserPromptRef()` SPI members describe template-rendering-at-dispatch; in v1 each `AiTask` hand-assembles its prompt under the conventional `"prompt"` variable and `PromptTemplateLoader` only audits the `.md` wiring docs (it does not render `{{#if}}` etc.). Wiring the renderer + threading a system prompt into the Anthropic `system` param is gated on a prompt-eval harness — see the Flow 1 ai-1 note.
+- **Tokenizer-accurate input-token counting.** v1's `TokenCapGuard` (ai-4) uses a char-length proxy (~4 chars/token). A true tokenizer-based count is a v1.5 refinement; the coarse cap already makes "shove the whole pool in" fail loudly.
 - **Per-user dispatch rate limits.** v1 is global (Resilience4j keyed by `taskType`). Per-user is a future addition keyed `(userId, taskType)`.
 - **Anthropic Message Batches API.** Not v1; would land as a sibling `AiBatchService`.
 - **Per-user prompt variants** (A/B testing, per-user tuning). Templates are global today.

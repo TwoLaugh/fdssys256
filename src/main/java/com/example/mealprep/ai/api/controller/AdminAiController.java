@@ -1,5 +1,6 @@
 package com.example.mealprep.ai.api.controller;
 
+import com.example.mealprep.ai.api.AiAdminGuard;
 import com.example.mealprep.ai.api.dto.AiCallLogDto;
 import com.example.mealprep.ai.api.dto.CostSummaryDto;
 import com.example.mealprep.ai.api.dto.PromptTemplateDto;
@@ -25,11 +26,15 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Admin observability endpoints for the AI module.
  *
- * <p>{@code @PreAuthorize("hasRole('ADMIN')")} is present on every method but is not yet enforced.
- * Auth-01a wires the filter chain so anonymous requests now return 401, but role gating still
- * passes for any authenticated user — the flat user model has no ROLE_ADMIN authority yet.
- * <strong>TODO(auth-roles-followup):</strong> introduce ROLE_ADMIN once the household-admin model
- * lands and verify these endpoints reject non-admin authenticated users.
+ * <p><b>Authorisation (finding {@code ai-10}).</b> {@code @PreAuthorize("hasRole('ADMIN')")} is
+ * declared on every method as the published contract, but it is <em>inert</em> in v1: the project
+ * does not enable Spring method-security ({@code @EnableMethodSecurity} is absent) and the flat
+ * user model has no {@code ROLE_ADMIN} authority. Enforcement is therefore done imperatively via
+ * {@link AiAdminGuard#requireAdmin()} at the top of every handler — anonymous callers get 401 (also
+ * enforced by the deny-by-default {@code AuthSecurityConfig} chain) and authenticated-but-not-admin
+ * callers get 403, gated on the {@code mealprep.ai.admin.user-ids} allowlist (fail-closed: empty by
+ * default ⇒ no non-admin reaches these endpoints). When project-wide method-security lands, the
+ * {@code @PreAuthorize} annotations activate and this guard can be retired.
  */
 @RestController
 @RequestMapping("/api/v1/admin/ai")
@@ -39,11 +44,15 @@ public class AdminAiController {
 
   private final AdminAiQueryService queryService;
   private final PromptTemplateService promptTemplateService;
+  private final AiAdminGuard adminGuard;
 
   public AdminAiController(
-      AdminAiQueryService queryService, PromptTemplateService promptTemplateService) {
+      AdminAiQueryService queryService,
+      PromptTemplateService promptTemplateService,
+      AiAdminGuard adminGuard) {
     this.queryService = queryService;
     this.promptTemplateService = promptTemplateService;
+    this.adminGuard = adminGuard;
   }
 
   @GetMapping("/cost-summary")
@@ -53,6 +62,7 @@ public class AdminAiController {
       description = "Window is in hours and clamped to [1, 720] (30 days).")
   public CostSummaryDto getCostSummary(
       @RequestParam(defaultValue = "24") @Min(1) @Max(720) int windowHours) {
+    adminGuard.requireAdmin();
     return queryService.getCostSummary(windowHours);
   }
 
@@ -64,6 +74,7 @@ public class AdminAiController {
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size,
       @RequestParam(required = false) TaskType taskType,
       @RequestParam(required = false) UUID userId) {
+    adminGuard.requireAdmin();
     Pageable pageable = PageRequest.of(page, size);
     return queryService.getCallLog(taskType, userId, pageable);
   }
@@ -74,6 +85,7 @@ public class AdminAiController {
   public Page<PromptTemplateDto> listPromptTemplates(
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    adminGuard.requireAdmin();
     Pageable pageable = PageRequest.of(page, size);
     return promptTemplateService.listAll(pageable);
   }
@@ -83,6 +95,7 @@ public class AdminAiController {
   @Operation(summary = "Get a single prompt template by (name, version).")
   public PromptTemplateDto getPromptTemplate(
       @PathVariable String name, @PathVariable @Min(1) int version) {
+    adminGuard.requireAdmin();
     return promptTemplateService.get(name, version);
   }
 }

@@ -15,7 +15,11 @@ import org.springframework.web.client.RestClient;
  * sensitive key off the bean definition and out of any actuator dump.
  */
 @Configuration
-@EnableConfigurationProperties(AiProperties.class)
+@EnableConfigurationProperties({
+  AiProperties.class,
+  AiAdminProperties.class,
+  AiTokenCapProperties.class
+})
 public class AnthropicSdkConfig {
 
   @Bean

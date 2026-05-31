@@ -4,6 +4,7 @@ import com.example.mealprep.ai.exception.AiCircuitOpenException;
 import com.example.mealprep.ai.exception.AiCostBudgetExceededException;
 import com.example.mealprep.ai.exception.AiInvalidRequestException;
 import com.example.mealprep.ai.exception.AiInvalidResponseException;
+import com.example.mealprep.ai.exception.AiTokenCapExceededException;
 import com.example.mealprep.ai.exception.AiUnavailableException;
 import com.example.mealprep.config.ProblemDetailSupport;
 import jakarta.servlet.http.HttpServletRequest;
@@ -33,11 +34,30 @@ public class AiExceptionHandler {
             "ai-budget-exceeded",
             "AI budget exceeded",
             req.getRequestURI());
+    pd.setProperty("scope", ex.scope().name());
     pd.setProperty("spentPence", ex.spentPence());
     pd.setProperty("limitPence", ex.limitPence());
     pd.setProperty("windowSeconds", ex.window().toSeconds());
     return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
         .header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds))
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(AiTokenCapExceededException.class)
+  public ResponseEntity<ProblemDetail> handleAiTokenCapExceeded(
+      AiTokenCapExceededException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            "AI input token cap exceeded",
+            "ai-token-cap-exceeded",
+            "AI token cap exceeded",
+            req.getRequestURI());
+    pd.setProperty("taskType", ex.taskType().name());
+    pd.setProperty("estimatedTokens", ex.estimatedTokens());
+    pd.setProperty("capTokens", ex.capTokens());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

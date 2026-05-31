@@ -30,7 +30,7 @@ class PriceFreshnessGuardrailsTest {
   private static final UUID USER = UUID.randomUUID();
 
   private static AiProperties.Budget budget(boolean enabled, long dailyPence, int windowHours) {
-    return new AiProperties.Budget(enabled, dailyPence, windowHours);
+    return AiProperties.Budget.ofDaily(enabled, dailyPence, windowHours);
   }
 
   private static AiProperties propertiesWith(AiProperties.Budget budget) {

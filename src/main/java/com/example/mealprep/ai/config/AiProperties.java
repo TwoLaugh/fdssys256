@@ -48,7 +48,7 @@ public record AiProperties(
       embedding = new Embedding(null, null, null);
     }
     if (budget == null) {
-      budget = new Budget(null, null, null);
+      budget = Budget.ofDaily(null, null, null);
     }
   }
 
@@ -90,10 +90,35 @@ public record AiProperties(
   }
 
   /**
-   * Per-user rolling-window cost cap. {@code enabled=false} short-circuits the {@code
-   * CostBudgetGuard} entirely — useful for dev / test convenience when the call log isn't seeded.
+   * Two-scope rolling-window cost cap (lld/ai.md Flow 1 step 5 + Decisions §7). {@code
+   * enabled=false} short-circuits the {@code CostBudgetGuard} entirely — useful for dev / test
+   * convenience when the call log isn't seeded.
+   *
+   * <p>Two independent scopes are evaluated per dispatch:
+   *
+   * <ul>
+   *   <li><b>DAILY_USER</b> — per-user spend over {@link #windowHours} (default 24h). {@link
+   *       #dailyHardBlock} defaults {@code false}: crossing it publishes a {@code
+   *       CostBudgetExceededEvent} and logs, but the call still proceeds (soft alert). Set {@code
+   *       true} to turn the daily cap into a per-user hard block.
+   *   <li><b>MONTHLY_TOTAL</b> — system-wide spend across all users over {@link
+   *       #monthlyWindowHours} (default 720h ≈ 30 days). {@link #monthlyHardBlock} defaults {@code
+   *       true}: crossing it throws {@link
+   *       com.example.mealprep.ai.exception.AiCostBudgetExceededException} — the runaway-spend kill
+   *       switch. The monthly scope has no {@code userId} (it bills the system, not a person).
+   * </ul>
+   *
+   * <p>{@code dailyPencePerUser} / {@code windowHours} retain their original names for config
+   * backward-compatibility.
    */
-  public record Budget(Boolean enabled, Long dailyPencePerUser, Integer windowHours) {
+  public record Budget(
+      Boolean enabled,
+      Long dailyPencePerUser,
+      Integer windowHours,
+      Boolean dailyHardBlock,
+      Long monthlyPenceTotal,
+      Integer monthlyWindowHours,
+      Boolean monthlyHardBlock) {
 
     public Budget {
       if (enabled == null) {
@@ -105,10 +130,40 @@ public record AiProperties(
       if (windowHours == null || windowHours <= 0) {
         windowHours = 24;
       }
+      if (dailyHardBlock == null) {
+        // Daily cap is soft by default (alert-and-proceed); see Decisions §7.
+        dailyHardBlock = false;
+      }
+      if (monthlyPenceTotal == null || monthlyPenceTotal < 0) {
+        // £200/month system-wide default — the runaway-spend ceiling, not a per-user limit.
+        monthlyPenceTotal = 20_000L;
+      }
+      if (monthlyWindowHours == null || monthlyWindowHours <= 0) {
+        monthlyWindowHours = 24 * 30;
+      }
+      if (monthlyHardBlock == null) {
+        // Monthly cap is a hard block by default (Decisions §7).
+        monthlyHardBlock = true;
+      }
     }
 
+    /**
+     * Backward-compatible 3-arg factory — daily values set, daily soft, monthly scope at defaults.
+     * A static factory (not a second constructor) keeps the record's <em>single</em> canonical
+     * constructor unambiguous for Spring's {@code @ConfigurationProperties} constructor binding.
+     */
+    public static Budget ofDaily(Boolean enabled, Long dailyPencePerUser, Integer windowHours) {
+      return new Budget(enabled, dailyPencePerUser, windowHours, null, null, null, null);
+    }
+
+    /** Rolling window for the per-user DAILY_USER scope. */
     public Duration window() {
       return Duration.ofHours(windowHours);
+    }
+
+    /** Rolling window for the system-wide MONTHLY_TOTAL scope. */
+    public Duration monthlyWindow() {
+      return Duration.ofHours(monthlyWindowHours);
     }
   }
 }

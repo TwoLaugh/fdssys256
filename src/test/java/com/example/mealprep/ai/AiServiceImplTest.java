@@ -60,6 +60,7 @@ class AiServiceImplTest {
   @Mock private AiCallRecorder recorder;
   @Mock private ApplicationEventPublisher eventPublisher;
   @Mock private CostBudgetGuard budgetGuard;
+  @Mock private com.example.mealprep.ai.domain.service.internal.TokenCapGuard tokenCapGuard;
 
   private final AiProperties properties =
       new AiProperties("k", null, "haiku-id", "sonnet-id", "opus-id", 60, 3, null, null, null);
@@ -78,6 +79,7 @@ class AiServiceImplTest {
         objectMapper,
         fixedClock,
         budgetGuard,
+        tokenCapGuard,
         costCalculator);
   }
 
@@ -393,6 +395,33 @@ class AiServiceImplTest {
     assertThat(budgetEvent.userId()).isEqualTo(userId);
     assertThat(budgetEvent.spentPence()).isEqualByComparingTo(new BigDecimal("48.00"));
     assertThat(budgetEvent.limitPence()).isEqualByComparingTo(new BigDecimal("50.00"));
+  }
+
+  @Test
+  void execute_tokenCapExceeded_recordsTokenCapFailure_doesNotCheckBudgetOrCallAnthropic() {
+    UUID callId = UUID.randomUUID();
+    AiTask<String> task =
+        AiTestData.task(String.class)
+            .ofType(TaskType.PLANNER_STAGE_C)
+            .withTier(ModelTier.MID)
+            .build();
+    when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
+    Mockito.doThrow(
+            new com.example.mealprep.ai.exception.AiTokenCapExceededException(
+                TaskType.PLANNER_STAGE_C, 40_000, 32_000))
+        .when(tokenCapGuard)
+        .checkOrThrow(task);
+
+    assertThatThrownBy(() -> service().execute(task))
+        .isInstanceOf(com.example.mealprep.ai.exception.AiTokenCapExceededException.class);
+
+    // PENDING row written, then token-cap rejection finalises it FAILED with TOKEN_CAP_EXCEEDED.
+    verify(recorder).recordPending(task, ModelTier.MID, "sonnet-id");
+    verify(recorder).recordFailure(eq(callId), eq(CallErrorKind.TOKEN_CAP_EXCEEDED), anyInt());
+    // Token cap short-circuits before the budget guard and the wire call.
+    verify(budgetGuard, never()).checkOrThrow(any());
+    verify(anthropicClient, never()).call(any(), any());
+    verify(eventPublisher).publishEvent(any(AiCallFailedEvent.class));
   }
 
   @Test
