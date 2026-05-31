@@ -24,10 +24,30 @@ import java.util.UUID;
 
 /**
  * Write API for the nutrition module's targets + intake + daily-activity aggregates. {@code
- * initialiseTargets} (auto-seed at user creation with DRI defaults) ships in 01c — its DRI seed
- * migration is deferred. The intake / activity surface lands in 01b.
+ * initialiseTargets} bootstraps a user's targets at onboarding, seeding DRI micro defaults from the
+ * {@code nutrition_dri_defaults} seed table for any micronutrient the onboarding wizard did not
+ * supply.
  */
 public interface NutritionUpdateService {
+
+  /**
+   * Bootstrap a user's nutrition targets at onboarding (nutrition-7 / LLD §NutritionUpdateService
+   * line 705). Creates the aggregate from {@code request} (the onboarding wizard supplies the
+   * macros + any age/sex-tuned micro overrides it has computed) and then DRI-seeds any
+   * micronutrient the request did NOT specify from the {@code nutrition_dri_defaults} seed table
+   * (per the HLD Bootstrapping section: "Micro targets defaulted from standard dietary reference
+   * intakes"). DRI defaults are seeded as warning-only micros ({@code is_hard_floor = false}).
+   *
+   * <p>Idempotent on the {@code (user_id)} unique constraint: calling it when a targets row already
+   * exists throws {@link org.springframework.dao.DataIntegrityViolationException} (the caller is
+   * expected to {@code updateTargets} thereafter). The create is audited and publishes a {@link
+   * com.example.mealprep.nutrition.event.NutritionTargetsChangedEvent}, consistent with the
+   * create-via-PUT leg.
+   *
+   * @param userId the targets owner
+   * @param request the onboarding-computed payload (macros + any explicit micro overrides)
+   */
+  TargetsDto initialiseTargets(UUID userId, UpdateTargetsRequest request);
 
   /**
    * Replace the user's nutrition targets wholesale. The request's {@code expectedVersion} is
@@ -180,4 +200,17 @@ public interface NutritionUpdateService {
    */
   HealthDirectiveDto rejectHealthDirective(
       UUID actorUserId, UUID directiveId, RejectDirectiveRequest request);
+
+  /**
+   * Auto-expiry sweep (LLD Flow 8 line 1022): for every {@code ACCEPTED} directive whose {@code
+   * auto_expires_at} has passed, instruct the source module to revert any temporary effects (e.g. a
+   * 6-week egg-elimination hard constraint via {@code
+   * PreferenceUpdateService.removeTemporaryConstraint}) and transition the directive to {@code
+   * EXPIRED}. Each directive is processed in its own transaction so one bad row does not block the
+   * rest. Idempotent — a directive already {@code EXPIRED} is not re-swept. Driven by a daily
+   * {@code @Scheduled} job; also callable directly (tests / ops).
+   *
+   * @return the number of directives transitioned to {@code EXPIRED}
+   */
+  int sweepExpiredDirectives();
 }

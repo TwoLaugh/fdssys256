@@ -61,14 +61,23 @@ public final class NutritionTestData {
         Goal.MAINTAIN,
         defaultCalories(),
         new MacroTargetDto(
-            BigDecimal.valueOf(120.0), null, "daily_floor", EnforcementDirection.LOWER_FLOOR),
+            BigDecimal.valueOf(120.0), null, "daily_floor", EnforcementDirection.LOWER_FLOOR, true),
         new MacroTargetDto(
-            BigDecimal.valueOf(250.0), null, "weekly_average", EnforcementDirection.BOTH_BOUNDED),
+            BigDecimal.valueOf(250.0),
+            null,
+            "weekly_average",
+            EnforcementDirection.BOTH_BOUNDED,
+            true),
         new MacroTargetDto(
-            BigDecimal.valueOf(70.0), null, "weekly_average", EnforcementDirection.BOTH_BOUNDED),
+            BigDecimal.valueOf(70.0),
+            null,
+            "weekly_average",
+            EnforcementDirection.BOTH_BOUNDED,
+            true),
         new MacroTargetDto(
-            BigDecimal.valueOf(30.0), null, "daily_floor", EnforcementDirection.LOWER_FLOOR),
-        new MacroTargetDto(BigDecimal.valueOf(20.0), null, null, EnforcementDirection.UPPER_LIMIT),
+            BigDecimal.valueOf(30.0), null, "daily_floor", EnforcementDirection.LOWER_FLOOR, true),
+        new MacroTargetDto(
+            BigDecimal.valueOf(20.0), null, null, EnforcementDirection.UPPER_LIMIT, false),
         "Default notes",
         defaultPerMealList(),
         defaultMicros(),
@@ -83,7 +92,8 @@ public final class NutritionTestData {
   }
 
   public static MacroTargetDto defaultMacro(BigDecimal target) {
-    return new MacroTargetDto(target, null, "weekly_average", EnforcementDirection.BOTH_BOUNDED);
+    return new MacroTargetDto(
+        target, null, "weekly_average", EnforcementDirection.BOTH_BOUNDED, true);
   }
 
   public static List<PerMealDistributionDto> defaultPerMealList() {
@@ -97,8 +107,9 @@ public final class NutritionTestData {
 
   public static List<MicroTargetDto> defaultMicros() {
     List<MicroTargetDto> list = new ArrayList<>();
-    list.add(new MicroTargetDto("iron_mg", BigDecimal.valueOf(18.0), null, null, null));
-    list.add(new MicroTargetDto("vitamin_d_iu", BigDecimal.valueOf(800.0), null, null, null));
+    list.add(new MicroTargetDto("iron_mg", BigDecimal.valueOf(18.0), null, null, null, false));
+    list.add(
+        new MicroTargetDto("vitamin_d_iu", BigDecimal.valueOf(800.0), null, null, null, false));
     return list;
   }
 
@@ -376,6 +387,20 @@ public final class NutritionTestData {
       return this;
     }
 
+    /**
+     * Add a micro target that participates in the hard-floor gate ({@code is_hard_floor = true}).
+     */
+    public NutritionTargetsBuilder withMicroHardFloor(String key, BigDecimal target) {
+      micros.add(
+          MicroTarget.builder()
+              .id(UUID.randomUUID())
+              .nutrientKey(key)
+              .targetValue(target)
+              .hardFloor(true)
+              .build());
+      return this;
+    }
+
     public NutritionTargetsBuilder withActivity(ActivityLevel level, int calories, int carbs) {
       activities.add(
           ActivityAdjustment.builder()
@@ -407,18 +432,22 @@ public final class NutritionTestData {
               .proteinFloorG(proteinFloorG)
               .proteinEnforcement("daily_floor")
               .proteinDirection(EnforcementDirection.LOWER_FLOOR)
+              .proteinHardFloor(true)
               .carbsTargetG(BigDecimal.valueOf(250.0))
               .carbsFloorG(carbsFloorG)
               .carbsEnforcement("weekly_average")
               .carbsDirection(EnforcementDirection.BOTH_BOUNDED)
+              .carbsHardFloor(true)
               .fatTargetG(BigDecimal.valueOf(70.0))
               .fatFloorG(fatFloorG)
               .fatEnforcement("weekly_average")
               .fatDirection(EnforcementDirection.BOTH_BOUNDED)
+              .fatHardFloor(true)
               .fibreTargetG(BigDecimal.valueOf(30.0))
               .fibreFloorG(fibreFloorG)
               .fibreEnforcement("daily_floor")
               .fibreDirection(EnforcementDirection.LOWER_FLOOR)
+              .fibreHardFloor(true)
               .satFatTargetG(BigDecimal.valueOf(20.0))
               .satFatDirection(EnforcementDirection.UPPER_LIMIT)
               .notes(null)

@@ -284,7 +284,7 @@ class Phase2AugmenterImplTest {
   // ---- nutrition-gap computation (computeNutritionGaps / addGapIfBreached) ---------------------
 
   private static MacroTargetDto macro(String targetG, EnforcementDirection dir) {
-    return new MacroTargetDto(new BigDecimal(targetG), null, "daily", dir);
+    return new MacroTargetDto(new BigDecimal(targetG), null, "daily", dir, true);
   }
 
   private static TargetsDto targets(

@@ -1,6 +1,7 @@
 package com.example.mealprep.nutrition.domain.service;
 
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
+import com.example.mealprep.nutrition.api.dto.DailyAggregateDto;
 import com.example.mealprep.nutrition.api.dto.DirectiveStatus;
 import com.example.mealprep.nutrition.api.dto.FoodMoodEntryDto;
 import com.example.mealprep.nutrition.api.dto.HealthDirectiveDto;
@@ -63,11 +64,27 @@ public interface NutritionQueryService {
   List<IntakeDayDto> getIntakeRange(UUID userId, LocalDate from, LocalDate to);
 
   /**
+   * Daily intake aggregate for the user on {@code onDate}: planned / actual-so-far / remaining per
+   * macro + calories, plus the micros-actual map. {@code remaining} is computed against the user's
+   * daily target and floored at zero (LLD Flow 9 line 1026). Returns a zero-valued aggregate when
+   * no day row exists — the day does NOT auto-create on read.
+   */
+  DailyAggregateDto getDailyAggregate(UUID userId, LocalDate onDate);
+
+  /**
    * Weekly intake aggregate for the user (Monday-anchored). {@code weekStart} must be a Monday
    * (ISO-8601 day-of-week 1); non-Monday inputs throw {@code InvalidWeekStartException}. Missing
    * days contribute zero-valued daily entries; the per-day list is always exactly 7 entries.
    */
   WeeklyAggregateDto getWeeklyAggregate(UUID userId, LocalDate weekStart);
+
+  /**
+   * Recent daily intake aggregates over {@code [from, to]} inclusive (max 35 days), one entry per
+   * day in the window — including zero-valued aggregates for days with no intake row, in ascending
+   * date order. Exposed for the planner's mid-week re-opt path so it can read actual-so-far /
+   * remaining figures keyed by date (LLD §NutritionQueryService line 679). No HTTP exposure.
+   */
+  List<DailyAggregateDto> getRecentIntakeTotals(UUID userId, LocalDate from, LocalDate to);
 
   /**
    * Paginated audit log for an intake day, newest-first. Returns an empty page if the day row does

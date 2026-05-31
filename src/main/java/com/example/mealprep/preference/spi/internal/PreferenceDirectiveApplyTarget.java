@@ -156,6 +156,16 @@ public class PreferenceDirectiveApplyTarget implements DirectiveApplyTarget {
         temporary);
   }
 
+  @Override
+  public void revertExpiredDirective(UUID userId, UUID directiveId) {
+    // Revert leg of the nutrition auto-expiry sweep (LLD Flow 8 line 1022). Delegates to the
+    // idempotent, best-effort reversal that removes any surviving directive-sourced temporary
+    // intolerance rows. Joins the sweep's per-directive transaction.
+    updateService.removeTemporaryConstraint(userId, directiveId);
+    log.info(
+        "preference directive reverted on expiry userId={} directiveId={}", userId, directiveId);
+  }
+
   private HardConstraintsDto initialiseDefaults(UUID userId) {
     log.info("preference directive apply: initialising default hard constraints userId={}", userId);
     return updateService.initialiseHardConstraints(userId);

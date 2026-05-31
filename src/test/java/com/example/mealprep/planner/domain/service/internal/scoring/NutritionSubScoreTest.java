@@ -29,7 +29,7 @@ class NutritionSubScoreTest {
   private final NutritionSubScore calc = new NutritionSubScore();
 
   private static MacroTargetDto macro(String targetG, EnforcementDirection dir) {
-    return new MacroTargetDto(new BigDecimal(targetG), null, "daily", dir);
+    return new MacroTargetDto(new BigDecimal(targetG), null, "daily", dir, true);
   }
 
   @Test

@@ -6,7 +6,6 @@ import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
 import com.example.mealprep.nutrition.domain.entity.IntakeDay;
 import com.example.mealprep.nutrition.domain.entity.IntakeSlot;
 import com.example.mealprep.nutrition.domain.entity.IntakeSnack;
-import com.example.mealprep.nutrition.domain.entity.MicroTarget;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargets;
 import com.example.mealprep.nutrition.domain.repository.IntakeDayRepository;
 import com.example.mealprep.nutrition.domain.repository.NutritionTargetsRepository;
@@ -33,13 +32,19 @@ import org.springframework.stereotype.Component;
  *   <li>{@code aggregateDay} sums slot.actual + snack across the existing {@link IntakeDay}'s
  *       slots/snacks. Slot status doesn't gate inclusion — the slot's {@code actual_*} columns are
  *       zero unless the slot has been decided, so {@code PENDING} contributes zero by construction.
- *   <li>Macro {@code remainingG} = plan - actual; can be negative.
+ *   <li>Macro {@code remainingG} is computed against the user's {@link NutritionTargets} daily
+ *       target and floored at zero: {@code remaining = max(0, target - actualSoFar)} (nutrition-6 /
+ *       LLD Flow 9 line 1026). When the user has no targets row, there is no target to remain
+ *       against, so it falls back to {@code max(0, planned - actualSoFar)} (how much of the plan is
+ *       left) rather than fabricating a target.
  *   <li>Macro {@code plannedG} sums {@code IntakeSlot.plannedXxxG} across all slots; snacks have no
  *       planned counterpart.
  *   <li>{@code microsActualSoFar} merges the slot.actualMicros JSONB objects + snack.micros JSONB
  *       objects, summing numeric values per key.
  *   <li>{@code aggregateWeek} is Monday-anchored; missing days contribute a zero-valued daily
- *       aggregate. {@code floorViolations} uses 7-day-summed floors (macro floor × 7).
+ *       aggregate. Per-day {@code remaining} uses the daily target; the weekly total's remaining is
+ *       the zero-floored 7×-target less the weekly actual. {@code floorViolations} uses
+ *       7-day-summed floors (macro floor × 7).
  * </ul>
  */
 @Component
@@ -61,16 +66,20 @@ public class IntakeAggregator {
   /**
    * Aggregate a single day. Loads the {@link IntakeDay} (and forces lazy-load of slots+snacks)
    * inside the caller's transaction. Returns a zero-valued aggregate if no day row exists.
+   *
+   * <p>Loads the user's {@link NutritionTargets} so {@code remaining} is computed against the daily
+   * target and floored at zero (nutrition-6).
    */
   public DailyAggregateDto aggregateDay(UUID userId, LocalDate onDate) {
+    DailyTargets targets = dailyTargets(userId);
     return intakeDayRepository
         .findByUserIdAndOnDate(userId, onDate)
-        .map(IntakeAggregator::aggregateDayEntity)
-        .orElseGet(IntakeAggregator::emptyAggregate);
+        .map(day -> aggregateDayEntity(day, targets))
+        .orElseGet(() -> emptyAggregate(targets));
   }
 
-  /** Aggregate one {@link IntakeDay} entity. Public for {@link DivergenceDetector} reuse. */
-  static DailyAggregateDto aggregateDayEntity(IntakeDay day) {
+  /** Aggregate one {@link IntakeDay} entity against the user's {@code targets}. */
+  static DailyAggregateDto aggregateDayEntity(IntakeDay day, DailyTargets targets) {
     // Force lazy load.
     day.getSlots().size();
     day.getSnacks().size();
@@ -114,17 +123,20 @@ public class IntakeAggregator {
     return new DailyAggregateDto(
         caloriesPlanned,
         caloriesActual,
-        caloriesPlanned - caloriesActual,
-        macroAgg(proteinPlanned, proteinActual),
-        macroAgg(carbsPlanned, carbsActual),
-        macroAgg(fatPlanned, fatActual),
-        macroAgg(fibrePlanned, fibreActual),
+        caloriesRemaining(targets, caloriesPlanned, caloriesActual),
+        macroAgg(targets == null ? null : targets.protein(), proteinPlanned, proteinActual),
+        macroAgg(targets == null ? null : targets.carbs(), carbsPlanned, carbsActual),
+        macroAgg(targets == null ? null : targets.fat(), fatPlanned, fatActual),
+        macroAgg(targets == null ? null : targets.fibre(), fibrePlanned, fibreActual),
         scaleMicros(micros));
   }
 
   /** Weekly rollup, Monday-anchored. Caller validates {@code weekStart} is a Monday. */
   public WeeklyAggregateDto aggregateWeek(UUID userId, LocalDate weekStart) {
     LocalDate weekEnd = weekStart.plusDays(6);
+    Optional<NutritionTargets> targetsOpt = nutritionTargetsRepository.findByUserId(userId);
+    DailyTargets targets = targetsOpt.map(DailyTargets::of).orElse(null);
+
     Map<LocalDate, IntakeDay> byDate = new LinkedHashMap<>();
     for (IntakeDay d :
         intakeDayRepository.findByUserIdAndOnDateBetween(userId, weekStart, weekEnd)) {
@@ -135,35 +147,56 @@ public class IntakeAggregator {
     for (int i = 0; i < 7; i++) {
       LocalDate d = weekStart.plusDays(i);
       IntakeDay day = byDate.get(d);
-      perDay.add(day != null ? aggregateDayEntity(day) : emptyAggregate());
+      perDay.add(day != null ? aggregateDayEntity(day, targets) : emptyAggregate(targets));
     }
-    DailyAggregateDto weeklyTotal = sumDailies(perDay);
+    // Weekly total: remaining is the zero-floored 7×-daily-target less the weekly actual.
+    DailyAggregateDto weeklyTotal = sumDailies(perDay, targets);
 
-    Optional<NutritionTargets> targets = nutritionTargetsRepository.findByUserId(userId);
     List<String> floorViolations =
-        targets.map(t -> computeWeeklyFloorViolations(t, weeklyTotal)).orElseGet(List::of);
+        targetsOpt.map(t -> computeWeeklyFloorViolations(t, weeklyTotal)).orElseGet(List::of);
 
     return new WeeklyAggregateDto(weekStart, weekEnd, perDay, weeklyTotal, floorViolations);
   }
 
   // ---------------- helpers ----------------
 
-  private static DailyAggregateDto emptyAggregate() {
+  private DailyTargets dailyTargets(UUID userId) {
+    return nutritionTargetsRepository.findByUserId(userId).map(DailyTargets::of).orElse(null);
+  }
+
+  private static DailyAggregateDto emptyAggregate(DailyTargets targets) {
     return new DailyAggregateDto(
         0,
         0,
-        0,
-        macroAgg(BigDecimal.ZERO, BigDecimal.ZERO),
-        macroAgg(BigDecimal.ZERO, BigDecimal.ZERO),
-        macroAgg(BigDecimal.ZERO, BigDecimal.ZERO),
-        macroAgg(BigDecimal.ZERO, BigDecimal.ZERO),
+        caloriesRemaining(targets, 0, 0),
+        macroAgg(targets == null ? null : targets.protein(), BigDecimal.ZERO, BigDecimal.ZERO),
+        macroAgg(targets == null ? null : targets.carbs(), BigDecimal.ZERO, BigDecimal.ZERO),
+        macroAgg(targets == null ? null : targets.fat(), BigDecimal.ZERO, BigDecimal.ZERO),
+        macroAgg(targets == null ? null : targets.fibre(), BigDecimal.ZERO, BigDecimal.ZERO),
         new LinkedHashMap<>());
   }
 
-  private static MacroAggregateDto macroAgg(BigDecimal planned, BigDecimal actual) {
+  /**
+   * Per-macro aggregate. {@code remaining = max(0, target - actual)} when a daily {@code target} is
+   * configured; otherwise {@code max(0, planned - actual)} (how much of the plan is left). Never
+   * negative (nutrition-6 / LLD Flow 9 line 1026).
+   */
+  private static MacroAggregateDto macroAgg(
+      BigDecimal dailyTarget, BigDecimal planned, BigDecimal actual) {
     BigDecimal p = scale(planned);
     BigDecimal a = scale(actual);
-    return new MacroAggregateDto(p, a, p.subtract(a));
+    BigDecimal basis = dailyTarget != null ? scale(dailyTarget) : p;
+    BigDecimal remaining = basis.subtract(a).max(BigDecimal.ZERO);
+    return new MacroAggregateDto(p, a, remaining);
+  }
+
+  /**
+   * Calories remaining: {@code max(0, dailyCalorieTarget - actual)} when targets exist, else {@code
+   * max(0, planned - actual)}.
+   */
+  private static int caloriesRemaining(DailyTargets targets, int planned, int actual) {
+    int basis = targets != null ? targets.calories() : planned;
+    return Math.max(0, basis - actual);
   }
 
   private static BigDecimal scale(BigDecimal v) {
@@ -203,7 +236,7 @@ public class IntakeAggregator {
     return out;
   }
 
-  private static DailyAggregateDto sumDailies(List<DailyAggregateDto> days) {
+  private static DailyAggregateDto sumDailies(List<DailyAggregateDto> days, DailyTargets targets) {
     int caloriesPlanned = 0;
     int caloriesActual = 0;
     BigDecimal proteinPlanned = BigDecimal.ZERO;
@@ -232,21 +265,24 @@ public class IntakeAggregator {
       }
     }
 
+    // Weekly basis is 7× the daily target (or null → planned-based per-macro fallback).
+    DailyTargets weekly = targets == null ? null : targets.times(7);
     return new DailyAggregateDto(
         caloriesPlanned,
         caloriesActual,
-        caloriesPlanned - caloriesActual,
-        macroAgg(proteinPlanned, proteinActual),
-        macroAgg(carbsPlanned, carbsActual),
-        macroAgg(fatPlanned, fatActual),
-        macroAgg(fibrePlanned, fibreActual),
+        caloriesRemaining(weekly, caloriesPlanned, caloriesActual),
+        macroAgg(weekly == null ? null : weekly.protein(), proteinPlanned, proteinActual),
+        macroAgg(weekly == null ? null : weekly.carbs(), carbsPlanned, carbsActual),
+        macroAgg(weekly == null ? null : weekly.fat(), fatPlanned, fatActual),
+        macroAgg(weekly == null ? null : weekly.fibre(), fibrePlanned, fibreActual),
         scaleMicros(micros));
   }
 
   /**
-   * Compute weekly floor violations: for each hard-floor macro, compare weekly actual against
-   * {@code floorG × 7}. Micros are not hard-floored in the current schema (no {@code is_hard_floor}
-   * column on {@link MicroTarget}).
+   * Compute weekly floor violations for the dashboard's {@code WeeklyAggregateDto.floorViolations}:
+   * for each macro carrying a {@code <macro>FloorG}, compare weekly actual against {@code floorG ×
+   * 7}. This is the weekly dashboard list (every breached floor), distinct from the planner's
+   * per-target {@code is_hard_floor} multiplicative gate.
    */
   private static List<String> computeWeeklyFloorViolations(
       NutritionTargets t, DailyAggregateDto weeklyTotal) {
@@ -267,6 +303,35 @@ public class IntakeAggregator {
     BigDecimal weeklyFloor = dailyFloor.multiply(BigDecimal.valueOf(7));
     if (weeklyActual.compareTo(weeklyFloor) < 0) {
       out.add(key);
+    }
+  }
+
+  /**
+   * The user's daily target basis for the "remaining" computation: calories + the four macro target
+   * grams. {@code remaining} is computed against these (zero-floored). {@code null} macro targets
+   * fall back to the planned basis per-macro.
+   */
+  record DailyTargets(
+      int calories, BigDecimal protein, BigDecimal carbs, BigDecimal fat, BigDecimal fibre) {
+
+    static DailyTargets of(NutritionTargets t) {
+      return new DailyTargets(
+          t.getDailyCalorieTarget(),
+          t.getProteinTargetG(),
+          t.getCarbsTargetG(),
+          t.getFatTargetG(),
+          t.getFibreTargetG());
+    }
+
+    /** Scale every target by {@code factor} (used to derive the weekly-total basis = daily × 7). */
+    DailyTargets times(int factor) {
+      BigDecimal f = BigDecimal.valueOf(factor);
+      return new DailyTargets(
+          calories * factor,
+          protein == null ? null : protein.multiply(f),
+          carbs == null ? null : carbs.multiply(f),
+          fat == null ? null : fat.multiply(f),
+          fibre == null ? null : fibre.multiply(f));
     }
   }
 }

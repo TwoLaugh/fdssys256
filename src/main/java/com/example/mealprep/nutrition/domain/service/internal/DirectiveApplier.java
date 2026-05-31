@@ -204,6 +204,27 @@ public class DirectiveApplier {
         actorUserId);
   }
 
+  /**
+   * Revert a directive's temporary effects on expiry (auto-expiry sweep / LLD Flow 8 line 1022).
+   * Routes by {@code mapsToModel}: {@code preference_model} directives are reversed via the SPI's
+   * {@link DirectiveApplyTarget#revertExpiredDirective} (idempotent, best-effort); {@code
+   * nutrition_model} target adjustments are NOT auto-reverted (the LLD's revert leg names only the
+   * preference removeTemporaryConstraint path — a target nudge stands until the user re-edits).
+   * Joins the sweep's transaction.
+   */
+  public void revertExpired(HealthDirective directive) {
+    String route = directive.getMapsToModel();
+    if (ROUTE_PREFERENCE_MODEL.equals(route)) {
+      preferenceTarget.getObject().revertExpiredDirective(directive.getUserId(), directive.getId());
+    } else {
+      log.debug(
+          "DirectiveApplier.revertExpired no-op for route={} directiveId={} (only preference_model"
+              + " temporary effects are reverted)",
+          route,
+          directive.getId());
+    }
+  }
+
   private void writeAudit(
       UUID targetsId,
       UUID actorUserId,

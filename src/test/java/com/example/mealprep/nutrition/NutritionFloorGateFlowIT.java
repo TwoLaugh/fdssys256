@@ -105,6 +105,10 @@ class NutritionFloorGateFlowIT {
             .proteinFloorG(proteinFloorG)
             .proteinEnforcement("daily_floor")
             .proteinDirection(EnforcementDirection.LOWER_FLOOR)
+            // nutrition-4: a macro contributes to the gate only when its is_hard_floor flag is set
+            // (macros default true). The DB default is true; set it explicitly on this hand-built
+            // builder fixture (primitive boolean defaults to false otherwise).
+            .proteinHardFloor(true)
             .carbsTargetG(BigDecimal.valueOf(250.0))
             .carbsFloorG(null)
             .carbsEnforcement("weekly_average")

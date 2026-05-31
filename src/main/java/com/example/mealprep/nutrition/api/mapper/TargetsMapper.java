@@ -45,23 +45,29 @@ public interface TargetsMapper {
             entity.getProteinTargetG(),
             entity.getProteinFloorG(),
             entity.getProteinEnforcement(),
-            entity.getProteinDirection()),
+            entity.getProteinDirection(),
+            entity.isProteinHardFloor()),
         new MacroTargetDto(
             entity.getCarbsTargetG(),
             entity.getCarbsFloorG(),
             entity.getCarbsEnforcement(),
-            entity.getCarbsDirection()),
+            entity.getCarbsDirection(),
+            entity.isCarbsHardFloor()),
         new MacroTargetDto(
             entity.getFatTargetG(),
             entity.getFatFloorG(),
             entity.getFatEnforcement(),
-            entity.getFatDirection()),
+            entity.getFatDirection(),
+            entity.isFatHardFloor()),
         new MacroTargetDto(
             entity.getFibreTargetG(),
             entity.getFibreFloorG(),
             entity.getFibreEnforcement(),
-            entity.getFibreDirection()),
-        new MacroTargetDto(entity.getSatFatTargetG(), null, null, entity.getSatFatDirection()),
+            entity.getFibreDirection(),
+            entity.isFibreHardFloor()),
+        // Saturated fat is a goal-independent UPPER_LIMIT health cap, never a hard floor.
+        new MacroTargetDto(
+            entity.getSatFatTargetG(), null, null, entity.getSatFatDirection(), false),
         entity.getNotes(),
         copyOrEmpty(entity.getUserOverriddenDirections()),
         mapPerMeal(entity.getPerMealDistribution()),
@@ -119,7 +125,8 @@ public interface TargetsMapper {
               m.getTargetValue(),
               m.getUpperLimit(),
               m.getSourcePreference(),
-              m.getNotes()));
+              m.getNotes(),
+              m.isHardFloor()));
     }
     return result;
   }

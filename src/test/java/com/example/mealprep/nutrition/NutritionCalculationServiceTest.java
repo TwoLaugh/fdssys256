@@ -138,6 +138,8 @@ class NutritionCalculationServiceTest {
                 new java.math.BigDecimal("0.10"),
                 new java.math.BigDecimal("0.20"),
                 1000),
+            org.mockito.Mockito.mock(
+                com.example.mealprep.nutrition.domain.repository.DriDefaultRepository.class),
             eventPublisher,
             objectMapper,
             fixedClock);

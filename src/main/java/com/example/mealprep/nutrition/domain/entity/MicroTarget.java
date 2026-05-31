@@ -18,8 +18,9 @@ import lombok.Setter;
 
 /**
  * Micronutrient target. Identifier is {@code nutrient_key} (e.g. {@code "iron_mg"}, {@code
- * "vitamin_d_iu"}); the per-key DRI defaults seed ships with 01c. {@code UNIQUE(targets_id,
- * nutrient_key)} at the DB level prevents duplicate rows.
+ * "vitamin_d_iu"}). At onboarding, {@code initialiseTargets} seeds any unsupplied key from the
+ * {@code nutrition_dri_defaults} table (nutrition-7). {@code UNIQUE(targets_id, nutrient_key)} at
+ * the DB level prevents duplicate rows.
  */
 @Entity
 @Table(name = "nutrition_micro_target")
@@ -52,4 +53,13 @@ public class MicroTarget {
 
   @Column(name = "notes", length = 255)
   private String notes;
+
+  /**
+   * Whether this micro participates in the planner's multiplicative hard-floor gate (LLD lines
+   * 774-776). Defaults to {@code false} (warning-only) — the user can toggle a specific micro (e.g.
+   * iron in pregnancy, B12 for vegans) to {@code true} so it kills a candidate plan that breaches
+   * it.
+   */
+  @Column(name = "is_hard_floor", nullable = false)
+  private boolean hardFloor;
 }

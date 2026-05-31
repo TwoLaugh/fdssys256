@@ -19,10 +19,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -58,6 +60,20 @@ public class TargetsController {
     return queryService
         .getTargets(userId)
         .orElseThrow(() -> new NutritionTargetsNotFoundException(userId));
+  }
+
+  @PostMapping(
+      path = "/initialise",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Bootstrap the calling user's nutrition targets at onboarding; DRI-seeds any micro the"
+              + " request omits. 409 if a targets row already exists.")
+  @ResponseStatus(HttpStatus.CREATED)
+  public TargetsDto initialise(@Valid @RequestBody UpdateTargetsRequest request) {
+    UUID userId = requireCurrentUserId();
+    return updateService.initialiseTargets(userId, request);
   }
 
   @PutMapping(

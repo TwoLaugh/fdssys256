@@ -214,6 +214,15 @@ class PreferenceDirectiveApplyTargetTest {
         .isInstanceOf(InvalidDirectivePreferenceRouteException.class);
   }
 
+  // ---------------- revert on expiry (nutrition-3) ----------------
+
+  @Test
+  void revertExpiredDirective_delegatesToRemoveTemporaryConstraint() {
+    target.revertExpiredDirective(userId, directiveId);
+
+    verify(preferenceService).removeTemporaryConstraint(userId, directiveId);
+  }
+
   @Test
   void mappedAction_withBlankTarget_throwsInvalidRoute() {
     assertThatThrownBy(

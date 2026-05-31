@@ -143,6 +143,8 @@ paths:
   # ===== nutrition =====
   /api/v1/nutrition/targets:
     $ref: 'paths/nutrition.yaml#/targets'
+  /api/v1/nutrition/targets/initialise:
+    $ref: 'paths/nutrition.yaml#/targetsInitialise'
   /api/v1/nutrition/targets/audit-log:
     $ref: 'paths/nutrition.yaml#/targetsAuditLog'
   /api/v1/nutrition/targets/activity:
@@ -197,6 +199,8 @@ paths:
     $ref: 'paths/nutrition.yaml#/nutritionRecipeRecalc'
   /api/v1/nutrition/floor-gate/evaluate:
     $ref: 'paths/nutrition.yaml#/nutritionFloorGateEvaluate'
+  /api/v1/nutrition/intake/{date}/aggregate:
+    $ref: 'paths/nutrition.yaml#/nutritionIntakeDayAggregate'
   /api/v1/nutrition/intake/week/{weekStart}/aggregate:
     $ref: 'paths/nutrition.yaml#/nutritionIntakeWeekAggregate'
   # ===== recipe =====
