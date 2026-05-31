@@ -73,7 +73,8 @@ class HouseholdMembersServiceTest {
       new com.example.mealprep.household.api.mapper.HouseholdSettingsAuditMapperImpl();
   private final HouseholdInviteMapper inviteMapper =
       new com.example.mealprep.household.api.mapper.HouseholdInviteMapperImpl();
-  private final HouseholdSettingsDiffer differ = new HouseholdSettingsDiffer(new ObjectMapper());
+  private final HouseholdSettingsDiffer differ =
+      new HouseholdSettingsDiffer(new ObjectMapper(), Clock.systemUTC());
   private final SlotConfigurationResolver slotConfigurationResolver =
       new SlotConfigurationResolver();
   private final InviteCodeGenerator inviteCodeGenerator = new InviteCodeGenerator();

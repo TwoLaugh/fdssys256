@@ -9,9 +9,10 @@ import java.util.UUID;
  * Published {@code AFTER_COMMIT} when a household invite is accepted and the accepter is seated as
  * a {@code HouseholdMember} of the inviting household.
  *
- * <p>01c does NOT additionally publish {@code HouseholdMemberAddedEvent} on this path — that event
- * is reserved for the dedicated member-admin endpoints that 01e introduces. Downstream listeners
- * consuming the v1 onboarding flow should subscribe to this event. 01e may consider unifying.
+ * <p>The accept path ALSO publishes {@code HouseholdMemberAddedEvent} (household-4) so that any
+ * member-add consumer — notably the planner's re-opt listener (household-7) — reacts to the new
+ * eater regardless of whether the member arrived via direct-add or invite-accept. This event is
+ * retained for invite-flow-specific consumers (e.g. notification of a successful join).
  *
  * <p>{@code scopeKind = "household"}, {@code scopeId = householdId}.
  */

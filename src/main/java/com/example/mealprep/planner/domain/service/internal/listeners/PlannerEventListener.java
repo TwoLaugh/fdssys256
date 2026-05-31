@@ -1,8 +1,12 @@
 package com.example.mealprep.planner.domain.service.internal.listeners;
 
 import com.example.mealprep.ai.exception.AiUnavailableException;
+import com.example.mealprep.core.events.ScopeChangedEvent;
 import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
+import com.example.mealprep.household.event.HouseholdMemberAddedEvent;
+import com.example.mealprep.household.event.HouseholdMemberRemovedEvent;
+import com.example.mealprep.household.event.HouseholdRoleChangedEvent;
 import com.example.mealprep.nutrition.event.NutritionIntakeDivergedEvent;
 import com.example.mealprep.planner.domain.entity.Day;
 import com.example.mealprep.planner.domain.entity.MealSlot;
@@ -256,6 +260,67 @@ class PlannerEventListener {
     } catch (RuntimeException ex) {
       log.warn(
           "onHouseholdConfigChanged failed for trace={}: {}", event.traceId(), ex.toString(), ex);
+    }
+  }
+
+  // ---- Trigger listener 5: household-01b membership/role events (household-7) ------------------
+
+  /**
+   * household-7: react to household membership changes. Adding, removing, or re-roling a member
+   * changes the shared-slot eater set and the merged soft-preferences the planner scores against,
+   * so every such event is treated as material (no field-path materiality filter applies — these
+   * events carry no settings paths). Routed under {@link ReoptTriggerKind#HOUSEHOLD_SETTINGS},
+   * sharing the settings-event re-opt path. {@code householdId} is on the event itself (a {@link
+   * ScopeChangedEvent}), so no per-user resolution is needed.
+   */
+  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public void onHouseholdMemberAdded(HouseholdMemberAddedEvent event) {
+    onHouseholdMembershipChanged(event, "memberAdded");
+  }
+
+  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public void onHouseholdMemberRemoved(HouseholdMemberRemovedEvent event) {
+    onHouseholdMembershipChanged(event, "memberRemoved");
+  }
+
+  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public void onHouseholdRoleChanged(HouseholdRoleChangedEvent event) {
+    onHouseholdMembershipChanged(event, "roleChanged");
+  }
+
+  /**
+   * Shared body for the three membership/role events. They all expose {@code householdId} as the
+   * {@link ScopeChangedEvent#scopeId()} and a {@code traceId}; a membership change is always
+   * material (it changes the eater set), so each active plan's re-opt is requested directly.
+   */
+  private void onHouseholdMembershipChanged(ScopeChangedEvent event, String typeTag) {
+    try {
+      UUID householdId = event.scopeId();
+      UUID triggerEventId = deriveTriggerEventId(typeTag, event.traceId(), event.scopeId());
+      for (Plan plan : activePlans(householdId)) {
+        Optional<UUID> suggestionId =
+            requestReopt(
+                plan, ReoptTriggerKind.HOUSEHOLD_SETTINGS, triggerEventId, event.traceId());
+        log.info(
+            "onHouseholdMembershipChanged plan={} eventType={} suggestionId={}",
+            plan.getId(),
+            event.getClass().getSimpleName(),
+            suggestionId.orElse(null));
+      }
+    } catch (AiUnavailableException ex) {
+      log.info(
+          "onHouseholdMembershipChanged: AI unavailable during downstream re-opt"
+              + " (graceful-degrade): {}",
+          ex.toString());
+    } catch (RuntimeException ex) {
+      log.warn(
+          "onHouseholdMembershipChanged failed for trace={}: {}",
+          event.traceId(),
+          ex.toString(),
+          ex);
     }
   }
 

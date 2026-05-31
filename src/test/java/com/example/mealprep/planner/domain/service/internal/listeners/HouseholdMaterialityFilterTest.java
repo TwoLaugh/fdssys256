@@ -37,8 +37,12 @@ class HouseholdMaterialityFilterTest {
   }
 
   @Test
-  void material_whenMembershipChanged() {
-    assertThat(filter.isMaterial(event(Set.of("members[2].userId")), plan())).isTrue();
+  void immaterial_whenMembershipPathOnSettingsEvent_household7() {
+    // household-7: membership changes no longer ride HouseholdSettingsChangedEvent (the differ
+    // never
+    // emits members* paths); they arrive as dedicated member events routed directly to re-opt. A
+    // stray members* path on a settings event is therefore immaterial here.
+    assertThat(filter.isMaterial(event(Set.of("members[2].userId")), plan())).isFalse();
   }
 
   @Test

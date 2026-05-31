@@ -104,14 +104,15 @@ public final class HouseholdTestData {
 
   /**
    * Default settings document mirroring {@code HouseholdServiceImpl.buildDefaultSettings} —
-   * breakfast/lunch/dinner/snack all {@code shared=true, headcount=1, timeBudgetMin=30}.
+   * breakfast/lunch/dinner/snack all {@code shared=true, headcount=1} with the planner-HLD per-kind
+   * time budgets (breakfast 15, lunch 20, dinner 45, snack 5).
    */
   public static HouseholdSettingsDocument defaultDocument() {
     Map<SlotKind, SlotDefault> slotDefaults = new LinkedHashMap<>();
-    slotDefaults.put(SlotKind.breakfast, new SlotDefault(true, 1, 30));
-    slotDefaults.put(SlotKind.lunch, new SlotDefault(true, 1, 30));
-    slotDefaults.put(SlotKind.dinner, new SlotDefault(true, 1, 30));
-    slotDefaults.put(SlotKind.snack, new SlotDefault(true, 1, 30));
+    slotDefaults.put(SlotKind.breakfast, new SlotDefault(true, 1, 15));
+    slotDefaults.put(SlotKind.lunch, new SlotDefault(true, 1, 20));
+    slotDefaults.put(SlotKind.dinner, new SlotDefault(true, 1, 45));
+    slotDefaults.put(SlotKind.snack, new SlotDefault(true, 1, 5));
     return new HouseholdSettingsDocument(
         slotDefaults, new ArrayList<>(), null, new HouseholdSchedulingPreferences());
   }

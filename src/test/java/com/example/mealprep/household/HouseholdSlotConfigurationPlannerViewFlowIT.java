@@ -110,12 +110,15 @@ class HouseholdSlotConfigurationPlannerViewFlowIT {
             get("/api/v1/households/current/slot-configuration/planner-view")
                 .cookie(primary.cookie()))
         .andExpect(status().isOk())
-        // The four built-in slots ship as shared=true, headcount=1, timeBudgetMin=30 from
-        // HouseholdServiceImpl.buildDefaultSettings.
-        .andExpect(jsonPath("$.slots[0].kind").isString())
-        .andExpect(jsonPath("$.slots[0].shared").value(true))
-        .andExpect(jsonPath("$.slots[0].headcount").value(1))
-        .andExpect(jsonPath("$.slots[0].timeBudgetMin").value(30));
+        // The four built-in slots ship as shared=true, headcount=1, with per-kind time budgets from
+        // HouseholdServiceImpl.buildDefaultSettings. Slot order is not guaranteed (the JSONB map
+        // round-trip does not preserve insertion order), so match by kind rather than index.
+        .andExpect(jsonPath("$.slots[?(@.kind=='breakfast')].timeBudgetMin").value(15))
+        .andExpect(jsonPath("$.slots[?(@.kind=='lunch')].timeBudgetMin").value(20))
+        .andExpect(jsonPath("$.slots[?(@.kind=='dinner')].timeBudgetMin").value(45))
+        .andExpect(jsonPath("$.slots[?(@.kind=='snack')].timeBudgetMin").value(5))
+        .andExpect(jsonPath("$.slots[?(@.kind=='breakfast')].shared").value(true))
+        .andExpect(jsonPath("$.slots[?(@.kind=='breakfast')].headcount").value(1));
   }
 
   // ---------------- 4xx ----------------

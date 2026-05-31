@@ -19,6 +19,7 @@ import com.example.mealprep.household.api.dto.CreateHouseholdRequest;
 import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.api.dto.UpdateHouseholdSettingsRequest;
 import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument;
+import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument.CustomSlotDefinition;
 import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument.HouseholdSchedulingPreferences;
 import com.example.mealprep.household.domain.entity.HouseholdSettingsDocument.SlotDefault;
 import com.example.mealprep.household.domain.entity.SlotKind;
@@ -279,6 +280,64 @@ class HouseholdSettingsFlowIT {
         .andExpect(status().isBadRequest());
   }
 
+  /**
+   * household-2: a custom-slot key that is kebab-case (so it passes the OpenAPI {@code
+   * ^[a-z0-9-]+$} pattern) but collides with a built-in slot kind ({@code dinner}) must be rejected
+   * by the {@code @ValidSlotKey} bean validator with a 400 — a guard the OpenAPI gate alone cannot
+   * apply.
+   */
+  @Test
+  void putSettings_returns400_whenCustomSlotKeyCollidesWithBuiltInKind() throws Exception {
+    AuthedUser user = registerUser("primary");
+    HouseholdDto household =
+        householdUpdateService.createHousehold(
+            user.userId(), new CreateHouseholdRequest("My Family"));
+
+    HouseholdSettingsDocument prev = HouseholdTestData.defaultDocument();
+    CustomSlotDefinition colliding =
+        new CustomSlotDefinition("dinner", "Second dinner", SlotKind.dinner, true, 1, 30);
+    HouseholdSettingsDocument doc =
+        new HouseholdSettingsDocument(
+            prev.slotDefaults(), List.of(colliding), null, new HouseholdSchedulingPreferences());
+
+    mvc.perform(
+            put("/api/v1/households/" + household.id() + "/settings")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(new UpdateHouseholdSettingsRequest(doc, 0L))))
+        .andExpect(status().isBadRequest())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+  }
+
+  /**
+   * household-2: a per-slot headcount above the {@code @ValidHeadcount} max (16) must be rejected
+   * with a 400. The OpenAPI schema also bounds headcount at 16, so this confirms the bean validator
+   * agrees with the contract (and guards the same rule on the in-process path).
+   */
+  @Test
+  void putSettings_returns400_whenSlotHeadcountExceedsMax() throws Exception {
+    AuthedUser user = registerUser("primary");
+    HouseholdDto household =
+        householdUpdateService.createHousehold(
+            user.userId(), new CreateHouseholdRequest("My Family"));
+
+    HouseholdSettingsDocument prev = HouseholdTestData.defaultDocument();
+    Map<SlotKind, SlotDefault> slots = new LinkedHashMap<>(prev.slotDefaults());
+    slots.put(SlotKind.dinner, new SlotDefault(true, 99, 45));
+    HouseholdSettingsDocument doc =
+        new HouseholdSettingsDocument(
+            slots, new ArrayList<>(), null, new HouseholdSchedulingPreferences());
+
+    mvc.perform(
+            put("/api/v1/households/" + household.id() + "/settings")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(new UpdateHouseholdSettingsRequest(doc, 0L))))
+        .andExpect(status().isBadRequest());
+  }
+
   // ---------------- GET /settings/audit-log ----------------
 
   @Test
@@ -288,10 +347,11 @@ class HouseholdSettingsFlowIT {
         householdUpdateService.createHousehold(
             user.userId(), new CreateHouseholdRequest("My Family"));
 
-    // First flip: dinner.shared
+    // First flip: dinner.shared only (keep headcount/timeBudgetMin at the default-dinner 1/45 so a
+    // single audit row is written).
     HouseholdSettingsDocument prev = HouseholdTestData.defaultDocument();
     Map<SlotKind, SlotDefault> next1Slots = new LinkedHashMap<>(prev.slotDefaults());
-    next1Slots.put(SlotKind.dinner, new SlotDefault(false, 1, 30));
+    next1Slots.put(SlotKind.dinner, new SlotDefault(false, 1, 45));
     HouseholdSettingsDocument next1 =
         new HouseholdSettingsDocument(
             next1Slots, new ArrayList<>(), null, new HouseholdSchedulingPreferences());

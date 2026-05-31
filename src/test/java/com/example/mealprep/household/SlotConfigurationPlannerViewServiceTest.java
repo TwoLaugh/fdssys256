@@ -33,6 +33,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -66,7 +67,8 @@ class SlotConfigurationPlannerViewServiceTest {
       new com.example.mealprep.household.api.mapper.HouseholdSettingsAuditMapperImpl();
   private final HouseholdInviteMapper inviteMapper =
       new com.example.mealprep.household.api.mapper.HouseholdInviteMapperImpl();
-  private final HouseholdSettingsDiffer differ = new HouseholdSettingsDiffer(new ObjectMapper());
+  private final HouseholdSettingsDiffer differ =
+      new HouseholdSettingsDiffer(new ObjectMapper(), Clock.systemUTC());
   private final SlotConfigurationResolver slotConfigurationResolver =
       new SlotConfigurationResolver();
   private final InviteCodeGenerator inviteCodeGenerator = new InviteCodeGenerator();
@@ -134,12 +136,18 @@ class SlotConfigurationPlannerViewServiceTest {
     assertThat(result.householdId()).isEqualTo(household.getId());
     // Four built-in slots: breakfast/lunch/dinner/snack from default document.
     assertThat(result.slots()).hasSize(4);
+    Map<com.example.mealprep.household.domain.entity.SlotKind, Integer> expectedBudgets =
+        Map.of(
+            com.example.mealprep.household.domain.entity.SlotKind.breakfast, 15,
+            com.example.mealprep.household.domain.entity.SlotKind.lunch, 20,
+            com.example.mealprep.household.domain.entity.SlotKind.dinner, 45,
+            com.example.mealprep.household.domain.entity.SlotKind.snack, 5);
     assertThat(result.slots())
         .allSatisfy(
             slot -> {
               assertThat(slot.shared()).isTrue();
               assertThat(slot.headcount()).isEqualTo(1);
-              assertThat(slot.timeBudgetMin()).isEqualTo(30);
+              assertThat(slot.timeBudgetMin()).isEqualTo(expectedBudgets.get(slot.kind()));
               assertThat(slot.eaterUserIdsIfPerPerson()).isNull();
               // cuisinePreferenceWeight: always null in v1.
               assertThat(slot.cuisinePreferenceWeight()).isNull();

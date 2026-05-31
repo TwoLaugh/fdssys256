@@ -49,9 +49,9 @@ import org.springframework.transaction.event.TransactionalEventListener;
 /**
  * Full HTTP flow over the member-administration endpoints (01d): add / update / remove /
  * change-role. Asserts AFTER_COMMIT event capture, OpenAPI validity, the 404 ladder
- * (cross-household leak protection), the last-primary guard, and that 01c's accept-invite path
- * still emits {@code HouseholdInviteAcceptedEvent} (NOT {@code HouseholdMemberAddedEvent}) after
- * 01d's shared-helper refactor.
+ * (cross-household leak protection), the last-primary guard, and that the accept-invite path emits
+ * BOTH {@code HouseholdMemberAddedEvent} (household-4, for the planner / member-add consumers) and
+ * {@code HouseholdInviteAcceptedEvent} (for invite-flow consumers).
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -630,11 +630,11 @@ class HouseholdMembersFlowIT {
         .andExpect(status().isBadRequest());
   }
 
-  // ---------------- 01c regression: accept-invite still emits only InviteAcceptedEvent
+  // ---------------- household-4: accept-invite emits BOTH member-added AND invite-accepted
   // ----------------
 
   @Test
-  void acceptInvite_afterRefactor_emitsOnlyInviteAcceptedEvent() throws Exception {
+  void acceptInvite_emitsMemberAddedAndInviteAcceptedEvents() throws Exception {
     AuthedUser primary = registerUser("primary");
     AuthedUser invitee = registerUser("invitee");
     householdUpdateService.createHousehold(primary.userId(), new CreateHouseholdRequest("X"));
@@ -659,7 +659,11 @@ class HouseholdMembersFlowIT {
                 .content("{\"inviteCode\":\"" + code + "\"}"))
         .andExpect(status().isOk());
 
-    assertThat(eventCapture.added()).isEmpty();
+    // household-4: the planner / member-add consumers must see the new eater on the invite path.
+    assertThat(eventCapture.added()).hasSize(1);
+    assertThat(eventCapture.added().get(0).userId()).isEqualTo(invitee.userId());
+    assertThat(eventCapture.added().get(0).role().name()).isEqualTo("member");
+    // The invite-flow event is still emitted for invite-specific consumers.
     assertThat(eventCapture.accepted()).hasSize(1);
     assertThat(eventCapture.accepted().get(0).acceptedByUserId()).isEqualTo(invitee.userId());
   }

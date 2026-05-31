@@ -343,6 +343,29 @@ class PlannerEventListenerIT {
     assertNoSuggestionsAfterSettle(plan.getId());
   }
 
+  /**
+   * household-7: a membership change (new eater) is always material — the planner must re-evaluate
+   * the shared-slot eater set — and routes under the HOUSEHOLD_SETTINGS trigger.
+   */
+  @Test
+  void householdMemberAdded_writesSuggestion_withHouseholdSettingsTrigger() {
+    UUID householdId = UUID.randomUUID();
+    Plan plan = seedPlan(householdId);
+
+    publishInTx(
+        new com.example.mealprep.household.event.HouseholdMemberAddedEvent(
+            householdId,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            HouseholdRole.member,
+            UUID.randomUUID(),
+            Instant.now()));
+
+    List<MealPrepPlanReoptSuggestion> mine = awaitSuggestions(plan.getId(), 1);
+    assertThat(mine).hasSize(1);
+    assertThat(mine.get(0).getTriggerKind()).isEqualTo(ReoptTriggerKind.HOUSEHOLD_SETTINGS);
+  }
+
   // ---- Idempotency ----------------------------------------------------------------------------
 
   @Test

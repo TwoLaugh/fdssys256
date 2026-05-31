@@ -16,9 +16,11 @@ public interface HouseholdMergeService {
 
   /**
    * Merge soft preferences for the given household. {@code eaterUserIds} null or empty resolves to
-   * all current members (LLD line 318). Throws {@code HouseholdNotFoundException} (404) if the
-   * household is missing, {@code EmptyHouseholdMergeException} (422) if the household has zero
-   * members.
+   * all current members (LLD line 318); otherwise every supplied id MUST be a current member of the
+   * household (LLD Flow 7 step 1). Throws {@code HouseholdNotFoundException} (404) if the household
+   * is missing, {@code EmptyHouseholdMergeException} (422) if the household has zero members, and
+   * {@code HouseholdMemberNotFoundException} (404) if any supplied {@code eaterUserId} is not a
+   * current member.
    */
   MergedSoftPreferencesDto mergeSoftPreferencesForSlot(UUID householdId, List<UUID> eaterUserIds);
 
