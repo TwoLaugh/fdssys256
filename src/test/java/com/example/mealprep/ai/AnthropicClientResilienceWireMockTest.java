@@ -78,7 +78,7 @@ class AnthropicClientResilienceWireMockTest {
             "sonnet",
             "opus",
             60,
-            3, // maxRetries
+            2, // maxRetries → 1 + 2 = 3 total wire attempts (ai-9: field is retries, not attempts)
             null,
             null,
             null);
@@ -102,6 +102,9 @@ class AnthropicClientResilienceWireMockTest {
     // Capture backoff delays instead of sleeping; lets us assert the rate-limit base is longer.
     sleeps = new ArrayList<>();
     client.setSleeper(sleeps::add);
+    // Fixed-seed jitter so backoff durations are deterministic-within-range (ai-9: LLD Flow 2 adds
+    // jitter, so the wait is in [ceiling/2, ceiling] rather than exactly the exponential ceiling).
+    client.setJitterRandom(new java.util.Random(7));
   }
 
   @AfterEach
@@ -144,9 +147,12 @@ class AnthropicClientResilienceWireMockTest {
     assertThat(response.body()).isEqualTo("ok");
     // Three attempts in total: 429, 429, 200.
     verify(3, postRequestedFor(urlPathEqualTo(MESSAGES_PATH)));
-    // Two backoff sleeps, both on the RATE_LIMIT base (1000ms) → 1000, 2000 (longer than the
-    // 200/400 transient series — this is the ai-2 correctness fix).
-    assertThat(sleeps).containsExactly(1_000L, 2_000L);
+    // Two backoff sleeps on the RATE_LIMIT base (1000ms), each jittered into [ceiling/2, ceiling]:
+    // attempt 1 → [500,1000], attempt 2 → [1000,2000] (longer than the 200/400 transient series —
+    // this is the ai-2 correctness fix; the jitter is the ai-9 addition).
+    assertThat(sleeps).hasSize(2);
+    assertThat(sleeps.get(0)).isBetween(500L, 1_000L);
+    assertThat(sleeps.get(1)).isBetween(1_000L, 2_000L);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -171,8 +177,9 @@ class AnthropicClientResilienceWireMockTest {
 
     assertThat(response.body()).isEqualTo("ok");
     verify(2, postRequestedFor(urlPathEqualTo(MESSAGES_PATH)));
-    // One transient backoff at the 200ms base — preserves the historical 200/400 series.
-    assertThat(sleeps).containsExactly(200L);
+    // One transient backoff at the 200ms base, jittered into [100,200].
+    assertThat(sleeps).hasSize(1);
+    assertThat(sleeps.get(0)).isBetween(100L, 200L);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -181,7 +188,8 @@ class AnthropicClientResilienceWireMockTest {
 
   @Test
   void repeatedFailures_openCircuit_thenNextCallShortCircuits_andMapsTo503() {
-    // Always 503. maxRetries=3 → each call() makes 3 wire attempts then throws AiUnavailable.
+    // Always 503. maxRetries=2 → each call() makes 1 + 2 = 3 wire attempts then throws
+    // AiUnavailable.
     stubFor(
         post(urlPathEqualTo(MESSAGES_PATH))
             .willReturn(aResponse().withStatus(503).withBody("down")));
@@ -317,8 +325,10 @@ class AnthropicClientResilienceWireMockTest {
         .isInstanceOf(AiRateLimitException.class)
         .isInstanceOf(AiUnavailableException.class);
 
-    // maxRetries=3 → three wire attempts, two backoff sleeps on the rate-limit base.
+    // maxRetries=2 → 1 + 2 = three wire attempts, two backoff sleeps on the rate-limit base.
     verify(3, postRequestedFor(urlPathEqualTo(MESSAGES_PATH)));
-    assertThat(sleeps).containsExactly(1_000L, 2_000L);
+    assertThat(sleeps).hasSize(2);
+    assertThat(sleeps.get(0)).isBetween(500L, 1_000L);
+    assertThat(sleeps.get(1)).isBetween(1_000L, 2_000L);
   }
 }

@@ -117,6 +117,10 @@ class AiMutationKillsTest {
         new AnthropicClient(rest, properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
     List<Long> sleeps = new ArrayList<>();
     client.setSleeper(sleeps::add);
+    // Pin jitter to its maximum (nextLong(bound) → bound-1) so the equal-jitter wait collapses to
+    // the full exponential ceiling — lets this mutation-kill test assert the exact 200, 400 series
+    // while the production path still jitters (ai-9). half + (half) = ceiling.
+    client.setJitterRandom(maxJitter());
 
     AnthropicResponse parsed =
         client.call(
@@ -127,8 +131,25 @@ class AiMutationKillsTest {
             "haiku");
 
     assertThat(parsed.body()).isEqualTo("ok");
-    // Exactly 2 sleeps with exponential backoff: 200 << 0 = 200, 200 << 1 = 400.
+    // Exactly 2 sleeps with exponential backoff (jitter pinned to max): 200 << 0 = 200, 200 << 1 =
+    // 400.
     assertThat(sleeps).containsExactly(200L, 400L);
+  }
+
+  /** A {@link java.util.random.RandomGenerator} whose {@code nextLong(bound)} always returns the */
+  /* upper end (bound-1), pinning equal-jitter backoff to the full exponential ceiling. */
+  private static java.util.random.RandomGenerator maxJitter() {
+    return new java.util.random.RandomGenerator() {
+      @Override
+      public long nextLong() {
+        return Long.MAX_VALUE;
+      }
+
+      @Override
+      public long nextLong(long bound) {
+        return bound - 1;
+      }
+    };
   }
 
   /**
@@ -621,7 +642,16 @@ class AiMutationKillsTest {
 
     AiServiceImpl svc =
         new AiServiceImpl(
-            anthropic, embedding, recorder, publisher, props, objectMapper, clock, guard, calc);
+            anthropic,
+            embedding,
+            recorder,
+            publisher,
+            props,
+            objectMapper,
+            clock,
+            guard,
+            mock(com.example.mealprep.ai.domain.service.internal.TokenCapGuard.class),
+            calc);
     String result = svc.execute(task);
     assertThat(result).isEqualTo("ok");
 
@@ -659,7 +689,16 @@ class AiMutationKillsTest {
 
     AiServiceImpl svc =
         new AiServiceImpl(
-            anthropic, embedding, recorder, publisher, props, objectMapper, clock, guard, calc);
+            anthropic,
+            embedding,
+            recorder,
+            publisher,
+            props,
+            objectMapper,
+            clock,
+            guard,
+            mock(com.example.mealprep.ai.domain.service.internal.TokenCapGuard.class),
+            calc);
 
     assertThatThrownBy(() -> svc.execute(task))
         .isInstanceOf(com.example.mealprep.ai.exception.AiCircuitOpenException.class);
@@ -684,6 +723,8 @@ class AiMutationKillsTest {
   void costBudgetGuard_exactlyAtLimit_isExclusive_throws() {
     AiCallLogRepository repo = mock(AiCallLogRepository.class);
     CostCalculator calc = new CostCalculator();
+    ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+    // Daily made HARD so the exclusive-cap boundary surfaces as a throw (default daily is soft).
     AiProperties props =
         new AiProperties(
             "k",
@@ -695,9 +736,9 @@ class AiMutationKillsTest {
             3,
             null,
             null,
-            new AiProperties.Budget(true, 50L, 24));
+            new AiProperties.Budget(true, 50L, 24, true, 10_000_000L, 720, true));
     Clock clock = Clock.fixed(Instant.parse("2026-05-08T12:00:00Z"), ZoneOffset.UTC);
-    CostBudgetGuard guard = new CostBudgetGuard(repo, calc, props, clock);
+    CostBudgetGuard guard = new CostBudgetGuard(repo, calc, props, clock, publisher);
 
     UUID userId = UUID.randomUUID();
     AiTask<String> task =
@@ -706,6 +747,8 @@ class AiMutationKillsTest {
             .withTier(ModelTier.CHEAP)
             .withUserId(userId)
             .build();
+    // High monthly cap not tripped by the seeded global spend.
+    when(repo.sumCostMicroPenceGlobalSince(any())).thenReturn(0L);
     // CHEAP estimate = 4_000 * 79 + 2_000 * 395 = 1_106_000 micropence. Set spent so total is
     // exactly the 50p (50_000_000 micropence) limit.
     long estimate = 1_106_000L;
@@ -752,6 +795,8 @@ class AiMutationKillsTest {
   void costBudgetGuard_retryAfterFor_rowWithNullCreatedAt_defersToWindow() {
     AiCallLogRepository repo = mock(AiCallLogRepository.class);
     CostCalculator calc = new CostCalculator();
+    ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+    // Daily HARD so retryAfter is exercised on the per-user reject path (default daily is soft).
     AiProperties props =
         new AiProperties(
             "k",
@@ -763,9 +808,9 @@ class AiMutationKillsTest {
             3,
             null,
             null,
-            new AiProperties.Budget(true, 50L, 24));
+            new AiProperties.Budget(true, 50L, 24, true, 10_000_000L, 720, true));
     Clock clock = Clock.fixed(Instant.parse("2026-05-08T12:00:00Z"), ZoneOffset.UTC);
-    CostBudgetGuard guard = new CostBudgetGuard(repo, calc, props, clock);
+    CostBudgetGuard guard = new CostBudgetGuard(repo, calc, props, clock, publisher);
 
     UUID userId = UUID.randomUUID();
     AiTask<String> task =
@@ -774,6 +819,7 @@ class AiMutationKillsTest {
             .withTier(ModelTier.HIGH)
             .withUserId(userId)
             .build();
+    when(repo.sumCostMicroPenceGlobalSince(any())).thenReturn(0L);
     when(repo.sumCostMicroPenceForUserSince(eq(userId), any())).thenReturn(100_000_000L);
     // Single row with null createdAt — defensive path returns window length clamped.
     AiCallLog rowWithNullCreatedAt =
@@ -908,7 +954,16 @@ class AiMutationKillsTest {
 
     AiServiceImpl svc =
         new AiServiceImpl(
-            anthropic, embedding, recorder, publisher, props, objectMapper, clock, guard, calc);
+            anthropic,
+            embedding,
+            recorder,
+            publisher,
+            props,
+            objectMapper,
+            clock,
+            guard,
+            mock(com.example.mealprep.ai.domain.service.internal.TokenCapGuard.class),
+            calc);
     assertThatThrownBy(() -> svc.embed(stubEmbedTask("x")))
         .isInstanceOf(com.example.mealprep.ai.exception.AiInvalidResponseException.class);
     verify(recorder)

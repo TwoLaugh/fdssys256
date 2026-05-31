@@ -156,11 +156,66 @@ class AnthropicClientTest {
 
   @Test
   void call_throwsAiUnavailableAfterRetriesExhausted() {
+    // maxRetries=3 ⇒ 1 initial attempt + 3 retries = 4 wire attempts (ai-9: retries, not attempts).
+    scripted.add(RoundTrip.status(HttpStatus.BAD_GATEWAY, "x"));
     scripted.add(RoundTrip.status(HttpStatus.BAD_GATEWAY, "x"));
     scripted.add(RoundTrip.status(HttpStatus.BAD_GATEWAY, "x"));
     scripted.add(RoundTrip.status(HttpStatus.BAD_GATEWAY, "x"));
     assertThatThrownBy(() -> client.call(stubTask(), "haiku"))
         .isInstanceOf(AiUnavailableException.class);
+    // All four scripted attempts consumed — confirms 1 + maxRetries, not maxRetries.
+    assertThat(scripted).isEmpty();
+  }
+
+  @Test
+  void maxAttempts_isOnePlusConfiguredRetries() {
+    // ai-9: the field is "retries"; total attempts = 1 + retries.
+    AiProperties zeroRetries =
+        new AiProperties(
+            "k", "https://example.test", "haiku", "sonnet", "opus", 60, 0, null, null, null);
+    AnthropicClient zero =
+        new AnthropicClient(
+            restClient, zeroRetries, objectMapper, CircuitBreakerRegistry.ofDefaults());
+    assertThat(zero.maxAttempts()).isEqualTo(1);
+    assertThat(client.maxAttempts()).isEqualTo(4); // default maxRetries=3
+  }
+
+  @Test
+  void call_maxRetriesZero_makesExactlyOneAttempt_noRetry() {
+    AiProperties zeroRetries =
+        new AiProperties(
+            "k", "https://example.test", "haiku", "sonnet", "opus", 60, 0, null, null, null);
+    AnthropicClient zero =
+        new AnthropicClient(
+            restClient, zeroRetries, objectMapper, CircuitBreakerRegistry.ofDefaults());
+    zero.setSleeper(ms -> {});
+    // Two failures scripted; with zero retries only the first is consumed before it throws.
+    scripted.add(RoundTrip.status(HttpStatus.BAD_GATEWAY, "x"));
+    scripted.add(RoundTrip.status(HttpStatus.BAD_GATEWAY, "x"));
+    assertThatThrownBy(() -> zero.call(stubTask(), "haiku"))
+        .isInstanceOf(AiUnavailableException.class);
+    // The second scripted response was NOT consumed — exactly one wire attempt was made.
+    assertThat(scripted).hasSize(1);
+  }
+
+  @Test
+  void call_appliesJitteredBackoffBetweenRetries_boundedByExponentialCeiling() {
+    // Capture the backoff durations the client sleeps for, with a fixed-seed jitter source so the
+    // values are deterministic. RATE_LIMIT base is 1000ms: attempt 1 ceiling 1000 → wait in
+    // [500,1000]; attempt 2 ceiling 2000 → wait in [1000,2000]; attempt 3 ceiling 4000 →
+    // [2000,4000]. (maxRetries=3 ⇒ 4 attempts ⇒ 3 inter-attempt waits.)
+    java.util.List<Long> sleeps = new java.util.ArrayList<>();
+    client.setSleeper(sleeps::add);
+    client.setJitterRandom(new java.util.Random(42));
+    for (int i = 0; i < 4; i++) {
+      scripted.add(RoundTrip.status(HttpStatus.TOO_MANY_REQUESTS, "rate limited"));
+    }
+    assertThatThrownBy(() -> client.call(stubTask(), "haiku"))
+        .isInstanceOf(com.example.mealprep.ai.exception.AiRateLimitException.class);
+    assertThat(sleeps).hasSize(3);
+    assertThat(sleeps.get(0)).isBetween(500L, 1000L);
+    assertThat(sleeps.get(1)).isBetween(1000L, 2000L);
+    assertThat(sleeps.get(2)).isBetween(2000L, 4000L);
   }
 
   private AiTask<String> stubTask() {

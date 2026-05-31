@@ -10,6 +10,7 @@ import com.example.mealprep.ai.exception.AiCircuitOpenException;
 import com.example.mealprep.ai.exception.AiCostBudgetExceededException;
 import com.example.mealprep.ai.exception.AiInvalidRequestException;
 import com.example.mealprep.ai.exception.AiInvalidResponseException;
+import com.example.mealprep.ai.exception.AiTokenCapExceededException;
 import com.example.mealprep.ai.exception.AiUnavailableException;
 import com.example.mealprep.ai.spi.AiTask;
 import com.example.mealprep.ai.spi.EmbeddingTask;
@@ -58,6 +59,7 @@ public class AiServiceImpl implements AiService {
   private final Clock clock;
   private final Cache<String, float[]> embeddingCache;
   private final CostBudgetGuard budgetGuard;
+  private final TokenCapGuard tokenCapGuard;
   private final CostCalculator costCalculator;
 
   public AiServiceImpl(
@@ -69,6 +71,7 @@ public class AiServiceImpl implements AiService {
       ObjectMapper objectMapper,
       Clock clock,
       CostBudgetGuard budgetGuard,
+      TokenCapGuard tokenCapGuard,
       CostCalculator costCalculator) {
     this.anthropicClient = anthropicClient;
     this.embeddingClient = embeddingClient;
@@ -84,6 +87,7 @@ public class AiServiceImpl implements AiService {
             .expireAfterWrite(Duration.ofHours(cfg.cacheTtlHours()))
             .build();
     this.budgetGuard = budgetGuard;
+    this.tokenCapGuard = tokenCapGuard;
     this.costCalculator = costCalculator;
   }
 
@@ -96,6 +100,15 @@ public class AiServiceImpl implements AiService {
     String modelId = properties.modelIdFor(tier);
     UUID callId = recorder.recordPending(task, tier, modelId);
     long startNanos = System.nanoTime();
+    try {
+      // Token-cap pre-check (lld/ai.md Flow 1 step 4): the rendered prompt must fit the task's
+      // input-token cap before we evaluate cost or hit the wire. Runs AFTER the PENDING row so an
+      // oversized-prompt caller bug is visible in the call log (status=FAILED, TOKEN_CAP_EXCEEDED).
+      tokenCapGuard.checkOrThrow(task);
+    } catch (AiTokenCapExceededException ex) {
+      finalizeFailure(callId, task, CallErrorKind.TOKEN_CAP_EXCEEDED, startNanos);
+      throw ex;
+    }
     try {
       // Budget pre-check runs AFTER the PENDING row is written so a budget rejection still appears
       // in the call log (status=FAILED, error_kind=BUDGET_EXCEEDED) — operationally important.
@@ -304,6 +317,8 @@ public class AiServiceImpl implements AiService {
     eventPublisher.publishEvent(
         new CostBudgetExceededEvent(
             ex.userId(),
+            ex.scope(),
+            true,
             ex.spentPence(),
             ex.limitPence(),
             ex.window(),

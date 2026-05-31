@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.ai.api.AiAdminGuard;
 import com.example.mealprep.ai.api.controller.AdminAiController;
 import com.example.mealprep.ai.api.dto.AiCallLogDto;
 import com.example.mealprep.ai.api.dto.CostSummaryDto;
@@ -34,15 +35,39 @@ class AdminAiControllerTest {
 
   private final AdminAiQueryService queryService = mock(AdminAiQueryService.class);
   private final PromptTemplateService promptTemplateService = mock(PromptTemplateService.class);
+  private final AiAdminGuard adminGuard = mock(AiAdminGuard.class);
   private final AdminAiController controller =
-      new AdminAiController(queryService, promptTemplateService);
+      new AdminAiController(queryService, promptTemplateService, adminGuard);
 
   @Test
   void getCostSummary_delegatesAndReturnsResult() {
     CostSummaryDto dto = new CostSummaryDto(24, 0L, 0L, List.of());
     when(queryService.getCostSummary(24)).thenReturn(dto);
     assertThat(controller.getCostSummary(24)).isSameAs(dto);
+    verify(adminGuard).requireAdmin();
     verify(queryService).getCostSummary(24);
+  }
+
+  @Test
+  void everyEndpoint_invokesAdminGuard_beforeDelegating() {
+    // ai-10: the imperative admin gate must run on each handler. A guard that rejects (throws)
+    // must short-circuit before any query/service call.
+    org.mockito.Mockito.doThrow(
+            new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.FORBIDDEN, "denied"))
+        .when(adminGuard)
+        .requireAdmin();
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.getCostSummary(24))
+        .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> controller.getCallLog(0, 20, null, null))
+        .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.listPromptTemplates(0, 20))
+        .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.getPromptTemplate("x", 1))
+        .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+    org.mockito.Mockito.verifyNoInteractions(queryService, promptTemplateService);
   }
 
   @Test

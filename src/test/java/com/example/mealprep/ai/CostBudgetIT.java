@@ -50,7 +50,13 @@ import org.springframework.transaction.support.TransactionTemplate;
     properties = {
       "mealprep.ai.budget.enabled=true",
       "mealprep.ai.budget.daily-pence-per-user=50",
-      "mealprep.ai.budget.window-hours=24"
+      "mealprep.ai.budget.window-hours=24",
+      // Daily made HARD here so the IT can assert a real per-user rejection against Postgres.
+      "mealprep.ai.budget.daily-hard-block=true",
+      // High monthly ceiling so the daily-scope tests aren't masked by the system-wide cap.
+      "mealprep.ai.budget.monthly-pence-total=1000000",
+      "mealprep.ai.budget.monthly-window-hours=720",
+      "mealprep.ai.budget.monthly-hard-block=true"
     })
 class CostBudgetIT {
 
@@ -58,6 +64,7 @@ class CostBudgetIT {
   @Autowired private AiProperties properties;
   @Autowired private CostCalculator costCalculator;
   @Autowired private Clock clock;
+  @Autowired private org.springframework.context.ApplicationEventPublisher eventPublisher;
   @Autowired private PlatformTransactionManager transactionManager;
   @PersistenceContext private EntityManager entityManager;
 
@@ -105,8 +112,9 @@ class CostBudgetIT {
             properties.maxRetries(),
             properties.openaiApiKey(),
             properties.embedding(),
-            new AiProperties.Budget(false, 50L, 24));
-    CostBudgetGuard guard = new CostBudgetGuard(repository, costCalculator, disabled, clock);
+            AiProperties.Budget.ofDaily(false, 50L, 24));
+    CostBudgetGuard guard =
+        new CostBudgetGuard(repository, costCalculator, disabled, clock, eventPublisher);
     AiTask<String> task =
         AiTestData.task(String.class).withTier(ModelTier.CHEAP).withUserId(userId).build();
 
@@ -114,13 +122,14 @@ class CostBudgetIT {
   }
 
   @Test
-  void budgetGuard_overLimit_throws_andEvictionTimeMatchesOldestRow() {
+  void dailyUser_hardBlock_overLimit_throws_andEvictionTimeMatchesOldestRow() {
     UUID userId = UUID.randomUUID();
     Instant now = Instant.now(clock);
     persist(userId, now.minus(Duration.ofHours(20)), CallStatus.SUCCEEDED, 30_000_000L);
     persist(userId, now.minus(Duration.ofMinutes(30)), CallStatus.SUCCEEDED, 30_000_000L);
 
-    CostBudgetGuard guard = new CostBudgetGuard(repository, costCalculator, properties, clock);
+    CostBudgetGuard guard =
+        new CostBudgetGuard(repository, costCalculator, properties, clock, eventPublisher);
     AiTask<String> task =
         AiTestData.task(String.class).withTier(ModelTier.CHEAP).withUserId(userId).build();
 
@@ -129,9 +138,51 @@ class CostBudgetIT {
         .satisfies(
             ex -> {
               AiCostBudgetExceededException budget = (AiCostBudgetExceededException) ex;
+              assertThat(budget.scope())
+                  .isEqualTo(com.example.mealprep.ai.event.BudgetScope.DAILY_USER);
               assertThat(budget.userId()).isEqualTo(userId);
               // Oldest row at 20h → ~4h until eviction (24h window).
               assertThat(budget.retryAfter().toHours()).isBetween(3L, 5L);
+            });
+  }
+
+  @Test
+  void monthlyTotal_hardBlock_systemWideOverLimit_throws_withSystemScope() {
+    // Two different users contribute to the system-wide monthly spend; the cap is global.
+    UUID userA = UUID.randomUUID();
+    UUID userB = UUID.randomUUID();
+    Instant now = Instant.now(clock);
+    // 6_000_000 micropence = £60; two rows = £120 system-wide.
+    persist(userA, now.minus(Duration.ofDays(5)), CallStatus.SUCCEEDED, 60_000_000L);
+    persist(userB, now.minus(Duration.ofDays(2)), CallStatus.SUCCEEDED, 60_000_000L);
+
+    // Monthly cap £1.00 (100 pence) so the seeded £120 trips it; daily made effectively
+    // unreachable.
+    AiProperties tightMonthly =
+        new AiProperties(
+            properties.anthropicApiKey(),
+            properties.anthropicBaseUrl(),
+            properties.tierCheapModel(),
+            properties.tierMidModel(),
+            properties.tierHighModel(),
+            properties.timeoutSeconds(),
+            properties.maxRetries(),
+            properties.openaiApiKey(),
+            properties.embedding(),
+            new AiProperties.Budget(true, 100_000L, 24, false, 100L, 720, true));
+    CostBudgetGuard guard =
+        new CostBudgetGuard(repository, costCalculator, tightMonthly, clock, eventPublisher);
+    AiTask<String> task =
+        AiTestData.task(String.class).withTier(ModelTier.CHEAP).withUserId(userA).build();
+
+    assertThatThrownBy(() -> guard.checkOrThrow(task))
+        .isInstanceOf(AiCostBudgetExceededException.class)
+        .satisfies(
+            ex -> {
+              AiCostBudgetExceededException budget = (AiCostBudgetExceededException) ex;
+              assertThat(budget.scope())
+                  .isEqualTo(com.example.mealprep.ai.event.BudgetScope.MONTHLY_TOTAL);
+              assertThat(budget.userId()).isNull();
             });
   }
 

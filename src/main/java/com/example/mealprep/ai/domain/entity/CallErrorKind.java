@@ -15,5 +15,11 @@ public enum CallErrorKind {
    * Per-user rolling-window cost cap was reached before the call left the JVM. Recorded with {@code
    * status=FAILED} so ops can see the cost spike that triggered the guard.
    */
-  BUDGET_EXCEEDED
+  BUDGET_EXCEEDED,
+  /**
+   * The rendered prompt exceeded the per-task input-token cap (Stage-C context-shape guard).
+   * Recorded with {@code status=FAILED} so an oversized-prompt caller bug is visible in the audit
+   * log; the call never left the JVM.
+   */
+  TOKEN_CAP_EXCEEDED
 }

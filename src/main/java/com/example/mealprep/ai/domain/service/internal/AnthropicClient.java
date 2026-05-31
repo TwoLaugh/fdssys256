@@ -83,6 +83,7 @@ public class AnthropicClient {
   private final ObjectMapper objectMapper;
   private final CircuitBreakerRegistry circuitBreakerRegistry;
   private Sleeper sleeper;
+  private java.util.random.RandomGenerator jitterRandom;
 
   public AnthropicClient(
       RestClient anthropicRestClient,
@@ -94,11 +95,20 @@ public class AnthropicClient {
     this.objectMapper = objectMapper;
     this.circuitBreakerRegistry = circuitBreakerRegistry;
     this.sleeper = Thread::sleep;
+    this.jitterRandom = java.util.concurrent.ThreadLocalRandom.current();
   }
 
   /** Test seam — replaces the production {@code Thread::sleep} so retries don't block tests. */
   public void setSleeper(Sleeper sleeper) {
     this.sleeper = sleeper;
+  }
+
+  /**
+   * Test seam — replaces the production {@link java.util.concurrent.ThreadLocalRandom} jitter
+   * source with a fixed-seed generator so backoff durations are deterministic in tests.
+   */
+  public void setJitterRandom(java.util.random.RandomGenerator jitterRandom) {
+    this.jitterRandom = jitterRandom;
   }
 
   /**
@@ -179,7 +189,7 @@ public class AnthropicClient {
    */
   private AnthropicResponse callWithRetry(AiTask<?> task, String modelId) {
     String requestBody = buildRequestBody(task, modelId);
-    int maxAttempts = Math.max(1, properties.maxRetries());
+    int maxAttempts = maxAttempts();
     AiUnavailableException lastTransient = null;
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
@@ -193,7 +203,9 @@ public class AnthropicClient {
         if (attempt == maxAttempts) {
           break;
         }
-        long delay = RetryPolicy.backoffFor(RetryPolicy.Category.RATE_LIMIT, attempt).toMillis();
+        long delay =
+            RetryPolicy.backoffWithJitter(RetryPolicy.Category.RATE_LIMIT, attempt, jitterRandom)
+                .toMillis();
         log.warn(
             "anthropic RATE_LIMIT (429) (attempt {}/{}), backing off {}ms before retry: {}",
             attempt,
@@ -209,7 +221,9 @@ public class AnthropicClient {
         if (attempt == maxAttempts) {
           break;
         }
-        long delay = RetryPolicy.backoffFor(RetryPolicy.Category.TIMEOUT, attempt).toMillis();
+        long delay =
+            RetryPolicy.backoffWithJitter(RetryPolicy.Category.TIMEOUT, attempt, jitterRandom)
+                .toMillis();
         log.warn(
             "anthropic call failed (attempt {}/{}), retrying after {}ms: {}",
             attempt,
@@ -225,6 +239,19 @@ public class AnthropicClient {
     }
     throw new AiUnavailableException(
         "Anthropic call failed after " + maxAttempts + " attempts", lastTransient);
+  }
+
+  /**
+   * Total wire attempts for one {@code call}: the first attempt plus {@code
+   * mealprep.ai.max-retries} retries. The config field is "retries" (additional attempts after the
+   * first), so {@code maxRetries=0} ⇒ a single attempt (no retry) and the default {@code
+   * maxRetries=3} ⇒ 4 attempts (1 + 3 retries). The {@code AiProperties} record already floors a
+   * negative value to its default, so this is always ≥ 1. (Before the {@code ai-9} fix this method
+   * conflated retries with attempts — {@code maxRetries=1} silently meant a single non-retried
+   * attempt.)
+   */
+  public int maxAttempts() {
+    return 1 + Math.max(0, properties.maxRetries());
   }
 
   private String post(String requestBody) {
@@ -308,6 +335,16 @@ public class AnthropicClient {
   }
 
   private String renderUserMessage(AiTask<?> task) {
+    return renderUserMessage(task, objectMapper);
+  }
+
+  /**
+   * Render the single user-message string the dispatcher sends to Anthropic (and that {@link
+   * TokenCapGuard} measures against the per-task input-token cap). Exposed as a static so the
+   * token-cap pre-check measures the exact text that will go on the wire — no drift between the cap
+   * estimate and the real request body.
+   */
+  public static String renderUserMessage(AiTask<?> task, ObjectMapper objectMapper) {
     Map<String, Object> vars = task.variables();
     if (vars == null || vars.isEmpty()) {
       // The prompt-template loader (01d) materialises the body; until then the calling module is
