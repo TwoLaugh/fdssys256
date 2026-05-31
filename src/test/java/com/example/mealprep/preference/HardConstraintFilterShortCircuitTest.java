@@ -3,6 +3,7 @@ package com.example.mealprep.preference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.preference.api.dto.FilterContext;
 import com.example.mealprep.preference.domain.entity.AgeRestriction;
 import com.example.mealprep.preference.domain.entity.AllergenDerivative;
 import com.example.mealprep.preference.domain.entity.DietaryIdentityException;
@@ -46,8 +47,12 @@ class HardConstraintFilterShortCircuitTest {
   }
 
   private List<UUID> filterOne(UUID userId, List<String> ingredients) {
+    return filterOne(userId, ingredients, FilterContext.ANY);
+  }
+
+  private List<UUID> filterOne(UUID userId, List<String> ingredients, FilterContext context) {
     UUID recipe = UUID.randomUUID();
-    return service().filterRecipes(userId, Map.of(recipe, ingredients));
+    return service().filterRecipes(userId, Map.of(recipe, ingredients), context);
   }
 
   @Test
@@ -156,9 +161,12 @@ class HardConstraintFilterShortCircuitTest {
     when(hardConstraintsRepository.findWithChildrenByUserId(userId))
         .thenReturn(Optional.of(aggregate));
 
-    // 'fish' is excluded by the vegetarian base BUT widened by the exception → recipe must PASS.
-    // Mutating the '&& !exceptionAllows.contains(key)' guard would wrongly exclude it.
-    assertThat(filterOne(userId, List.of("fish"))).hasSize(1);
+    // 'fish' is excluded by the vegetarian base BUT widened by the weekend exception under a
+    // WEEKEND
+    // call → recipe must PASS. Mutating the '&& !exceptionAllows.contains(key)' guard would wrongly
+    // exclude it. (Under ANY/WEEKDAY the weekend exception would NOT apply — see
+    // HardConstraintFilterServiceImplTest for the context-matching cases.)
+    assertThat(filterOne(userId, List.of("fish"), FilterContext.WEEKEND)).hasSize(1);
   }
 
   @Test
@@ -239,6 +247,7 @@ class HardConstraintFilterShortCircuitTest {
     java.util.ArrayList<String> keys = new java.util.ArrayList<>();
     keys.add(null);
     keys.add("rice");
-    assertThat(service().filterRecipes(userId, Map.of(UUID.randomUUID(), keys))).hasSize(1);
+    assertThat(service().filterRecipes(userId, Map.of(UUID.randomUUID(), keys), FilterContext.ANY))
+        .hasSize(1);
   }
 }

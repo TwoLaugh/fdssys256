@@ -5,8 +5,12 @@ import com.example.mealprep.preference.api.dto.UpdateHardConstraintsRequest;
 import java.util.UUID;
 
 /**
- * Write API for the preference module — partial in 01a (hard-constraints only). Taste profile and
- * lifestyle config writes land in subsequent preference tickets.
+ * Write API for the preference module's hard-constraints tier. Per the module's split-interface
+ * design, taste-profile and lifestyle-config writes are NOT here — they live in their own dedicated
+ * services ({@link TasteProfileUpdateService}, {@link LifestyleConfigUpdateService}) alongside the
+ * preference-archive write surface ({@link PreferenceArchiveUpdateService}). This interface owns
+ * only hard-constraints initialisation/replacement and the directive-sourced temporary-constraint
+ * reversal.
  */
 public interface PreferenceUpdateService {
 

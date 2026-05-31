@@ -625,7 +625,11 @@ public class DiscoveryJobRunner {
                   .map(ParsedRecipe.ParsedIngredient::ingredientMappingKey)
                   .filter(Objects::nonNull)
                   .toList();
-      FilterResult hardCheck = hardConstraintFilter.check(userId, ingredientKeys);
+      // Discovery has no meal-slot day context, so the conservative ANY context is used: only
+      // universally-applicable ("any") dietary-identity exceptions widen the base diet here.
+      FilterResult hardCheck =
+          hardConstraintFilter.check(
+              userId, ingredientKeys, com.example.mealprep.preference.api.dto.FilterContext.ANY);
       if (!hardCheck.passes()) {
         writeScrapeRow(
             scrapeRowBuilder(jobId, source.key(), candidate.candidateUrl())

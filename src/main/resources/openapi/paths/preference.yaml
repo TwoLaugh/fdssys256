@@ -232,7 +232,7 @@ lifestyleConfigAuditLog:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 # ============================================================================
-# Taste profile (01c) — six endpoints. Rollback endpoint is deferred.
+# Taste profile (01c) — query + manual override + async refresh + rollback.
 # ============================================================================
 tasteProfile:
   get:

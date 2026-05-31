@@ -19,7 +19,7 @@ import lombok.NoArgsConstructor;
 
 /**
  * Append-only audit row for a single change on a {@link TasteProfile}. One row per write — manual
- * override, AI delta apply (deferred), refresh trigger, init, or rollback (deferred).
+ * override, AI delta apply, refresh trigger, init, or rollback.
  *
  * <p>Distinct from {@link TasteProfileVersion} — this table is the change <i>provenance</i> log
  * (who, when, what kind of change); the versions table holds the document snapshot. They have

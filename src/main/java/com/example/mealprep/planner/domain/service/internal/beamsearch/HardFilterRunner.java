@@ -4,12 +4,15 @@ import com.example.mealprep.core.types.SlotKind;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.config.PlannerProperties;
+import com.example.mealprep.preference.api.dto.FilterContext;
 import com.example.mealprep.preference.api.dto.FilterResult;
 import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.recipe.api.dto.IngredientDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -129,6 +132,7 @@ public class HardFilterRunner {
                 .map(IngredientDto::ingredientMappingKey)
                 .filter(Objects::nonNull)
                 .toList();
+    FilterContext context = contextFor(skel);
     if (skel.shared()) {
       // Shared slot: union check across all eaters via checkForHousehold (preference-01b's
       // contract takes the userId list directly so the planner does not need a household lookup).
@@ -136,7 +140,7 @@ public class HardFilterRunner {
       if (eaters.isEmpty()) {
         return true;
       }
-      FilterResult fr = hardConstraintFilterService.checkForHousehold(eaters, keys);
+      FilterResult fr = hardConstraintFilterService.checkForHousehold(eaters, keys, context);
       return fr.passes();
     }
     // Per-person slot: every eater must individually pass. 01d divergence per ticket §
@@ -146,11 +150,29 @@ public class HardFilterRunner {
       return true;
     }
     for (UUID eater : eaters) {
-      FilterResult fr = hardConstraintFilterService.check(eater, keys);
+      FilterResult fr = hardConstraintFilterService.check(eater, keys, context);
       if (!fr.passes()) {
         return false;
       }
     }
     return true;
+  }
+
+  /**
+   * Derives the {@link FilterContext} for a slot from its date: weekend (Sat/Sun) → {@link
+   * FilterContext#WEEKEND}, otherwise {@link FilterContext#WEEKDAY}. This lets context-conditional
+   * dietary-identity exceptions (e.g. "fish on the weekend") widen the base diet only on the right
+   * day; a slot with no date falls back to {@link FilterContext#ANY} (only {@code "any"} exceptions
+   * widen). The {@code social} context is not derivable from a meal slot and is not used here.
+   */
+  private static FilterContext contextFor(MealSlotSkeleton skel) {
+    LocalDate date = skel.onDate();
+    if (date == null) {
+      return FilterContext.ANY;
+    }
+    DayOfWeek dow = date.getDayOfWeek();
+    return (dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY)
+        ? FilterContext.WEEKEND
+        : FilterContext.WEEKDAY;
   }
 }

@@ -415,16 +415,22 @@ public record UpdateLifestyleConfigRequest(
 
 ### Filter results
 
-```java
-public record FilterResultDto(boolean safe, List<FilterFlagDto> flags) {}
+The shipped shape (the design earlier sketched `FilterResultDto`/`FilterFlagDto`; the module ships the equivalent `FilterResult`/`Violation` pair):
 
-public record FilterFlagDto(
-    FilterFlagType type,             // ALLERGY | DIETARY_IDENTITY | INTOLERANCE | AGE_RESTRICTION | AMBIGUOUS
-    String offendingItem,
-    String matchedRule,
-    String message
+```java
+public record FilterResult(boolean passes, List<Violation> violations) {}
+
+public record Violation(
+    UUID userId,                     // which member the violation belongs to (household/batch variants)
+    UUID recipeId,                   // originating recipe for checkRecipe; null otherwise
+    String ingredientKey,            // the ingredient that triggered the violation
+    ViolationKind kind,              // ALLERGY | INTOLERANCE | DIETARY_BASE | DIETARY_EXCEPTION_MISMATCH
+                                     //   | MEDICAL_DIET | AGE_RESTRICTION | AMBIGUOUS
+    String constraintValue           // the stored constraint that matched (allergen / substance / base / diet)
 ) {}
 ```
+
+`AMBIGUOUS` (see Flow 2 step 8) is the under-determined outcome: the filter returns `passes = false` with an `AMBIGUOUS` violation rather than silently passing when a conditional "X-free" exception might relax an allergy/intolerance match but the ingredient key does not declare the free-of qualifier.
 
 ---
 
@@ -592,12 +598,17 @@ public interface PreferenceUpdateService {
 
 ```java
 public interface HardConstraintFilterService {
-    FilterResultDto check(UUID userId, List<String> ingredientMappingKeys);
-    FilterResultDto checkRecipe(UUID userId, UUID recipeId, List<String> recipeIngredientMappingKeys);
-    List<UUID> filterRecipes(UUID userId, Map<UUID, List<String>> recipesIngredientKeys);
-    FilterResultDto checkForHousehold(List<UUID> userIds, List<String> ingredientMappingKeys);
+    FilterResult check(UUID userId, List<String> ingredientMappingKeys, FilterContext context);
+    FilterResult checkRecipe(
+        UUID userId, UUID recipeId, List<String> recipeIngredientMappingKeys, FilterContext context);
+    List<UUID> filterRecipes(
+        UUID userId, Map<UUID, List<String>> recipesIngredientKeys, FilterContext context);
+    FilterResult checkForHousehold(
+        List<UUID> userIds, List<String> ingredientMappingKeys, FilterContext context);
 }
 ```
+
+Every method takes a `FilterContext` (`ANY | SOCIAL | WEEKEND | WEEKDAY`) — the call context against which context-conditional dietary-identity exceptions are evaluated (Flow 2 step 6 + the §Call context note). Cross-module callers updated for this signature: the planner's `HardFilterRunner`, `AugmentationVerifier`, and `RevertToPlanCoordinator` (which derive `WEEKEND`/`WEEKDAY` from the slot date), and discovery's `DiscoveryJobRunner` + adaptation's `AdaptationServiceImpl`/`AdaptationImportListener`/`AdaptationDataModelListener` (which pass `ANY`).
 
 The technical-architecture HLD shows `checkRecipe(userId, recipeId)` — i.e. the filter loads the recipe itself. The LLD changes this to require the caller to pass the ingredient keys. **Reasoning:** the filter must not depend on `RecipeQueryService` because every food-output module (including recipe) injects the filter — that creates a cycle. Callers already have the ingredient list in hand at the moment they call. The household variant is implied by the HLD's union-of-eaters rule but not given an explicit signature; added here because the planner needs it for shared meal slots. **Worth user review.**
 
@@ -655,7 +666,7 @@ Standard Jakarta annotations applied at request-record level: `@NotNull`, `@NotB
 
 Custom validators in `validation/`:
 
-- **`@ValidDietaryIdentity`** (class-level on `DietaryIdentityDto`) — asserts `base` is a known enum, each `exception.allows` is in a known sub-category list (`fish`, `poultry`, `dairy`, `eggs`, `gluten`, ...), `exception.context` ∈ {`any`, `social`, `weekend`, `weekday`}, and no exception's `allows` collides with a substance the user has listed as an allergy or hard intolerance.
+- **`@ValidDietaryIdentity`** — applied **type-level on `DietaryIdentityDto`** and **class-level on `UpdateHardConstraintsRequest`** (two validator implementations behind one annotation). On the DTO it validates the *shape*: `base` is a known base (`omnivore`, `vegetarian`, `vegan`, `pescatarian`, `keto`, `paleo`, `other`), each `exception.allows` is a known sub-category (`fish`, `poultry`, `dairy`, `eggs`, `gluten`, ...) **or a conditional "X-free" qualifier** (`lactose_free`, `gluten_free`, ...), and `exception.context` ∈ {`any`, `social`, `weekend`, `weekday`}. On the request it adds the **safety collision check**: no *plain* (non-free-of) exception's `allows` may name a substance the user has listed as an allergy or hard intolerance (a conditional "X-free" exception is allowed even when its base substance is an allergy — it only widens to the explicitly-safe variant; the filter still flags any untagged form as `AMBIGUOUS`). Shape validation on the request path is owned by the DTO validator via the `@Valid` cascade, so it is not duplicated.
 - **`@ValidNoveltyTolerance`** — applied inside `LifestyleConfigDocument.NoveltyTolerance`. Asserts each per-slot `mode` ∈ {`rotation`, `batch_repeat`, `high_variety`, `static`} and that mode-specific fields are coherent (`rotation` requires `rotationSize > 0`; `batch_repeat` requires `maxConsecutiveSame > 0`; etc.). Also asserts `recipeRepeatCooldownWeeks` values ≥ 0.
 
 Validation failures bubble up as `MethodArgumentNotValidException` mapped to 400 ProblemDetails by the global advice.
@@ -713,14 +724,30 @@ Once the gate passes, it diffs each field, replaces scalars and child collection
 
 The single most safety-critical path. **Code, not AI** per [technical-architecture.md §Hard Constraint Filter](../design/technical-architecture.md#hard-constraint-filter). Method is `@Transactional(readOnly = true)`.
 
-1. Caller invokes `check(userId, ingredientMappingKeys)` or one of the batch siblings.
+1. Caller invokes `check(userId, ingredientMappingKeys, context)` or one of the batch siblings. **`context`** is a `FilterContext` (`ANY | SOCIAL | WEEKEND | WEEKDAY`) supplied by the caller — see step 5 and the §Call context note below.
 2. Loads `HardConstraints` via `findWithChildrenByUserId` (single JOIN, no N+1) and `ProfileMetadata` for age-restriction context.
 3. **Allergy check.** For each ingredient key, asserts `key ∉ allergies ∪ derivativesOf(allergies)`. Derivative set fetched once per call. Match is exact-string against pre-normalised keys (caller responsibility — keys come pre-normalised per [technical-architecture.md `ingredient_mapping_key`](../design/technical-architecture.md#cross-module-references)).
 4. **Severe intolerance check.** Identical to allergy check.
-5. **Dietary identity check.** `DietaryIdentityResolver` evaluates `base` ∪ matching exceptions. Conditional exceptions widen `base` only when their `context` matches the call context; **`frequency` is not evaluated at filter time** (the filter has no week-view) — frequency is enforced by the planner's scoring.
-6. **Age restriction check.** Each `ageRestriction.ruleKey` runs against the ingredient list via a static rule registry (e.g. `no_whole_nuts` rejects ingredients tagged `whole_nut`).
-7. **Ambiguity flagging.** When the filter cannot decisively pass or fail (e.g. milk allergy with lactose-free exception, ingredient is "yoghurt" with no lactose-free tag), returns `safe = false` with an `AMBIGUOUS` flag rather than silently passing. The HLD calls this out as the safer of the two approaches; the LLD makes it default.
-8. Returns `FilterResultDto`. Caller is responsible for blocking.
+5. **Medical-diet check.** Medical diets are **hard-enforced at filter time** (a match makes `safe = false`, kind `MEDICAL_DIET`). Two sub-checks: (a) the diet name appearing directly as an ingredient key; (b) the diet's implicitly-rejected keys via the **rejected-key taxonomy** (see §Medical-diet rejected-key taxonomy below). The taxonomy is reference-data-as-code (`MedicalDietRules`), mirroring `DietaryBaseExclusions` — small, stable, on the hot read path.
+6. **Dietary identity check.** Evaluates `base`'s excluded keys ∪ matching exceptions. **A conditional exception widens `base` only when its stored `context` matches the call `context`** (an exception stored with `context = "any"` always matches; a `weekend` exception widens only when the caller passes `WEEKEND`; under the conservative `ANY` call context only `"any"` exceptions widen). **`frequency` is not evaluated at filter time** (the filter has no week-view) — frequency is enforced by the planner's scoring.
+7. **Age restriction check.** Each `ageRestriction.ruleKey` runs against the ingredient list via a static rule registry (e.g. `no_whole_nuts` rejects ingredients tagged `whole_nut`).
+8. **Ambiguity flagging.** When the filter cannot decisively pass or fail, it returns `passes = false` with an `AMBIGUOUS` violation rather than silently passing — the HLD calls this out as the safer of the two approaches; the LLD makes it the default. The v1 ambiguity trigger is the **conditional-exception case**: when an ingredient matches an allergy/intolerance that a *conditional* "X-free" dietary-identity exception (e.g. `lactose_free`) could relax, but the ingredient key does not declare the free-of qualifier. Example: a `dairy` allergy + a `lactose_free` exception + an ingredient key `yoghurt` (no lactose-free tag) → `AMBIGUOUS`; key `lactose_free_yoghurt` → safe; the same `dairy` allergy with **no** conditional exception → plain `ALLERGY`. In `filterRecipes` (the batch pool builder), an AMBIGUOUS outcome drops the recipe from the auto-generated pool (the safe choice); the per-recipe `check`/`checkRecipe` paths surface the AMBIGUOUS detail for the user-facing UI.
+9. Returns `FilterResult`. Caller is responsible for blocking.
+
+**Call context.** The `FilterContext` lets the filter evaluate context-conditional dietary-identity exceptions for the right occasion. The planner derives it from the meal-slot date (`WEEKEND` for Sat/Sun, else `WEEKDAY`); callers with no slot/day context (discovery candidate import, adaptation re-checks) pass `ANY`, under which only `"any"` exceptions widen — the conservative default for a safety-critical filter. `SOCIAL` is reserved for occasion-aware callers and is not derivable from a meal slot.
+
+**Medical-diet rejected-key taxonomy.** `MedicalDietRules` maps each `medical_diets` entry to the ingredient keys it implicitly rejects. The v1 list (expand as the product surfaces more diets):
+
+| Medical diet | Rejected ingredient keys |
+|---|---|
+| `low_sodium` | `salt`, `soy_sauce`, `fish_sauce`, `msg`, `bouillon` |
+| `low_sugar` | `sugar`, `honey`, `syrup`, `agave`, `high_fructose_corn_syrup`, `molasses` |
+| `low_fodmap` | `garlic`, `onion`, `wheat`, `lactose`, `honey` |
+| `diabetic` | `sugar`, `honey`, `syrup`, `high_fructose_corn_syrup` |
+| `low_potassium` | `banana`, `potato`, `spinach`, `tomato` |
+| `low_phosphorus` | `dairy`, `cheese`, `milk`, `nuts` |
+
+This is kept as a code constant rather than a DB seed (unlike `allergen_derivatives`): the table is tiny and stable, it is consulted on the hot read path, and DB indirection would buy nothing — the same rationale `DietaryBaseExclusions` records. If the product expands this materially, revisit moving it to a repeatable-migration seed.
 
 Every invocation is logged at INFO with `userId`, `traceId`, ingredient count, result summary — required by [technical-architecture.md §Observability](../design/technical-architecture.md#observability) for the safety audit trail. Full ingredient lists at DEBUG only (PII rule).
 

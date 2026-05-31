@@ -3,12 +3,15 @@ package com.example.mealprep.planner.domain.service.internal.stagec;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.config.PlannerProperties;
+import com.example.mealprep.preference.api.dto.FilterContext;
 import com.example.mealprep.preference.api.dto.FilterResult;
 import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
 import com.example.mealprep.recipe.api.dto.IngredientDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -127,23 +130,46 @@ class AugmentationVerifier {
       if (allEaters.isEmpty()) {
         return true; // nothing to check against — never block on missing data
       }
-      return hardConstraintFilterService.checkForHousehold(allEaters, ingredientKeys).passes();
+      // Plan-level / Repair: no single slot, so no derivable day — conservative ANY context.
+      return hardConstraintFilterService
+          .checkForHousehold(allEaters, ingredientKeys, FilterContext.ANY)
+          .passes();
     }
     MealSlotSkeleton sk = slot.get();
     List<UUID> eaters = sk.eaters() == null ? List.of() : sk.eaters();
     if (eaters.isEmpty()) {
       return true;
     }
+    FilterContext context = contextFor(sk);
     if (sk.shared()) {
-      return hardConstraintFilterService.checkForHousehold(eaters, ingredientKeys).passes();
+      return hardConstraintFilterService
+          .checkForHousehold(eaters, ingredientKeys, context)
+          .passes();
     }
     for (UUID userId : eaters) {
-      FilterResult r = hardConstraintFilterService.check(userId, ingredientKeys);
+      FilterResult r = hardConstraintFilterService.check(userId, ingredientKeys, context);
       if (!r.passes()) {
         return false;
       }
     }
     return true;
+  }
+
+  /**
+   * Derives the {@link FilterContext} for a slot from its date (weekend → {@link
+   * FilterContext#WEEKEND}, weekday → {@link FilterContext#WEEKDAY}, no date → {@link
+   * FilterContext#ANY}), mirroring {@code HardFilterRunner} so the Phase-2 re-check evaluates
+   * context-conditional exceptions identically to the Stage-A hard filter.
+   */
+  private static FilterContext contextFor(MealSlotSkeleton sk) {
+    LocalDate date = sk.onDate();
+    if (date == null) {
+      return FilterContext.ANY;
+    }
+    DayOfWeek dow = date.getDayOfWeek();
+    return (dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY)
+        ? FilterContext.WEEKEND
+        : FilterContext.WEEKDAY;
   }
 
   private boolean exceedsTimeBudget(RecipeDto recipe, MealSlotSkeleton slot) {

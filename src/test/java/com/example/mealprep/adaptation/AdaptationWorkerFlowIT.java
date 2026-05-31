@@ -112,7 +112,7 @@ class AdaptationWorkerFlowIT {
     when(recipeQueryService.getById(recipeId))
         .thenReturn(Optional.of(recipe(recipeId, userId, branchId, currentVersionId, "beef")));
     when(recipeQueryService.getFingerprint(any(), any())).thenReturn(Optional.empty());
-    when(hardConstraintFilterService.checkRecipe(any(), any(), any())).thenReturn(pass());
+    when(hardConstraintFilterService.checkRecipe(any(), any(), any(), any())).thenReturn(pass());
 
     ObjectNode diff = swapDiff("beef", "chicken");
     when(aiService.execute(any()))
@@ -160,7 +160,7 @@ class AdaptationWorkerFlowIT {
     when(recipeQueryService.getById(recipeId))
         .thenReturn(Optional.of(recipe(recipeId, userId, branchId, currentVersionId, "beef")));
     when(recipeQueryService.getFingerprint(any(), any())).thenReturn(Optional.empty());
-    when(hardConstraintFilterService.checkRecipe(any(), any(), any())).thenReturn(pass());
+    when(hardConstraintFilterService.checkRecipe(any(), any(), any(), any())).thenReturn(pass());
 
     ObjectNode diff = swapDiff("beef", "chicken");
     when(aiService.execute(any()))
@@ -213,7 +213,7 @@ class AdaptationWorkerFlowIT {
     when(recipeQueryService.getFingerprint(any(), any())).thenReturn(Optional.empty());
     // Step 3 lets the shortlist through (current "beef" is fine), but anything resolving to "tofu"
     // (a soy allergen) is rejected — which catches the LLM's post-hoc finalDiff at Step 6.
-    when(hardConstraintFilterService.checkRecipe(any(), any(), any()))
+    when(hardConstraintFilterService.checkRecipe(any(), any(), any(), any()))
         .thenAnswer(
             inv -> {
               List<String> keys = inv.getArgument(2);
@@ -261,7 +261,7 @@ class AdaptationWorkerFlowIT {
     when(recipeQueryService.getById(recipeId))
         .thenReturn(Optional.of(recipe(recipeId, userId, branchId, currentVersionId, "beef")));
     when(recipeQueryService.getFingerprint(any(), any())).thenReturn(Optional.empty());
-    when(hardConstraintFilterService.checkRecipe(any(), any(), any())).thenReturn(pass());
+    when(hardConstraintFilterService.checkRecipe(any(), any(), any(), any())).thenReturn(pass());
 
     // The AI picks candidate 0 and proposes a VERSION; the diff itself touches a side ingredient,
     // but the dimension must still resolve to SALT_LEVEL from the negative-taste rating delta.
@@ -310,7 +310,7 @@ class AdaptationWorkerFlowIT {
     when(recipeQueryService.getById(recipeId))
         .thenReturn(Optional.of(recipe(recipeId, userId, branchId, currentVersionId, "beef")));
     when(recipeQueryService.getFingerprint(any(), any())).thenReturn(Optional.empty());
-    when(hardConstraintFilterService.checkRecipe(any(), any(), any())).thenReturn(pass());
+    when(hardConstraintFilterService.checkRecipe(any(), any(), any(), any())).thenReturn(pass());
 
     ObjectNode diff = swapDiff("beef", "chicken");
     when(aiService.execute(any()))
@@ -365,7 +365,7 @@ class AdaptationWorkerFlowIT {
     when(recipeQueryService.getById(recipeId))
         .thenReturn(Optional.of(recipe(recipeId, userId, branchId, currentVersionId, "beef")));
     when(recipeQueryService.getFingerprint(any(), any())).thenReturn(Optional.empty());
-    when(hardConstraintFilterService.checkRecipe(any(), any(), any())).thenReturn(pass());
+    when(hardConstraintFilterService.checkRecipe(any(), any(), any(), any())).thenReturn(pass());
 
     ObjectNode diff = swapDiff("beef", "chicken");
     when(aiService.execute(any()))

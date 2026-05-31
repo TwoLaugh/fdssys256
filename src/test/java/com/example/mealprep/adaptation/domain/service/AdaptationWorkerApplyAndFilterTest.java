@@ -135,7 +135,7 @@ class AdaptationWorkerApplyAndFilterTest {
     w.stubScoringPassthrough();
     // The user is allergic to BOTH almond_milk and oat_milk — every swap candidate is infeasible.
     // (portion-adjust / method candidates keep the base "milk", which we also reject below.)
-    when(w.filter.checkRecipe(any(), any(), anyList()))
+    when(w.filter.checkRecipe(any(), any(), anyList(), any()))
         .thenReturn(failResult()); // everything fails the safety net
 
     assertThat(w.runAndCaptureFailureReason(job)).isEqualTo(JobFailureReason.HARD_FILTER);
@@ -154,7 +154,7 @@ class AdaptationWorkerApplyAndFilterTest {
     // Step 3 lets the candidate set through (current "beef" is fine for this user). But the LLM
     // returns a free-form finalDiff that swaps to "tofu" — a soy allergen the user can't have. The
     // Step-6 recheck must catch the post-hoc stitch and fail HARD_FILTER, never reaching the write.
-    when(w.filter.checkRecipe(any(), any(), anyList()))
+    when(w.filter.checkRecipe(any(), any(), anyList(), any()))
         .thenAnswer(
             inv -> {
               List<String> keys = inv.getArgument(2);
@@ -869,12 +869,12 @@ class AdaptationWorkerApplyAndFilterTest {
     }
 
     void stubFilterAllPass() {
-      when(filter.checkRecipe(any(), any(), anyList())).thenReturn(pass());
+      when(filter.checkRecipe(any(), any(), anyList(), any())).thenReturn(pass());
     }
 
     /** Reject any candidate whose resulting key set contains {@code blockedKey}. */
     void stubFilterRejectingKey(String blockedKey) {
-      when(filter.checkRecipe(any(), any(), anyList()))
+      when(filter.checkRecipe(any(), any(), anyList(), any()))
           .thenAnswer(
               inv -> {
                 List<String> keys = inv.getArgument(2);

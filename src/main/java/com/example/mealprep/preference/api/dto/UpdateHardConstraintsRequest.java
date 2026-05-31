@@ -1,5 +1,6 @@
 package com.example.mealprep.preference.api.dto;
 
+import com.example.mealprep.preference.validation.ValidDietaryIdentity;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -12,8 +13,11 @@ import java.util.List;
  * field is matched against the row's current {@code @Version}; mismatch → 409. Each child
  * collection is replaced wholesale (cascade + orphanRemoval handle delete + insert).
  *
- * <p>The {@code @ValidDietaryIdentity} cross-field validator is intentionally NOT applied here —
- * 01c will add it; today {@code dietaryIdentity.base} is just length-bounded.
+ * <p>The class-level {@code @ValidDietaryIdentity} validator enforces the safety collision check —
+ * no dietary-identity {@code exception.allows} may name a substance the user has listed as an
+ * allergy or hard intolerance. The dietary-identity <em>shape</em> (known base / sub-category /
+ * context) is validated by the type-level validator on {@link DietaryIdentityDto} via the
+ * {@code @Valid} cascade.
  *
  * <p><b>Tier-1 removal safety gate (GAP-04).</b> Removing a safety-critical Tier-1 hard constraint
  * (an allergy, a medical diet, a severe/hard intolerance, or narrowing the dietary-identity base)
@@ -23,6 +27,7 @@ import java.util.List;
  * reorderings, and non-Tier-1 edits never require the flag. The flag is optional in the wire
  * contract (absent ⇒ {@code false}), so ordinary one-step edits stay unchanged.
  */
+@ValidDietaryIdentity
 public record UpdateHardConstraintsRequest(
     @NotNull List<@NotBlank @Size(max = 64) String> allergies,
     @NotNull @Valid DietaryIdentityDto dietaryIdentity,

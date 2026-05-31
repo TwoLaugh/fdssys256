@@ -75,10 +75,10 @@ class Phase2AugmenterImplTest {
     // AugmentationVerifierTest covers the constraint logic itself.
     AugmentationVerifier verifier = new AugmentationVerifier(filter, properties);
     lenient()
-        .when(filter.checkForHousehold(anyList(), anyList()))
+        .when(filter.checkForHousehold(anyList(), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient()
-        .when(filter.check(any(UUID.class), anyList()))
+        .when(filter.check(any(UUID.class), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
 
     augmenter = new Phase2AugmenterImpl(aiService, verifier, parser, properties);

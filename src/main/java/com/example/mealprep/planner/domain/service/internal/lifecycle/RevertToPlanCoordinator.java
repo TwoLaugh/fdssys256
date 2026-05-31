@@ -313,27 +313,48 @@ public class RevertToPlanCoordinator {
   private boolean recipePassesConstraints(
       UUID recipeId, SlotSnapshot slot, Map<UUID, Optional<RecipeDto>> recipeCache) {
     List<String> keys = ingredientKeys(recipeId, recipeCache);
-    return slotPasses(slot.shared(), slot.eaters(), keys);
+    return slotPasses(slot.shared(), slot.eaters(), keys, contextFor(slot.onDate()));
   }
 
   /**
    * Re-run the same hard-constraint logic the beam search uses ({@code HardFilterRunner}): a shared
    * slot is checked as a household union; a per-person slot must clear for every eater. An empty
-   * eaters list passes (nothing to violate), matching the runner's contract.
+   * eaters list passes (nothing to violate), matching the runner's contract. The {@code context}
+   * (derived from the slot date, mirroring {@code HardFilterRunner}) lets context-conditional
+   * dietary-identity exceptions be evaluated for the right day.
    */
-  private boolean slotPasses(boolean shared, List<UUID> eaters, List<String> keys) {
+  private boolean slotPasses(
+      boolean shared,
+      List<UUID> eaters,
+      List<String> keys,
+      com.example.mealprep.preference.api.dto.FilterContext context) {
     if (eaters == null || eaters.isEmpty()) {
       return true;
     }
     if (shared) {
-      return hardConstraintFilterService.checkForHousehold(eaters, keys).passes();
+      return hardConstraintFilterService.checkForHousehold(eaters, keys, context).passes();
     }
     for (UUID eater : eaters) {
-      if (!hardConstraintFilterService.check(eater, keys).passes()) {
+      if (!hardConstraintFilterService.check(eater, keys, context).passes()) {
         return false;
       }
     }
     return true;
+  }
+
+  /**
+   * Derives the {@link com.example.mealprep.preference.api.dto.FilterContext} from a slot date
+   * (weekend → WEEKEND, weekday → WEEKDAY, null → ANY), mirroring {@code HardFilterRunner}.
+   */
+  private static com.example.mealprep.preference.api.dto.FilterContext contextFor(
+      java.time.LocalDate date) {
+    if (date == null) {
+      return com.example.mealprep.preference.api.dto.FilterContext.ANY;
+    }
+    java.time.DayOfWeek dow = date.getDayOfWeek();
+    return (dow == java.time.DayOfWeek.SATURDAY || dow == java.time.DayOfWeek.SUNDAY)
+        ? com.example.mealprep.preference.api.dto.FilterContext.WEEKEND
+        : com.example.mealprep.preference.api.dto.FilterContext.WEEKDAY;
   }
 
   /**
@@ -360,7 +381,7 @@ public class RevertToPlanCoordinator {
             r -> {
               List<String> keys = ingredientKeysOf(r);
               recipeCache.put(r.id(), Optional.of(r));
-              return slotPasses(slot.shared(), slot.eaters(), keys);
+              return slotPasses(slot.shared(), slot.eaters(), keys, contextFor(slot.onDate()));
             })
         .min(Comparator.comparing(RecipeDto::id));
   }
