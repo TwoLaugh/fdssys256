@@ -60,10 +60,15 @@ public final class TestPayloads {
    *       to match).
    * </ul>
    *
-   * <p>A single ingredient with a valid {@code ingredientMappingKey} passes the hard-constraint
-   * filter for a fresh user (no hard constraints). The {@code name} must be unique per recipe so
-   * the content fingerprint stays distinct (each seed is a separate catalogue row, not a dedup
-   * collapse).
+   * <p>The shared {@code chicken breast} line passes the hard-constraint filter for a fresh user
+   * (no hard constraints) AND resolves against the grocery reference-price snapshot for GROC-03.
+   * The {@code name} must be unique per recipe: it is BOTH the catalogue display name AND the
+   * discriminator for a second, recipe-unique ingredient key ({@code unique.<name>}). The recipe-2
+   * dedup keys off the normalised ingredient-mapping-key SET (Jaccard ≥ 80% + method-length), so
+   * every recipe seeded for one user must carry a distinct set or the 2nd+ create 422s as a
+   * duplicate. With one shared key + one unique key, any two seeds overlap by only 1/3 (&lt; 80%),
+   * so all N seeds for the user create as distinct catalogue rows while still pricing the shared
+   * {@code chicken breast} line.
    */
   public static Map<String, Object> plannableRecipe(String name, String mealType) {
     Map<String, Object> metadata = new java.util.HashMap<>();
@@ -80,6 +85,9 @@ public final class TestPayloads {
 
     List<Map<String, Object>> ingredients = new ArrayList<>();
     ingredients.add(ingredient(0, "chicken breast", "Chicken breast", "300.000", "g"));
+    // Recipe-unique key so the ingredient SET differs per seed (recipe-2 dedup is set-based).
+    ingredients.add(
+        ingredient(1, "unique " + name, "Distinct ingredient for " + name, "50.000", "g"));
 
     List<Map<String, Object>> method = new ArrayList<>();
     method.add(methodStep(1, "Prepare and cook the " + name + ".", 25));

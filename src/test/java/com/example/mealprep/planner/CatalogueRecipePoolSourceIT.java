@@ -167,11 +167,41 @@ class CatalogueRecipePoolSourceIT {
         new CreateRecipeRequest(
             name,
             "seeded for planner pool IT",
-            RecipeTestData.defaultIngredients(),
+            // recipe-2 dedup keys off the normalised ingredient-mapping-key set, so EVERY seeded
+            // recipe for one user must carry a distinct set or the 2nd+ create 422s as a duplicate.
+            // The unique per-recipe `name` discriminates the keys (disjoint sets => Jaccard 0).
+            distinctIngredients(name),
             RecipeTestData.defaultMethod(),
             metadata,
             RecipeTestData.defaultTags());
     return tx().execute(t -> recipeUpdateService.createRecipe(userId, request).id());
+  }
+
+  /**
+   * Two ingredients whose mapping keys are unique to {@code discriminator}, so two recipes seeded
+   * with different names never overlap on the recipe-2 ingredient-set-hash dedup probe. Mirrors
+   * {@link RecipeTestData#uniqueCreateRequest(String)} but keeps this IT's kind-specific metadata
+   * (the planner hard filters read mealTypes + totalTimeMins).
+   */
+  private static List<com.example.mealprep.recipe.api.dto.CreateIngredientRequest>
+      distinctIngredients(String discriminator) {
+    return List.of(
+        new com.example.mealprep.recipe.api.dto.CreateIngredientRequest(
+            0,
+            "catalogue." + discriminator + ".a",
+            "Ingredient A",
+            new java.math.BigDecimal("100.000"),
+            "g",
+            null,
+            false),
+        new com.example.mealprep.recipe.api.dto.CreateIngredientRequest(
+            1,
+            "catalogue." + discriminator + ".b",
+            "Ingredient B",
+            new java.math.BigDecimal("200.000"),
+            "g",
+            null,
+            false));
   }
 
   /** Seed {@code perKind} recipes for each of the supplied kinds; returns all seeded recipe ids. */
