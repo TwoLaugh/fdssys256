@@ -7,7 +7,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.example.mealprep.ai.api.AiAdminGuard;
 import com.example.mealprep.ai.api.controller.AdminAiController;
 import com.example.mealprep.ai.api.dto.AiCallLogDto;
 import com.example.mealprep.ai.api.dto.CostSummaryDto;
@@ -16,6 +15,7 @@ import com.example.mealprep.ai.domain.service.AdminAiQueryService;
 import com.example.mealprep.ai.domain.service.PromptTemplateService;
 import com.example.mealprep.ai.spi.ModelTier;
 import com.example.mealprep.ai.spi.TaskType;
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -35,7 +35,7 @@ class AdminAiControllerTest {
 
   private final AdminAiQueryService queryService = mock(AdminAiQueryService.class);
   private final PromptTemplateService promptTemplateService = mock(PromptTemplateService.class);
-  private final AiAdminGuard adminGuard = mock(AiAdminGuard.class);
+  private final AdminAccessGuard adminGuard = mock(AdminAccessGuard.class);
   private final AdminAiController controller =
       new AdminAiController(queryService, promptTemplateService, adminGuard);
 

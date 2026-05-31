@@ -9,6 +9,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
 import com.example.mealprep.discovery.api.controller.DiscoveryAdminController;
 import com.example.mealprep.discovery.api.controller.DiscoveryJobsController;
@@ -54,6 +55,7 @@ class DiscoveryControllersUnitTest {
   @Mock private DiscoveryService discoveryService;
   @Mock private DiscoveryQueryService discoveryQueryService;
   @Mock private CurrentUserResolver currentUserResolver;
+  @Mock private AdminAccessGuard adminGuard;
 
   private static final UUID USER_ID = UUID.fromString("99999999-9999-9999-9999-999999999999");
 
@@ -226,39 +228,54 @@ class DiscoveryControllersUnitTest {
   @Test
   void adminController_enable_callsService() {
     DiscoveryAdminController controller =
-        new DiscoveryAdminController(discoveryService, currentUserResolver);
-    when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
+        new DiscoveryAdminController(discoveryService, currentUserResolver, adminGuard);
     DiscoverySourceDto dto = sampleSourceDto("src_a");
     when(discoveryService.enableSource("src_a")).thenReturn(dto);
 
     assertThat(controller.enable("src_a")).isSameAs(dto);
+    verify(adminGuard).requireAdmin();
   }
 
   @Test
   void adminController_disable_callsService() {
     DiscoveryAdminController controller =
-        new DiscoveryAdminController(discoveryService, currentUserResolver);
-    when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
+        new DiscoveryAdminController(discoveryService, currentUserResolver, adminGuard);
     DiscoverySourceDto dto = sampleSourceDto("src_a");
     when(discoveryService.disableSource("src_a")).thenReturn(dto);
 
     assertThat(controller.disable("src_a")).isSameAs(dto);
+    verify(adminGuard).requireAdmin();
   }
 
   @Test
   void adminController_runOrphanSweep_callsService() {
     DiscoveryAdminController controller =
-        new DiscoveryAdminController(discoveryService, currentUserResolver);
-    when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
+        new DiscoveryAdminController(discoveryService, currentUserResolver, adminGuard);
     when(discoveryService.runOrphanSweep()).thenReturn(new OrphanSweepResultDto(5));
 
     assertThat(controller.runOrphanSweep().resumedCount()).isEqualTo(5);
+    verify(adminGuard).requireAdmin();
+  }
+
+  @Test
+  void adminController_enable_nonAdmin_throws403_beforeService() {
+    DiscoveryAdminController controller =
+        new DiscoveryAdminController(discoveryService, currentUserResolver, adminGuard);
+    org.mockito.Mockito.doThrow(
+            new ResponseStatusException(HttpStatus.FORBIDDEN, "Admin privileges required."))
+        .when(adminGuard)
+        .requireAdmin();
+
+    assertThatThrownBy(() -> controller.enable("src_a"))
+        .isInstanceOf(ResponseStatusException.class)
+        .hasMessageContaining("403");
+    verify(discoveryService, never()).enableSource(any());
   }
 
   @Test
   void adminController_runJobSync_succeeded_returnsOk() {
     DiscoveryAdminController controller =
-        new DiscoveryAdminController(discoveryService, currentUserResolver);
+        new DiscoveryAdminController(discoveryService, currentUserResolver, adminGuard);
     when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
     DiscoveryJobDto dto = sampleJobDto(DiscoveryJobStatus.SUCCEEDED);
     when(discoveryService.runJobSync(eq(USER_ID), any(), any())).thenReturn(dto);
@@ -276,7 +293,7 @@ class DiscoveryControllersUnitTest {
   void adminController_runJobSync_runningStrictTimeout_throws408() {
     // kills NegateConditionalsMutator on the strictTimeout check.
     DiscoveryAdminController controller =
-        new DiscoveryAdminController(discoveryService, currentUserResolver);
+        new DiscoveryAdminController(discoveryService, currentUserResolver, adminGuard);
     when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
     DiscoveryJobDto dto = sampleJobDto(DiscoveryJobStatus.RUNNING);
     when(discoveryService.runJobSync(eq(USER_ID), any(), any())).thenReturn(dto);
@@ -293,7 +310,7 @@ class DiscoveryControllersUnitTest {
   void adminController_runJobSync_runningNotStrict_returnsOk() {
     // Complements the strict path — non-strict timeout returns the partial DTO with 200.
     DiscoveryAdminController controller =
-        new DiscoveryAdminController(discoveryService, currentUserResolver);
+        new DiscoveryAdminController(discoveryService, currentUserResolver, adminGuard);
     when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
     DiscoveryJobDto dto = sampleJobDto(DiscoveryJobStatus.RUNNING);
     when(discoveryService.runJobSync(eq(USER_ID), any(), any())).thenReturn(dto);
@@ -310,7 +327,7 @@ class DiscoveryControllersUnitTest {
   void adminController_runJobSync_failedAllDown_throwsAllSourcesUnavailable() {
     // kills the and-conditional `anyFailed && noneSucceeded`. With only failed sources we throw.
     DiscoveryAdminController controller =
-        new DiscoveryAdminController(discoveryService, currentUserResolver);
+        new DiscoveryAdminController(discoveryService, currentUserResolver, adminGuard);
     when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
     DiscoveryJobDto dto =
         sampleJobDtoWithSources(DiscoveryJobStatus.FAILED, List.of(), List.of("a"));
@@ -328,7 +345,7 @@ class DiscoveryControllersUnitTest {
   void adminController_runJobSync_failedSomeSucceeded_returnsOk() {
     // Complements the all-down case — non-all-down FAILED returns 200 (planner inspects).
     DiscoveryAdminController controller =
-        new DiscoveryAdminController(discoveryService, currentUserResolver);
+        new DiscoveryAdminController(discoveryService, currentUserResolver, adminGuard);
     when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
     DiscoveryJobDto dto =
         sampleJobDtoWithSources(DiscoveryJobStatus.FAILED, List.of("ok"), List.of("a"));
@@ -346,7 +363,7 @@ class DiscoveryControllersUnitTest {
   void adminController_runJobSync_failedNothingFailedNothingSucceeded_returnsOk() {
     // Cover the corner: FAILED with no failed sources at all (e.g. caller error) → 200.
     DiscoveryAdminController controller =
-        new DiscoveryAdminController(discoveryService, currentUserResolver);
+        new DiscoveryAdminController(discoveryService, currentUserResolver, adminGuard);
     when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
     DiscoveryJobDto dto = sampleJobDtoWithSources(DiscoveryJobStatus.FAILED, List.of(), List.of());
     when(discoveryService.runJobSync(eq(USER_ID), any(), any())).thenReturn(dto);
@@ -362,7 +379,7 @@ class DiscoveryControllersUnitTest {
   @Test
   void adminController_runJobSync_anonymous_throws401() {
     DiscoveryAdminController controller =
-        new DiscoveryAdminController(discoveryService, currentUserResolver);
+        new DiscoveryAdminController(discoveryService, currentUserResolver, adminGuard);
     when(currentUserResolver.currentUserId()).thenReturn(Optional.empty());
 
     StartDiscoveryJobRequest req =

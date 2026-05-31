@@ -68,6 +68,11 @@ class SecurityChainTest {
   // scan, so mock it. The no-cookie tests never reach the soft-deleted-user revoke branch anyway.
   @MockBean private SessionRevoker sessionRevoker;
   @MockBean private ServiceTokenRepository serviceTokenRepository;
+  // AdminDecisionLogController now depends on the shared AdminAccessGuard; provide it so the
+  // slice's
+  // controller bean constructs. The no-cookie tests are rejected with 401 by the chain before the
+  // controller (and thus the guard) is ever reached, so a no-op mock is sufficient.
+  @MockBean private com.example.mealprep.auth.api.AdminAccessGuard adminGuard;
 
   /**
    * Defensive: clear any {@link SecurityContextHolder} state an earlier test class on the same

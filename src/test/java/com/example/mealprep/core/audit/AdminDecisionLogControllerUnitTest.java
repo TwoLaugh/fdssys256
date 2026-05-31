@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import com.example.mealprep.core.audit.api.controller.AdminDecisionLogController;
 import com.example.mealprep.core.audit.api.dto.AncestryResponse;
 import com.example.mealprep.core.audit.api.dto.DecisionLogDto;
@@ -45,6 +46,9 @@ import org.springframework.web.server.ResponseStatusException;
 class AdminDecisionLogControllerUnitTest {
 
   @Mock private DecisionLogQueryService queryService;
+  // Injected so the controller constructs; requireAdmin() is a no-op mock here (the guard's own
+  // 401/403 verdicts are unit-tested in auth.AdminAccessGuardTest and end-to-end elsewhere).
+  @Mock private AdminAccessGuard adminGuard;
   @InjectMocks private AdminDecisionLogController controller;
 
   private static DecisionLogDto sampleDto(UUID decisionId) {

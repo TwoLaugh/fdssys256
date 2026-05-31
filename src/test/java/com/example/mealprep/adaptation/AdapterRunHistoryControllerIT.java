@@ -17,6 +17,7 @@ import com.example.mealprep.adaptation.domain.enums.JobPriority;
 import com.example.mealprep.adaptation.domain.enums.JobSource;
 import com.example.mealprep.adaptation.domain.enums.JobStatus;
 import com.example.mealprep.adaptation.domain.service.AdaptationQueryService;
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import com.example.mealprep.recipe.domain.entity.Catalogue;
 import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -44,6 +45,10 @@ class AdapterRunHistoryControllerIT {
   @Autowired private MockMvc mvc;
   @Autowired private OpenApiInteractionValidator openApiValidator;
   @MockBean private AdaptationQueryService queryService;
+  // Admin gate is mocked no-op so contract tests stay focused on response shape; the
+  // 403-when-denied
+  // path is asserted below.
+  @MockBean private AdminAccessGuard adminGuard;
 
   private static AdaptationJobDto jobDto() {
     return new AdaptationJobDto(
@@ -100,5 +105,21 @@ class AdapterRunHistoryControllerIT {
                 .param("version", "v1"))
         .andExpect(status().isOk())
         .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void runHistory_returns403_whenGuardDeniesNonAdmin() throws Exception {
+    org.mockito.Mockito.doThrow(
+            new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.FORBIDDEN, "Admin privileges required."))
+        .when(adminGuard)
+        .requireAdmin();
+
+    mvc.perform(
+            get("/api/v1/adaptation/run-history")
+                .param("source", "FEEDBACK")
+                .param("from", "2026-01-01T00:00:00Z")
+                .param("to", "2026-12-31T00:00:00Z"))
+        .andExpect(status().isForbidden());
   }
 }

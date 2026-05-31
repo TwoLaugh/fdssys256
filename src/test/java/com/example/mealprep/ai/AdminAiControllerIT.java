@@ -51,7 +51,7 @@ class AdminAiControllerIT {
   @MockBean private PromptTemplateService promptTemplateService;
   // Admin gate is mocked here (no-op) so these tests stay focused on the response/OpenAPI contract;
   // the real 401/403 enforcement is proved end-to-end in AdminAiAuthIT (ai-10).
-  @MockBean private com.example.mealprep.ai.api.AiAdminGuard adminGuard;
+  @MockBean private com.example.mealprep.auth.api.AdminAccessGuard adminGuard;
 
   private static AiCallLogDto sampleCallLog(UUID id) {
     return new AiCallLogDto(

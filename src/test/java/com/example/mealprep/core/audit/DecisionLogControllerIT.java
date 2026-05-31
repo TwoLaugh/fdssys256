@@ -13,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.atlassian.oai.validator.OpenApiInteractionValidator;
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import com.example.mealprep.core.audit.api.controller.AdminDecisionLogController;
 import com.example.mealprep.core.audit.api.dto.AncestryResponse;
 import com.example.mealprep.core.audit.api.dto.DecisionLogDto;
@@ -55,6 +56,10 @@ class DecisionLogControllerIT {
   @Autowired private MockMvc mvc;
   @Autowired private OpenApiInteractionValidator openApiValidator;
   @MockBean private DecisionLogQueryService queryService;
+  // Admin gate is mocked no-op so the contract tests stay focused on the response shape; the real
+  // 401/403/admin enforcement is unit-tested in auth.AdminAccessGuardTest and exercised end-to-end
+  // by other modules' full-context ITs. The 403-when-denied path is asserted below.
+  @MockBean private AdminAccessGuard adminGuard;
 
   private static DecisionLogDto sampleDto(UUID decisionId, UUID traceId) {
     return new DecisionLogDto(
@@ -174,5 +179,20 @@ class DecisionLogControllerIT {
             get("/api/v1/admin/decision-log/{decisionId}/ancestry", leaf).param("maxDepth", "0"))
         .andExpect(status().isBadRequest())
         .andExpect(jsonPath("$.status", equalTo(400)));
+  }
+
+  @Test
+  void getById_returns403_whenGuardDeniesNonAdmin() throws Exception {
+    // The shared AdminAccessGuard maps an authenticated-non-admin to 403; assert the controller
+    // surfaces it (security autoconfig is excluded in this slice, so the guard is the gate here).
+    org.mockito.Mockito.doThrow(
+            new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.FORBIDDEN, "Admin privileges required."))
+        .when(adminGuard)
+        .requireAdmin();
+
+    mvc.perform(get("/api/v1/admin/decision-log/{decisionId}", UUID.randomUUID()))
+        .andExpect(status().isForbidden())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
   }
 }

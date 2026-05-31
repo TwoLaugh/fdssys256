@@ -1,12 +1,14 @@
 package com.example.mealprep.discovery;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.example.mealprep.ai.spi.TaskType;
 import com.example.mealprep.ai.testing.TestAiService;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
+import com.example.mealprep.auth.config.AdminAccessProperties;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
@@ -47,6 +49,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
@@ -91,6 +94,10 @@ class DiscoveryRunnerPhasesIT {
   @Autowired private DiscoveryJobRepository jobRepository;
   @Autowired private DiscoveryScrapeLogRepository scrapeLogRepository;
   @Autowired private TestAiService testAiService;
+
+  // Only the allowlist config record is mocked so the registered user can be designated admin; the
+  // shared AdminAccessGuard is the real production bean.
+  @MockBean private AdminAccessProperties adminProperties;
 
   @BeforeEach
   void seedAiCannedResponse() {
@@ -148,7 +155,10 @@ class DiscoveryRunnerPhasesIT {
     Cookie cookie = result.getResponse().getCookie(authProperties.cookieName());
     String userIdJson =
         objectMapper.readTree(result.getResponse().getContentAsString()).get("userId").asText();
-    return new AuthedUser(UUID.fromString(userIdJson), cookie);
+    UUID userId = UUID.fromString(userIdJson);
+    // Designate the registered user an allowlisted admin so the admin-only sync endpoint proceeds.
+    given(adminProperties.isAdmin(userId)).willReturn(true);
+    return new AuthedUser(userId, cookie);
   }
 
   private void seedSource(String key) {

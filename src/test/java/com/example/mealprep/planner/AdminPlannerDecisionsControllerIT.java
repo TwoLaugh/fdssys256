@@ -1,6 +1,7 @@
 package com.example.mealprep.planner;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
+import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -9,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
+import com.example.mealprep.auth.config.AdminAccessProperties;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.testdata.AuthTestData;
 import com.example.mealprep.core.audit.api.dto.DecisionLogScale;
@@ -25,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -37,15 +40,14 @@ import org.springframework.test.web.servlet.MvcResult;
  * com.example.mealprep.planner.api.controller.AdminPlannerDecisionsController} (planner-01l).
  * Drives the real deny-by-default {@code AuthSecurityConfig} chain.
  *
- * <p><b>Auth scope note:</b> the project does not enable Spring method-security yet
- * ({@code @EnableMethodSecurity} is absent — see {@code core.audit.AdminDecisionLogController} +
- * {@code PlannerAuth} javadoc), so {@code @PreAuthorize("hasRole('ADMIN')")} is presently inert:
- * the filter chain enforces anonymous &rarr; 401, but every <em>authenticated</em> user passes the
- * role gate (the flat v1 user model has no admin authority). A genuine non-admin&rarr;403 case is
- * therefore not assertable in this codebase today; {@link
- * com.example.mealprep.planner.DecisionLogWriterTest} / a controller-annotation check guard the
- * annotation so it activates the moment method-security lands. This mirrors the existing {@code
- * DecisionLogControllerIT} stance.
+ * <p><b>Auth scope note:</b> the project does not enable Spring method-security
+ * ({@code @EnableMethodSecurity} is absent), so {@code @PreAuthorize("hasRole('ADMIN')")} is inert.
+ * Enforcement is instead the shared imperative {@code AdminAccessGuard.requireAdmin()} against the
+ * {@code mealprep.admin.user-ids} allowlist. The three verdicts are all assertable here: anonymous
+ * &rarr; 401 (filter chain), authenticated-non-admin &rarr; 403 (fail-closed empty allowlist),
+ * allowlisted-admin &rarr; 200. Only the allowlist config record ({@link AdminAccessProperties}) is
+ * mocked so the test's runtime-random registered user can be designated admin; the guard itself is
+ * the production bean.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -60,6 +62,10 @@ class AdminPlannerDecisionsControllerIT {
   @Autowired private DecisionLogService decisionLogService;
   @Autowired private JdbcTemplate jdbcTemplate;
 
+  // Only the allowlist config record is mocked (default: everyone non-admin ⇒ fail-closed 403). The
+  // shared AdminAccessGuard bean is the real production component.
+  @MockBean private AdminAccessProperties adminProperties;
+
   @AfterEach
   void cleanup() {
     // Single DELETE — decision_log self-FKs on parent_decision_id.
@@ -69,7 +75,9 @@ class AdminPlannerDecisionsControllerIT {
     jdbcTemplate.update("DELETE FROM auth_users");
   }
 
-  private Cookie registerAndLogin() throws Exception {
+  private record AuthedUser(UUID userId, Cookie cookie) {}
+
+  private AuthedUser register() throws Exception {
     RegisterRequest body = AuthTestData.registerRequest("admin-dec-" + AuthTestData.shortId());
     MvcResult result =
         mvc.perform(
@@ -78,7 +86,21 @@ class AdminPlannerDecisionsControllerIT {
                     .content(objectMapper.writeValueAsString(body)))
             .andExpect(status().isCreated())
             .andReturn();
-    return result.getResponse().getCookie(authProperties.cookieName());
+    Cookie cookie = result.getResponse().getCookie(authProperties.cookieName());
+    UUID userId =
+        UUID.fromString(
+            objectMapper
+                .readTree(result.getResponse().getContentAsString())
+                .get("userId")
+                .asText());
+    return new AuthedUser(userId, cookie);
+  }
+
+  /** Register a user and designate it an allowlisted admin, returning its session cookie. */
+  private Cookie registerAndLogin() throws Exception {
+    AuthedUser user = register();
+    given(adminProperties.isAdmin(user.userId())).willReturn(true);
+    return user.cookie();
   }
 
   /** Seed a PLANNER-scope decision row for {@code planId} on {@code traceId}. */
@@ -109,6 +131,14 @@ class AdminPlannerDecisionsControllerIT {
     mvc.perform(get("/api/v1/admin/planner/decisions/{planId}", UUID.randomUUID()))
         .andExpect(status().isUnauthorized())
         .andExpect(jsonPath("$.status").value(401));
+  }
+
+  @Test
+  void getChain_returns403_whenAuthenticatedButNotAdmin() throws Exception {
+    // Registered but NOT added to the allowlist (default mock isAdmin ⇒ false): fail-closed 403.
+    Cookie cookie = register().cookie();
+    mvc.perform(get("/api/v1/admin/planner/decisions/{planId}", UUID.randomUUID()).cookie(cookie))
+        .andExpect(status().isForbidden());
   }
 
   @Test

@@ -1,12 +1,12 @@
 package com.example.mealprep.ai.api.controller;
 
-import com.example.mealprep.ai.api.AiAdminGuard;
 import com.example.mealprep.ai.api.dto.AiCallLogDto;
 import com.example.mealprep.ai.api.dto.CostSummaryDto;
 import com.example.mealprep.ai.api.dto.PromptTemplateDto;
 import com.example.mealprep.ai.domain.service.AdminAiQueryService;
 import com.example.mealprep.ai.domain.service.PromptTemplateService;
 import com.example.mealprep.ai.spi.TaskType;
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
@@ -30,11 +30,12 @@ import org.springframework.web.bind.annotation.RestController;
  * declared on every method as the published contract, but it is <em>inert</em> in v1: the project
  * does not enable Spring method-security ({@code @EnableMethodSecurity} is absent) and the flat
  * user model has no {@code ROLE_ADMIN} authority. Enforcement is therefore done imperatively via
- * {@link AiAdminGuard#requireAdmin()} at the top of every handler — anonymous callers get 401 (also
- * enforced by the deny-by-default {@code AuthSecurityConfig} chain) and authenticated-but-not-admin
- * callers get 403, gated on the {@code mealprep.ai.admin.user-ids} allowlist (fail-closed: empty by
- * default ⇒ no non-admin reaches these endpoints). When project-wide method-security lands, the
- * {@code @PreAuthorize} annotations activate and this guard can be retired.
+ * the shared {@link AdminAccessGuard#requireAdmin()} at the top of every handler — anonymous
+ * callers get 401 (also enforced by the deny-by-default {@code AuthSecurityConfig} chain) and
+ * authenticated-but-not-admin callers get 403, gated on the project-wide {@code
+ * mealprep.admin.user-ids} allowlist (fail-closed: empty by default ⇒ no non-admin reaches these
+ * endpoints). When project-wide method-security lands, the {@code @PreAuthorize} annotations
+ * activate and this guard can be retired.
  */
 @RestController
 @RequestMapping("/api/v1/admin/ai")
@@ -44,12 +45,12 @@ public class AdminAiController {
 
   private final AdminAiQueryService queryService;
   private final PromptTemplateService promptTemplateService;
-  private final AiAdminGuard adminGuard;
+  private final AdminAccessGuard adminGuard;
 
   public AdminAiController(
       AdminAiQueryService queryService,
       PromptTemplateService promptTemplateService,
-      AiAdminGuard adminGuard) {
+      AdminAccessGuard adminGuard) {
     this.queryService = queryService;
     this.promptTemplateService = promptTemplateService;
     this.adminGuard = adminGuard;

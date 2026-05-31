@@ -2,6 +2,7 @@ package com.example.mealprep.adaptation;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.hamcrest.Matchers.is;
+import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -21,6 +22,7 @@ import com.example.mealprep.adaptation.domain.enums.ValidationResult;
 import com.example.mealprep.adaptation.domain.repository.AdaptationJobRepository;
 import com.example.mealprep.adaptation.domain.repository.AdaptationTraceRepository;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
+import com.example.mealprep.auth.config.AdminAccessProperties;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.testdata.AuthTestData;
 import com.example.mealprep.recipe.domain.entity.Catalogue;
@@ -38,6 +40,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -50,11 +53,13 @@ import org.springframework.test.web.servlet.MvcResult;
  * AdapterRunHistoryController} (2 endpoints), driven through the real Spring stack with the
  * deny-by-default auth chain.
  *
- * <p>Auth-scope note (mirrors {@code AdminPlannerDecisionsControllerIT} / the controllers' own
- * javadoc): the project does not enable Spring method-security, so
- * {@code @PreAuthorize("hasRole('ROLE_ADMIN')")} is currently inert — anonymous &rarr; 401, but
- * every authenticated user passes the (no-op) role gate. A genuine non-admin&rarr;403 is not
- * assertable today; we pin the current behaviour (401 anon, 200 authed).
+ * <p>Auth-scope note (mirrors {@code AdminPlannerDecisionsControllerIT}): the project does not
+ * enable Spring method-security, so {@code @PreAuthorize("hasRole('ROLE_ADMIN')")} is inert.
+ * Enforcement is the shared imperative {@code AdminAccessGuard.requireAdmin()} against the {@code
+ * mealprep.admin.user-ids} allowlist: anonymous &rarr; 401, authenticated-non-admin &rarr; 403
+ * (fail-closed), allowlisted-admin &rarr; 200. Only the allowlist config record ({@link
+ * AdminAccessProperties}) is mocked so the test's registered user can be designated admin; the
+ * guard is the production bean.
  *
  * <p>Jobs and traces are seeded directly through the repositories (no async pipeline race, wave-3
  * 0012); the {@code adaptation_traces.job_id} unique FK rides a real parent job (round-6). Time
@@ -73,6 +78,10 @@ class AdaptationAdminControllerFlowIT {
   @Autowired private AdaptationJobRepository jobRepository;
   @Autowired private AdaptationTraceRepository traceRepository;
   @Autowired private JdbcTemplate jdbcTemplate;
+
+  // Only the allowlist config record is mocked (default: everyone non-admin ⇒ fail-closed 403). The
+  // shared AdminAccessGuard bean is the real production component.
+  @MockBean private AdminAccessProperties adminProperties;
 
   @AfterEach
   void cleanup() {
@@ -99,6 +108,26 @@ class AdaptationAdminControllerFlowIT {
                 .param("from", Instant.now().minus(1, ChronoUnit.DAYS).toString())
                 .param("to", Instant.now().toString()))
         .andExpect(status().isUnauthorized());
+  }
+
+  @Test
+  void getJob_authenticatedButNotAdmin_returns403() throws Exception {
+    // Registered but NOT allowlisted (default mock isAdmin ⇒ false): fail-closed 403.
+    Cookie cookie = register().cookie();
+    mvc.perform(get("/api/v1/adaptation/jobs/{jobId}", UUID.randomUUID()).cookie(cookie))
+        .andExpect(status().isForbidden());
+  }
+
+  @Test
+  void runHistory_authenticatedButNotAdmin_returns403() throws Exception {
+    Cookie cookie = register().cookie();
+    mvc.perform(
+            get("/api/v1/adaptation/run-history")
+                .cookie(cookie)
+                .param("source", "FEEDBACK")
+                .param("from", Instant.now().minus(1, ChronoUnit.DAYS).toString())
+                .param("to", Instant.now().toString()))
+        .andExpect(status().isForbidden());
   }
 
   // ---------------- AdaptationAdminController read surface ----------------
@@ -306,7 +335,9 @@ class AdaptationAdminControllerFlowIT {
 
   // ---------------- helpers ----------------
 
-  private Cookie registerAndLogin() throws Exception {
+  private record AuthedUser(UUID userId, Cookie cookie) {}
+
+  private AuthedUser register() throws Exception {
     RegisterRequest body = AuthTestData.registerRequest("admin-adp-" + AuthTestData.shortId());
     MvcResult result =
         mvc.perform(
@@ -315,7 +346,21 @@ class AdaptationAdminControllerFlowIT {
                     .content(objectMapper.writeValueAsString(body)))
             .andExpect(status().isCreated())
             .andReturn();
-    return result.getResponse().getCookie(authProperties.cookieName());
+    Cookie cookie = result.getResponse().getCookie(authProperties.cookieName());
+    UUID userId =
+        UUID.fromString(
+            objectMapper
+                .readTree(result.getResponse().getContentAsString())
+                .get("userId")
+                .asText());
+    return new AuthedUser(userId, cookie);
+  }
+
+  /** Register a user and designate it an allowlisted admin, returning its session cookie. */
+  private Cookie registerAndLogin() throws Exception {
+    AuthedUser user = register();
+    given(adminProperties.isAdmin(user.userId())).willReturn(true);
+    return user.cookie();
   }
 
   private AdaptationJob seedJob(JobStatus status, JobSource source, JobPriority priority) {

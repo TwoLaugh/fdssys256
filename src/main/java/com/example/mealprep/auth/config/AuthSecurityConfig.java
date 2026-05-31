@@ -45,7 +45,11 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
  */
 @Configuration
 @EnableWebSecurity
-@EnableConfigurationProperties({AuthProperties.class, OriginProperties.class})
+@EnableConfigurationProperties({
+  AuthProperties.class,
+  AdminAccessProperties.class,
+  OriginProperties.class
+})
 public class AuthSecurityConfig {
 
   /** System default clock — overridden in tests via fixed clocks. */

@@ -1,5 +1,6 @@
 package com.example.mealprep.planner.api.controller;
 
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import com.example.mealprep.core.audit.api.dto.DecisionLogDto;
 import com.example.mealprep.core.audit.domain.service.DecisionLogQueryService;
 import com.example.mealprep.planner.api.dto.PlannerDecisionChainDto;
@@ -27,12 +28,13 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>Plans generated BEFORE planner-01l shipped have no decision-log rows — the endpoint returns an
  * empty {@code rows} list (no retroactive backfill; ticket invariant #12).
  *
- * <p>{@code @PreAuthorize("hasRole('ADMIN')")} mirrors {@code
- * core.audit.AdminDecisionLogController} (the ticket's literal {@code hasRole('ROLE_ADMIN')} would
- * wrongly require a {@code ROLE_ROLE_ADMIN} authority — Spring's {@code hasRole} already prepends
- * the {@code ROLE_} prefix). As in core, the flat v1 user model has no admin authority yet, so this
- * currently gates anonymous (401) but admits any authenticated user — tightened when the
- * household-admin role lands (TODO auth-roles-followup).
+ * <p><b>Authorisation.</b> {@code @PreAuthorize("hasRole('ADMIN')")} is the published contract but
+ * inert in v1 (the project does not enable method-security; the flat user model has no {@code
+ * ROLE_ADMIN} authority). Enforcement is therefore done imperatively via the shared {@link
+ * AdminAccessGuard#requireAdmin()} (config key {@code mealprep.admin.user-ids}): anonymous ⇒ 401
+ * (also enforced by the deny-by-default security chain), authenticated-but-not-allowlisted ⇒ 403,
+ * fail-closed on an empty allowlist. When project-wide method-security lands the guard can be
+ * retired in favour of the annotation.
  */
 @RestController
 @RequestMapping("/api/v1/admin/planner")
@@ -43,11 +45,15 @@ public class AdminPlannerDecisionsController {
 
   private final DecisionLogQueryService queryService;
   private final PlannerDecisionMapper mapper;
+  private final AdminAccessGuard adminGuard;
 
   public AdminPlannerDecisionsController(
-      DecisionLogQueryService queryService, PlannerDecisionMapper mapper) {
+      DecisionLogQueryService queryService,
+      PlannerDecisionMapper mapper,
+      AdminAccessGuard adminGuard) {
     this.queryService = queryService;
     this.mapper = mapper;
+    this.adminGuard = adminGuard;
   }
 
   @GetMapping("/decisions/{planId}")
@@ -60,6 +66,7 @@ public class AdminPlannerDecisionsController {
               + "before planner-01l shipped have no rows (empty list; no retroactive backfill).")
   public ResponseEntity<PlannerDecisionChainDto> getChain(
       @PathVariable UUID planId, @RequestParam(required = false) @Nullable UUID traceId) {
+    adminGuard.requireAdmin();
     List<DecisionLogDto> rows;
     if (traceId != null) {
       // ?traceId= alternative: the trace's rows, narrowed to this plan's PLANNER-scope rows so a

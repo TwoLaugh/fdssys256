@@ -10,7 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.atlassian.oai.validator.OpenApiInteractionValidator;
-import com.example.mealprep.ai.api.AiAdminGuard;
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import com.example.mealprep.ops.api.controller.AdminStatusController;
 import com.example.mealprep.ops.api.dto.AdminStatusDto;
 import com.example.mealprep.ops.domain.service.AdminStatusService;
@@ -44,7 +44,7 @@ class AdminStatusControllerIT {
   @Autowired private MockMvc mvc;
   @Autowired private OpenApiInteractionValidator openApiValidator;
   @MockBean private AdminStatusService statusService;
-  @MockBean private AiAdminGuard adminGuard;
+  @MockBean private AdminAccessGuard adminGuard;
 
   @Test
   void status_returns200_andMatchesContract_whenDbUpAndCallsPresent() throws Exception {

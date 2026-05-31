@@ -21,6 +21,7 @@ import com.example.mealprep.adaptation.domain.service.AdaptationQueryService;
 import com.example.mealprep.adaptation.domain.service.AdaptationService;
 import com.example.mealprep.adaptation.exception.AdaptationJobNotFoundException;
 import com.example.mealprep.adaptation.exception.AdaptationJobNotRetryableException;
+import com.example.mealprep.auth.api.AdminAccessGuard;
 import com.example.mealprep.recipe.domain.entity.Catalogue;
 import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -50,6 +51,10 @@ class AdaptationAdminControllerIT {
   @Autowired private OpenApiInteractionValidator openApiValidator;
   @MockBean private AdaptationService adaptationService;
   @MockBean private AdaptationQueryService queryService;
+  // Admin gate is mocked no-op so contract tests stay focused on response shape; the
+  // 403-when-denied
+  // path is asserted below and end-to-end in AdaptationAdminControllerFlowIT.
+  @MockBean private AdminAccessGuard adminGuard;
 
   private static AdaptationJobDto jobDto(UUID id) {
     return new AdaptationJobDto(
@@ -165,5 +170,20 @@ class AdaptationAdminControllerIT {
                 "v1"))
         .andExpect(status().isOk())
         .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void getJob_returns403_whenGuardDeniesNonAdmin() throws Exception {
+    doThrow(
+            new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.FORBIDDEN, "Admin privileges required."))
+        .when(adminGuard)
+        .requireAdmin();
+
+    mvc.perform(get("/api/v1/adaptation/jobs/{jobId}", UUID.randomUUID()))
+        .andExpect(status().isForbidden())
+        .andExpect(
+            org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                .contentTypeCompatibleWith("application/problem+json"));
   }
 }
