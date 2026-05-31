@@ -90,14 +90,20 @@ class RecipeRatingControllerIT {
 
   private record CreatedRecipe(UUID recipeId, UUID versionId) {}
 
+  private final java.util.concurrent.atomic.AtomicInteger recipeCounter =
+      new java.util.concurrent.atomic.AtomicInteger();
+
   private CreatedRecipe createRecipe(Cookie cookie) throws Exception {
+    // Unique ingredient set per call so multiple recipes for one user never trip recipe-2 dedup.
+    String discriminator = "rating-" + recipeCounter.incrementAndGet();
     MvcResult created =
         mvc.perform(
                 post("/api/v1/recipes")
                     .cookie(cookie)
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(
-                        objectMapper.writeValueAsString(RecipeTestData.defaultCreateRequest())))
+                        objectMapper.writeValueAsString(
+                            RecipeTestData.uniqueCreateRequest(discriminator))))
             .andExpect(status().isCreated())
             .andReturn();
     JsonNode body = objectMapper.readTree(created.getResponse().getContentAsString());

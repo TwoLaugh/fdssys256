@@ -29,6 +29,11 @@ recipes:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: Recipe duplicates an existing library recipe (recipe-2 dedup).
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/RecipeImportDuplicate' }
 recipeRoot:
   get:
     tags: [Recipes]
@@ -181,6 +186,108 @@ recipeImports:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/RecipeImportFailure' }
+recipeImportsPreviewUrl:
+  post:
+    tags: [Recipes]
+    operationId: previewRecipeImportFromUrl
+    summary: Preview a URL import (Paprika-style) — fetch + extract the candidate without persisting.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/recipe.yaml#/ImportRecipeFromUrlRequest' }
+    responses:
+      '200':
+        description: Extracted candidate (editable); nothing persisted.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeImportPreview' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: Fetch error or extraction failure.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/RecipeImportFailure' }
+recipeImportsPreviewHtml:
+  post:
+    tags: [Recipes]
+    operationId: previewRecipeImportFromHtml
+    summary: Preview an import from frontend-supplied HTML — extract the candidate without persisting.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/recipe.yaml#/ImportRecipeFromHtmlRequest' }
+    responses:
+      '200':
+        description: Extracted candidate (editable); nothing persisted.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeImportPreview' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: Extraction failure (no layer produced a sufficient recipe).
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/RecipeImportFailure' }
+recipeImportsConfirm:
+  post:
+    tags: [Recipes]
+    operationId: confirmRecipeImport
+    summary: Confirm a previewed import — persist the reviewed/edited candidate (runs dedup first).
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/recipe.yaml#/ConfirmImportRequest' }
+    responses:
+      '201':
+        description: Recipe imported.
+        headers:
+          Location:
+            schema: { type: string, format: uri }
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: Imported recipe duplicates an existing library recipe (recipe-2 dedup).
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/RecipeImportDuplicate' }
 recipeImportProvenance:
   get:
     tags: [Recipes]
@@ -366,6 +473,82 @@ recipeVersionsRevert:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '422':
         description: Revert on a SYSTEM-catalogue recipe.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeVersions:
+  get:
+    tags: [Recipes]
+    operationId: listRecipeVersions
+    summary: List a branch's version history, newest version-number first (paginated).
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: branchId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: page
+        required: false
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        required: false
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of versions on the branch, newest version-number first.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeVersionDtoPage' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Recipe or branch not found.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+recipeVersionByNumber:
+  get:
+    tags: [Recipes]
+    operationId: getRecipeVersionByNumber
+    summary: Fetch a single version of a recipe by branch + version number.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: recipeId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: versionNumber
+        required: true
+        schema: { type: integer, minimum: 1 }
+      - in: query
+        name: branchId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: The version, hydrated with its body.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeVersionDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Recipe, branch, or version not found.
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

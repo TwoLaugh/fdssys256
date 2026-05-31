@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 /**
  * Read-by-others contract for the recipe module.
@@ -74,6 +76,26 @@ public interface RecipeQueryService {
    * recipe-import-not-found}, and "recipe missing" → 404 with {@code recipe-not-found}.
    */
   Optional<RecipeImportDto> getImportProvenance(UUID recipeId);
+
+  /**
+   * Version-history listing (recipe-5 / LLD §REST line 645). Returns the versions on a branch of a
+   * recipe, newest version-number first, each fully hydrated to the same {@link RecipeVersionDto}
+   * shape the by-id reads produce (body + children). Bounded by the supplied {@link Pageable}.
+   *
+   * <p>Throws {@code RecipeNotFoundException} (404) when the recipe is missing / soft-deleted and
+   * {@code RecipeBranchNotFoundException} (404) when the branch is missing or belongs to a
+   * different recipe.
+   */
+  Page<RecipeVersionDto> getVersionHistory(UUID recipeId, UUID branchId, Pageable pageable);
+
+  /**
+   * Single version-by-number read (recipe-5 / LLD §REST line 646). Returns the version with {@code
+   * versionNumber} on the given branch of the recipe, hydrated with its body. Throws {@code
+   * RecipeNotFoundException} (404) for a missing recipe, {@code RecipeBranchNotFoundException}
+   * (404) for a missing / foreign branch, and {@code RecipeVersionNotFoundException} (404) when the
+   * branch has no such version number.
+   */
+  RecipeVersionDto getVersionByNumber(UUID recipeId, UUID branchId, int versionNumber);
 
   /**
    * Return the persisted change-diff between two consecutive versions on the same branch. Pure

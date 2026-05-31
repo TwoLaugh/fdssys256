@@ -110,6 +110,10 @@ class RecipeSubstitutionsServiceTest {
         urlFetcher,
         htmlImportParser,
         new com.example.mealprep.recipe.api.mapper.ParsedRecipeToCreateRequestMapper(),
+        com.example.mealprep.recipe.extraction.RecipeExtractionServices.defaultService(
+            objectMapper),
+        new com.example.mealprep.recipe.domain.service.internal.RecipeDeduplicationService(
+            recipeRepository),
         versionDiffer,
         divergenceCalculator,
         fingerprintDeriver,
