@@ -33,9 +33,13 @@ import org.springframework.stereotype.Component;
  *
  * <p>Per-slot list is capped at {@code maxPoolPerSlot} after sorting by recipe id ascending — the
  * cap is bounded-search hygiene; the beam-search's scoring step selects the actual best.
+ *
+ * <p>{@code public} (within the module-internal {@code beamsearch} package, behind {@code
+ * PlannerBoundaryTest}) so the Pre-A {@code ConstraintFeasibilityCheck} (planner-6) can reuse the
+ * exact same per-slot pool the beam search would see when classifying under-pooled slots.
  */
 @Component
-class HardFilterRunner {
+public class HardFilterRunner {
 
   private final HardConstraintFilterService hardConstraintFilterService;
   private final PlannerProperties properties;
@@ -46,7 +50,7 @@ class HardFilterRunner {
     this.properties = properties;
   }
 
-  Map<UUID, List<RecipeDto>> filterPool(PlanCompositionContext ctx) {
+  public Map<UUID, List<RecipeDto>> filterPool(PlanCompositionContext ctx) {
     Set<String> availableEquipment =
         ctx.provisions() == null || ctx.provisions().equipment() == null
             ? Set.of()

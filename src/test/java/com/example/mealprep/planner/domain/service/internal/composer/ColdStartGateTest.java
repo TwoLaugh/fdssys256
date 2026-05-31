@@ -114,7 +114,7 @@ class ColdStartGateTest {
   void belowThreshold_fires_andRequestsDiscovery() {
     when(discoveryService.runJobSync(any(), any(), any()))
         .thenReturn(jobDto(DiscoveryJobStatus.SUCCEEDED, 18));
-    // 1 distinct kind × multiplier 3 = threshold 3; pool 0 < 3 ⇒ fires.
+    // 1 slot × multiplier 3 = threshold 3; pool 0 < 3 ⇒ fires.
     ColdStartGate gate = gate(cfg(true, 3, List.of()));
 
     boolean fired = gate.fillIfCold(USER, skeletons(SlotKind.DINNER), 0, TRACE);
@@ -146,13 +146,40 @@ class ColdStartGateTest {
 
   @Test
   void atOrAboveThreshold_skips_noDiscoveryCall() {
-    // 2 distinct kinds × multiplier 3 = threshold 6; pool 6 ⇒ NOT cold.
+    // 2 slots × multiplier 3 = threshold 6; pool 6 ⇒ NOT cold.
     ColdStartGate gate = gate(cfg(true, 3, List.of()));
 
     boolean fired = gate.fillIfCold(USER, skeletons(SlotKind.DINNER, SlotKind.LUNCH), 6, TRACE);
 
     assertThat(fired).isFalse();
     verifyNoInteractions(discoveryService);
+  }
+
+  @Test
+  void thresholdScalesWithSlotCount_notDistinctKinds() {
+    // planner-4: a full week of 7 same-kind DINNER slots → threshold 7 × 3 = 21, NOT
+    // distinct-kind 1 × 3 = 3. A pool of 10 is below 21 ⇒ the gate must FIRE (it would
+    // wrongly skip under the old per-distinct-kind threshold of 3).
+    when(discoveryService.runJobSync(any(), any(), any()))
+        .thenReturn(jobDto(DiscoveryJobStatus.SUCCEEDED, 30));
+    ColdStartGate gate = gate(cfg(true, 3, List.of()));
+
+    boolean fired =
+        gate.fillIfCold(
+            USER,
+            skeletons(
+                SlotKind.DINNER,
+                SlotKind.DINNER,
+                SlotKind.DINNER,
+                SlotKind.DINNER,
+                SlotKind.DINNER,
+                SlotKind.DINNER,
+                SlotKind.DINNER),
+            10,
+            TRACE);
+
+    assertThat(fired).isTrue();
+    verify(discoveryService).runJobSync(any(), any(), any());
   }
 
   @Test

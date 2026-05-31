@@ -3,6 +3,7 @@ package com.example.mealprep.planner.domain.service.internal.lifecycle;
 import com.example.mealprep.planner.api.dto.PlanReoptSuggestionDto;
 import com.example.mealprep.planner.api.dto.ProposedReoptAssignmentsDocument.ProposedSlotChange;
 import com.example.mealprep.planner.api.mapper.ReoptSuggestionMapper;
+import com.example.mealprep.planner.config.PlannerProperties;
 import com.example.mealprep.planner.domain.entity.Day;
 import com.example.mealprep.planner.domain.entity.MealPrepPlanReoptSuggestion;
 import com.example.mealprep.planner.domain.entity.MealSlot;
@@ -21,6 +22,7 @@ import com.example.mealprep.planner.domain.service.internal.decisionlog.Decision
 import com.example.mealprep.planner.domain.service.internal.decisionlog.PlannerDecisionKind;
 import com.example.mealprep.planner.event.PlanAbandonedEvent;
 import com.example.mealprep.planner.event.PlanAcceptedEvent;
+import com.example.mealprep.planner.event.PlanCompletedEvent;
 import com.example.mealprep.planner.event.PlanGeneratedEvent;
 import com.example.mealprep.planner.event.PlanRejectedEvent;
 import com.example.mealprep.planner.event.PlanSupersededEvent;
@@ -30,9 +32,15 @@ import com.example.mealprep.planner.exception.PlanNotReoptableException;
 import com.example.mealprep.planner.exception.ReoptSuggestionNotFoundException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.PersistenceContext;
 import java.time.Clock;
+import java.time.LocalDate;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -64,7 +72,10 @@ public class PlanWriteServiceImpl implements PlanWriteService {
   private final ReoptSuggestionMapper reoptSuggestionMapper;
   private final DecisionLogWriter decisionLogWriter;
   private final ObjectMapper objectMapper;
+  private final PlannerProperties properties;
   private final Clock clock;
+
+  @PersistenceContext private EntityManager entityManager;
 
   public PlanWriteServiceImpl(
       PlanRepository planRepository,
@@ -75,6 +86,7 @@ public class PlanWriteServiceImpl implements PlanWriteService {
       ReoptSuggestionMapper reoptSuggestionMapper,
       DecisionLogWriter decisionLogWriter,
       ObjectMapper objectMapper,
+      PlannerProperties properties,
       Clock clock) {
     this.planRepository = planRepository;
     this.mealSlotRepository = mealSlotRepository;
@@ -84,6 +96,7 @@ public class PlanWriteServiceImpl implements PlanWriteService {
     this.reoptSuggestionMapper = reoptSuggestionMapper;
     this.decisionLogWriter = decisionLogWriter;
     this.objectMapper = objectMapper;
+    this.properties = properties;
     this.clock = clock;
   }
 
@@ -119,6 +132,13 @@ public class PlanWriteServiceImpl implements PlanWriteService {
     Plan plan = load(planId);
     PlanStatus from = plan.getStatus();
     stateMachine.assertPlanTransitionAllowed(from, PlanStatus.ACTIVE);
+    // Supersede any plan already ACTIVE for this (household, week) inside the same transaction so
+    // the accept doesn't trip the partial unique index uq_planner_plans_active_per_household_week
+    // (planner-9, LLD §Flow 3 / error table). Without this, GENERATED→ACTIVE while another plan is
+    // ACTIVE for the same week would raise a DataIntegrityViolationException; we supersede the
+    // incumbent first so the common case is graceful. A genuine concurrent double-accept that races
+    // past this read is still caught by the index and mapped to 409 by PlannerExceptionHandler.
+    supersedeExistingActive(plan);
     plan.setStatus(PlanStatus.ACTIVE);
     plan.setAcceptedAt(clock.instant());
     planRepository.save(plan);
@@ -131,6 +151,36 @@ public class PlanWriteServiceImpl implements PlanWriteService {
             plan.getTraceId(),
             clock.instant()));
     return plan.getId();
+  }
+
+  /**
+   * If a different plan is already ACTIVE for {@code accepting}'s (household, week), transition it
+   * to SUPERSEDED (publishing {@code PlanSupersededEvent}) so the accept of {@code accepting} does
+   * not violate the single-active partial unique index. No-op when there is no incumbent or the
+   * incumbent is the plan being accepted. The status write is flushed so the unique-index slot is
+   * free before the new active row is written.
+   */
+  private void supersedeExistingActive(Plan accepting) {
+    planRepository
+        .findFirstByHouseholdIdAndWeekStartDateAndStatus(
+            accepting.getHouseholdId(), accepting.getWeekStartDate(), PlanStatus.ACTIVE)
+        .filter(existing -> !existing.getId().equals(accepting.getId()))
+        .ifPresent(
+            existing -> {
+              PlanStatus existingFrom = existing.getStatus();
+              stateMachine.assertPlanTransitionAllowed(existingFrom, PlanStatus.SUPERSEDED);
+              existing.setStatus(PlanStatus.SUPERSEDED);
+              planRepository.saveAndFlush(existing);
+              logTransition(existing, existingFrom, PlanStatus.SUPERSEDED);
+              eventPublisher.publishEvent(
+                  new PlanSupersededEvent(
+                      existing.getId(),
+                      accepting.getId(),
+                      existing.getHouseholdId(),
+                      existing.getWeekStartDate(),
+                      existing.getTraceId(),
+                      clock.instant()));
+            });
   }
 
   @Override
@@ -192,6 +242,13 @@ public class PlanWriteServiceImpl implements PlanWriteService {
     slot.setState(newState);
     stateMachine.derivePinnedReason(newState).ifPresent(slot::setPinnedReason);
     mealSlotRepository.save(slot);
+    // Force-increment the parent Plan's @Version so a concurrent mid-week re-opt that read the
+    // plan's slots aborts with an OptimisticLockException (→ 409) rather than persisting against a
+    // now-stale slot graph (planner-7, LLD §Flow 5 step 4 / §Concurrency). The slot write alone
+    // does not touch the aggregate root, so we load the parent and bump it explicitly. The forced
+    // increment fires on flush even though no scalar Plan column changed.
+    Plan plan = load(planId);
+    entityManager.lock(plan, LockModeType.OPTIMISTIC_FORCE_INCREMENT);
     return planId;
   }
 
@@ -347,6 +404,68 @@ public class PlanWriteServiceImpl implements PlanWriteService {
       }
     }
     return reoptSuggestionMapper.toPlanReoptDto(suggestion);
+  }
+
+  @Override
+  @Transactional
+  public int sweepExpiredReoptSuggestions() {
+    var stale =
+        suggestionRepository.findAllByStatusAndSweptFalseAndExpiresAtBefore(
+            ReoptSuggestionStatus.PENDING, clock.instant());
+    for (MealPrepPlanReoptSuggestion s : stale) {
+      s.setStatus(ReoptSuggestionStatus.EXPIRED);
+      s.setSwept(true);
+    }
+    if (!stale.isEmpty()) {
+      suggestionRepository.saveAll(stale);
+      log.info("re-opt suggestion expiry sweep flipped {} row(s) PENDING -> EXPIRED", stale.size());
+    }
+    return stale.size();
+  }
+
+  @Override
+  @Transactional
+  public int sweepCompletedPlans() {
+    // Current week's start day (Monday by config) in the system zone — plans whose week started
+    // strictly before this are "prior-week" candidates.
+    LocalDate currentWeekStart =
+        LocalDate.now(clock)
+            .with(TemporalAdjusters.previousOrSame(properties.weekStartDayOfWeek()));
+    List<Plan> priorWeekActive =
+        planRepository.findByStatusAndWeekStartDateBefore(PlanStatus.ACTIVE, currentWeekStart);
+    int completed = 0;
+    for (Plan plan : priorWeekActive) {
+      if (!allSlotsTerminal(plan)) {
+        // A slot is still PLANNED/COOKING/COOKED — leave ACTIVE; the sweep never auto-abandons.
+        continue;
+      }
+      PlanStatus from = plan.getStatus();
+      stateMachine.assertPlanTransitionAllowed(from, PlanStatus.COMPLETED);
+      plan.setStatus(PlanStatus.COMPLETED);
+      plan.setCompletedAt(clock.instant());
+      planRepository.save(plan);
+      logTransition(plan, from, PlanStatus.COMPLETED);
+      eventPublisher.publishEvent(
+          new PlanCompletedEvent(
+              plan.getId(),
+              plan.getHouseholdId(),
+              plan.getWeekStartDate(),
+              plan.getTraceId(),
+              clock.instant()));
+      completed++;
+    }
+    if (completed > 0) {
+      log.info(
+          "weekly PlanCompleted sweep transitioned {} prior-week plan(s) to COMPLETED", completed);
+    }
+    return completed;
+  }
+
+  /** True when every slot of the plan is in a terminal slot state (EATEN or SKIPPED). */
+  private static boolean allSlotsTerminal(Plan plan) {
+    return plan.getDays().stream()
+        .flatMap(d -> d.getSlots().stream())
+        .allMatch(s -> s.getState() == SlotState.EATEN || s.getState() == SlotState.SKIPPED);
   }
 
   /**

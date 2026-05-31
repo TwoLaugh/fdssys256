@@ -1,6 +1,5 @@
 package com.example.mealprep.planner.domain.service.internal.composer;
 
-import com.example.mealprep.core.types.SlotKind;
 import com.example.mealprep.discovery.api.dto.DiscoveryConstraints;
 import com.example.mealprep.discovery.api.dto.DiscoveryJobDto;
 import com.example.mealprep.discovery.api.dto.StartDiscoveryJobRequest;
@@ -9,9 +8,8 @@ import com.example.mealprep.discovery.domain.service.DiscoveryService;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.config.PlannerProperties;
 import java.time.Duration;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
+import java.util.Objects;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,10 +22,13 @@ import org.springframework.stereotype.Component;
  * gate invokes the discovery module — synchronously and bounded — to fill the SYSTEM catalogue, so
  * the household's first plan has scheduled recipes.
  *
- * <p>Per meal-planner.md §Cold start (threshold "≥3× slot count"; "discovery + AI generation
- * pre-step fills the system catalogue up to ~50 USDA-mapped recipes") and lld/planner.md §Flow-1
- * step 5 ("Run cold-start gate: catalogue-size check. If below threshold, trigger RecipeDiscovery …
- * Sets coldStart = true").
+ * <p>Per meal-planner.md §Cold start (threshold "≥3× slot count" — e.g. 63 recipes for a 21-slot
+ * week; "discovery + AI generation pre-step fills the system catalogue up to ~50 USDA-mapped
+ * recipes") and lld/planner.md §Flow-1 step 5 ("Run cold-start gate: catalogue-size check. If below
+ * threshold, trigger RecipeDiscovery … Sets coldStart = true"). The threshold scales with the
+ * <b>total slot count</b> ({@code ctx.slotSkeletons().size()}), not the count of distinct slot
+ * kinds (planner-4) — a full week (21 slots) needs a far larger pool than its 3-4 distinct kinds
+ * would imply.
  *
  * <h2>Cross-module call (sanctioned)</h2>
  *
@@ -82,7 +83,7 @@ class ColdStartGate {
    * already adequate or the gate is disabled).
    *
    * @param requestUserId the resolved caller (the discovery job is attributed to them)
-   * @param skeletons the resolved slot skeletons (their distinct kinds drive the threshold)
+   * @param skeletons the resolved slot skeletons (their total count drives the threshold)
    * @param currentPoolSize the candidate count Stage-A would otherwise see
    * @param traceId the run trace id (threaded onto the discovery request)
    */
@@ -93,7 +94,7 @@ class ColdStartGate {
       return false;
     }
 
-    int threshold = threshold(skeletons, cfg.slotKindMultiplier());
+    int threshold = threshold(skeletons, cfg.slotCountMultiplier());
     if (currentPoolSize >= threshold) {
       log.debug(
           "Cold-start gate: pool {} >= threshold {} (trace {}); not cold.",
@@ -104,12 +105,12 @@ class ColdStartGate {
     }
 
     log.info(
-        "Cold-start gate FIRED: pool {} < threshold {} (multiplier {} × {} distinct slot-kind(s));"
+        "Cold-start gate FIRED: pool {} < threshold {} (multiplier {} × {} slot(s));"
             + " filling SYSTEM catalogue via discovery (trace {}).",
         currentPoolSize,
         threshold,
-        cfg.slotKindMultiplier(),
-        distinctKindCount(skeletons),
+        cfg.slotCountMultiplier(),
+        slotCount(skeletons),
         traceId);
 
     try {
@@ -139,21 +140,18 @@ class ColdStartGate {
     return true;
   }
 
-  /** Threshold = {@code slotKindMultiplier × distinctSlotKinds}, floor 1 (meal-planner.md). */
+  /**
+   * Threshold = {@code slotCountMultiplier × totalSlotCount}, floor 1 (meal-planner.md "≥3× slot
+   * count", e.g. 3 × 21 = 63 for a full week). Slot COUNT, not distinct slot-kind count: a week of
+   * 21 slots across 3-4 kinds needs a pool sized to the slots it must fill, not the handful of
+   * kinds (planner-4).
+   */
   private int threshold(List<MealSlotSkeleton> skeletons, int multiplier) {
-    return Math.max(1, distinctKindCount(skeletons)) * multiplier;
+    return Math.max(1, slotCount(skeletons)) * multiplier;
   }
 
-  private int distinctKindCount(List<MealSlotSkeleton> skeletons) {
-    Set<SlotKind> kinds = new LinkedHashSet<>();
-    if (skeletons != null) {
-      for (MealSlotSkeleton skel : skeletons) {
-        if (skel != null && skel.kind() != null) {
-          kinds.add(skel.kind());
-        }
-      }
-    }
-    return kinds.size();
+  private int slotCount(List<MealSlotSkeleton> skeletons) {
+    return skeletons == null ? 0 : (int) skeletons.stream().filter(Objects::nonNull).count();
   }
 
   /**

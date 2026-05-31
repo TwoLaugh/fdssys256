@@ -251,6 +251,8 @@ paths:
     $ref: 'paths/planner.yaml#/plansActive'
   /api/v1/plans/history:
     $ref: 'paths/planner.yaml#/plansHistory'
+  /api/v1/plans/feasibility:
+    $ref: 'paths/planner.yaml#/plansFeasibility'
   /api/v1/plans/suggestions:
     $ref: 'paths/planner.yaml#/plansSuggestions'
   /api/v1/plans/generate:
@@ -735,6 +737,10 @@ components:
     AugmentationSource: { $ref: 'schemas/planner.yaml#/AugmentationSource' }
     ReoptTriggerKind: { $ref: 'schemas/planner.yaml#/ReoptTriggerKind' }
     ReoptStatus: { $ref: 'schemas/planner.yaml#/ReoptStatus' }
+    ConflictType: { $ref: 'schemas/planner.yaml#/ConflictType' }
+    ConstraintConflictDto: { $ref: 'schemas/planner.yaml#/ConstraintConflictDto' }
+    ResolutionOptionDto: { $ref: 'schemas/planner.yaml#/ResolutionOptionDto' }
+    FeasibilityCheckResultDto: { $ref: 'schemas/planner.yaml#/FeasibilityCheckResultDto' }
     DailyRollupDocument: { $ref: 'schemas/planner.yaml#/DailyRollupDocument' }
     WeeklyRollupDocument: { $ref: 'schemas/planner.yaml#/WeeklyRollupDocument' }
     RollupSummaryDocument: { $ref: 'schemas/planner.yaml#/RollupSummaryDocument' }

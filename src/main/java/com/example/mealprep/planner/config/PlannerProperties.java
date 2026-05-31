@@ -64,7 +64,7 @@ public record PlannerProperties(
   /**
    * Cold-start gate tunables (planner recipe-pool Tier-2). Bound under {@code
    * mealprep.planner.cold-start.*}. The gate runs in the composer BEFORE Stage A: when the
-   * candidate catalogue is below {@code slotKindMultiplier × distinct-slot-kinds} it invokes {@code
+   * candidate catalogue is below {@code slotCountMultiplier × total-slot-count} it invokes {@code
    * DiscoveryService.runJobSync} (bounded) to fill the SYSTEM catalogue, then re-reads the pool and
    * flags the plan {@code coldStart = true}. Per meal-planner.md §Cold start + lld/planner.md
    * §Flow-1 step 5.
@@ -77,9 +77,10 @@ public record PlannerProperties(
    *   <li>{@code enabled} — master switch. {@code false} skips the gate entirely (plans behave
    *       exactly as Tier-1: an empty catalogue yields a quality-warning plan, never a discovery
    *       call). Default {@code true}.
-   *   <li>{@code slotKindMultiplier} — the per-distinct-slot-kind candidate floor. The threshold is
-   *       {@code slotKindMultiplier × distinctSlotKinds} (meal-planner.md heuristic "≥3× slot
-   *       count"). Default {@code 3}.
+   *   <li>{@code slotCountMultiplier} — the per-slot candidate floor. The threshold is {@code
+   *       slotCountMultiplier × totalSlotCount} (meal-planner.md heuristic "≥3× slot count", e.g. 3
+   *       × 21 = 63 for a full week — planner-4 corrects an earlier per-distinct-kind reading).
+   *       Default {@code 3}.
    *   <li>{@code requestedCount} — the discovery job quota (recipes to import in one cold-start
    *       run). Default {@code 50} (meal-planner.md "adds up to 50 recipes per cold-start run").
    *   <li>{@code timeout} — the bounded {@code runJobSync} deadline. On timeout the gate degrades
@@ -92,7 +93,7 @@ public record PlannerProperties(
    */
   public record ColdStart(
       boolean enabled,
-      @Min(1) int slotKindMultiplier,
+      @Min(1) int slotCountMultiplier,
       @Min(1) @jakarta.validation.constraints.Max(50) int requestedCount,
       @NotNull Duration timeout,
       @NotNull List<String> sourceKeys) {}

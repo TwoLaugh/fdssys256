@@ -1,5 +1,6 @@
 package com.example.mealprep.planner.domain.service;
 
+import com.example.mealprep.planner.api.dto.FeasibilityCheckResultDto;
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
 import com.example.mealprep.planner.api.dto.UpcomingSlotView;
@@ -14,9 +15,9 @@ import org.springframework.data.domain.Pageable;
  * Public read surface of the planner module.
  *
  * <p>01a shipped {@link #getPlanById(UUID)}; 01c appends the household-scoped reads
- * (active/history/range/by-ids) plus the suggestion reads. The remaining method on LLD line 578
- * ({@code checkFeasibility(...)}) defers to 01j because it depends on the cross-module composition
- * context that lands with Stage A wiring.
+ * (active/history/range/by-ids) plus the suggestion reads. {@link #checkFeasibility(UUID,
+ * LocalDate)} (LLD line ~577) is implemented by planner-6: it builds the cross-module composition
+ * context and runs the Pre-A {@code ConstraintFeasibilityCheck}.
  *
  * <p>Every read returns a hydrated DTO graph — child collections (days → slots → scheduledRecipe)
  * are materialised inside the service's {@code @Transactional(readOnly = true)} boundary so the
@@ -90,4 +91,14 @@ public interface PlanQueryService {
    * HTTP exposure.
    */
   List<UpcomingSlotView> getUpcomingSlots(UUID householdId, LocalDate fromDate, LocalDate toDate);
+
+  /**
+   * Pre-Stage-A constraint feasibility check for a (household, week) — the surface behind {@code
+   * GET /api/v1/plans/feasibility} (planner-6, LLD §PlanQueryService /
+   * §ConstraintFeasibilityCheck). The UI calls this before triggering generation so a resolution
+   * dialog can render the conflicts + ranked resolutions even before Stage A starts. Read-only; the
+   * cross-module composition context is assembled server-side (the household owner is resolved as
+   * the representative caller for the provisions / settings reads).
+   */
+  FeasibilityCheckResultDto checkFeasibility(UUID householdId, LocalDate weekStartDate);
 }

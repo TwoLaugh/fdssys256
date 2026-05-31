@@ -5,6 +5,9 @@ import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.api.dto.HouseholdMemberDto;
 import com.example.mealprep.household.domain.entity.HouseholdRole;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
+import com.example.mealprep.planner.api.dto.FeasibilityCheckResultDto;
+import com.example.mealprep.planner.api.dto.GeneratePlanRequest;
+import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
 import com.example.mealprep.planner.api.dto.UpcomingSlotView;
@@ -17,6 +20,8 @@ import com.example.mealprep.planner.domain.entity.ReoptStatus;
 import com.example.mealprep.planner.domain.repository.PlanRepository;
 import com.example.mealprep.planner.domain.repository.ReoptSuggestionRepository;
 import com.example.mealprep.planner.domain.service.PlanQueryService;
+import com.example.mealprep.planner.domain.service.internal.composer.ConstraintFeasibilityCheck;
+import com.example.mealprep.planner.domain.service.internal.composer.PlanCompositionContextBuilder;
 import com.example.mealprep.preference.api.dto.LifestyleConfigDto;
 import com.example.mealprep.preference.domain.document.LifestyleConfigDocument;
 import com.example.mealprep.preference.domain.service.LifestyleConfigQueryService;
@@ -68,6 +73,8 @@ public class PlannerServiceImpl implements PlanQueryService {
   private final ReoptSuggestionMapper reoptSuggestionMapper;
   private final HouseholdQueryService householdQueryService;
   private final LifestyleConfigQueryService lifestyleConfigQueryService;
+  private final PlanCompositionContextBuilder contextBuilder;
+  private final ConstraintFeasibilityCheck feasibilityCheck;
 
   public PlannerServiceImpl(
       PlanRepository planRepository,
@@ -75,13 +82,17 @@ public class PlannerServiceImpl implements PlanQueryService {
       PlanMapper planMapper,
       ReoptSuggestionMapper reoptSuggestionMapper,
       HouseholdQueryService householdQueryService,
-      LifestyleConfigQueryService lifestyleConfigQueryService) {
+      LifestyleConfigQueryService lifestyleConfigQueryService,
+      PlanCompositionContextBuilder contextBuilder,
+      ConstraintFeasibilityCheck feasibilityCheck) {
     this.planRepository = planRepository;
     this.reoptSuggestionRepository = reoptSuggestionRepository;
     this.planMapper = planMapper;
     this.reoptSuggestionMapper = reoptSuggestionMapper;
     this.householdQueryService = householdQueryService;
     this.lifestyleConfigQueryService = lifestyleConfigQueryService;
+    this.contextBuilder = contextBuilder;
+    this.feasibilityCheck = feasibilityCheck;
   }
 
   @Override
@@ -205,6 +216,19 @@ public class PlannerServiceImpl implements PlanQueryService {
       }
     }
     return out;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public FeasibilityCheckResultDto checkFeasibility(UUID householdId, LocalDate weekStartDate) {
+    // Resolve a representative caller (the household owner) for the user-scoped cross-module reads
+    // the context builder performs (provisions bundle, household settings, member roster). The
+    // feasibility check itself is household-level and read-only; no plan is created.
+    UUID ownerUserId = ownerUserIdFor(householdId);
+    GeneratePlanRequest request = new GeneratePlanRequest(householdId, weekStartDate, false);
+    PlanCompositionContext context =
+        contextBuilder.build(request, ownerUserId, UUID.randomUUID(), null);
+    return feasibilityCheck.check(context);
   }
 
   /**

@@ -41,6 +41,8 @@ import com.example.mealprep.planner.exception.PlanNotReoptableException;
 import com.example.mealprep.planner.exception.ReoptSuggestionNotFoundException;
 import com.example.mealprep.planner.testdata.PlanTestData;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -55,6 +57,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * Pure-unit tests over {@link PlanWriteServiceImpl}. Persistence + event publication + decision-log
@@ -77,6 +80,7 @@ class PlanWriteServiceImplTest {
   @Mock private MealPrepPlanReoptSuggestionRepository suggestionRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
   @Mock private DecisionLogWriter decisionLogWriter;
+  @Mock private EntityManager entityManager;
 
   private PlanWriteServiceImpl service;
 
@@ -92,7 +96,10 @@ class PlanWriteServiceImplTest {
             new ReoptSuggestionMapperImpl(),
             decisionLogWriter,
             new ObjectMapper(),
+            PlanTestData.scoringProperties(),
             Clock.fixed(NOW, ZoneOffset.UTC));
+    // @PersistenceContext field is injected by the container in prod; set it here for the unit.
+    ReflectionTestUtils.setField(service, "entityManager", entityManager);
   }
 
   private Plan generatedPlan() {
@@ -237,8 +244,7 @@ class PlanWriteServiceImplTest {
   // ---------- changeSlotState ----------
 
   @Test
-  void changeSlotState_validTransition_savesSlot_derivesPinnedReason() {
-    UUID planId = UUID.randomUUID();
+  void changeSlotState_validTransition_savesSlot_derivesPinnedReason_bumpsParentVersion() {
     MealSlot slot =
         MealSlot.builder()
             .id(UUID.randomUUID())
@@ -246,7 +252,11 @@ class PlanWriteServiceImplTest {
             .kind(SlotKind.DINNER)
             .state(SlotState.PLANNED)
             .build();
+    // The parent plan owns this slot; load(planId) reads it for the OPTIMISTIC_FORCE_INCREMENT.
+    Plan parent = PlanTestData.newPlanGraph(UUID.randomUUID(), WEEK, 1, PlanStatus.ACTIVE, 1, 1);
+    UUID planId = parent.getId();
     when(mealSlotRepository.findByIdAndPlanId(slot.getId(), planId)).thenReturn(Optional.of(slot));
+    when(planRepository.findById(planId)).thenReturn(Optional.of(parent));
 
     UUID returned = service.changeSlotState(planId, slot.getId(), SlotState.COOKING);
 
@@ -256,6 +266,8 @@ class PlanWriteServiceImplTest {
     assertThat(slot.getPinnedReason())
         .isEqualTo(com.example.mealprep.planner.domain.entity.PinnedReason.COOKING);
     verify(mealSlotRepository).save(slot);
+    // planner-7: the parent Plan's @Version is force-incremented so concurrent re-opt aborts.
+    verify(entityManager).lock(parent, LockModeType.OPTIMISTIC_FORCE_INCREMENT);
   }
 
   @Test

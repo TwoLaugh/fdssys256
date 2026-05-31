@@ -43,4 +43,23 @@ public interface PlanWriteService {
 
   /** Reject a {@code MealPrepPlanReoptSuggestion}: mark {@code REJECTED}; no plan change. */
   PlanReoptSuggestionDto rejectReoptSuggestion(UUID planId, UUID suggestionId);
+
+  /**
+   * Daily expiry sweep (planner-10): flip every still-{@code PENDING} re-opt suggestion whose
+   * {@code expiresAt} ({@code weekStartDate + 7 days}) is in the past to {@code EXPIRED} and mark
+   * it swept, so a week-old plan's suggestion can no longer be accepted. Driven by {@code
+   * PlannerReoptExpirySweepScheduler}; returns the number of rows transitioned. Per LLD
+   * §Idempotency / §Flow 6.
+   */
+  int sweepExpiredReoptSuggestions();
+
+  /**
+   * Weekly PlanCompleted sweep (planner-3): load prior-week ({@code weekStartDate} before the
+   * current week's start day) {@code ACTIVE} plans and, for each whose slots are <em>all</em> in a
+   * terminal state ({@code EATEN} / {@code SKIPPED}), transition it to {@code COMPLETED} and
+   * publish {@code PlanCompletedEvent}. A plan with any non-terminal slot is left {@code ACTIVE}
+   * (the sweep never auto-abandons). Driven by {@code PlannerPlanCompletedSweepScheduler} every
+   * Monday; returns the number of plans completed. Per LLD §Events line ~1152.
+   */
+  int sweepCompletedPlans();
 }

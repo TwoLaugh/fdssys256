@@ -76,7 +76,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @TestPropertySource(
     properties = {
       "mealprep.planner.cold-start.enabled=true",
-      "mealprep.planner.cold-start.slot-kind-multiplier=3",
+      "mealprep.planner.cold-start.slot-count-multiplier=3",
       "mealprep.planner.cold-start.requested-count=20",
       "mealprep.planner.cold-start.timeout=PT30S",
       "mealprep.planner.cold-start.source-keys=coldstart_seed"

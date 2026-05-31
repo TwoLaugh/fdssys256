@@ -12,6 +12,7 @@ import com.example.mealprep.planner.exception.RevertTargetNotInHistoryException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -146,6 +147,29 @@ public class PlannerExceptionHandler {
             "Revert target is not in caller's history",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  /**
+   * A DB constraint violation surfacing from a planner write — chiefly the single-active partial
+   * unique index {@code uq_planner_plans_active_per_household_week} when a concurrent accept races
+   * past the in-tx supersede (planner-9, LLD §Flow 3 / error table: "the resulting
+   * DataIntegrityViolationException is mapped to 409"). Mapped here (planner advice, HIGHEST
+   * precedence) so it returns a 409 conflict rather than falling through to the catch-all 500. The
+   * accept path supersedes any incumbent active plan in-tx, so this fires only on a genuine race.
+   */
+  @ExceptionHandler(DataIntegrityViolationException.class)
+  public ResponseEntity<ProblemDetail> handleDataIntegrityViolation(
+      DataIntegrityViolationException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.CONFLICT,
+            "A conflicting plan change was committed concurrently; retry the operation.",
+            "plan-conflict",
+            "Plan conflict",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

@@ -22,6 +22,40 @@ ReoptTriggerKind:
 ReoptStatus:
   type: string
   enum: [PENDING, ACCEPTED, DISMISSED, EXPIRED]
+ConflictType:
+  type: string
+  enum: [HOUSEHOLD_HARD_COLLISION, NUTRITION_VS_BUDGET, PROVISIONS_BOTTLENECK, OVER_SPECIFIED_PREFERENCES]
+
+ConstraintConflictDto:
+  type: object
+  required: [type, affectedSlotIds, description]
+  properties:
+    type: { $ref: '#/ConflictType' }
+    affectedSlotIds:
+      type: array
+      items: { type: string, format: uuid }
+    description: { type: string }
+
+ResolutionOptionDto:
+  type: object
+  required: [key, description, slotsRecovered, scoreRecovered]
+  properties:
+    key: { type: string }
+    description: { type: string }
+    slotsRecovered: { type: integer }
+    scoreRecovered: { type: number }
+
+FeasibilityCheckResultDto:
+  type: object
+  required: [feasible, conflicts, resolutions]
+  properties:
+    feasible: { type: boolean }
+    conflicts:
+      type: array
+      items: { $ref: '#/ConstraintConflictDto' }
+    resolutions:
+      type: array
+      items: { $ref: '#/ResolutionOptionDto' }
 
 DailyRollupDocument:
   type: object

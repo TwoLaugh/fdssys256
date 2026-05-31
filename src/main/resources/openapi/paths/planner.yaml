@@ -481,6 +481,41 @@ reoptSuggestionReject:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 
+plansFeasibility:
+  get:
+    tags: [Plans]
+    operationId: getPlanFeasibility
+    summary: >-
+      Pre-Stage-A constraint feasibility check for a (household, week): returns conflicts +
+      ranked resolutions so the UI can render the resolution dialog before triggering generation.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: householdId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: weekStartDate
+        required: true
+        schema: { type: string, format: date }
+    responses:
+      '200':
+        description: 'Feasibility result (feasible flag + conflicts + ranked resolutions).'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/FeasibilityCheckResultDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Caller is not a member of the target household.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
 plansSuggestions:
   get:
     tags: [Plans]

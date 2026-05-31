@@ -390,8 +390,9 @@ class MidWeekReoptCoordinatorTest {
     assertThat(saved.getTraceId()).isEqualTo(traceId);
     assertThat(saved.getStatus()).isEqualTo(ReoptSuggestionStatus.PENDING);
     assertThat(saved.isSwept()).isFalse();
+    // planner-10: TTL reconciled to weekStartDate + 7 days (start-of-day UTC), not a flat 24h.
     assertThat(saved.getExpiresAt())
-        .isEqualTo(saved.getCreatedAt().plus(java.time.Duration.ofHours(24)));
+        .isEqualTo(WEEK.plusDays(7).atStartOfDay().toInstant(java.time.ZoneOffset.UTC));
     assertThat(saved.getProposedAssignments().changes()).hasSize(3);
     assertThat(saved.getProposedAssignments().schemaVersion()).isEqualTo(1);
     // Suggestion's decisionId anchors to the REQUEST row.

@@ -30,8 +30,9 @@ import com.example.mealprep.planner.exception.PlanNotFoundException;
 import com.example.mealprep.planner.exception.PlanNotReoptableException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
@@ -86,7 +87,15 @@ public class MidWeekReoptCoordinator {
   private static final Set<ReoptSuggestionStatus> BUDGET_STATUSES =
       EnumSet.of(ReoptSuggestionStatus.PENDING, ReoptSuggestionStatus.REJECTED);
 
-  private static final Duration SUGGESTION_TTL = Duration.ofHours(24);
+  /**
+   * Re-opt suggestions expire {@code weekStartDate + 7 days} (planner-10, LLD §Idempotency line
+   * ~1006 / §Flow 6): once the plan's week is fully past, regenerating it is moot, so the daily
+   * {@code @Scheduled} sweep ({@code PlanWriteService.sweepExpiredReoptSuggestions}) flips any
+   * still {@code PENDING} suggestion to {@code EXPIRED}. (Earlier code used a flat 24h window;
+   * reconciled to the week-relative LLD value so the suggestion lives for the whole week it
+   * concerns.)
+   */
+  private static final long SUGGESTION_TTL_DAYS_AFTER_WEEK_START = 7;
 
   private final PlanRepository planRepository;
   private final MealPrepPlanReoptSuggestionRepository suggestionRepository;
@@ -357,7 +366,7 @@ public class MidWeekReoptCoordinator {
             .status(ReoptSuggestionStatus.PENDING)
             .proposedAssignments(ProposedReoptAssignmentsDocument.of(changes))
             .createdAt(now)
-            .expiresAt(now.plus(SUGGESTION_TTL))
+            .expiresAt(expiresAtForWeek(plan.getWeekStartDate()))
             .swept(false)
             .build();
 
@@ -404,6 +413,18 @@ public class MidWeekReoptCoordinator {
   }
 
   // ---- helpers (NO @Transactional) ------------------------------------------------------------
+
+  /**
+   * Suggestion expiry instant = {@code weekStartDate + 7 days} at start-of-day UTC (planner-10, LLD
+   * §Idempotency / §Flow 6). The daily expiry sweep flips a still-PENDING suggestion past this
+   * point to EXPIRED.
+   */
+  private static Instant expiresAtForWeek(LocalDate weekStartDate) {
+    return weekStartDate
+        .plusDays(SUGGESTION_TTL_DAYS_AFTER_WEEK_START)
+        .atStartOfDay()
+        .toInstant(ZoneOffset.UTC);
+  }
 
   private List<MealSlot> orderedSlots(Plan plan) {
     List<MealSlot> slots = new ArrayList<>();
