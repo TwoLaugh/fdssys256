@@ -76,6 +76,8 @@ class GroceryContextLoadIT {
     assertThat(groceryConfig.confidenceWeights().inflationIndexed()).isEqualTo(0.15);
     assertThat(groceryConfig.inflation().monthlyFactor()).isEqualTo(0.005);
     assertThat(groceryConfig.freshness().defaultRefreshTopN()).isEqualTo(50);
-    assertThat(groceryConfig.order().singleFlightLockTtlSeconds()).isEqualTo(300);
+    // grocery-5: singleFlightLockTtlSeconds dropped (xact-lock honours no TTL); only the retry
+    // window remains on OrderConfig.
+    assertThat(groceryConfig.order().providerUnavailableRetryHours()).isEqualTo(24);
   }
 }

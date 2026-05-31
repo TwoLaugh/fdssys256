@@ -345,9 +345,11 @@ RecordManualPriceRequest:
 
 RefreshPricesRequest:
   type: object
-  required: [userId]
+  description: >-
+    Tier-4 on-demand price refresh. The acting user is resolved server-side
+    (grocery-7), so the body carries only the keys to refresh and the
+    useProviderQuote flag.
   properties:
-    userId: { type: string, format: uuid }
     ingredientMappingKeys:
       type: array
       maxItems: 200

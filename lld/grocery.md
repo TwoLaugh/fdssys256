@@ -93,9 +93,9 @@ CREATE TABLE shopping_lists (
     user_id                  uuid NOT NULL,
     household_id             uuid,                                -- nullable: single-user mode; populated when household scope known
     plan_id                  uuid NOT NULL,                       -- soft FK to planner_plans
-    plan_revision            integer NOT NULL,                    -- monotonic per plan; matches the planner's revision id
+    plan_generation          integer NOT NULL,                    -- == planner_plans.generation (renamed from plan_revision, ticket 01a)
     generated_at             timestamptz NOT NULL,
-    superseded_at            timestamptz,                         -- non-null when a newer revision is generated
+    superseded_at            timestamptz,                         -- non-null when a newer generation is generated
     estimated_total_pence    integer,                             -- nullable: no price data yet
     estimated_total_currency varchar(3) NOT NULL DEFAULT 'GBP',
     cost_confidence          numeric(4,3),                        -- 0..1; null when no price history
@@ -105,7 +105,7 @@ CREATE TABLE shopping_lists (
     version                  bigint NOT NULL DEFAULT 0,
     created_at               timestamptz NOT NULL,
     updated_at               timestamptz NOT NULL,
-    UNIQUE (plan_id, plan_revision)
+    UNIQUE (plan_id, plan_generation)
 );
 -- "show me the current list for this plan"
 CREATE INDEX idx_shop_lists_user_plan_active
@@ -147,7 +147,7 @@ CREATE INDEX idx_shop_lines_list_mapping_key
     ON shopping_list_lines (shopping_list_id, ingredient_mapping_key);
 ```
 
-`fulfilment_status` is a per-line fulfilment marker, not a soft-delete; the line stays for history. `bought_*` columns are the ground truth of what actually happened, populated by Tier 2 mark-bought or Tier 3 order reconciliation. `plan_revision` matches the planner's revision counter — when the planner re-optimises remaining days, the new revision generates a new list and supersedes the old one (`superseded_at` set).
+`fulfilment_status` is a per-line fulfilment marker, not a soft-delete; the line stays for history. `bought_*` columns are the ground truth of what actually happened, populated by Tier 2 mark-bought or Tier 3 order reconciliation. `plan_generation` (renamed from `plan_revision`, ticket 01a — see the divergence note below) maps 1:1 onto the planner's `planner_plans.generation` counter — when the planner re-optimises remaining days, the new generation generates a new list and supersedes the old one (`superseded_at` set).
 
 ### V20260601120100 — Grocery orders
 
@@ -356,7 +356,7 @@ All entities follow the style guide: UUID `@Id` set application-side, `@Version`
 
 | Entity | Notes |
 |---|---|
-| `ShoppingList` | Aggregate root. Owns `@OneToMany List<ShoppingListLine>` (cascade ALL, orphanRemoval). `@Version Long version`. `supersededAt` non-null when newer revision exists. |
+| `ShoppingList` | Aggregate root. Owns `@OneToMany List<ShoppingListLine>` (cascade ALL, orphanRemoval). `@Version Long version`. `supersededAt` non-null when a newer generation exists. |
 | `ShoppingListLine` | Child. `@ManyToOne(fetch = LAZY)` to parent. No `@Version` — parent's version covers the aggregate. `boughtVia`, `groceryOrderId`, `boughtPricePence` populated by Tier 2 / Tier 3. |
 | `GroceryOrder` | Aggregate root. Owns `@OneToMany List<GroceryOrderLine>`. `automationFailureLog` mapped to `List<AutomationFailureRecord>` via JSONB. `status` is a `GroceryOrderStatus` enum. `@Version Long version`. |
 | `GroceryOrderLine` | Child. `@ManyToOne(fetch = LAZY)` to parent. `lineStatus` enum. |
@@ -385,7 +385,7 @@ All DTOs are Java records. One response DTO per entity, mirroring entity fields 
 
 ```java
 public record ShoppingListDto(
-    UUID id, UUID userId, UUID householdId, UUID planId, int planRevision,
+    UUID id, UUID userId, UUID householdId, UUID planId, int planGeneration,
     Instant generatedAt, Instant supersededAt,
     Integer estimatedTotalPence, String estimatedTotalCurrency,
     BigDecimal costConfidence, int staleIngredientCount,
@@ -469,7 +469,7 @@ public record RefreshPricesResultDto(int observationsWritten, int ingredientsRef
 
 Request records carry standard Jakarta validation:
 
-- `RecalculateShoppingListRequest(@NotNull UUID planId, Integer planRevision)` — `null` revision means latest.
+- `RecalculateShoppingListRequest(@NotNull UUID planId, Integer planGeneration)` — `null` generation means latest. (Renamed from the LLD's original `planRevision`, ticket 01a, to match the planner's `generation` counter.)
 - `MarkBoughtRequest(@NotNull UUID shoppingListLineId, @NotNull @ValidQuantityUnit BigDecimal boughtQuantity, @NotNull String boughtUnit, @ValidObservedPrice Integer boughtPricePence, String store, Instant boughtAt)` — price/store/timestamp optional but encouraged.
 - `BulkMarkBoughtRequest(@NotNull UUID shoppingListId, @NotEmpty List<UUID> shoppingListLineIds, @ValidObservedPrice Integer totalSpendPence, String store, Instant boughtAt)` — when `totalSpendPence` present, distributes proportionally.
 - `CreateOrderRequest(@NotNull UUID shoppingListId, @NotBlank String providerKey)`; `QuoteRequest(@NotNull UUID groceryOrderId)`; `PlaceOrderRequest`; `CancelOrderRequest(@NotNull UUID groceryOrderId, @Size(max = 64) String reason)`.
@@ -492,8 +492,8 @@ Package-private. Cross-module access goes through service interfaces only. Every
 
 ```java
 interface ShoppingListRepository extends JpaRepository<ShoppingList, UUID> {
-    Optional<ShoppingList> findByPlanIdAndPlanRevision(UUID planId, int revision);
-    Optional<ShoppingList> findFirstByPlanIdAndSupersededAtIsNullOrderByPlanRevisionDesc(UUID planId);
+    Optional<ShoppingList> findByPlanIdAndPlanGeneration(UUID planId, int generation);
+    Optional<ShoppingList> findFirstByPlanIdAndSupersededAtIsNullOrderByPlanGenerationDesc(UUID planId);
     Page<ShoppingList> findAllByUserIdOrderByGeneratedAtDesc(UUID userId, Pageable p);
     @EntityGraph(attributePaths = {"lines"}) Optional<ShoppingList> findWithLinesById(UUID id);
 }
@@ -559,8 +559,8 @@ public interface ShoppingListService {
     List<ShoppingListDto> getByIds(List<UUID> ids);
     Page<ShoppingListDto> getHistory(UUID userId, Pageable pageable);
 
-    // Recalculate from a plan + provisions snapshot. Idempotent on (planId, planRevision):
-    // re-running with the same revision returns the existing row; new revision creates a new
+    // Recalculate from a plan + provisions snapshot. Idempotent on (planId, planGeneration):
+    // re-running with the same generation returns the existing row; new generation creates a new
     // shopping list and supersedes the previous one.
     ShoppingListDto recalculate(UUID userId, RecalculateShoppingListRequest request);
 
@@ -824,15 +824,15 @@ Lifecycle records (each implements `GroceryOrderLifecycleEvent`):
 - `GroceryOrderCancelledEvent(UUID userId, UUID groceryOrderId, String reason, ...)`.
 
 Stand-alone records (plain — single-kind):
-- Tier 1: `ShoppingListGeneratedEvent(UUID userId, UUID householdId, UUID shoppingListId, UUID planId, int planRevision, int lineCount, Integer estimatedTotalPence, ...)`.
+- Tier 1: `ShoppingListGeneratedEvent(UUID userId, UUID householdId, UUID shoppingListId, UUID planId, int planGeneration, int lineCount, Integer estimatedTotalPence, ...)`.
 - Tier 2: `ShoppingListItemMarkedBoughtEvent(UUID userId, UUID shoppingListId, UUID shoppingListLineId, String ingredientMappingKey, BigDecimal boughtQuantity, String boughtUnit, Integer boughtPricePence, BoughtVia via, ...)` and `ShoppingListBulkMarkedBoughtEvent(UUID userId, UUID shoppingListId, List<UUID> shoppingListLineIds, Integer totalSpendPence, ...)`.
-- Tier 3 substitution decisions (kept separate from the lifecycle hierarchy because their listeners react per proposal, not per lifecycle stage): `SubstitutionProposedEvent(UUID userId, UUID groceryOrderId, UUID proposalId, ...)`, `SubstitutionAcceptedEvent(... String substituteIngredientMappingKey, ...)`, `SubstitutionRejectedEvent(... String originalIngredientMappingKey, ...)`.
+- Tier 3 substitution decisions (kept separate from the lifecycle hierarchy because their listeners react per proposal, not per lifecycle stage): `SubstitutionProposedEvent(UUID userId, UUID groceryOrderId, UUID proposalId, ...)` and a SINGLE decision-carrying `SubstitutionResolvedEvent(UUID userId, UUID groceryOrderId, UUID proposalId, SubstitutionProposalStatus decision, String originalIngredientMappingKey, String substituteIngredientMappingKey, ...)`. **Shipped reality (grocery-8): one `SubstitutionResolvedEvent` per resolved proposal, NOT an Accepted/Rejected pair.** The `decision` field (`ACCEPTED | REJECTED`) carries the outcome and both mapping keys are present so a single record covers either decision (provisions reads `substituteIngredientMappingKey` on accept, `originalIngredientMappingKey` on reject). The distinct name avoids a cross-module collision with provisions' own `ProvisionChangedEvent.SubstitutionAcceptedEvent` and leaves the planner's listener on that provisions event unaffected — which is why grocery does NOT publish a `grocery.event.SubstitutionAcceptedEvent` / `SubstitutionRejectedEvent` pair.
 - Tier 3 availability: `GroceryProviderUnavailableEvent(UUID userId, String providerKey, String reason, ...)`.
 - Tier 4: `PriceObservedEvent(UUID userId, UUID householdId, UUID priceObservationId, String ingredientMappingKey, String store, Integer paidUnitPence, PriceSource source, ...)`.
 
 Published via `ApplicationEventPublisher` after the relevant write transaction. Listeners across the system use `@TransactionalEventListener(phase = AFTER_COMMIT)` per the style guide.
 
-The technical-architecture event catalogue lists `GroceryOrderConfirmedEvent` only; the LLD adds the rest of the lifecycle family because the HLD explicitly enumerates them. **The catalogue's `GroceryOrderConfirmedEvent` is the contract Provisions consumes** — the HLD's flow ("provisions adds items to inventory after order confirmation") routes through this event. Provisions also listens to `SubstitutionAcceptedEvent` (the technical-architecture catalogue lists this as a sub-kind of `ProvisionChangedEvent` published by Provisions, but the **proposal/accept/reject decision** is owned here; Provisions in turn publishes `ItemAddedFromGroceryEvent` / `SubstitutionAcceptedEvent` from its own table updates). **Worth user review** — the directionality of `SubstitutionAcceptedEvent` is ambiguous in the design docs; this LLD says grocery publishes the user-decision event and provisions republishes its own state-change event.
+The technical-architecture event catalogue lists `GroceryOrderConfirmedEvent` only; the LLD adds the rest of the lifecycle family because the HLD explicitly enumerates them. **The catalogue's `GroceryOrderConfirmedEvent` is the contract Provisions consumes** — the HLD's flow ("provisions adds items to inventory after order confirmation") routes through this event. The **proposal/accept/reject decision** is owned here: grocery publishes the single decision-carrying `SubstitutionResolvedEvent` (above) for the user decision; provisions in turn publishes its OWN `ProvisionChangedEvent.SubstitutionAcceptedEvent` / `ItemAddedFromGroceryEvent` from its own table updates (the technical-architecture catalogue lists those provisions-side events). The directionality is therefore unambiguous: grocery → `SubstitutionResolvedEvent` (user decision); provisions → its own state-change sub-kinds.
 
 The HLD says reconciliation also "updates price history with paid prices" — the LLD makes this explicit: `markDelivered` enqueues paid-price observations during reconciliation; each emits a `PriceObservedEvent` after commit. The reconciled-event fires once after all paid-price rows are written.
 
@@ -859,14 +859,14 @@ public void onCostBudgetExceeded(CostBudgetExceededEvent event) { ... }  // disa
 
 `ShoppingListService.recalculate` is `@Transactional`. The HLD's six steps map one-for-one to `ShoppingListCalculator.calculate`:
 
-1. **Aggregate planned demand.** Walk every scheduled recipe in the plan (via `PlannerQueryService.getPlanForGrocery(planId, planRevision)` — a bundled DTO defined in the planner LLD), multiply ingredient quantity by cooked-servings per slot, sum by `ingredient_mapping_key` using the nutrition module's `normaliseKey()` utility (per [technical-architecture.md §Cross-module references](../design/technical-architecture.md#cross-module-references)). Output: `Map<String, IngredientDemand>`.
+1. **Aggregate planned demand.** Walk every scheduled recipe in the plan (via `PlannerQueryService.getPlanForGrocery(planId, planGeneration)` — a bundled DTO defined in the planner LLD), multiply ingredient quantity by cooked-servings per slot, sum by `ingredient_mapping_key` using the nutrition module's `normaliseKey()` utility (per [technical-architecture.md §Cross-module references](../design/technical-architecture.md#cross-module-references)). Output: `Map<String, IngredientDemand>`.
 2. **Subtract current inventory.** Read `pantry_tracking_enabled` from `PreferenceQueryService.getLifestyleConfig(userId).document().pantryTracking().enabled()`. When `false`, skip — inventory treated as empty per the HLD's lifestyle-config gate. When `true`, call `ProvisionQueryService.getActiveInventory(userId)`, group by mapping key, subtract from demand. Underflow (negative remaining) becomes zero — never negative.
 3. **Apply pack-size heuristics.** For each non-zero remaining demand, `PackSizeHeuristic` lookup by mapping key (then category fallback). `PackSizeOptimiser.choose(remaining, availablePacks)` picks the smallest combination meeting demand: greedy from largest pack down for non-perishables, from smallest pack up for perishables (avoid waste). Output: `(pack_size_g, pack_count)` per line.
 4. **Add staples.** `ProvisionQueryService.getStaplesNeedingReplenishment(userId)` returns staples at `LOW` or `OUT`. Each becomes a `STAPLE_REPLENISHMENT` line with default pack from heuristics.
 5. **Apply quality preferences.** Read lifestyle config's `groceryQualityPreferences` (free-range eggs, organic where available, own-brand for staples, ...). Each line gets `quality_notes` populated as a hint. Provider-side product matching (Tier 3) reads these notes when selecting SKUs; without a provider, they're informational on the rendered list.
 6. **Cost projection.** For each line, call `PriceHistoryService.getAggregate(householdId, key, store=null)`. Compute `estimated_unit_pence × pack_count = estimated_line_pence`; total = sum; `cost_confidence` = mean of line confidences weighted by line cost. Lines without aggregates contribute `null` and increment `stale_ingredient_count`. With no aggregates at all, the totals are null; the list still renders.
 
-**Idempotency.** Same `(planId, planRevision)` returns the existing list. New `planRevision` creates a new list and supersedes the old one (`superseded_at = now()` on the prior). Concurrent recalculation calls for the same `(planId, planRevision)` are serialised via a database unique constraint (`UNIQUE (plan_id, plan_revision)`); the second insert fails and the catcher re-fetches the existing row.
+**Idempotency.** Same `(planId, planGeneration)` returns the existing list. New `planGeneration` creates a new list and supersedes the old one (`superseded_at = now()` on the prior). Concurrent recalculation calls for the same `(planId, planGeneration)` are serialised via a database unique constraint (`UNIQUE (plan_id, plan_generation)`); the second insert fails and the catcher re-fetches the existing row. (The field was renamed `planRevision → planGeneration` in ticket 01a to map onto the planner's `generation` counter — see the §Entities divergence note.)
 
 **Performance.** The bundled `getPlanForGrocery` (defined in the planner LLD) and `getActiveInventory` calls each take one round trip; price aggregates are batched via `getAggregatesByKeys` (one query). `ShoppingListCalculator.calculate` should be ≤ 5 SQL statements end-to-end — verified in `ShoppingListServiceIT` via Hibernate statistics.
 
@@ -906,11 +906,13 @@ The full happy path crosses six service methods, each `@Transactional`. Orchestr
 
 1. **`createDraft`** — `DRAFT`. Validates shopping list and provider configuration; clones lines from the list (deep copy — the order is the snapshot, the list may be regenerated).
 2. **`quote`** — `DRAFT → QUOTED`. Acquires lock. Loads `GroceryProviderState` (404 if missing; `ProviderNotConfiguredException` if disabled). Constructs `BasketDraft` via `BasketDraftAssembler`. Calls `provider.quote(draft)`. On `ProviderUnavailableException` → `PROVIDER_UNAVAILABLE`, publishes `GroceryProviderUnavailableEvent`, 503. On `AiUnavailableException` → reverts to `DRAFT` with reason "AI cost cap reached", 503 — user falls back to manual fulfilment. On success: writes `provider_order_id`, per-line quoted prices, one `PriceObservation` per quoted line (`source = QUOTE`, weight 0.85). Publishes `GroceryOrderQuotedEvent` and per-line `PriceObservedEvent`.
-3. **`placeOrder`** — `QUOTED → PLACED | PLACED_PARTIAL`. Acquires lock. Calls `provider.placeOrder(draft)`. Persists `confirm_link`, per-line `OrderLineStatus`, `automation_failure_log` records. Auto-advances to `AWAITING_USER_CONFIRMATION`. **The user always confirms in the provider's own UI** — automation never auto-confirms.
+3. **`placeOrder`** — `QUOTED → PLACED | PLACED_PARTIAL`. Acquires lock. Calls `provider.placeOrder(draft)`. Persists `confirm_link`, per-line `OrderLineStatus`, `automation_failure_log` records. Auto-advances to `AWAITING_USER_CONFIRMATION` **only when the provider secured a delivery slot** (`PlaceOrderResult.deliverySlotSecured = true`); when no slot is secured on the non-partial path the order PAUSES at `PLACED` with `status_reason = "delivery_slot_required"` (the delivery-slot-fails failure mode below — grocery-4) and the user advances it once a slot is chosen in the provider UI. A `PLACED_PARTIAL` outcome always auto-advances (its pause-for-manual-completion semantic is separate). **The user always confirms in the provider's own UI** — automation never auto-confirms.
 4. **`markUserConfirmed`** — `AWAITING_USER_CONFIRMATION → CONFIRMED`. Optionally fetches confirmed total via `provider.checkStatus`. Publishes `GroceryOrderConfirmedEvent` — **the event Provisions consumes** to add items to inventory per [technical-architecture.md §Event catalogue](../design/technical-architecture.md#event-catalogue).
 5. **`refreshStatus` / `markDelivered`** — A `@Scheduled` job hourly polls active confirmed orders; advances `CONFIRMED → DELIVERED` when the provider reports delivery. Persists substitution proposals as `pending_user_review` rows; publishes one `SubstitutionProposedEvent` per. Publishes `GroceryOrderDeliveredEvent`.
 6. **Substitution resolution.** Per-proposal `resolveSubstitution` updates status to `ACCEPTED | REJECTED`. Accept → `SubstitutionAcceptedEvent` (Provisions adds the substitute). Reject → `SubstitutionRejectedEvent` (Provisions skips; planner notified). **Auto-accept is never the default** per the HLD.
-7. **Reconciliation.** Internal `tryReconcile(orderId)` runs when no proposals remain `pending_user_review` (called from `resolveSubstitution` commit and from `markDelivered`): writes paid-price observations (`source = PAID`, weight 1.0), updates `paid_total_pence`, sets `status = RECONCILED`. Publishes `GroceryOrderReconciledEvent` + per-line `PriceObservedEvent`. Reconciliation blocks while proposals are pending — `OrderHasOutstandingProposalsException` (422) if forced.
+7. **Reconciliation.** Internal `tryReconcile(orderId)` runs when no proposals remain `pending_user_review` (called from `resolveSubstitution` commit and from `markDelivered`): writes paid-price observations (`source = PAID`, weight 1.0), adds delivered lines to provisions inventory, **writes fulfilment back to the source `shopping_list_lines`** (grocery-1), updates `paid_total_pence`, sets `status = RECONCILED`. Publishes `GroceryOrderReconciledEvent` + per-line `PriceObservedEvent`. Reconciliation blocks while proposals are pending — `OrderHasOutstandingProposalsException` (422) if forced.
+
+   **Source-line write-back (grocery-1).** Each order line carries a soft FK (`shopping_list_line_id`) to the `ShoppingListLine` it was cloned from at `createDraft`. At reconcile, the reconciler loads those source lines (batch) and stamps each: `fulfilment_status = BOUGHT` for an arrived line (`DELIVERED | ADDED | ADDED_PARTIAL`), `SUBSTITUTED` for an accepted substitution, `DROPPED` for a rejected substitution or an unavailable line (`REJECTED | UNAVAILABLE`); `bought_via = ORDER`, `grocery_order_id`, and the `bought_*` fields (quantity / unit / price / at) for the arrived/substituted ones. A line a user already marked `BOUGHT` manually (Tier 2) is left untouched; a `QUEUED` (never-placed) line is left untouched. Each touched parent list's `@Version` is bumped (the same aggregate-root touch Tier-2 mark-bought uses), so the rendered list reflects what actually arrived and a concurrent list edit collides.
 
 **Failure forward, never silent.**
 
@@ -919,13 +921,15 @@ The full happy path crosses six service methods, each `@Transactional`. Orchestr
 | Login expired (`ProviderUnavailableException` with reason `login_required`) | Order stays `DRAFT`; `consecutive_failures++`; the user re-authenticates via the provider connection flow and re-runs |
 | 3 of 5 items added (`ProviderPartialFailureException`) | Status `PLACED_PARTIAL`; added items persisted; `confirm_link` returned for manual completion |
 | Substitution unparseable | Stored with `proposal_status = UNPARSED`, `raw_payload` populated; user resolves manually via the `resolveSubstitution` endpoint (which accepts an `UNPARSED → ACCEPTED|REJECTED` transition) |
-| Delivery slot fails | Order pauses at `PLACED`; user picks slot manually in the provider UI |
+| Delivery slot fails (`PlaceOrderResult.deliverySlotSecured = false`) | Order pauses at `PLACED` with `status_reason = "delivery_slot_required"` (does NOT auto-advance to `AWAITING_USER_CONFIRMATION`); the user picks a slot in the provider UI, then advances the order |
 | Provider down (`ProviderUnavailableException`) | Status `PROVIDER_UNAVAILABLE`; scheduled retry runs `quote` once an hour for 24 hours, then the order auto-cancels with `cancel_reason = "provider_unavailable_24h"` |
 | AI navigator cost cap (`AiUnavailableException`) | Status reverts to `DRAFT`; `automation_failure_log` records the AI cost cap hit; the printable shopping list is the fallback per the HLD's graceful-degrade contract |
 
 ### Flow 5 — Tier 4: Price aggregation
 
-`PriceAggregator.aggregate(householdId, ingredientMappingKey, store)` is the worker. Pure logic, deterministic, called from `getAggregate`/`getAggregatesByKeys`. Steps per the HLD:
+> **v1 cut (grocery-6, mirroring ticket 01c).** v1 ships the SIMPLE source-weighted aggregator plus a `ReferencePriceSource` cold-start fallback — NOT the model the rest of this section describes. The shipped `PriceAggregator` (V1-SIMPLE) reads ONLY each row's persisted `confidence_weight` (the source weights) and `aggregator.staleThresholdDays`. It has **NO time-decay**, **NO Bayesian `priorStrength`**, and **NO `InflationIndexer`**. The shipped maths is: point estimate = flat source-weighted mean `sum(unitPence × weight) / sum(weight)`; confidence = `min(1.0, sumWeight / (sumWeight + 2.0))` with a FIXED prior constant of 2.0 (not the config `priorStrength`), dampened ×0.5 when stale; cold start falls back to `ReferencePriceSource` (low confidence, `sampleCount = 0`, `isStale = true`), returning `Optional.empty()` only when the key is also unmapped in the reference source. The `aggregator.halfLifeDays` / `aggregator.priorStrength` / `inflation.monthlyFactor` config fields are bound (the surface is stable) but UNUSED in v1. **The decay / Bayesian / `InflationIndexer` machinery in steps 1, 3, 5 and the "Inflation indexing fallback" below is the DEFERRED-V2 design, kept here as the v2 target — it is not implemented in v1.**
+
+`PriceAggregator.aggregate(householdId, ingredientMappingKey, store)` is the worker. Pure logic, deterministic, called from `getAggregate`/`getAggregatesByKeys`. The steps below describe the **v2 target**; see the v1-cut note above for what v1 actually ships:
 
 1. **Fetch recent observations.** `findRecentByKey(householdId, key, since)` where `since = now() - 6 × halfLife` — enough samples to span the decay window. With `halfLife = 90 days` (default), `since = now() - 540 days`.
 2. **Source-weight observations.** Each row's `confidence_weight` was set at write time per `GroceryConfig.confidenceWeights` (`paid = 1.0`, `quote = 0.85`, `manual = 0.7`, `manual_estimated = 0.4`, `inflation_indexed = 0.15`). These are **defaults** flagged for tuning.
@@ -981,7 +985,7 @@ Login itself (the actual cookie-establishing flow) happens in the provider imple
 | Scheduled refresh fan-out | `@Async` per-user execution to avoid blocking the scheduler thread; each user's refresh is its own bounded transaction. |
 | List-line concurrent mark-bought | `@Version` on `ShoppingList` (the aggregate root). Two concurrent line edits both bump the parent — second commit gets 409, frontend retries. |
 | Substitution-resolve race | `@Version` on the proposal; concurrent resolve attempts → 409. |
-| `recalculate` race on same revision | DB unique constraint `(plan_id, plan_revision)`; second insert fails, catcher re-fetches existing row. |
+| `recalculate` race on same generation | DB unique constraint `(plan_id, plan_generation)`; second insert fails, catcher re-fetches existing row. |
 
 ---
 
@@ -996,7 +1000,7 @@ Login itself (the actual cookie-establishing flow) happens in the provider imple
 | `InflationConfig` | `monthlyFactor=0.005` (~0.5%/month per HLD) |
 | `FreshnessConfig` | `rampUpWeeks=8`, `defaultRefreshTopN=50` |
 | `SchedulerConfig` | `refreshCron="0 0 4 * * SUN"`, `orderStatusCron="0 0 * * * *"`, `archiveCron="0 0 5 * * *"` |
-| `OrderConfig` | `singleFlightLockTtlSeconds=300`, `providerUnavailableRetryHours=24` |
+| `OrderConfig` | `providerUnavailableRetryHours=24` (grocery-5: the former `singleFlightLockTtlSeconds` was dropped — the single-flight lock is a transaction-scoped `pg_try_advisory_xact_lock` that honours no TTL) |
 
 Values validated with `@Min` / `@DecimalMin` / `@DecimalMax` / `@NotBlank` per the style guide. Defaults specified above are the LLD's starting values; per the HLD's deferral, "tuning is implementation-phase" — `monthlyFactor`, `halfLifeDays`, and the confidence weights are the most likely tuning targets, exposed as config so changes don't require a redeploy.
 
@@ -1031,7 +1035,7 @@ Unit tests use `@ExtendWith(MockitoExtension.class)`. Integration tests are `*IT
 | `ManualFulfilmentControllerIT` | mark-bought (200/400/404/409), bulk-mark-bought (200/400), undo (204/404/409). Verifies `ShoppingListItemMarkedBoughtEvent` is published exactly once after commit. |
 | `GroceryOrderControllerIT` | Full lifecycle: createDraft → quote → place → mark-user-confirmed → refresh-status → mark-delivered → resolve-substitution → reconciled. Each transition emits its event after commit; outstanding-proposals blocks reconciliation; cancel from each state behaves per the state machine. |
 | `PriceHistoryControllerIT` | Aggregate read returns correct shape; manual price record happy + 400; refresh on-demand returns 503 when AI service mocked to throw `AiUnavailableException`. |
-| `ShoppingListCalculatorIT` | End-to-end with real DB: aggregate from a planner-bundle DTO, subtract real inventory, write list + lines, idempotent on `(planId, planRevision)`, supersede on new revision. Hibernate-statistics check: ≤ 5 SQL statements per recalculate call. |
+| `ShoppingListCalculatorIT` | End-to-end with real DB: aggregate from a planner-bundle DTO, subtract real inventory, write list + lines, idempotent on `(planId, planGeneration)`, supersede on new generation. Hibernate-statistics check: ≤ 5 SQL statements per recalculate call. |
 | `OrderConcurrencyIT` | Two concurrent `quote` calls on the same shopping list: one acquires the advisory lock, the other gets `OrderConcurrencyConflictException` (409). After the first releases, the second can re-attempt. |
 | `OrderReconciliationIT` | Order with substitutions: reconcile blocked while pending proposals exist; resolve all → `tryReconcile` runs and emits `GroceryOrderReconciledEvent`; paid-price observations written with `source = PAID`. |
 | `SchedulerIT` | Order-status hourly job advances confirmed → delivered when provider mock reports delivery; archive sweep moves 12-month-old reconciled orders to `archived`; scheduled refresh respects `scheduled_refresh_enabled` and the AI daily cap. |
@@ -1061,7 +1065,7 @@ Unit tests use `@ExtendWith(MockitoExtension.class)`. Integration tests are `*IT
 | User over-marks bought (more than list) | 2 | `bought_quantity > requested_quantity` is allowed; ad-hoc inventory entries created via provisions; warning surfaced via the response (`note` on the result) |
 | User under-marks bought | 2 | Unmarked lines remain `unfilled`; planner offers re-optimisation if material |
 | Inflation indexing produces wrong price | 4 | Low `confidence_weight` on indexed observations; user override at next mark-bought writes a high-confidence row that dominates the aggregate |
-| Concurrent recalculate / order-place | 1, 3 | DB unique on `(plan_id, plan_revision)`; advisory lock on `(userId, shoppingListId)` |
+| Concurrent recalculate / order-place | 1, 3 | DB unique on `(plan_id, plan_generation)`; advisory lock on `(userId, shoppingListId)` |
 | Listener debounce miss (15 inventory updates) | 1 | 5-second `(userId, planId)` debounce in `onProvisionChanged` collapses bursts; one recalculate per delivery |
 
 The **graceful-degrade contract** is preserved: at every failure point in Tier 3, the user can fall back to the printable shopping list and complete manually — automation is convenience, never a hard dependency, per the HLD.

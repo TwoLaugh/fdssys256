@@ -1,10 +1,14 @@
 package com.example.mealprep.grocery.domain.service.internal;
 
+import com.example.mealprep.grocery.domain.entity.BoughtVia;
 import com.example.mealprep.grocery.domain.entity.GroceryOrder;
 import com.example.mealprep.grocery.domain.entity.GroceryOrderLine;
 import com.example.mealprep.grocery.domain.entity.GroceryOrderStatus;
+import com.example.mealprep.grocery.domain.entity.LineFulfilmentStatus;
 import com.example.mealprep.grocery.domain.entity.OrderLineStatus;
 import com.example.mealprep.grocery.domain.entity.PriceSource;
+import com.example.mealprep.grocery.domain.entity.ShoppingList;
+import com.example.mealprep.grocery.domain.entity.ShoppingListLine;
 import com.example.mealprep.grocery.domain.entity.SubstitutionProposalStatus;
 import com.example.mealprep.grocery.event.GroceryOrderReconciledEvent;
 import com.example.mealprep.grocery.exception.GroceryOrderNotFoundException;
@@ -18,7 +22,9 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +56,17 @@ import org.springframework.stereotype.Component;
  * {@code GroceryOrderReconciledEvent} fires exactly ONCE, AFTER all paid rows are written (LLD line
  * 837).
  *
+ * <p><b>Source shopping-list-line write-back (grocery-1).</b> Reconciliation closes the Tier-1
+ * loop: each order line carries a soft FK ({@code shoppingListLineId}) back to the {@link
+ * ShoppingListLine} it was cloned from at {@code createDraft}. At reconcile we load those source
+ * lines and stamp their fulfilment so the rendered list reflects what actually arrived — {@code
+ * fulfilment_status} = {@code BOUGHT} (delivered/added), {@code SUBSTITUTED} (an accepted
+ * substitution), or {@code DROPPED} (a rejected substitution or an unavailable line), {@code
+ * bought_via = ORDER}, the {@code bought_*} fields (quantity / unit / price / at), and {@code
+ * grocery_order_id}. Each touched line's parent {@link ShoppingList} {@code @Version} is bumped
+ * (mirroring the Tier-2 mark-bought seam) so a concurrent list edit collides. A QUEUED line (never
+ * placed) is left untouched.
+ *
  * <p><b>Transaction.</b> Both entry points run inside the CALLER'S transaction (the public
  * {@code @Transactional} {@code resolveSubstitution} / {@code markDelivered} / {@code
  * refreshStatus} methods). The methods are package-private, so a {@code @Transactional} here would
@@ -68,6 +85,7 @@ class OrderReconciler {
       List.of(SubstitutionProposalStatus.PENDING_USER_REVIEW, SubstitutionProposalStatus.UNPARSED);
 
   private final GroceryOrderDataGateway dataGateway;
+  private final ShoppingListDataGateway shoppingListDataGateway;
   private final OrderStateMachine stateMachine;
   private final PriceObservationWriter priceObservationWriter;
   private final ProvisionUpdateService provisionUpdateService;
@@ -76,12 +94,14 @@ class OrderReconciler {
 
   OrderReconciler(
       GroceryOrderDataGateway dataGateway,
+      ShoppingListDataGateway shoppingListDataGateway,
       OrderStateMachine stateMachine,
       PriceObservationWriter priceObservationWriter,
       ProvisionUpdateService provisionUpdateService,
       org.springframework.context.ApplicationEventPublisher eventPublisher,
       Clock clock) {
     this.dataGateway = dataGateway;
+    this.shoppingListDataGateway = shoppingListDataGateway;
     this.stateMachine = stateMachine;
     this.priceObservationWriter = priceObservationWriter;
     this.provisionUpdateService = provisionUpdateService;
@@ -147,6 +167,10 @@ class OrderReconciler {
 
     // (3) Inventory add via the canonical, idempotent applyGroceryOrder. orderRef = order id.
     addInventory(order, deliveredLines, now);
+
+    // (3b) Source shopping-list-line write-back (grocery-1): stamp fulfilment on the Tier-1 lines
+    // the order was cloned from, so the rendered list reflects what arrived.
+    writeSourceLineFulfilment(order, now);
 
     // (4) paid_total_pence + RECONCILED + reconciled_at, then publish the reconciled event ONCE.
     if (order.getPaidTotalPence() == null) {
@@ -273,6 +297,109 @@ class OrderReconciler {
               + " (idempotent no-op).",
           order.getId());
     }
+  }
+
+  /**
+   * Stamp fulfilment on the source {@link ShoppingListLine}s the order lines were cloned from
+   * (grocery-1). Loads every distinct {@code shoppingListLineId} referenced by the order lines in
+   * one batch (parents eagerly joined), maps each order line's {@link OrderLineStatus} to a {@link
+   * LineFulfilmentStatus}, sets the {@code bought_*} / {@code bought_via = ORDER} / {@code
+   * grocery_order_id} fields for the arrived ones, and bumps each touched parent list's
+   * {@code @Version}. A line already {@code BOUGHT} (e.g. via a prior Tier-2 mark-bought) is left
+   * as-is so we never clobber a manual fulfilment with order data. Order lines with no source FK (a
+   * provider-added line that maps to no list line) are skipped.
+   */
+  private void writeSourceLineFulfilment(GroceryOrder order, Instant now) {
+    if (order.getLines() == null || order.getLines().isEmpty()) {
+      return;
+    }
+    // Collect the order line per source-line id (a source line maps to at most one order line).
+    Map<UUID, GroceryOrderLine> orderLineBySource = new HashMap<>();
+    for (GroceryOrderLine line : order.getLines()) {
+      UUID sourceId = line.getShoppingListLineId();
+      if (sourceId != null) {
+        orderLineBySource.putIfAbsent(sourceId, line);
+      }
+    }
+    if (orderLineBySource.isEmpty()) {
+      return;
+    }
+
+    List<ShoppingListLine> sourceLines =
+        shoppingListDataGateway.findLinesByIds(orderLineBySource.keySet());
+    Map<UUID, ShoppingList> touchedParents = new HashMap<>();
+    for (ShoppingListLine sourceLine : sourceLines) {
+      GroceryOrderLine orderLine = orderLineBySource.get(sourceLine.getId());
+      if (orderLine == null) {
+        continue;
+      }
+      LineFulfilmentStatus fulfilment = fulfilmentFor(orderLine.getLineStatus());
+      if (fulfilment == null) {
+        continue; // QUEUED / unknown — not part of this reconciliation, leave untouched.
+      }
+      // Never overwrite a line a user already marked bought manually (Tier 2).
+      if (sourceLine.getFulfilmentStatus() == LineFulfilmentStatus.BOUGHT) {
+        continue;
+      }
+
+      applyOrderFulfilment(sourceLine, orderLine, fulfilment, order, now);
+      shoppingListDataGateway.saveLine(sourceLine);
+      ShoppingList parent = sourceLine.getShoppingList();
+      if (parent != null) {
+        touchedParents.putIfAbsent(parent.getId(), parent);
+      }
+    }
+    // One version bump per touched parent list (the aggregate-root @Version covers its child
+    // lines).
+    for (ShoppingList parent : touchedParents.values()) {
+      shoppingListDataGateway.touchListVersion(parent);
+    }
+  }
+
+  /**
+   * Map an order line's {@link OrderLineStatus} onto the source-line {@link LineFulfilmentStatus}.
+   * Arrived (delivered/added) → {@code BOUGHT}; an accepted substitution ({@code SUBSTITUTED}) →
+   * {@code SUBSTITUTED}; a rejected substitution or unavailable line ({@code REJECTED} / {@code
+   * UNAVAILABLE}) → {@code DROPPED}. A {@code QUEUED} line (never placed) → {@code null}
+   * (untouched).
+   */
+  private static LineFulfilmentStatus fulfilmentFor(OrderLineStatus status) {
+    if (status == null) {
+      return null;
+    }
+    return switch (status) {
+      case DELIVERED, ADDED, ADDED_PARTIAL -> LineFulfilmentStatus.BOUGHT;
+      case SUBSTITUTED -> LineFulfilmentStatus.SUBSTITUTED;
+      case REJECTED, UNAVAILABLE -> LineFulfilmentStatus.DROPPED;
+      case QUEUED -> null;
+    };
+  }
+
+  /**
+   * Apply the order-driven fulfilment fields to a source line. For {@code BOUGHT}/{@code
+   * SUBSTITUTED} we record the bought quantity/unit/price; for {@code DROPPED} we record only the
+   * status + {@code grocery_order_id} (no bought price — nothing arrived).
+   */
+  private static void applyOrderFulfilment(
+      ShoppingListLine sourceLine,
+      GroceryOrderLine orderLine,
+      LineFulfilmentStatus fulfilment,
+      GroceryOrder order,
+      Instant now) {
+    sourceLine.setFulfilmentStatus(fulfilment);
+    sourceLine.setBoughtVia(BoughtVia.ORDER);
+    sourceLine.setGroceryOrderId(order.getId());
+    if (fulfilment == LineFulfilmentStatus.DROPPED) {
+      sourceLine.setBoughtQuantity(null);
+      sourceLine.setBoughtUnit(null);
+      sourceLine.setBoughtPricePence(null);
+      sourceLine.setBoughtAt(null);
+      return;
+    }
+    sourceLine.setBoughtQuantity(orderLine.getQuantityRequested());
+    sourceLine.setBoughtUnit(orderLine.getQuantityUnit());
+    sourceLine.setBoughtPricePence(paidUnitPence(orderLine));
+    sourceLine.setBoughtAt(now);
   }
 
   private static com.example.mealprep.provisions.api.dto.GroceryOrderLine toProvisionLine(

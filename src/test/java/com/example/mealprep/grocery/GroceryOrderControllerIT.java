@@ -323,6 +323,27 @@ class GroceryOrderControllerIT {
   }
 
   @Test
+  void place_noDeliverySlot_pausesAtPlaced_withReason() throws Exception {
+    // grocery-4: when the provider secures no delivery slot, the placed order pauses at PLACED
+    // (the LLD "delivery slot fails" failure mode) rather than auto-advancing.
+    AuthedUser user = registerUser();
+    UUID orderId = quotedOrder(user);
+
+    fakeGroceryProvider.setDeliverySlotSecured(false);
+    mvc.perform(post(BASE + "/" + orderId + "/place").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("PLACED"))
+        .andExpect(jsonPath("$.statusReason").value("delivery_slot_required"))
+        .andExpect(jsonPath("$.confirmLink").isNotEmpty())
+        .andExpect(openApi().isValid(openApiValidator));
+
+    String dbStatus =
+        jdbcTemplate.queryForObject(
+            "SELECT status FROM grocery_orders WHERE id = ?", String.class, orderId);
+    assertThat(dbStatus).isEqualTo("PLACED");
+  }
+
+  @Test
   void place_fromDraft_returns409_illegalTransition() throws Exception {
     AuthedUser user = registerUser();
     enableProvider(user.cookie());

@@ -125,6 +125,56 @@ class OrderReconciliationIT {
         .orElseThrow(() -> new IllegalStateException("seeded order not found"));
   }
 
+  /** Seed one UNFILLED shopping-list line on {@code listId}; return its id. */
+  private UUID seedSourceLine(UUID listId, String key) {
+    UUID lineId = UUID.randomUUID();
+    jdbcTemplate.update(
+        "INSERT INTO shopping_list_lines (id, shopping_list_id, ingredient_mapping_key,"
+            + " display_name, requested_quantity, requested_unit, line_type, is_stale_estimate,"
+            + " fulfilment_status, created_at, updated_at) VALUES (?, ?, ?, ?, 1.000, 'kg',"
+            + " 'PLANNED_DEMAND', false, 'UNFILLED', now(), now())",
+        lineId,
+        listId,
+        key,
+        "Display " + key);
+    return lineId;
+  }
+
+  /**
+   * Persist a DELIVERED order whose single delivered line references a real source {@code
+   * shopping_list_lines} row, so reconciliation can write fulfilment back to it (grocery-1).
+   * Returns {@code [orderId, sourceLineId]}.
+   */
+  private UUID[] seedDeliveredOrderWithSourceLine(UUID userId, String key) {
+    UUID listId = seedList(userId);
+    UUID sourceLineId = seedSourceLine(listId, key);
+    UUID orderId = UUID.randomUUID();
+    jdbcTemplate.update(
+        "INSERT INTO grocery_orders (id, user_id, household_id, shopping_list_id, provider_key,"
+            + " provider_order_id, status, currency, delivered_at, automation_failure_log,"
+            + " trace_id, version, created_at, updated_at) VALUES (?, ?, NULL, ?, 'fake', ?,"
+            + " 'DELIVERED', 'GBP', now(), '[]'::jsonb, ?, 0, now(), now())",
+        orderId,
+        userId,
+        listId,
+        "fake-order-" + orderId,
+        orderId);
+    UUID orderLineId = UUID.randomUUID();
+    jdbcTemplate.update(
+        "INSERT INTO grocery_order_lines (id, grocery_order_id, shopping_list_line_id,"
+            + " ingredient_mapping_key, display_name, provider_product_id, quantity_requested,"
+            + " quantity_unit, pack_size_g, pack_count_requested, paid_unit_pence, line_status,"
+            + " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1.000, 'kg', 500, 1, 120,"
+            + " 'DELIVERED', now(), now())",
+        orderLineId,
+        orderId,
+        sourceLineId,
+        key,
+        "Display " + key,
+        "fake-sku-" + key);
+    return new UUID[] {orderId, sourceLineId};
+  }
+
   private GrocerySubstitutionProposal seedProposal(
       UUID orderId, UUID lineId, SubstitutionProposalStatus status) {
     GrocerySubstitutionProposal proposal =
@@ -206,6 +256,43 @@ class OrderReconciliationIT {
     // ReconciledEvent fired exactly ONCE.
     assertThat(capture.reconciled).hasSize(1);
     assertThat(capture.reconciled.get(0).groceryOrderId()).isEqualTo(order.getId());
+  }
+
+  // ---- grocery-1: reconcile writes the source shopping-list line ----
+
+  @Test
+  void orderReconciled_marksSourceListLineBoughtViaOrder() {
+    UUID userId = UUID.randomUUID();
+    UUID[] seeded = seedDeliveredOrderWithSourceLine(userId, "white rice");
+    UUID orderId = seeded[0];
+    UUID sourceLineId = seeded[1];
+
+    // No proposals → gate clear; reconcile straight away (the markDelivered/auto path).
+    assertThat(inTx(() -> reconciler.tryReconcile(orderId))).isTrue();
+    assertThat(statusOf(orderId)).isEqualTo("RECONCILED");
+
+    // The source shopping_list_lines row is now BOUGHT via ORDER, carrying the order id + paid
+    // price.
+    assertThat(sourceLineColumn(sourceLineId, "fulfilment_status", String.class))
+        .isEqualTo("BOUGHT");
+    assertThat(sourceLineColumn(sourceLineId, "bought_via", String.class)).isEqualTo("ORDER");
+    assertThat(sourceLineColumn(sourceLineId, "grocery_order_id", UUID.class)).isEqualTo(orderId);
+    assertThat(sourceLineColumn(sourceLineId, "bought_price_pence", Integer.class)).isEqualTo(120);
+    assertThat(sourceLineColumn(sourceLineId, "bought_at", java.sql.Timestamp.class)).isNotNull();
+
+    // The parent list @Version was bumped (the aggregate-root touch).
+    Long listVersion =
+        jdbcTemplate.queryForObject(
+            "SELECT version FROM shopping_lists WHERE id ="
+                + " (SELECT shopping_list_id FROM shopping_list_lines WHERE id = ?)",
+            Long.class,
+            sourceLineId);
+    assertThat(listVersion).isGreaterThanOrEqualTo(1L);
+  }
+
+  private <T> T sourceLineColumn(UUID lineId, String column, Class<T> type) {
+    return jdbcTemplate.queryForObject(
+        "SELECT " + column + " FROM shopping_list_lines WHERE id = ?", type, lineId);
   }
 
   @Test
