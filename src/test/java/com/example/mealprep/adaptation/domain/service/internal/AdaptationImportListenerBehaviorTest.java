@@ -63,7 +63,7 @@ class AdaptationImportListenerBehaviorTest {
     // exists yet → no conflict → SKIP.
     when(recipeQueryService.findUserRecipeIngredientKeys(userId))
         .thenReturn(Map.of(recipeId, List.of("rice", "chicken")));
-    when(hardConstraintFilterService.checkRecipe(eq(userId), eq(recipeId), any()))
+    when(hardConstraintFilterService.checkRecipe(eq(userId), eq(recipeId), any(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     when(recipeQueryService.findUserRecipeNutrition(userId)).thenReturn(Map.of());
 
@@ -90,7 +90,7 @@ class AdaptationImportListenerBehaviorTest {
             event(recipeId, userId, Catalogue.USER, DataQuality.USER_VERIFIED));
 
     assertThat(result).isEmpty();
-    verify(hardConstraintFilterService, never()).checkRecipe(any(), any(), any());
+    verify(hardConstraintFilterService, never()).checkRecipe(any(), any(), any(), any());
     verify(service, never()).enqueueImportJob(any(ImportJobRequest.class), any(JobPriority.class));
   }
 
@@ -100,7 +100,7 @@ class AdaptationImportListenerBehaviorTest {
     UUID recipeId = UUID.randomUUID();
     when(recipeQueryService.findUserRecipeIngredientKeys(userId))
         .thenReturn(Map.of(recipeId, List.of("peanut")));
-    when(hardConstraintFilterService.checkRecipe(eq(userId), eq(recipeId), any()))
+    when(hardConstraintFilterService.checkRecipe(eq(userId), eq(recipeId), any(), any()))
         .thenReturn(new FilterResult(false, List.of())); // violates → conflict
     UUID enqueued = UUID.randomUUID();
     when(service.enqueueImportJob(any(ImportJobRequest.class), eq(JobPriority.ASYNC)))
@@ -123,7 +123,7 @@ class AdaptationImportListenerBehaviorTest {
     // Hard constraints pass, but nutrition violates → conflict → ASYNC.
     when(recipeQueryService.findUserRecipeIngredientKeys(userId))
         .thenReturn(Map.of(recipeId, List.of("rice")));
-    when(hardConstraintFilterService.checkRecipe(eq(userId), eq(recipeId), any()))
+    when(hardConstraintFilterService.checkRecipe(eq(userId), eq(recipeId), any(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     when(recipeQueryService.findUserRecipeNutrition(userId)).thenReturn(Map.of(recipeId, nut));
     when(nutritionQueryService.findRecipeIdsViolatingTargets(eq(userId), any()))

@@ -13,6 +13,7 @@ import com.example.mealprep.preference.api.controller.HardConstraintsController;
 import com.example.mealprep.preference.api.dto.AgeRestrictionDto;
 import com.example.mealprep.preference.api.dto.DietaryIdentityDto;
 import com.example.mealprep.preference.api.dto.DietaryIdentityExceptionDto;
+import com.example.mealprep.preference.api.dto.FilterContext;
 import com.example.mealprep.preference.api.dto.HardConstraintsAuditEntryDto;
 import com.example.mealprep.preference.api.dto.HardConstraintsDto;
 import com.example.mealprep.preference.api.dto.HardIntoleranceDto;
@@ -411,7 +412,8 @@ class PreferenceMutationKillsTest {
     when(allergenDerivativeRepository.findAll()).thenReturn(List.of());
 
     UUID emptyRecipe = UUID.randomUUID();
-    List<UUID> passing = filterService().filterRecipes(userId, Map.of(emptyRecipe, List.of()));
+    List<UUID> passing =
+        filterService().filterRecipes(userId, Map.of(emptyRecipe, List.of()), FilterContext.ANY);
 
     assertThat(passing).containsExactly(emptyRecipe);
   }
@@ -440,7 +442,7 @@ class PreferenceMutationKillsTest {
     Map<UUID, List<String>> recipes =
         Map.of(empty, List.of(), bad, List.of("peanut"), good, List.of("rice"));
 
-    List<UUID> passing = filterService().filterRecipes(userId, recipes);
+    List<UUID> passing = filterService().filterRecipes(userId, recipes, FilterContext.ANY);
 
     assertThat(passing).containsExactlyInAnyOrder(empty, good);
   }

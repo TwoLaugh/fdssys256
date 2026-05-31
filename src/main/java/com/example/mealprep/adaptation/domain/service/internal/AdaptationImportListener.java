@@ -143,7 +143,13 @@ public class AdaptationImportListener {
         recipeQueryService.findUserRecipeIngredientKeys(userId).getOrDefault(recipeId, List.of());
     boolean hardConflict =
         !keys.isEmpty()
-            && !hardConstraintFilterService.checkRecipe(userId, recipeId, keys).passes();
+            && !hardConstraintFilterService
+                .checkRecipe(
+                    userId,
+                    recipeId,
+                    keys,
+                    com.example.mealprep.preference.api.dto.FilterContext.ANY)
+                .passes();
     if (hardConflict) {
       return true;
     }

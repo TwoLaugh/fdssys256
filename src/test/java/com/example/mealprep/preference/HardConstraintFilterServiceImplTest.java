@@ -6,6 +6,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.preference.api.dto.FilterContext;
 import com.example.mealprep.preference.api.dto.FilterResult;
 import com.example.mealprep.preference.api.dto.Violation;
 import com.example.mealprep.preference.domain.entity.AgeRestriction;
@@ -51,7 +52,7 @@ class HardConstraintFilterServiceImplTest {
     UUID userId = UUID.randomUUID();
     when(hardConstraintsRepository.findWithChildrenByUserId(userId)).thenReturn(Optional.empty());
 
-    FilterResult result = service().check(userId, List.of("chicken"));
+    FilterResult result = service().check(userId, List.of("chicken"), FilterContext.ANY);
 
     assertThat(result.passes()).isTrue();
     assertThat(result.violations()).isEmpty();
@@ -70,7 +71,7 @@ class HardConstraintFilterServiceImplTest {
         .thenReturn(Optional.of(aggregate));
     when(allergenDerivativeRepository.findAll()).thenReturn(List.of());
 
-    FilterResult result = service().check(userId, List.of());
+    FilterResult result = service().check(userId, List.of(), FilterContext.ANY);
 
     assertThat(result.passes()).isTrue();
     assertThat(result.violations()).isEmpty();
@@ -88,7 +89,7 @@ class HardConstraintFilterServiceImplTest {
         .thenReturn(Optional.of(aggregate));
     when(allergenDerivativeRepository.findAll()).thenReturn(List.of());
 
-    FilterResult result = service().check(userId, List.of("peanut"));
+    FilterResult result = service().check(userId, List.of("peanut"), FilterContext.ANY);
 
     assertThat(result.passes()).isFalse();
     assertThat(result.violations()).hasSize(1);
@@ -116,7 +117,7 @@ class HardConstraintFilterServiceImplTest {
                 new AllergenDerivative(UUID.randomUUID(), "peanut", "peanut_oil"),
                 new AllergenDerivative(UUID.randomUUID(), "dairy", "milk")));
 
-    FilterResult result = service().check(userId, List.of("peanut_oil"));
+    FilterResult result = service().check(userId, List.of("peanut_oil"), FilterContext.ANY);
 
     assertThat(result.passes()).isFalse();
     assertThat(result.violations()).hasSize(1);
@@ -143,7 +144,7 @@ class HardConstraintFilterServiceImplTest {
     when(hardConstraintsRepository.findWithChildrenByUserId(userId))
         .thenReturn(Optional.of(aggregate));
 
-    FilterResult result = service().check(userId, List.of("milk"));
+    FilterResult result = service().check(userId, List.of("milk"), FilterContext.ANY);
 
     assertThat(result.passes()).isFalse();
     assertThat(result.violations()).hasSize(1);
@@ -163,7 +164,7 @@ class HardConstraintFilterServiceImplTest {
     when(hardConstraintsRepository.findWithChildrenByUserId(userId))
         .thenReturn(Optional.of(aggregate));
 
-    FilterResult result = service().check(userId, List.of("salt"));
+    FilterResult result = service().check(userId, List.of("salt"), FilterContext.ANY);
 
     assertThat(result.passes()).isFalse();
     assertThat(result.violations()).hasSize(1);
@@ -183,7 +184,7 @@ class HardConstraintFilterServiceImplTest {
     when(hardConstraintsRepository.findWithChildrenByUserId(userId))
         .thenReturn(Optional.of(aggregate));
 
-    FilterResult result = service().check(userId, List.of("chicken"));
+    FilterResult result = service().check(userId, List.of("chicken"), FilterContext.ANY);
 
     assertThat(result.passes()).isFalse();
     assertThat(result.violations()).hasSize(1);
@@ -193,30 +194,180 @@ class HardConstraintFilterServiceImplTest {
   }
 
   @Test
-  void check_dietaryBaseExceptionWidens_doesNotProduceViolationForExcepted() {
+  void check_anyContextExceptionWidens_doesNotProduceViolationForExcepted() {
+    // An exception stored with context = "any" widens the base regardless of the call context.
     UUID userId = UUID.randomUUID();
+    HardConstraints aggregate = vegetarianWithFishException(userId, "any");
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+
+    FilterResult result = service().check(userId, List.of("fish"), FilterContext.ANY);
+
+    assertThat(result.passes()).isTrue();
+    assertThat(result.violations()).isEmpty();
+  }
+
+  // ---------------- preference-3: context-conditional exceptions ----------------
+
+  @Test
+  void check_weekendException_widensOnlyOnWeekendCall() {
+    // Vegetarian + "fish on the weekend": fish is allowed under WEEKEND, blocked under WEEKDAY/ANY.
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate = vegetarianWithFishException(userId, "weekend");
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+
+    assertThat(service().check(userId, List.of("fish"), FilterContext.WEEKEND).passes()).isTrue();
+  }
+
+  @Test
+  void check_weekendException_doesNotWidenOnWeekdayCall() {
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate = vegetarianWithFishException(userId, "weekend");
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+
+    FilterResult result = service().check(userId, List.of("fish"), FilterContext.WEEKDAY);
+
+    assertThat(result.passes()).isFalse();
+    assertThat(result.violations()).hasSize(1);
+    assertThat(result.violations().get(0).kind()).isEqualTo(ViolationKind.DIETARY_BASE);
+  }
+
+  @Test
+  void check_weekendException_doesNotWidenOnAnyCall() {
+    // The conservative default: a weekend-only relaxation must NOT apply when the context is ANY.
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate = vegetarianWithFishException(userId, "weekend");
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+
+    FilterResult result = service().check(userId, List.of("fish"), FilterContext.ANY);
+
+    assertThat(result.passes()).isFalse();
+    assertThat(result.violations().get(0).kind()).isEqualTo(ViolationKind.DIETARY_BASE);
+  }
+
+  @Test
+  void check_nullCallContext_treatedAsAny() {
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate = vegetarianWithFishException(userId, "weekend");
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+
+    FilterResult result = service().check(userId, List.of("fish"), null);
+
+    assertThat(result.passes()).isFalse();
+  }
+
+  // ---------------- preference-2: ambiguity flagging ----------------
+
+  @Test
+  void check_dairyAllergyWithLactoseFreeException_untaggedKey_isAmbiguous() {
+    // Dairy allergy + a lactose_free exception + plain "yoghurt" (no lactose-free tag) → AMBIGUOUS.
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints().withUserId(userId).withAllergies("dairy").build();
+    aggregate.getExceptions().add(exception("lactose_free", "any"));
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+    when(allergenDerivativeRepository.findAll())
+        .thenReturn(
+            List.of(
+                new AllergenDerivative(UUID.randomUUID(), "dairy", "yoghurt"),
+                new AllergenDerivative(UUID.randomUUID(), "dairy", "lactose")));
+
+    FilterResult result = service().check(userId, List.of("yoghurt"), FilterContext.ANY);
+
+    assertThat(result.passes()).isFalse();
+    assertThat(result.violations()).hasSize(1);
+    Violation v = result.violations().get(0);
+    assertThat(v.kind()).isEqualTo(ViolationKind.AMBIGUOUS);
+    assertThat(v.ingredientKey()).isEqualTo("yoghurt");
+    assertThat(v.constraintValue()).isEqualTo("dairy");
+  }
+
+  @Test
+  void check_dairyAllergyWithLactoseFreeException_taggedKey_isSafe() {
+    // The same exception, but the key DECLARES the lactose-free variant → decisively safe.
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints().withUserId(userId).withAllergies("dairy").build();
+    aggregate.getExceptions().add(exception("lactose_free", "any"));
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+    when(allergenDerivativeRepository.findAll())
+        .thenReturn(List.of(new AllergenDerivative(UUID.randomUUID(), "dairy", "yoghurt")));
+
+    FilterResult result =
+        service().check(userId, List.of("lactose_free_yoghurt"), FilterContext.ANY);
+
+    assertThat(result.passes()).isTrue();
+    assertThat(result.violations()).isEmpty();
+  }
+
+  @Test
+  void check_dairyAllergyWithoutAnyException_isPlainAllergyNotAmbiguous() {
+    // No conditional exception → the same untagged "yoghurt" is a hard ALLERGY, not AMBIGUOUS.
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints().withUserId(userId).withAllergies("dairy").build();
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+    when(allergenDerivativeRepository.findAll())
+        .thenReturn(List.of(new AllergenDerivative(UUID.randomUUID(), "dairy", "yoghurt")));
+
+    FilterResult result = service().check(userId, List.of("yoghurt"), FilterContext.ANY);
+
+    assertThat(result.passes()).isFalse();
+    assertThat(result.violations()).hasSize(1);
+    assertThat(result.violations().get(0).kind()).isEqualTo(ViolationKind.ALLERGY);
+  }
+
+  @Test
+  void check_intoleranceWithFreeOfException_untaggedKey_isAmbiguous() {
+    // The conditional-exception machinery also relaxes a hard intolerance the same way.
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints().withUserId(userId).build();
+    aggregate
+        .getIntolerances()
+        .add(
+            HardIntolerance.builder()
+                .id(UUID.randomUUID())
+                .hardConstraints(aggregate)
+                .substance("lactose")
+                .severity("moderate")
+                .build());
+    aggregate.getExceptions().add(exception("lactose_free", "any"));
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+
+    FilterResult result = service().check(userId, List.of("lactose"), FilterContext.ANY);
+
+    assertThat(result.passes()).isFalse();
+    assertThat(result.violations()).hasSize(1);
+    assertThat(result.violations().get(0).kind()).isEqualTo(ViolationKind.AMBIGUOUS);
+  }
+
+  private static HardConstraints vegetarianWithFishException(UUID userId, String context) {
     HardConstraints aggregate =
         HardConstraintsTestData.hardConstraints()
             .withUserId(userId)
             .withDietaryIdentityBase("vegetarian")
             .build();
-    aggregate
-        .getExceptions()
-        .add(
-            DietaryIdentityException.builder()
-                .id(UUID.randomUUID())
-                .hardConstraints(aggregate)
-                .allows("fish")
-                .frequency("weekly")
-                .context("weekend")
-                .build());
-    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
-        .thenReturn(Optional.of(aggregate));
+    aggregate.getExceptions().add(exception("fish", context));
+    aggregate.getExceptions().get(0).setHardConstraints(aggregate);
+    return aggregate;
+  }
 
-    FilterResult result = service().check(userId, List.of("fish"));
-
-    assertThat(result.passes()).isTrue();
-    assertThat(result.violations()).isEmpty();
+  private static DietaryIdentityException exception(String allows, String context) {
+    return DietaryIdentityException.builder()
+        .id(UUID.randomUUID())
+        .allows(allows)
+        .frequency("weekly")
+        .context(context)
+        .build();
   }
 
   @Test
@@ -236,7 +387,7 @@ class HardConstraintFilterServiceImplTest {
     when(hardConstraintsRepository.findWithChildrenByUserId(userId))
         .thenReturn(Optional.of(aggregate));
 
-    FilterResult result = service().check(userId, List.of("whole_nut_almond"));
+    FilterResult result = service().check(userId, List.of("whole_nut_almond"), FilterContext.ANY);
 
     assertThat(result.passes()).isFalse();
     assertThat(result.violations()).hasSize(1);
@@ -268,7 +419,7 @@ class HardConstraintFilterServiceImplTest {
     when(hardConstraintsRepository.findWithChildrenByUserId(userId))
         .thenReturn(Optional.of(aggregate));
 
-    FilterResult result = service().check(userId, List.of("milk"));
+    FilterResult result = service().check(userId, List.of("milk"), FilterContext.ANY);
 
     assertThat(result.passes()).isFalse();
     // intolerance + medical-diet + dietary-base = 3
@@ -294,7 +445,8 @@ class HardConstraintFilterServiceImplTest {
         .thenReturn(Optional.of(aggregate));
     when(allergenDerivativeRepository.findAll()).thenReturn(List.of());
 
-    FilterResult result = service().checkRecipe(userId, recipeId, List.of("peanut"));
+    FilterResult result =
+        service().checkRecipe(userId, recipeId, List.of("peanut"), FilterContext.ANY);
 
     assertThat(result.passes()).isFalse();
     assertThat(result.violations()).hasSize(1);
@@ -307,7 +459,8 @@ class HardConstraintFilterServiceImplTest {
     UUID recipeId = UUID.randomUUID();
     when(hardConstraintsRepository.findWithChildrenByUserId(userId)).thenReturn(Optional.empty());
 
-    FilterResult result = service().checkRecipe(userId, recipeId, List.of("peanut"));
+    FilterResult result =
+        service().checkRecipe(userId, recipeId, List.of("peanut"), FilterContext.ANY);
 
     assertThat(result.passes()).isTrue();
     assertThat(result.violations()).isEmpty();
@@ -332,7 +485,7 @@ class HardConstraintFilterServiceImplTest {
       recipes.put(UUID.randomUUID(), List.of("chicken", "rice"));
     }
 
-    List<UUID> passing = service().filterRecipes(userId, recipes);
+    List<UUID> passing = service().filterRecipes(userId, recipes, FilterContext.ANY);
 
     assertThat(passing).hasSize(1000);
     // The single-load contract: ONE aggregate fetch + ONE derivative fetch.
@@ -358,7 +511,7 @@ class HardConstraintFilterServiceImplTest {
     recipes.put(safeRecipe, List.of("chicken", "rice"));
     recipes.put(unsafeRecipe, List.of("chicken", "peanut"));
 
-    List<UUID> passing = service().filterRecipes(userId, recipes);
+    List<UUID> passing = service().filterRecipes(userId, recipes, FilterContext.ANY);
 
     assertThat(passing).containsExactly(safeRecipe);
   }
@@ -374,7 +527,7 @@ class HardConstraintFilterServiceImplTest {
     recipes.put(r1, List.of("peanut"));
     recipes.put(r2, List.of("chicken"));
 
-    List<UUID> passing = service().filterRecipes(userId, recipes);
+    List<UUID> passing = service().filterRecipes(userId, recipes, FilterContext.ANY);
 
     assertThat(passing).containsExactlyInAnyOrder(r1, r2);
     verify(allergenDerivativeRepository, never()).findAll();
@@ -384,7 +537,7 @@ class HardConstraintFilterServiceImplTest {
   void filterRecipes_emptyRecipeMap_returnsEmptyList() {
     UUID userId = UUID.randomUUID();
 
-    List<UUID> passing = service().filterRecipes(userId, Map.of());
+    List<UUID> passing = service().filterRecipes(userId, Map.of(), FilterContext.ANY);
 
     assertThat(passing).isEmpty();
     verify(hardConstraintsRepository, never()).findWithChildrenByUserId(userId);
@@ -411,7 +564,7 @@ class HardConstraintFilterServiceImplTest {
     }
 
     long start = System.nanoTime();
-    List<UUID> passing = service().filterRecipes(userId, recipes);
+    List<UUID> passing = service().filterRecipes(userId, recipes, FilterContext.ANY);
     long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
 
     // Sanity floor: vegan-base's tomato exclusion would be a problem if mismatched. With
@@ -440,7 +593,9 @@ class HardConstraintFilterServiceImplTest {
     when(allergenDerivativeRepository.findAll()).thenReturn(List.of());
 
     FilterResult result =
-        service().checkForHousehold(List.of(alice, bob), List.of("peanut", "chicken"));
+        service()
+            .checkForHousehold(
+                List.of(alice, bob), List.of("peanut", "chicken"), FilterContext.ANY);
 
     assertThat(result.passes()).isFalse();
     // alice -> ALLERGY on peanut; bob -> DIETARY_BASE on chicken.
@@ -451,7 +606,8 @@ class HardConstraintFilterServiceImplTest {
 
   @Test
   void checkForHousehold_emptyUserList_returnsPasses() {
-    FilterResult result = service().checkForHousehold(List.of(), List.of("chicken"));
+    FilterResult result =
+        service().checkForHousehold(List.of(), List.of("chicken"), FilterContext.ANY);
 
     assertThat(result.passes()).isTrue();
     assertThat(result.violations()).isEmpty();
@@ -464,7 +620,8 @@ class HardConstraintFilterServiceImplTest {
     when(hardConstraintsRepository.findWithChildrenByUserIdIn(List.of(alice, bob)))
         .thenReturn(List.of());
 
-    FilterResult result = service().checkForHousehold(List.of(alice, bob), List.of("peanut"));
+    FilterResult result =
+        service().checkForHousehold(List.of(alice, bob), List.of("peanut"), FilterContext.ANY);
 
     assertThat(result.passes()).isTrue();
     assertThat(result.violations()).isEmpty();

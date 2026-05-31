@@ -33,8 +33,9 @@ import org.hibernate.annotations.UpdateTimestamp;
  * hypersistence {@link JsonBinaryType}). The LLD originally specced {@code text[]}; runtime testing
  * showed Hibernate's text[] mapping is brittle in this stack (Spring Boot 3.2.5 /
  * hibernate-utils-63), and JSONB is well-tested elsewhere in the repo. {@code
- * dietary_identity_base} is a free-form String at this stage; 01c introduces the
- * {@code @ValidDietaryIdentity} validator that constrains it to a known enum.
+ * dietary_identity_base} is stored as a free-form String; the {@code @ValidDietaryIdentity}
+ * request-level validator constrains it to a known base (and cross-checks exceptions against the
+ * user's allergies) at the API boundary.
  */
 @Entity
 @Table(name = "preference_hard_constraints")

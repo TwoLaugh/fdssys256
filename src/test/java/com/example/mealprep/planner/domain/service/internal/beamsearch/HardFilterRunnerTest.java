@@ -73,9 +73,9 @@ class HardFilterRunnerTest {
             null,
             null);
     runner = new HardFilterRunner(filterService, properties);
-    when(filterService.check(any(UUID.class), anyList()))
+    when(filterService.check(any(UUID.class), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
-    when(filterService.checkForHousehold(anyList(), anyList()))
+    when(filterService.checkForHousehold(anyList(), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
   }
 
@@ -144,8 +144,8 @@ class HardFilterRunnerTest {
 
     runner.filterPool(ctxWith(List.of(slot), List.of(r)));
 
-    verify(filterService).checkForHousehold(anyList(), anyList());
-    verify(filterService, never()).check(any(UUID.class), anyList());
+    verify(filterService).checkForHousehold(anyList(), anyList(), any());
+    verify(filterService, never()).check(any(UUID.class), anyList(), any());
   }
 
   @Test
@@ -166,8 +166,8 @@ class HardFilterRunnerTest {
 
     runner.filterPool(ctxWith(List.of(perPerson), List.of(r)));
 
-    verify(filterService).check(any(UUID.class), anyList());
-    verify(filterService, never()).checkForHousehold(anyList(), anyList());
+    verify(filterService).check(any(UUID.class), anyList(), any());
+    verify(filterService, never()).checkForHousehold(anyList(), anyList(), any());
   }
 
   @Test
@@ -176,7 +176,7 @@ class HardFilterRunnerTest {
     RecipeDto r1 = PlanTestData.trivialRecipe(uuidOf(1), SlotKind.DINNER);
     RecipeDto r2 = PlanTestData.trivialRecipe(uuidOf(2), SlotKind.DINNER);
 
-    when(filterService.checkForHousehold(anyList(), anyList()))
+    when(filterService.checkForHousehold(anyList(), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()))
         .thenReturn(
             new FilterResult(
@@ -298,7 +298,7 @@ class HardFilterRunnerTest {
     Map<UUID, List<RecipeDto>> pool = runner.filterPool(ctxWith(List.of(noEaters), List.of(r)));
 
     assertThat(pool.get(noEaters.slotId())).extracting(RecipeDto::id).containsExactly(r.id());
-    verify(filterService, never()).checkForHousehold(anyList(), anyList());
+    verify(filterService, never()).checkForHousehold(anyList(), anyList(), any());
   }
 
   /**
@@ -323,7 +323,7 @@ class HardFilterRunnerTest {
     Map<UUID, List<RecipeDto>> pool = runner.filterPool(ctxWith(List.of(noEaters), List.of(r)));
 
     assertThat(pool.get(noEaters.slotId())).extracting(RecipeDto::id).containsExactly(r.id());
-    verify(filterService, never()).check(any(UUID.class), anyList());
+    verify(filterService, never()).check(any(UUID.class), anyList(), any());
   }
 
   /**
@@ -349,7 +349,7 @@ class HardFilterRunnerTest {
     RecipeDto keep = PlanTestData.trivialRecipe(uuidOf(1), SlotKind.LUNCH);
     RecipeDto drop = PlanTestData.trivialRecipe(uuidOf(2), SlotKind.LUNCH);
 
-    when(filterService.check(any(UUID.class), anyList()))
+    when(filterService.check(any(UUID.class), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of())) // first recipe (id order) passes
         .thenReturn(
             new FilterResult(
@@ -385,7 +385,7 @@ class HardFilterRunnerTest {
     @SuppressWarnings("unchecked")
     org.mockito.ArgumentCaptor<List<String>> keysCaptor =
         org.mockito.ArgumentCaptor.forClass(List.class);
-    verify(filterService).checkForHousehold(anyList(), keysCaptor.capture());
+    verify(filterService).checkForHousehold(anyList(), keysCaptor.capture(), any());
     assertThat(keysCaptor.getValue()).containsExactlyInAnyOrder("rice", "tofu");
   }
 

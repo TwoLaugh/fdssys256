@@ -75,6 +75,7 @@ import com.example.mealprep.adaptation.exception.RebaseExhaustedException;
 import com.example.mealprep.core.audit.api.dto.DecisionLogScale;
 import com.example.mealprep.core.audit.api.dto.DecisionLogWriteRequest;
 import com.example.mealprep.core.audit.domain.service.DecisionLogService;
+import com.example.mealprep.preference.api.dto.FilterContext;
 import com.example.mealprep.preference.api.dto.FilterResult;
 import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
 import com.example.mealprep.recipe.api.dto.CharacterFingerprintDto;
@@ -1220,7 +1221,7 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
       List<String> resultingKeys = resultingIngredientKeys(baseKeys, c.proposedDiff());
       FilterResult result =
           hardConstraintFilterService.checkRecipe(
-              job.getUserId(), job.getRecipeId(), resultingKeys);
+              job.getUserId(), job.getRecipeId(), resultingKeys, FilterContext.ANY);
       if (result.passes()) {
         feasible.add(c);
       } else {
@@ -1254,7 +1255,8 @@ public class AdaptationServiceImpl implements AdaptationService, AdaptationQuery
     JsonNode finalDiff = resolveFinalDiff(withCandidates, response);
     List<String> resultingKeys = resultingIngredientKeys(currentVersionKeys(context), finalDiff);
     FilterResult result =
-        hardConstraintFilterService.checkRecipe(job.getUserId(), job.getRecipeId(), resultingKeys);
+        hardConstraintFilterService.checkRecipe(
+            job.getUserId(), job.getRecipeId(), resultingKeys, FilterContext.ANY);
     if (!result.passes()) {
       int violationCount = result.violations() == null ? 0 : result.violations().size();
       throw new AdaptationHardConstraintViolationException(

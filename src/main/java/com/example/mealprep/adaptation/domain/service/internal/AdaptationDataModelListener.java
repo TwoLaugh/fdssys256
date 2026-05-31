@@ -134,7 +134,9 @@ public class AdaptationDataModelListener {
     if (recipeKeys.isEmpty()) {
       return Set.of();
     }
-    List<UUID> passing = hardConstraintFilterService.filterRecipes(userId, recipeKeys);
+    List<UUID> passing =
+        hardConstraintFilterService.filterRecipes(
+            userId, recipeKeys, com.example.mealprep.preference.api.dto.FilterContext.ANY);
     Set<UUID> affected = new LinkedHashSet<>(recipeKeys.keySet());
     affected.removeAll(passing); // affected = recipes that VIOLATE the user's current constraints
     return affected;

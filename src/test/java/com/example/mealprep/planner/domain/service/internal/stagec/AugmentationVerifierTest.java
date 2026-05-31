@@ -1,6 +1,7 @@
 package com.example.mealprep.planner.domain.service.internal.stagec;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -56,10 +57,10 @@ class AugmentationVerifierTest {
 
   private void allowAll() {
     lenient()
-        .when(filter.checkForHousehold(anyList(), anyList()))
+        .when(filter.checkForHousehold(anyList(), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient()
-        .when(filter.check(org.mockito.ArgumentMatchers.any(UUID.class), anyList()))
+        .when(filter.check(org.mockito.ArgumentMatchers.any(UUID.class), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
   }
 
@@ -83,7 +84,7 @@ class AugmentationVerifierTest {
         PlanTestData.recipeFor(recipeId, SlotKind.SNACK, 10, List.of(), List.of("peanut"));
     MealSlotSkeleton slot = PlanTestData.skeletonFor(WEEK_START, 0, SlotKind.SNACK, 30);
     PlanCompositionContext ctx = ctxWith(List.of(slot), List.of(recipe));
-    when(filter.checkForHousehold(anyList(), eq(List.of("peanut"))))
+    when(filter.checkForHousehold(anyList(), eq(List.of("peanut")), any()))
         .thenReturn(new FilterResult(false, List.of()));
 
     boolean passes =
@@ -128,7 +129,7 @@ class AugmentationVerifierTest {
   void ingredientSwap_targetKeyAllergenClash_fails() {
     MealSlotSkeleton slot = PlanTestData.skeletonFor(WEEK_START, 0, SlotKind.DINNER, 30);
     PlanCompositionContext ctx = ctxWith(List.of(slot), List.of());
-    when(filter.checkForHousehold(anyList(), eq(List.of("shellfish"))))
+    when(filter.checkForHousehold(anyList(), eq(List.of("shellfish")), any()))
         .thenReturn(new FilterResult(false, List.of()));
 
     boolean passes =
@@ -197,7 +198,7 @@ class AugmentationVerifierTest {
             true,
             List.of(e2));
     PlanCompositionContext ctx = ctxWith(List.of(s1, s2), List.of());
-    when(filter.checkForHousehold(eq(List.of(e1, e2)), eq(List.of("shellfish"))))
+    when(filter.checkForHousehold(eq(List.of(e1, e2)), eq(List.of("shellfish")), any()))
         .thenReturn(new FilterResult(false, List.of()));
 
     boolean passes =
@@ -243,7 +244,7 @@ class AugmentationVerifierTest {
             false,
             List.of(eater));
     PlanCompositionContext ctx = ctxWith(List.of(perPerson), List.of());
-    when(filter.check(eq(eater), eq(List.of("quinoa"))))
+    when(filter.check(eq(eater), eq(List.of("quinoa")), any()))
         .thenReturn(new FilterResult(true, List.of()));
 
     boolean passes =
@@ -309,8 +310,9 @@ class AugmentationVerifierTest {
     PlanCompositionContext ctx = ctxWith(List.of(first, second), List.of());
     // Only the SECOND slot's eater clashes; if findSlot wrongly returned the first, e1 would be
     // checked and the swap would pass.
-    when(filter.check(eq(e1), anyList())).thenReturn(new FilterResult(true, List.of()));
-    when(filter.check(eq(e2), eq(List.of("nuts")))).thenReturn(new FilterResult(false, List.of()));
+    when(filter.check(eq(e1), anyList(), any())).thenReturn(new FilterResult(true, List.of()));
+    when(filter.check(eq(e2), eq(List.of("nuts")), any()))
+        .thenReturn(new FilterResult(false, List.of()));
 
     boolean passes =
         verifier.passes(
@@ -332,7 +334,7 @@ class AugmentationVerifierTest {
     MealSlotSkeleton slot = PlanTestData.skeletonFor(WEEK_START, 0, SlotKind.SNACK, 30);
     PlanCompositionContext ctx = ctxWith(List.of(slot), List.of(recipe));
     // The verifier must call the household check with EXACTLY ["oats"] (blank filtered out).
-    when(filter.checkForHousehold(anyList(), eq(List.of("oats"))))
+    when(filter.checkForHousehold(anyList(), eq(List.of("oats")), any()))
         .thenReturn(new FilterResult(true, List.of()));
 
     boolean passes =
@@ -356,7 +358,7 @@ class AugmentationVerifierTest {
             false,
             List.of(eater));
     PlanCompositionContext ctx = ctxWith(List.of(perPerson), List.of());
-    when(filter.check(eq(eater), eq(List.of("nuts"))))
+    when(filter.check(eq(eater), eq(List.of("nuts")), any()))
         .thenReturn(new FilterResult(false, List.of()));
 
     boolean passes =

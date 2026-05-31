@@ -237,9 +237,9 @@ class RevertToPlanCoordinatorTest {
     when(recipeQueryService.findPlannableCandidates(eq(caller), anyInt()))
         .thenReturn(List.of(safe));
     // peanut fails, rice passes (shared slot → checkForHousehold).
-    when(hardConstraintFilterService.checkForHousehold(anyList(), eq(List.of("peanut"))))
+    when(hardConstraintFilterService.checkForHousehold(anyList(), eq(List.of("peanut")), any()))
         .thenReturn(new FilterResult(false, List.of(banViolation(caller, bannedRecipeId))));
-    when(hardConstraintFilterService.checkForHousehold(anyList(), eq(List.of("rice"))))
+    when(hardConstraintFilterService.checkForHousehold(anyList(), eq(List.of("rice")), any()))
         .thenReturn(new FilterResult(true, List.of()));
 
     UUID newId = coordinator.revertToPlan(caller, new RevertToPlanRequest(target.getId()));
@@ -285,12 +285,12 @@ class RevertToPlanCoordinatorTest {
     when(recipeQueryService.findPlannableCandidates(eq(caller), anyInt()))
         .thenReturn(List.of(safe));
     // Per-person path uses check(eater, keys): eaterA passes peanut, eaterB does NOT → strip.
-    when(hardConstraintFilterService.check(eq(eaterA), eq(List.of("peanut"))))
+    when(hardConstraintFilterService.check(eq(eaterA), eq(List.of("peanut")), any()))
         .thenReturn(new FilterResult(true, List.of()));
-    when(hardConstraintFilterService.check(eq(eaterB), eq(List.of("peanut"))))
+    when(hardConstraintFilterService.check(eq(eaterB), eq(List.of("peanut")), any()))
         .thenReturn(new FilterResult(false, List.of(banViolation(eaterB, bannedRecipeId))));
     // The replacement (rice) passes for BOTH eaters.
-    when(hardConstraintFilterService.check(any(), eq(List.of("rice"))))
+    when(hardConstraintFilterService.check(any(), eq(List.of("rice")), any()))
         .thenReturn(new FilterResult(true, List.of()));
 
     UUID newId = coordinator.revertToPlan(caller, new RevertToPlanRequest(target.getId()));
@@ -340,9 +340,9 @@ class RevertToPlanCoordinatorTest {
     when(recipeQueryService.findPlannableCandidates(eq(caller), anyInt()))
         .thenReturn(List.of(wrongKind, overBudget, good));
 
-    when(hardConstraintFilterService.checkForHousehold(anyList(), eq(List.of("peanut"))))
+    when(hardConstraintFilterService.checkForHousehold(anyList(), eq(List.of("peanut")), any()))
         .thenReturn(new FilterResult(false, List.of(banViolation(caller, bannedRecipeId))));
-    when(hardConstraintFilterService.checkForHousehold(anyList(), eq(List.of("rice"))))
+    when(hardConstraintFilterService.checkForHousehold(anyList(), eq(List.of("rice")), any()))
         .thenReturn(new FilterResult(true, List.of()));
     // wrongKind/overBudget are dropped by matchesKind/withinTimeBudget BEFORE any constraint
     // check, so no stub for "oats" is needed (would be an unnecessary stubbing).
@@ -410,7 +410,7 @@ class RevertToPlanCoordinatorTest {
         PlanTestData.recipeFor(bannedRecipeId, SlotKind.DINNER, 25, List.of(), List.of("peanut"));
     when(recipeQueryService.getById(bannedRecipeId)).thenReturn(Optional.of(banned));
     when(recipeQueryService.findPlannableCandidates(eq(caller), anyInt())).thenReturn(List.of());
-    when(hardConstraintFilterService.checkForHousehold(anyList(), eq(List.of("peanut"))))
+    when(hardConstraintFilterService.checkForHousehold(anyList(), eq(List.of("peanut")), any()))
         .thenReturn(new FilterResult(false, List.of(banViolation(caller, bannedRecipeId))));
 
     UUID newId = coordinator.revertToPlan(caller, new RevertToPlanRequest(target.getId()));
@@ -457,10 +457,10 @@ class RevertToPlanCoordinatorTest {
   /** Stub both the per-user and household constraint checks to pass for any keys. */
   private void allRecipesPass() {
     lenient()
-        .when(hardConstraintFilterService.check(any(), anyList()))
+        .when(hardConstraintFilterService.check(any(), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient()
-        .when(hardConstraintFilterService.checkForHousehold(anyList(), anyList()))
+        .when(hardConstraintFilterService.checkForHousehold(anyList(), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     // Copied recipes resolve to a benign recipe with safe ingredient keys.
     lenient()

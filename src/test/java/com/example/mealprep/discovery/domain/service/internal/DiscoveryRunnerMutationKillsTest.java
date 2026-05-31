@@ -176,7 +176,7 @@ class DiscoveryRunnerMutationKillsTest {
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
         .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
-    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+    when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient().when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
@@ -225,7 +225,7 @@ class DiscoveryRunnerMutationKillsTest {
     row.setRespectRobotsTxt(false);
     lenient().when(sourceRepository.findBySourceKey("src_a")).thenReturn(Optional.of(row));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
-    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+    when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient().when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
@@ -405,7 +405,7 @@ class DiscoveryRunnerMutationKillsTest {
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
         .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
-    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+    when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(true);
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
@@ -446,7 +446,7 @@ class DiscoveryRunnerMutationKillsTest {
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
         .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.5")));
-    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+    when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient().when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
@@ -454,7 +454,7 @@ class DiscoveryRunnerMutationKillsTest {
     runner.run(startedEvent(jobId));
 
     // hardConstraintFilter must have been consulted (we got past low-confidence guard).
-    verify(hardConstraintFilter, times(1)).check(eq(USER_ID), anyList());
+    verify(hardConstraintFilter, times(1)).check(eq(USER_ID), anyList(), any());
     // No LOW_CONFIDENCE skip row.
     verify(transitions, never())
         .writeScrapeRow(argThat(r -> r.getSkipReason() == ScrapeSkipReason.LOW_CONFIDENCE));
@@ -495,7 +495,7 @@ class DiscoveryRunnerMutationKillsTest {
             "jsonld",
             new BigDecimal("0.9"));
     when(source.fetchRecipe(candidate)).thenReturn(parsed);
-    when(hardConstraintFilter.check(eq(USER_ID), eq(List.<String>of())))
+    when(hardConstraintFilter.check(eq(USER_ID), eq(List.<String>of()), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient().when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
@@ -503,7 +503,7 @@ class DiscoveryRunnerMutationKillsTest {
     runner.run(startedEvent(jobId));
 
     // hardConstraintFilter must have been called with an empty list of keys.
-    verify(hardConstraintFilter, times(1)).check(eq(USER_ID), eq(List.<String>of()));
+    verify(hardConstraintFilter, times(1)).check(eq(USER_ID), eq(List.<String>of()), any());
   }
 
   // ===================== userAgentFor: source-key found returns its UA =====================
@@ -1085,7 +1085,7 @@ class DiscoveryRunnerMutationKillsTest {
         .when(source.fetchRecipe(any(DiscoveryCandidate.class)))
         .thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
     lenient()
-        .when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+        .when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient().when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
@@ -1202,7 +1202,7 @@ class DiscoveryRunnerMutationKillsTest {
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
         .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
-    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+    when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient().when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
@@ -1245,7 +1245,7 @@ class DiscoveryRunnerMutationKillsTest {
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
         .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
-    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+    when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient().when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));

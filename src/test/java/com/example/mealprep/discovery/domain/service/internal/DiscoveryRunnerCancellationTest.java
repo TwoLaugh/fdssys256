@@ -150,7 +150,7 @@ class DiscoveryRunnerCancellationTest {
                 "jsonld",
                 new BigDecimal("0.9")));
     lenient()
-        .when(hardConstraintFilter.check(any(), anyList()))
+        .when(hardConstraintFilter.check(any(), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient().when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));

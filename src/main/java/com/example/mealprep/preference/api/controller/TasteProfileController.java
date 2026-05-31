@@ -38,8 +38,9 @@ import org.springframework.web.server.ResponseStatusException;
  * CurrentUserResolver}; controller never accepts {@code userId} from a query or path parameter so
  * user A cannot read or update user B's profile.
  *
- * <p>The rollback endpoint is intentionally absent in 01c — it ships in a follow-up ticket (see the
- * ticket's "Deferred to other tickets" section).
+ * <p>Endpoints: GET (read), PUT (manual override), POST {@code /refresh-now} (async AI refresh),
+ * and POST {@code /rollback} (revert to a prior version and replay feedback forward). The rollback
+ * endpoint has shipped — see {@link #rollback(RollbackTasteProfileRequest)}.
  */
 @RestController
 @RequestMapping("/api/v1/preferences/taste-profile")

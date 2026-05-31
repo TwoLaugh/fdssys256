@@ -2,8 +2,11 @@ package com.example.mealprep.preference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.example.mealprep.preference.api.dto.FilterContext;
 import com.example.mealprep.preference.api.dto.FilterResult;
+import com.example.mealprep.preference.domain.entity.DietaryIdentityException;
 import com.example.mealprep.preference.domain.entity.HardConstraints;
+import com.example.mealprep.preference.domain.entity.ViolationKind;
 import com.example.mealprep.preference.domain.repository.AllergenDerivativeRepository;
 import com.example.mealprep.preference.domain.repository.HardConstraintsAuditLogRepository;
 import com.example.mealprep.preference.domain.repository.HardConstraintsRepository;
@@ -64,7 +67,8 @@ class HardConstraintFilterServiceIT {
             .build();
     hardConstraintsRepository.saveAndFlush(aggregate);
 
-    FilterResult result = filterService.check(userId, List.of("peanut_oil", "rice"));
+    FilterResult result =
+        filterService.check(userId, List.of("peanut_oil", "rice"), FilterContext.ANY);
 
     assertThat(result.passes()).isFalse();
     assertThat(result.violations()).hasSize(1);
@@ -76,7 +80,7 @@ class HardConstraintFilterServiceIT {
   void check_userWithNoAggregate_returnsPassesAndDoesNotThrow() {
     UUID userId = UUID.randomUUID();
 
-    FilterResult result = filterService.check(userId, List.of("peanut"));
+    FilterResult result = filterService.check(userId, List.of("peanut"), FilterContext.ANY);
 
     assertThat(result.passes()).isTrue();
   }
@@ -90,7 +94,7 @@ class HardConstraintFilterServiceIT {
     recipes.put(r1, List.of("peanut"));
     recipes.put(r2, List.of("chicken"));
 
-    List<UUID> passing = filterService.filterRecipes(userId, recipes);
+    List<UUID> passing = filterService.filterRecipes(userId, recipes, FilterContext.ANY);
 
     assertThat(passing).containsExactlyInAnyOrder(r1, r2);
   }
@@ -113,7 +117,7 @@ class HardConstraintFilterServiceIT {
     recipes.put(directAllergyRecipe, List.of("peanut", "rice"));
     recipes.put(derivativeAllergyRecipe, List.of("rice", "satay_sauce"));
 
-    List<UUID> passing = filterService.filterRecipes(userId, recipes);
+    List<UUID> passing = filterService.filterRecipes(userId, recipes, FilterContext.ANY);
 
     assertThat(passing).containsExactly(safeRecipe);
   }
@@ -139,7 +143,7 @@ class HardConstraintFilterServiceIT {
     }
 
     long start = System.nanoTime();
-    List<UUID> passing = filterService.filterRecipes(userId, recipes);
+    List<UUID> passing = filterService.filterRecipes(userId, recipes, FilterContext.ANY);
     long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
 
     assertThat(passing).hasSize(1000);
@@ -163,11 +167,68 @@ class HardConstraintFilterServiceIT {
     hardConstraintsRepository.saveAndFlush(bobAggregate);
 
     FilterResult result =
-        filterService.checkForHousehold(List.of(alice, bob), List.of("peanut", "chicken"));
+        filterService.checkForHousehold(
+            List.of(alice, bob), List.of("peanut", "chicken"), FilterContext.ANY);
 
     assertThat(result.passes()).isFalse();
     assertThat(result.violations())
         .anyMatch(v -> v.userId().equals(alice) && "peanut".equals(v.ingredientKey()))
         .anyMatch(v -> v.userId().equals(bob) && "chicken".equals(v.ingredientKey()));
+  }
+
+  @Test
+  void check_weekendException_widensOnWeekendButNotWeekday_realDb() {
+    // preference-3: vegetarian + "fish on the weekend" — fish allowed under WEEKEND, blocked under
+    // WEEKDAY.
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints()
+            .withUserId(userId)
+            .withDietaryIdentityBase("vegetarian")
+            .build();
+    DietaryIdentityException ex =
+        DietaryIdentityException.builder()
+            .id(UUID.randomUUID())
+            .hardConstraints(aggregate)
+            .allows("fish")
+            .frequency("weekly")
+            .context("weekend")
+            .build();
+    aggregate.getExceptions().add(ex);
+    hardConstraintsRepository.saveAndFlush(aggregate);
+
+    assertThat(filterService.check(userId, List.of("fish"), FilterContext.WEEKEND).passes())
+        .isTrue();
+    assertThat(filterService.check(userId, List.of("fish"), FilterContext.WEEKDAY).passes())
+        .isFalse();
+  }
+
+  @Test
+  void check_dairyAllergyWithLactoseFreeException_yieldsAmbiguousForUntaggedKey_realDb() {
+    // preference-2: dairy allergy + lactose_free exception + seeded derivative "yoghurt" →
+    // AMBIGUOUS
+    // for the untagged key, but a key declaring the free-of variant is safe.
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints().withUserId(userId).withAllergies("dairy").build();
+    DietaryIdentityException ex =
+        DietaryIdentityException.builder()
+            .id(UUID.randomUUID())
+            .hardConstraints(aggregate)
+            .allows("lactose_free")
+            .frequency("daily")
+            .context("any")
+            .build();
+    aggregate.getExceptions().add(ex);
+    hardConstraintsRepository.saveAndFlush(aggregate);
+
+    FilterResult ambiguous = filterService.check(userId, List.of("yoghurt"), FilterContext.ANY);
+    assertThat(ambiguous.passes()).isFalse();
+    assertThat(ambiguous.violations()).hasSize(1);
+    assertThat(ambiguous.violations().get(0).kind()).isEqualTo(ViolationKind.AMBIGUOUS);
+
+    FilterResult safe =
+        filterService.check(userId, List.of("lactose_free_yoghurt"), FilterContext.ANY);
+    assertThat(safe.passes()).isTrue();
   }
 }

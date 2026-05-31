@@ -152,7 +152,7 @@ class DiscoveryJobRunnerTest {
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
         .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
-    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+    when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     lenient().when(sourceRepository.findBySourceKey("src_a")).thenReturn(Optional.empty());
@@ -267,7 +267,7 @@ class DiscoveryJobRunnerTest {
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
         .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(parsed);
-    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+    when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     lenient().when(sourceRepository.findBySourceKey("src_a")).thenReturn(Optional.empty());
@@ -302,7 +302,7 @@ class DiscoveryJobRunnerTest {
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
         .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
-    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+    when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(
             new FilterResult(
                 false,
@@ -353,7 +353,7 @@ class DiscoveryJobRunnerTest {
                 r ->
                     r.getStatus() == ScrapeOutcome.EXTRACTION_FAILED
                         && r.getSkipReason() == ScrapeSkipReason.LOW_CONFIDENCE));
-    verify(hardConstraintFilter, never()).check(any(), anyList());
+    verify(hardConstraintFilter, never()).check(any(), anyList(), any());
   }
 
   // -------- ExtractionFailedException from source --------
@@ -411,7 +411,7 @@ class DiscoveryJobRunnerTest {
     when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
         .thenThrow(new RuntimeException("AI down"));
     when(source.fetchRecipe(candidate)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
-    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+    when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient().when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
@@ -451,7 +451,7 @@ class DiscoveryJobRunnerTest {
                     new CandidateFilterOutcome.Rejection(
                         rejected, "not relevant (confidence=0.1)"))));
     when(source.fetchRecipe(kept)).thenReturn(sampleParsedRecipe(new BigDecimal("0.9")));
-    when(hardConstraintFilter.check(eq(USER_ID), anyList()))
+    when(hardConstraintFilter.check(eq(USER_ID), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     when(transitions.scrapeLogExistsSince(anyString(), any())).thenReturn(false);
     lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));

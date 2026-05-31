@@ -60,10 +60,10 @@ class BeamSearchEngineTest {
   void setup() {
     filterService = Mockito.mock(HardConstraintFilterService.class);
     lenient()
-        .when(filterService.check(any(UUID.class), anyList()))
+        .when(filterService.check(any(UUID.class), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     lenient()
-        .when(filterService.checkForHousehold(anyList(), anyList()))
+        .when(filterService.checkForHousehold(anyList(), anyList(), any()))
         .thenReturn(new FilterResult(true, List.of()));
     properties = newProps(Duration.ofSeconds(30));
     hardFilterRunner = new HardFilterRunner(filterService, properties);

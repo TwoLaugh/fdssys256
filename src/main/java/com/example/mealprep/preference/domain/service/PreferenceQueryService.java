@@ -10,8 +10,25 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 /**
- * Read API for the preference module — partial in 01a (hard-constraints only). Taste profile,
- * lifestyle config, profile metadata, and the soft bundle land in subsequent preference tickets.
+ * Read API for the preference module's hard-constraints tier plus the cross-module soft-preference
+ * bundle. The module ships a deliberately split-interface design rather than one monolithic
+ * service: the taste profile, lifestyle config, and preference archive are structurally different
+ * aggregates and each has its own narrow service so cross-module callers inject only what they need
+ * —
+ *
+ * <ul>
+ *   <li>{@link TasteProfileQueryService} / {@code TasteProfileUpdateService} — the JSONB taste
+ *       profile, its version history, and rollback;
+ *   <li>{@link LifestyleConfigQueryService} / {@code LifestyleConfigUpdateService} — the lifestyle
+ *       config document;
+ *   <li>{@link PreferenceArchiveQueryService} / {@code PreferenceArchiveUpdateService} — the
+ *       unbounded preference archive;
+ *   <li>{@link HardConstraintFilterService} — the safety-critical hard-constraint filter.
+ * </ul>
+ *
+ * <p>This interface keeps the hard-constraints read surface and the {@code SoftPreferenceBundleDto}
+ * the planner/household-merge consumes. Profile-metadata persistence is descoped per finding
+ * preference-1.
  */
 public interface PreferenceQueryService {
 
