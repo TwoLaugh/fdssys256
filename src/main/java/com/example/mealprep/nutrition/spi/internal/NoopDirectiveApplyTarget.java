@@ -60,5 +60,17 @@ public class NoopDirectiveApplyTarget {
       throw new DirectiveApplyTargetUnavailableException(
           "preference-model directive routes need preference-01c");
     }
+
+    @Override
+    public void revertExpiredDirective(UUID userId, UUID directiveId) {
+      // No preference impl wired: there is nothing applied to revert. Unlike apply, this is a quiet
+      // no-op (NOT a throw) — the auto-expiry sweep must still mark the directive EXPIRED, and a
+      // throw here would wrongly abort the sweep's per-directive transaction.
+      log.debug(
+          "Noop DirectiveApplyTarget.revertExpiredDirective — no preference impl wired; no-op."
+              + " directiveId={} userId={}",
+          directiveId,
+          userId);
+    }
   }
 }

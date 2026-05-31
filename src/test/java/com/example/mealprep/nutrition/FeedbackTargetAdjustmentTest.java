@@ -128,6 +128,8 @@ class FeedbackTargetAdjustmentTest {
         divergenceDetector,
         new FeedbackTargetResolver(),
         props,
+        org.mockito.Mockito.mock(
+            com.example.mealprep.nutrition.domain.repository.DriDefaultRepository.class),
         eventPublisher,
         objectMapper,
         clock);

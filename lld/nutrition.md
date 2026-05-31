@@ -77,7 +77,10 @@ V20260502120600__nutrition_create_ingredient_mapping.sql
 V20260502120700__nutrition_create_health_directives.sql
 V20260502120800__nutrition_create_targets_audit.sql
 R__nutrition_seed_dri_defaults.sql                       (DRI defaults by age/sex)
-R__nutrition_seed_quantity_conversions.sql               ("1 chicken breast = 170g" etc.)
+# R__nutrition_seed_quantity_conversions.sql — NOT a v1 nutrition migration. Quantity conversions
+#   ("1 chicken breast = 170g") are grounding context for the AI parse step, which is deferred to
+#   v1.5 (AI prompt-template work). Conversions are owned by the AI Service LLD; no half-baked seed
+#   ships here. See nutrition-8.
 ```
 
 ### V20260502120000 — Targets aggregate root
@@ -342,8 +345,8 @@ CREATE INDEX idx_nutr_targets_audit_targets_time ON nutrition_targets_audit (tar
 
 ### Repeatable migrations
 
-- `R__nutrition_seed_dri_defaults.sql` — DRI micro defaults keyed by `(age_group, sex)`. Loaded by `initialiseTargets` to seed `nutrition_micro_targets`.
-- `R__nutrition_seed_quantity_conversions.sql` — common ingredient → grams conversions ("1 chicken breast = 170g", "1 tin chickpeas drained = 240g", "1 tbsp oil = 14g") used by the AI parsing step's grounding context.
+- `R__nutrition_seed_dri_defaults.sql` — DRI micro defaults keyed by `(age_group, sex)`. Read by `initialiseTargets` (mapped via the `DriDefault` read-only entity / `DriDefaultRepository`) to seed `nutrition_micro_targets` at onboarding for any micronutrient the onboarding wizard did not supply (warning-only, `is_hard_floor = false`). Because the nutrition module has no demographic input of its own (age/sex live in the household/onboarding context and the wizard computes any age/sex-tuned micro overrides into the request), the auto-seed uses the most-protective adult band (`31-50 / female`) for the gaps. See nutrition-7.
+- **Quantity conversions** (common ingredient → grams, "1 chicken breast = 170g") are NOT a v1 nutrition migration. They are grounding context for the deferred AI parse step (v1.5) and are owned by the AI Service LLD; no `R__nutrition_seed_quantity_conversions.sql` ships in v1. See nutrition-8.
 
 ---
 
@@ -393,11 +396,11 @@ public enum EnforcementDirection { UPPER_LIMIT, LOWER_FLOOR, BOTH_BOUNDED }
 
 public record CalorieTargetDto(int dailyTarget, int toleranceUnder, int toleranceOver,
                                Enforcement enforcement, EnforcementDirection direction) {}
-public record MacroTargetDto(BigDecimal targetG, BigDecimal floorG, Enforcement enforcement,
-                             EnforcementDirection direction, boolean isHardFloor, String notes) {}
+public record MacroTargetDto(BigDecimal targetG, BigDecimal floorG, String enforcement,
+                             EnforcementDirection direction, boolean isHardFloor) {}
 public record PerMealDistributionDto(MealSlot mealSlot, int calorieTarget, BigDecimal proteinTargetG) {}
 public record MicroTargetDto(String nutrientKey, BigDecimal targetValue, BigDecimal upperLimit,
-                             String sourcePreference, String notes) {}
+                             String sourcePreference, String notes, boolean isHardFloor) {}
 public record EatingWindowDto(boolean enabled, LocalTime windowStart, LocalTime windowEnd, String notes) {}
 public record ActivityAdjustmentDto(ActivityLevel activityLevel, int calorieModifier, int carbModifierG) {}
 
@@ -786,6 +789,7 @@ All endpoints under `/api/v1/nutrition/...`. `userId` resolved server-side from 
 | Method | Path | Request | Response | Status |
 |---|---|---|---|---|
 | GET    | `/` | — | `TargetsDto` | 200 / 404 |
+| POST   | `/initialise` | `UpdateTargetsRequest` | `TargetsDto` | 201 / 400 / 409 |
 | PUT    | `/` | `UpdateTargetsRequest` | `TargetsDto` | 200 / 400 / 404 / 409 |
 | GET    | `/audit-log?page=&size=` | — | `Page<NutritionTargetsAuditEntryDto>` | 200 |
 | GET    | `/activity?from=&to=` | — | `List<DailyActivityDto>` | 200 |
@@ -973,9 +977,9 @@ Used by every recipe save (via `NutritionCalculationService`), every free-text o
 
 1. **Normalise** via `IntakeKeyNormaliser` (lowercase, trim, collapse whitespace) per [technical-architecture.md §Cross-module references](../design/technical-architecture.md#cross-module-references). Same normalisation as Provisions.
 2. **Cache check** — `findBySearchTerm(normalised)`. **Hit:** multiply `nutritionPer100g × (gramsEstimate / 100)` and return. **Miss:** continue.
-3. **AI parse step** — if the line lacks structured form (free text, no mapping key), call `IngredientParseTask` to produce `{ingredient, quantity, unit, gramsEstimate, usdaSearchTerm, isCooked}`. Recipe-side calls already carry structured form; skip.
+3. **AI parse step** — _deferred (v1 ships without it)._ Designed: if the line lacks structured form, call `IngredientParseTask` to produce `{ingredient, quantity, unit, gramsEstimate, usdaSearchTerm, isCooked}`. **v1 behaviour:** the AI task catalogue is not yet built, so the pipeline skips parse and uses the normalised term verbatim as the USDA search term. Recipe-side calls already carry structured form. (nutrition-9 — wire when the AI task catalogue lands.)
 4. **USDA search** — `UsdaApiClient.search(usdaSearchTerm)` returns top 5-10 matches. Resilience4j `@Retry` (2 attempts on 5xx) + `@RateLimiter` (1000 req/h). Empty → fall back to `OpenFoodFactsClient.search`.
-5. **AI match selection** — `IngredientMatchTask` picks the best entry, returns `{externalId, confidence}`. Both clients empty → return `UnmappedIngredientDto(name, "no source matches", 0)`; recipe `nutritionStatus` becomes `partial`.
+5. **Match selection** — _v1 ships a deterministic first-hit fallback, not the AI match step._ Designed: `IngredientMatchTask` re-ranks the candidates and picks the best, returning `{externalId, confidence}`. **v1 behaviour:** with the AI match task deferred, the pipeline takes the **first** (highest source-score) USDA hit, else the first OFF hit, and **caps the source-derived confidence at 0.85** (we don't trust an un-re-ranked source score above that) — so any first-hit mapping lands at ≤ 0.85 and a low score still flips `needsReview`. Both clients empty → `UnmappedIngredientDto(name, "no source matches", 0)`; recipe `nutritionStatus` becomes `partial`. (nutrition-9 — replace first-hit with `IngredientMatchTask` re-ranking when the AI task catalogue lands; the 0.85 cap lifts then.)
 6. **Persist** one `IngredientMapping` row with `needsReview = (confidence < 0.7)` per the recipe HLD threshold. Concurrent inserts collide on the unique constraint; the loser re-reads and uses the winning row — no retry storm.
 7. **Compute and return** as in cache-hit.
 

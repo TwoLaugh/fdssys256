@@ -32,4 +32,20 @@ public interface DirectiveApplyTarget {
       Instant autoExpiresAt,
       UUID directiveId,
       UUID actorUserId);
+
+  /**
+   * Reverse a temporary {@code preference_model} directive whose {@code auto_expires_at} has passed
+   * — the revert leg of the nutrition auto-expiry sweep (LLD Flow 8 line 1022). The implementation
+   * maps to {@code PreferenceUpdateService.removeTemporaryConstraint(userId, directiveId)}:
+   * best-effort and idempotent — a constraint the user has since edited away (or a directive with
+   * no surviving directive-sourced rows) is a no-op, never throws.
+   *
+   * <p>Implementations MUST NOT throw on a missing/already-reverted directive; the sweep marks the
+   * directive {@code EXPIRED} regardless, so a throw here would wrongly abort the per-directive
+   * transaction. Joins the sweep's per-directive transaction.
+   *
+   * @param userId the directive's target user
+   * @param directiveId the source directive's id (the provenance key on the temporary constraint)
+   */
+  void revertExpiredDirective(UUID userId, UUID directiveId);
 }

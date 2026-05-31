@@ -2,6 +2,7 @@ package com.example.mealprep.nutrition.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
 import com.example.mealprep.core.api.markers.BoundedCollection;
+import com.example.mealprep.nutrition.api.dto.DailyAggregateDto;
 import com.example.mealprep.nutrition.api.dto.IntakeAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.IntakeDayDto;
 import com.example.mealprep.nutrition.api.dto.IntakeEntryDto;
@@ -158,6 +159,17 @@ public class IntakeController {
       @PathVariable UUID snackId) {
     UUID userId = requireCurrentUserId();
     updateService.removeSnack(userId, date, snackId);
+  }
+
+  @GetMapping(path = "/{date}/aggregate", produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Daily intake rollup for the calling user: planned / actual-so-far / remaining per"
+              + " macro + calories. Remaining is target-based and floored at zero.")
+  public DailyAggregateDto getDailyAggregate(
+      @PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+    UUID userId = requireCurrentUserId();
+    return queryService.getDailyAggregate(userId, date);
   }
 
   @GetMapping(path = "/week/{weekStart}/aggregate", produces = MediaType.APPLICATION_JSON_VALUE)

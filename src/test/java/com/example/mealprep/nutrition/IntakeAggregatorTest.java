@@ -42,6 +42,7 @@ class IntakeAggregatorTest {
   }
 
   private static final LocalDate MONDAY = LocalDate.of(2026, 5, 11); // Monday
+  private static final LocalDate DAY = LocalDate.of(2026, 5, 12);
 
   @Test
   void aggregateWeek_noDays_returnsSevenZeroEntries_andEmptyViolations_whenNoTargets() {
@@ -165,6 +166,65 @@ class IntakeAggregatorTest {
     assertThat(a).isEqualTo(b);
   }
 
+  @Test
+  void aggregateDay_remainingIsTargetBased_andZeroFloored_whenTargetsExist() {
+    // nutrition-6: remaining = max(0, dailyTarget - actualSoFar), not planned - actual.
+    UUID userId = UUID.randomUUID();
+    // Eat 1500 kcal / 140g protein. Targets: 2000 kcal / 120g protein.
+    IntakeDay d = day(userId, DAY, confirmedSlot(MealSlot.BREAKFAST, 1500, 140, 60, 15, 8));
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, DAY)).thenReturn(Optional.of(d));
+    when(targetsRepository.findByUserId(userId))
+        .thenReturn(Optional.of(NutritionTestData.targets().withUserId(userId).build()));
+
+    DailyAggregateDto agg = aggregator().aggregateDay(userId, DAY);
+
+    // calories: 2000 - 1500 = 500 (target-based, NOT planned 1500 - actual 1500 = 0).
+    assertThat(agg.caloriesRemaining()).isEqualTo(500);
+    // protein: actual 140 > target 120 -> floored at 0 (NOT negative).
+    assertThat(agg.protein().remainingG()).isEqualByComparingTo(BigDecimal.ZERO);
+    // carbs: target 250 - actual 60 = 190.
+    assertThat(agg.carbs().remainingG()).isEqualByComparingTo(new BigDecimal("190.00"));
+  }
+
+  @Test
+  void aggregateDay_noTargets_fallsBackToZeroFlooredPlannedRemaining() {
+    // nutrition-6: with no targets row, remaining falls back to max(0, planned - actual).
+    UUID userId = UUID.randomUUID();
+    // planned 500 kcal / 30g protein; eat 700 kcal / 40g protein (over-eaten).
+    IntakeDay d = day(userId, DAY, slotPlannedVsActual(MealSlot.BREAKFAST, 500, 30, 700, 40));
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, DAY)).thenReturn(Optional.of(d));
+    when(targetsRepository.findByUserId(userId)).thenReturn(Optional.empty());
+
+    DailyAggregateDto agg = aggregator().aggregateDay(userId, DAY);
+
+    // planned 500 - actual 700 = -200 -> floored to 0.
+    assertThat(agg.caloriesRemaining()).isZero();
+    assertThat(agg.protein().remainingG()).isEqualByComparingTo(BigDecimal.ZERO);
+  }
+
+  @Test
+  void aggregateWeek_perDayAndTotalRemaining_areTargetBased_andZeroFloored() {
+    // nutrition-6: per-day remaining uses the daily target; weekly total uses 7×-target.
+    UUID userId = UUID.randomUUID();
+    IntakeDay d1 = day(userId, MONDAY, confirmedSlot(MealSlot.BREAKFAST, 1500, 100, 50, 20, 10));
+    when(intakeDayRepository.findByUserIdAndOnDateBetween(eq(userId), any(), any()))
+        .thenReturn(List.of(d1));
+    when(targetsRepository.findByUserId(userId))
+        .thenReturn(Optional.of(NutritionTestData.targets().withUserId(userId).build()));
+
+    WeeklyAggregateDto out = aggregator().aggregateWeek(userId, MONDAY);
+
+    // Monday: calories remaining = 2000 - 1500 = 500.
+    assertThat(out.perDay().get(0).caloriesRemaining()).isEqualTo(500);
+    // Empty days: remaining = full daily target (2000), not zero.
+    assertThat(out.perDay().get(1).caloriesRemaining()).isEqualTo(2000);
+    // Weekly total: 7×2000 - 1500 = 12500.
+    assertThat(out.weeklyTotal().caloriesRemaining()).isEqualTo(7 * 2000 - 1500);
+    // Weekly protein: 7×120 - 100 = 740, never negative.
+    assertThat(out.weeklyTotal().protein().remainingG())
+        .isEqualByComparingTo(new BigDecimal("740.00"));
+  }
+
   // ---------------- fixtures ----------------
 
   private static IntakeDay day(UUID userId, LocalDate onDate, IntakeSlot... slots) {
@@ -201,6 +261,19 @@ class IntakeAggregatorTest {
         .actualCarbsG(BigDecimal.valueOf(carbs))
         .actualFatG(BigDecimal.valueOf(fat))
         .actualFibreG(BigDecimal.valueOf(fibre))
+        .build();
+  }
+
+  private static IntakeSlot slotPlannedVsActual(
+      MealSlot mealSlot, int plannedKcal, int plannedProtein, int actualKcal, int actualProtein) {
+    return IntakeSlot.builder()
+        .id(UUID.randomUUID())
+        .mealSlot(mealSlot)
+        .plannedCalories(plannedKcal)
+        .plannedProteinG(BigDecimal.valueOf(plannedProtein))
+        .actualStatus(IntakeSlotStatus.EDITED)
+        .actualCalories(actualKcal)
+        .actualProteinG(BigDecimal.valueOf(actualProtein))
         .build();
   }
 

@@ -24,12 +24,18 @@ CalorieTargetDto:
     direction: { $ref: '#/EnforcementDirection' }
 MacroTargetDto:
   type: object
-  required: [direction]
+  required: [direction, isHardFloor]
   properties:
     targetG: { type: number, format: double, minimum: 0, nullable: true }
     floorG: { type: number, format: double, minimum: 0, nullable: true }
     enforcement: { type: string, maxLength: 24, nullable: true }
     direction: { $ref: '#/EnforcementDirection' }
+    isHardFloor:
+      type: boolean
+      default: true
+      description: >-
+        Whether this macro participates in the planner's multiplicative hard-floor gate. Macros
+        default true. A macro contributes to the gate only when it also carries a non-null floorG.
 PerMealDistributionDto:
   type: object
   required: [mealSlot, calorieTarget, proteinTargetG]
@@ -39,13 +45,19 @@ PerMealDistributionDto:
     proteinTargetG: { type: number, format: double, minimum: 0 }
 MicroTargetDto:
   type: object
-  required: [nutrientKey]
+  required: [nutrientKey, isHardFloor]
   properties:
     nutrientKey: { type: string, minLength: 1, maxLength: 48 }
     targetValue: { type: number, format: double, minimum: 0, nullable: true }
     upperLimit: { type: number, format: double, minimum: 0, nullable: true }
     sourcePreference: { type: string, maxLength: 24, nullable: true }
     notes: { type: string, maxLength: 255, nullable: true }
+    isHardFloor:
+      type: boolean
+      default: false
+      description: >-
+        Whether this micro participates in the planner's multiplicative hard-floor gate. Micros
+        default false (warning-only); the user can toggle a specific micro to true.
 EatingWindowDto:
   type: object
   required: [enabled]

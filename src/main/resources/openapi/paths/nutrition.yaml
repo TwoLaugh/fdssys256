@@ -58,6 +58,43 @@ targets:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+targetsInitialise:
+  post:
+    tags: [Nutrition]
+    operationId: initialiseNutritionTargets
+    summary: Bootstrap the calling user's nutrition targets at onboarding.
+    description: >-
+      Creates the targets aggregate from the onboarding-computed request and DRI-seeds any
+      micronutrient the request omits (from the nutrition_dri_defaults seed table). 409 if a
+      targets row already exists for the user.
+    security:
+      - cookieAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/nutrition.yaml#/UpdateTargetsRequest' }
+    responses:
+      '201':
+        description: Targets initialised (DRI micro defaults merged).
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/TargetsDto' }
+      '400':
+        description: Validation error.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Targets row already exists.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 targetsAuditLog:
   get:
     tags: [Nutrition]
@@ -613,7 +650,15 @@ nutritionIngredientLookup:
   get:
     tags: [Nutrition]
     operationId: lookupIngredient
-    summary: Look up an ingredient by free-text term; cache-checks then falls through USDA / OFF.
+    summary: Look up an ingredient by free-text term (cache → USDA → OFF, first-hit, capped confidence).
+    description: >-
+      Resolves a free-text ingredient term. First checks the local mapping cache; on a miss it falls
+      through to the external USDA then Open Food Facts clients, IF those clients are configured and
+      reachable (a 404 is returned when neither resolves, including when an external client is
+      unavailable). External resolution is DETERMINISTIC FIRST-HIT (highest source score) — the AI
+      re-rank/match step is deferred (v1.5) — and the returned `confidence` is therefore capped at
+      0.85; a low score also flips `needsReview = true`. Frontends should treat a first-hit external
+      result as provisional (surface the confidence + needsReview), not authoritative.
     security: [{ cookieAuth: [] }]
     parameters:
       - in: query
@@ -622,7 +667,9 @@ nutritionIngredientLookup:
         schema: { type: string, minLength: 1, maxLength: 255 }
     responses:
       '200':
-        description: Ingredient nutrition resolved.
+        description: >-
+          Ingredient nutrition resolved (from cache, or a first-hit USDA/OFF match with
+          confidence ≤ 0.85).
         content:
           application/json:
             schema: { $ref: '../schemas/nutrition.yaml#/IngredientNutritionDto' }
@@ -982,6 +1029,32 @@ nutritionFloorGateEvaluate:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: 'Unauthenticated'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+nutritionIntakeDayAggregate:
+  get:
+    tags: [Nutrition]
+    operationId: getDailyIntakeAggregate
+    summary: 'Daily intake rollup for the calling user.'
+    description: >-
+      Planned / actual-so-far / remaining per macro + calories, plus the micros-actual map.
+      Remaining is computed against the user's daily target and floored at zero. A day with no
+      intake row returns a zero-valued aggregate (the day is not auto-created on read).
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: date
+        required: true
+        schema: { type: string, format: date }
+    responses:
+      '200':
+        description: 'Daily aggregate (zero-valued when no intake row exists for the date).'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/nutrition.yaml#/DailyAggregateDto' }
       '401':
         description: 'Unauthenticated'
         content:

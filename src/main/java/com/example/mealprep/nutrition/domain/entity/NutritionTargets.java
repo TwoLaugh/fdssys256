@@ -95,6 +95,9 @@ public class NutritionTargets {
   @Column(name = "protein_direction", nullable = false, length = 24)
   private EnforcementDirection proteinDirection;
 
+  @Column(name = "protein_is_hard_floor", nullable = false)
+  private boolean proteinHardFloor;
+
   // ---------------- Carbs ----------------
   @Column(name = "carbs_target_g", nullable = false, precision = 6, scale = 1)
   private BigDecimal carbsTargetG;
@@ -108,6 +111,9 @@ public class NutritionTargets {
   @Enumerated(EnumType.STRING)
   @Column(name = "carbs_direction", nullable = false, length = 24)
   private EnforcementDirection carbsDirection;
+
+  @Column(name = "carbs_is_hard_floor", nullable = false)
+  private boolean carbsHardFloor;
 
   // ---------------- Fat ----------------
   @Column(name = "fat_target_g", nullable = false, precision = 6, scale = 1)
@@ -123,6 +129,9 @@ public class NutritionTargets {
   @Column(name = "fat_direction", nullable = false, length = 24)
   private EnforcementDirection fatDirection;
 
+  @Column(name = "fat_is_hard_floor", nullable = false)
+  private boolean fatHardFloor;
+
   // ---------------- Fibre ----------------
   @Column(name = "fibre_target_g", nullable = false, precision = 6, scale = 1)
   private BigDecimal fibreTargetG;
@@ -136,6 +145,9 @@ public class NutritionTargets {
   @Enumerated(EnumType.STRING)
   @Column(name = "fibre_direction", nullable = false, length = 24)
   private EnforcementDirection fibreDirection;
+
+  @Column(name = "fibre_is_hard_floor", nullable = false)
+  private boolean fibreHardFloor;
 
   // ---------------- Saturated fat ----------------
   @Column(name = "sat_fat_target_g", precision = 6, scale = 1)

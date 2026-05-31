@@ -8,6 +8,7 @@ import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
 import com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto;
 import com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto;
 import com.example.mealprep.nutrition.api.dto.DailyActivityDto;
+import com.example.mealprep.nutrition.api.dto.DailyAggregateDto;
 import com.example.mealprep.nutrition.api.dto.DirectiveInstructionDocument;
 import com.example.mealprep.nutrition.api.dto.DirectiveStatus;
 import com.example.mealprep.nutrition.api.dto.EatingWindowDto;
@@ -55,6 +56,7 @@ import com.example.mealprep.nutrition.domain.entity.ActivityLevel;
 import com.example.mealprep.nutrition.domain.entity.ActorKind;
 import com.example.mealprep.nutrition.domain.entity.AdjustmentDirection;
 import com.example.mealprep.nutrition.domain.entity.DailyActivityLog;
+import com.example.mealprep.nutrition.domain.entity.DriDefault;
 import com.example.mealprep.nutrition.domain.entity.EatingWindow;
 import com.example.mealprep.nutrition.domain.entity.FoodMoodJournalEntry;
 import com.example.mealprep.nutrition.domain.entity.Goal;
@@ -72,6 +74,7 @@ import com.example.mealprep.nutrition.domain.entity.NutritionTargets;
 import com.example.mealprep.nutrition.domain.entity.NutritionTargetsAuditLog;
 import com.example.mealprep.nutrition.domain.entity.PerMealDistributionEntry;
 import com.example.mealprep.nutrition.domain.repository.DailyActivityLogRepository;
+import com.example.mealprep.nutrition.domain.repository.DriDefaultRepository;
 import com.example.mealprep.nutrition.domain.repository.FoodMoodJournalRepository;
 import com.example.mealprep.nutrition.domain.repository.HealthDirectiveRepository;
 import com.example.mealprep.nutrition.domain.repository.IngredientMappingRepository;
@@ -163,18 +166,22 @@ public class NutritionServiceImpl
   static final String FIELD_PROTEIN_FLOOR = "protein.floorG";
   static final String FIELD_PROTEIN_ENFORCEMENT = "protein.enforcement";
   static final String FIELD_PROTEIN_DIRECTION = "protein.direction";
+  static final String FIELD_PROTEIN_HARD_FLOOR = "protein.isHardFloor";
   static final String FIELD_CARBS_TARGET = "carbs.targetG";
   static final String FIELD_CARBS_FLOOR = "carbs.floorG";
   static final String FIELD_CARBS_ENFORCEMENT = "carbs.enforcement";
   static final String FIELD_CARBS_DIRECTION = "carbs.direction";
+  static final String FIELD_CARBS_HARD_FLOOR = "carbs.isHardFloor";
   static final String FIELD_FAT_TARGET = "fat.targetG";
   static final String FIELD_FAT_FLOOR = "fat.floorG";
   static final String FIELD_FAT_ENFORCEMENT = "fat.enforcement";
   static final String FIELD_FAT_DIRECTION = "fat.direction";
+  static final String FIELD_FAT_HARD_FLOOR = "fat.isHardFloor";
   static final String FIELD_FIBRE_TARGET = "fibre.targetG";
   static final String FIELD_FIBRE_FLOOR = "fibre.floorG";
   static final String FIELD_FIBRE_ENFORCEMENT = "fibre.enforcement";
   static final String FIELD_FIBRE_DIRECTION = "fibre.direction";
+  static final String FIELD_FIBRE_HARD_FLOOR = "fibre.isHardFloor";
   static final String FIELD_SAT_FAT_TARGET = "satFat.targetG";
   static final String FIELD_SAT_FAT_DIRECTION = "satFat.direction";
   static final String FIELD_NOTES = "notes";
@@ -206,6 +213,7 @@ public class NutritionServiceImpl
   private final DivergenceDetector divergenceDetector;
   private final FeedbackTargetResolver feedbackTargetResolver;
   private final FeedbackAdjustmentProperties feedbackAdjustmentProperties;
+  private final DriDefaultRepository driDefaultRepository;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -232,6 +240,7 @@ public class NutritionServiceImpl
       DivergenceDetector divergenceDetector,
       FeedbackTargetResolver feedbackTargetResolver,
       FeedbackAdjustmentProperties feedbackAdjustmentProperties,
+      DriDefaultRepository driDefaultRepository,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
@@ -256,6 +265,7 @@ public class NutritionServiceImpl
     this.divergenceDetector = divergenceDetector;
     this.feedbackTargetResolver = feedbackTargetResolver;
     this.feedbackAdjustmentProperties = feedbackAdjustmentProperties;
+    this.driDefaultRepository = driDefaultRepository;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -334,6 +344,64 @@ public class NutritionServiceImpl
   }
 
   // ---------------- Update ----------------
+
+  /**
+   * Default DRI {@code (age_group, sex)} band used to seed micro defaults when the onboarding
+   * wizard supplies no age/sex-tuned micros (the nutrition module has no demographic input of its
+   * own — age/sex live in the household/onboarding context). {@code 31-50 / female} is the
+   * most-protective adult band in the seed (highest iron + calcium), chosen so an under-seed never
+   * under-protects.
+   */
+  static final String DEFAULT_DRI_AGE_GROUP = "31-50";
+
+  static final String DEFAULT_DRI_SEX = "female";
+
+  @Override
+  @Transactional
+  public TargetsDto initialiseTargets(UUID userId, UpdateTargetsRequest request) {
+    // Build the aggregate from the wizard-supplied request (macros + any explicit micro overrides).
+    NutritionTargets aggregate = newAggregateFromRequest(userId, request);
+
+    // DRI-seed any micronutrient the request did NOT specify (per the HLD Bootstrapping section).
+    Set<String> suppliedKeys = new LinkedHashSet<>();
+    for (MicroTarget m : aggregate.getMicroTargets()) {
+      if (m.getNutrientKey() != null) {
+        suppliedKeys.add(m.getNutrientKey());
+      }
+    }
+    List<MicroTarget> seeded = new ArrayList<>(aggregate.getMicroTargets());
+    for (DriDefault dri :
+        driDefaultRepository.findByAgeGroupAndSex(DEFAULT_DRI_AGE_GROUP, DEFAULT_DRI_SEX)) {
+      if (!suppliedKeys.contains(dri.getMicroName())) {
+        seeded.add(
+            MicroTarget.builder()
+                .id(UUID.randomUUID())
+                .nutrientKey(dri.getMicroName())
+                .targetValue(dri.getRdaValue())
+                .sourcePreference("dri_default")
+                .hardFloor(false) // micros default to warning-only per LLD line 774
+                .build());
+      }
+    }
+    aggregate.replaceMicroTargets(seeded);
+
+    Instant now = Instant.now(clock);
+    // Audit every field as a change from the empty baseline so the bootstrap is fully traceable.
+    Snapshot before = Snapshot.empty();
+    Snapshot after = Snapshot.of(aggregate);
+    Set<String> changedFields = before.diff(after);
+    NutritionTargets saved = targetsRepository.saveAndFlush(aggregate);
+    writeAuditRows(saved.getId(), userId, changedFields, before, after, now);
+    eventPublisher.publishEvent(
+        new NutritionTargetsChangedEvent(
+            userId, saved.getId(), changedFields, UUID.randomUUID(), now));
+    log.info(
+        "nutrition targets initialised userId={} targetsId={} microsSeeded={}",
+        userId,
+        saved.getId(),
+        saved.getMicroTargets().size());
+    return mapper.toDto(saved);
+  }
 
   @Override
   @Transactional
@@ -652,24 +720,28 @@ public class NutritionServiceImpl
         aggregate.setProteinFloorG(m.floorG());
         aggregate.setProteinEnforcement(m.enforcement());
         aggregate.setProteinDirection(m.direction());
+        aggregate.setProteinHardFloor(m.isHardFloor());
       }
       case "carbs" -> {
         aggregate.setCarbsTargetG(m.targetG());
         aggregate.setCarbsFloorG(m.floorG());
         aggregate.setCarbsEnforcement(m.enforcement());
         aggregate.setCarbsDirection(m.direction());
+        aggregate.setCarbsHardFloor(m.isHardFloor());
       }
       case "fat" -> {
         aggregate.setFatTargetG(m.targetG());
         aggregate.setFatFloorG(m.floorG());
         aggregate.setFatEnforcement(m.enforcement());
         aggregate.setFatDirection(m.direction());
+        aggregate.setFatHardFloor(m.isHardFloor());
       }
       case "fibre" -> {
         aggregate.setFibreTargetG(m.targetG());
         aggregate.setFibreFloorG(m.floorG());
         aggregate.setFibreEnforcement(m.enforcement());
         aggregate.setFibreDirection(m.direction());
+        aggregate.setFibreHardFloor(m.isHardFloor());
       }
       default -> throw new IllegalStateException("Unknown macro: " + macro);
     }
@@ -708,6 +780,7 @@ public class NutritionServiceImpl
               .upperLimit(dto.upperLimit())
               .sourcePreference(dto.sourcePreference())
               .notes(dto.notes())
+              .hardFloor(dto.isHardFloor())
               .build());
     }
     return out;
@@ -786,18 +859,22 @@ public class NutritionServiceImpl
       BigDecimal proteinFloorG,
       String proteinEnforcement,
       Object proteinDirection,
+      boolean proteinHardFloor,
       BigDecimal carbsTargetG,
       BigDecimal carbsFloorG,
       String carbsEnforcement,
       Object carbsDirection,
+      boolean carbsHardFloor,
       BigDecimal fatTargetG,
       BigDecimal fatFloorG,
       String fatEnforcement,
       Object fatDirection,
+      boolean fatHardFloor,
       BigDecimal fibreTargetG,
       BigDecimal fibreFloorG,
       String fibreEnforcement,
       Object fibreDirection,
+      boolean fibreHardFloor,
       BigDecimal satFatTargetG,
       Object satFatDirection,
       String notes,
@@ -818,18 +895,22 @@ public class NutritionServiceImpl
           a.getProteinFloorG(),
           a.getProteinEnforcement(),
           a.getProteinDirection(),
+          a.isProteinHardFloor(),
           a.getCarbsTargetG(),
           a.getCarbsFloorG(),
           a.getCarbsEnforcement(),
           a.getCarbsDirection(),
+          a.isCarbsHardFloor(),
           a.getFatTargetG(),
           a.getFatFloorG(),
           a.getFatEnforcement(),
           a.getFatDirection(),
+          a.isFatHardFloor(),
           a.getFibreTargetG(),
           a.getFibreFloorG(),
           a.getFibreEnforcement(),
           a.getFibreDirection(),
+          a.isFibreHardFloor(),
           a.getSatFatTargetG(),
           a.getSatFatDirection(),
           a.getNotes(),
@@ -856,19 +937,23 @@ public class NutritionServiceImpl
           null,
           null,
           null,
-          null, // protein
+          null,
+          false, // protein (+ hard-floor flag)
           null,
           null,
           null,
-          null, // carbs
+          null,
+          false, // carbs
           null,
           null,
           null,
-          null, // fat
+          null,
+          false, // fat
           null,
           null,
           null,
-          null, // fibre
+          null,
+          false, // fibre
           null,
           null, // sat fat target + direction
           null, // notes
@@ -912,18 +997,22 @@ public class NutritionServiceImpl
           req.protein().floorG(),
           req.protein().enforcement(),
           req.protein().direction(),
+          req.protein().isHardFloor(),
           req.carbs().targetG(),
           req.carbs().floorG(),
           req.carbs().enforcement(),
           req.carbs().direction(),
+          req.carbs().isHardFloor(),
           req.fat().targetG(),
           req.fat().floorG(),
           req.fat().enforcement(),
           req.fat().direction(),
+          req.fat().isHardFloor(),
           req.fibre().targetG(),
           req.fibre().floorG(),
           req.fibre().enforcement(),
           req.fibre().direction(),
+          req.fibre().isHardFloor(),
           req.satFat().targetG(),
           req.satFat().direction(),
           req.notes(),
@@ -975,6 +1064,9 @@ public class NutritionServiceImpl
       if (!Objects.equals(proteinDirection, other.proteinDirection)) {
         changed.add(FIELD_PROTEIN_DIRECTION);
       }
+      if (proteinHardFloor != other.proteinHardFloor) {
+        changed.add(FIELD_PROTEIN_HARD_FLOOR);
+      }
       // Carbs
       if (!bigEq(carbsTargetG, other.carbsTargetG)) {
         changed.add(FIELD_CARBS_TARGET);
@@ -987,6 +1079,9 @@ public class NutritionServiceImpl
       }
       if (!Objects.equals(carbsDirection, other.carbsDirection)) {
         changed.add(FIELD_CARBS_DIRECTION);
+      }
+      if (carbsHardFloor != other.carbsHardFloor) {
+        changed.add(FIELD_CARBS_HARD_FLOOR);
       }
       // Fat
       if (!bigEq(fatTargetG, other.fatTargetG)) {
@@ -1001,6 +1096,9 @@ public class NutritionServiceImpl
       if (!Objects.equals(fatDirection, other.fatDirection)) {
         changed.add(FIELD_FAT_DIRECTION);
       }
+      if (fatHardFloor != other.fatHardFloor) {
+        changed.add(FIELD_FAT_HARD_FLOOR);
+      }
       // Fibre
       if (!bigEq(fibreTargetG, other.fibreTargetG)) {
         changed.add(FIELD_FIBRE_TARGET);
@@ -1013,6 +1111,9 @@ public class NutritionServiceImpl
       }
       if (!Objects.equals(fibreDirection, other.fibreDirection)) {
         changed.add(FIELD_FIBRE_DIRECTION);
+      }
+      if (fibreHardFloor != other.fibreHardFloor) {
+        changed.add(FIELD_FIBRE_HARD_FLOOR);
       }
       // Sat fat
       if (!bigEq(satFatTargetG, other.satFatTargetG)) {
@@ -1073,7 +1174,8 @@ public class NutritionServiceImpl
             || !bigEq(ai.targetValue(), bi.targetValue())
             || !bigEq(ai.upperLimit(), bi.upperLimit())
             || !Objects.equals(ai.sourcePreference(), bi.sourcePreference())
-            || !Objects.equals(ai.notes(), bi.notes())) {
+            || !Objects.equals(ai.notes(), bi.notes())
+            || ai.isHardFloor() != bi.isHardFloor()) {
           return false;
         }
       }
@@ -1111,18 +1213,22 @@ public class NutritionServiceImpl
             case FIELD_PROTEIN_FLOOR -> proteinFloorG;
             case FIELD_PROTEIN_ENFORCEMENT -> proteinEnforcement;
             case FIELD_PROTEIN_DIRECTION -> proteinDirection;
+            case FIELD_PROTEIN_HARD_FLOOR -> proteinHardFloor;
             case FIELD_CARBS_TARGET -> carbsTargetG;
             case FIELD_CARBS_FLOOR -> carbsFloorG;
             case FIELD_CARBS_ENFORCEMENT -> carbsEnforcement;
             case FIELD_CARBS_DIRECTION -> carbsDirection;
+            case FIELD_CARBS_HARD_FLOOR -> carbsHardFloor;
             case FIELD_FAT_TARGET -> fatTargetG;
             case FIELD_FAT_FLOOR -> fatFloorG;
             case FIELD_FAT_ENFORCEMENT -> fatEnforcement;
             case FIELD_FAT_DIRECTION -> fatDirection;
+            case FIELD_FAT_HARD_FLOOR -> fatHardFloor;
             case FIELD_FIBRE_TARGET -> fibreTargetG;
             case FIELD_FIBRE_FLOOR -> fibreFloorG;
             case FIELD_FIBRE_ENFORCEMENT -> fibreEnforcement;
             case FIELD_FIBRE_DIRECTION -> fibreDirection;
+            case FIELD_FIBRE_HARD_FLOOR -> fibreHardFloor;
             case FIELD_SAT_FAT_TARGET -> satFatTargetG;
             case FIELD_SAT_FAT_DIRECTION -> satFatDirection;
             case FIELD_NOTES -> notes;
@@ -1166,7 +1272,8 @@ public class NutritionServiceImpl
                 m.getTargetValue(),
                 m.getUpperLimit(),
                 m.getSourcePreference(),
-                m.getNotes()));
+                m.getNotes(),
+                m.isHardFloor()));
       }
       result.sort(
           java.util.Comparator.comparing(
@@ -1235,11 +1342,28 @@ public class NutritionServiceImpl
 
   @Override
   @Transactional(readOnly = true)
+  public DailyAggregateDto getDailyAggregate(UUID userId, LocalDate onDate) {
+    return intakeAggregator.aggregateDay(userId, onDate);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
   public WeeklyAggregateDto getWeeklyAggregate(UUID userId, LocalDate weekStart) {
     if (weekStart == null || weekStart.getDayOfWeek() != DayOfWeek.MONDAY) {
       throw new InvalidWeekStartException(weekStart == null ? null : weekStart.getDayOfWeek());
     }
     return intakeAggregator.aggregateWeek(userId, weekStart);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<DailyAggregateDto> getRecentIntakeTotals(UUID userId, LocalDate from, LocalDate to) {
+    validateRange(from, to);
+    List<DailyAggregateDto> out = new ArrayList<>();
+    for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
+      out.add(intakeAggregator.aggregateDay(userId, d));
+    }
+    return out;
   }
 
   @Override
@@ -2129,6 +2253,28 @@ public class NutritionServiceImpl
     return healthDirectiveMapper.toDto(saved);
   }
 
+  @Override
+  @Transactional
+  public int sweepExpiredDirectives() {
+    Instant now = Instant.now(clock);
+    List<HealthDirective> expired =
+        healthDirectiveRepository.findByStatusAndAutoExpiresAtBefore(DirectiveStatus.ACCEPTED, now);
+    if (expired.isEmpty()) {
+      return 0;
+    }
+    for (HealthDirective directive : expired) {
+      // Instruct the source module to revert any temporary effect (preference_model →
+      // removeTemporaryConstraint). Best-effort + idempotent; joins this transaction.
+      directiveApplier.revertExpired(directive);
+      // Status carries the EXPIRED transition; decidedAt keeps the original accept timestamp (no
+      // separate expiredAt column in v1).
+      directive.setStatus(DirectiveStatus.EXPIRED);
+    }
+    healthDirectiveRepository.saveAll(expired);
+    log.info("directive auto-expiry sweep transitioned {} directive(s) to EXPIRED", expired.size());
+    return expired.size();
+  }
+
   /**
    * Resolve a directive id to its row, collapsing "not found" and "owned by another user" into a
    * single 404 so we don't leak existence.
@@ -2398,40 +2544,45 @@ public class NutritionServiceImpl
   }
 
   /**
-   * Collect the macro hard-floors. LLD says macros default to {@code isHardFloor=true}; the
-   * persisted schema does not carry an {@code is_hard_floor} column on the macro fields, so 01g
-   * treats any macro whose {@code <macro>FloorG} column is non-null as a hard floor (the column is
-   * the only way the floor is expressed at all). A {@code null} floor implies "no floor configured"
-   * regardless of the LLD default — there is nothing to compare against.
+   * Collect the macro hard-floors (nutrition-4 / LLD lines 774-776). A macro contributes to the
+   * multiplicative gate only when it carries BOTH a non-null {@code <macro>FloorG} (there is
+   * something to compare against) AND its per-target {@code is_hard_floor} flag is set (macros
+   * default {@code true}). Clearing the flag downgrades the macro to a soft warning while keeping
+   * its floor value, so the gate's strictness is no longer all-or-nothing coupled to floor
+   * presence.
    */
   private static List<MacroFloor> collectMacroFloors(NutritionTargets t) {
     List<MacroFloor> out = new ArrayList<>(4);
-    if (t.getProteinFloorG() != null) {
+    if (t.getProteinFloorG() != null && t.isProteinHardFloor()) {
       out.add(new MacroFloor("protein", t.getProteinFloorG(), CandidateDailyRollupDto::proteinG));
     }
-    if (t.getCarbsFloorG() != null) {
+    if (t.getCarbsFloorG() != null && t.isCarbsHardFloor()) {
       out.add(new MacroFloor("carbs", t.getCarbsFloorG(), CandidateDailyRollupDto::carbsG));
     }
-    if (t.getFatFloorG() != null) {
+    if (t.getFatFloorG() != null && t.isFatHardFloor()) {
       out.add(new MacroFloor("fat", t.getFatFloorG(), CandidateDailyRollupDto::fatG));
     }
-    if (t.getFibreFloorG() != null) {
+    if (t.getFibreFloorG() != null && t.isFibreHardFloor()) {
       out.add(new MacroFloor("fibre", t.getFibreFloorG(), CandidateDailyRollupDto::fibreG));
     }
     return out;
   }
 
   /**
-   * Collect the micro hard-floors. LLD says micros default to {@code isHardFloor=false}; the
-   * persisted schema does not carry an {@code is_hard_floor} column on {@code MicroTarget} either.
-   * To honour the LLD default verbatim, 01g treats no micro as hard-floored at this revision (the
-   * gate never raises a micro violation). When 01h adds the column, this method becomes the only
-   * place to update.
+   * Collect the micro hard-floors (nutrition-4 / LLD lines 774-776). Micros default to {@code
+   * is_hard_floor = false} (warning-only); a micro contributes to the multiplicative gate only when
+   * the user has toggled its flag on AND it carries a {@code targetValue} to compare against (e.g.
+   * iron in pregnancy, B12 for vegans). The gate compares each enforced micro's candidate-plan
+   * value against its {@code targetValue}.
    */
   private static List<MicroFloor> collectMicroFloors(NutritionTargets t) {
-    // No is_hard_floor column on MicroTarget yet — default isHardFloor=false per LLD line 774, so
-    // no micro contributes to the hard-floor list. List<MicroFloor> stays empty by design.
-    return List.of();
+    List<MicroFloor> out = new ArrayList<>();
+    for (MicroTarget m : t.getMicroTargets()) {
+      if (m.isHardFloor() && m.getTargetValue() != null && m.getNutrientKey() != null) {
+        out.add(new MicroFloor(m.getNutrientKey(), m.getTargetValue()));
+      }
+    }
+    return out;
   }
 
   /** Internal record carrying a macro key + its floor + the rollup field extractor. */

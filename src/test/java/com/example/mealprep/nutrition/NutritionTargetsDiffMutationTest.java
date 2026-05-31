@@ -138,6 +138,8 @@ class NutritionTargetsDiffMutationTest {
         new com.example.mealprep.nutrition.domain.service.internal.FeedbackTargetResolver(),
         new com.example.mealprep.nutrition.config.FeedbackAdjustmentProperties(
             new BigDecimal("0.05"), new BigDecimal("0.10"), new BigDecimal("0.20"), 1000),
+        org.mockito.Mockito.mock(
+            com.example.mealprep.nutrition.domain.repository.DriDefaultRepository.class),
         eventPublisher,
         objectMapper,
         fixedClock);
@@ -257,7 +259,8 @@ class NutritionTargetsDiffMutationTest {
             BigDecimal.valueOf(135.0), // changed from 120.0
             base.protein().floorG(),
             base.protein().enforcement(),
-            base.protein().direction());
+            base.protein().direction(),
+            base.protein().isHardFloor());
     UpdateTargetsRequest req =
         new UpdateTargetsRequest(
             base.goal(),
@@ -288,7 +291,8 @@ class NutritionTargetsDiffMutationTest {
             BigDecimal.valueOf(275.0), // changed from 250.0
             base.carbs().floorG(),
             base.carbs().enforcement(),
-            base.carbs().direction());
+            base.carbs().direction(),
+            base.carbs().isHardFloor());
     UpdateTargetsRequest req =
         new UpdateTargetsRequest(
             base.goal(),
@@ -319,7 +323,8 @@ class NutritionTargetsDiffMutationTest {
             base.fat().targetG(),
             base.fat().floorG(),
             base.fat().enforcement(),
-            EnforcementDirection.UPPER_LIMIT); // changed from BOTH_BOUNDED
+            EnforcementDirection.UPPER_LIMIT, // changed from BOTH_BOUNDED
+            base.fat().isHardFloor());
     UpdateTargetsRequest req =
         new UpdateTargetsRequest(
             base.goal(),
@@ -350,7 +355,8 @@ class NutritionTargetsDiffMutationTest {
             base.fibre().targetG(),
             base.fibre().floorG(),
             "weekly_average", // changed from "daily_floor"
-            base.fibre().direction());
+            base.fibre().direction(),
+            base.fibre().isHardFloor());
     UpdateTargetsRequest req =
         new UpdateTargetsRequest(
             base.goal(),
@@ -406,7 +412,8 @@ class NutritionTargetsDiffMutationTest {
             BigDecimal.valueOf(25.0), // changed from 20.0
             base.satFat().floorG(),
             base.satFat().enforcement(),
-            base.satFat().direction());
+            base.satFat().direction(),
+            base.satFat().isHardFloor());
     UpdateTargetsRequest req =
         new UpdateTargetsRequest(
             base.goal(),

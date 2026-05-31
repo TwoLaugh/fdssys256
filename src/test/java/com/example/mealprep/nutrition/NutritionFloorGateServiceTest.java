@@ -136,6 +136,8 @@ class NutritionFloorGateServiceTest {
                 new java.math.BigDecimal("0.10"),
                 new java.math.BigDecimal("0.20"),
                 1000),
+            org.mockito.Mockito.mock(
+                com.example.mealprep.nutrition.domain.repository.DriDefaultRepository.class),
             eventPublisher,
             objectMapper,
             fixedClock);
@@ -245,6 +247,98 @@ class NutritionFloorGateServiceTest {
     assertThat(result.passed()).isFalse();
     assertThat(result.violations()).hasSize(3);
     assertThat(result.summary()).isEqualTo("Plan fails 3 hard floor(s) across 2 day(s)");
+  }
+
+  @Test
+  void evaluate_macroFloorPresentButHardFloorCleared_noViolation() {
+    // nutrition-4: a configured floorG that is NOT a hard floor must not kill the candidate — it is
+    // a soft warning only, so the gate passes even when the candidate is under the floor.
+    UUID userId = UUID.randomUUID();
+    NutritionTargets targets =
+        NutritionTestData.targets()
+            .withUserId(userId)
+            .withProteinFloor(BigDecimal.valueOf(100.0))
+            .build();
+    targets.setProteinHardFloor(false); // floor stays, gate participation cleared
+    when(targetsRepository.findByUserId(userId)).thenReturn(Optional.of(targets));
+
+    CandidatePlanRollupDto rollup =
+        NutritionTestData.planRollup(
+            List.of(
+                NutritionTestData.dailyRollup(
+                    LocalDate.of(2026, 5, 9),
+                    BigDecimal.valueOf(80.0), // under the 100g floor
+                    BigDecimal.valueOf(260.0),
+                    BigDecimal.valueOf(80.0),
+                    BigDecimal.valueOf(35.0))));
+
+    FloorGateResultDto result = service.evaluate(userId, rollup);
+
+    assertThat(result.passed()).isTrue();
+    assertThat(result.violations()).isEmpty();
+  }
+
+  @Test
+  void evaluate_microHardFloorToggledOn_andBreached_producesViolation() {
+    // nutrition-4: a micro toggled to is_hard_floor=true (e.g. iron in pregnancy) participates in
+    // the gate and a candidate below its targetValue is a violation.
+    UUID userId = UUID.randomUUID();
+    NutritionTargets targets =
+        NutritionTestData.targets()
+            .withUserId(userId)
+            .withMicroHardFloor("iron_mg", BigDecimal.valueOf(18.0))
+            .build();
+    when(targetsRepository.findByUserId(userId)).thenReturn(Optional.of(targets));
+
+    // dailyRollup(date) seeds iron_mg = 20.0 (meets); override to 12.0 (under the 18 floor).
+    CandidateDailyRollupDto under =
+        new CandidateDailyRollupDto(
+            LocalDate.of(2026, 5, 9),
+            com.example.mealprep.nutrition.domain.entity.ActivityLevel.LIGHT_ACTIVITY,
+            2000,
+            BigDecimal.valueOf(150.0),
+            BigDecimal.valueOf(260.0),
+            BigDecimal.valueOf(80.0),
+            BigDecimal.valueOf(35.0),
+            java.util.Map.of("iron_mg", BigDecimal.valueOf(12.0)));
+    CandidatePlanRollupDto rollup = NutritionTestData.planRollup(List.of(under));
+
+    FloorGateResultDto result = service.evaluate(userId, rollup);
+
+    assertThat(result.passed()).isFalse();
+    assertThat(result.violations()).hasSize(1);
+    assertThat(result.violations().get(0).macroOrMicro()).isEqualTo("iron_mg");
+    assertThat(result.violations().get(0).floor()).isEqualByComparingTo(BigDecimal.valueOf(18.0));
+  }
+
+  @Test
+  void evaluate_microWarningOnly_notHardFloor_noViolation() {
+    // nutrition-4: a micro with the default is_hard_floor=false never produces a gate violation,
+    // even when the candidate is well below its targetValue.
+    UUID userId = UUID.randomUUID();
+    NutritionTargets targets =
+        NutritionTestData.targets()
+            .withUserId(userId)
+            .withMicro("iron_mg", BigDecimal.valueOf(18.0)) // warning-only by default
+            .build();
+    when(targetsRepository.findByUserId(userId)).thenReturn(Optional.of(targets));
+
+    CandidateDailyRollupDto under =
+        new CandidateDailyRollupDto(
+            LocalDate.of(2026, 5, 9),
+            com.example.mealprep.nutrition.domain.entity.ActivityLevel.LIGHT_ACTIVITY,
+            2000,
+            BigDecimal.valueOf(150.0),
+            BigDecimal.valueOf(260.0),
+            BigDecimal.valueOf(80.0),
+            BigDecimal.valueOf(35.0),
+            java.util.Map.of("iron_mg", BigDecimal.valueOf(1.0)));
+    CandidatePlanRollupDto rollup = NutritionTestData.planRollup(List.of(under));
+
+    FloorGateResultDto result = service.evaluate(userId, rollup);
+
+    assertThat(result.passed()).isTrue();
+    assertThat(result.violations()).isEmpty();
   }
 
   @Test
