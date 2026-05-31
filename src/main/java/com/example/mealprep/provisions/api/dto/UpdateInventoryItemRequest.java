@@ -21,9 +21,9 @@ import java.time.LocalDate;
  * as 409.
  *
  * <p>Lifecycle transitions ({@link ItemLifecycleStatus#EXHAUSTED}/{@link
- * ItemLifecycleStatus#SPOILED}/ {@link ItemLifecycleStatus#WASTED}) are out of scope for 01a — the
- * dedicated {@code mark-spoiled} / {@code mark-exhausted} endpoints land in 01b. {@code itemStatus}
- * is accepted here so a future ticket can flip it without altering the wire shape.
+ * ItemLifecycleStatus#SPOILED}/ {@link ItemLifecycleStatus#WASTED}) also have dedicated {@code
+ * mark-spoiled} / {@code mark-exhausted} endpoints; {@code itemStatus} is accepted on this full-
+ * replacement body so a status flip can ride a PUT as well.
  */
 @ValidStorageLocation
 public record UpdateInventoryItemRequest(

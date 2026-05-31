@@ -155,6 +155,49 @@ inventoryItem:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+inventoryItemQuantity:
+  patch:
+    tags: [Provisions]
+    operationId: adjustInventoryItemQuantity
+    summary: Adjust a pantry item's quantity (focused edit; expectedVersion required).
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: itemId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/provisions.yaml#/AdjustInventoryQuantityRequest' }
+    responses:
+      '200':
+        description: Updated.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/InventoryItemDto' }
+      '400':
+        description: Validation error (e.g. status-tracked item, negative quantity).
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found or not owned.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedVersion.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 equipment:
   get:
     tags: [Provisions]

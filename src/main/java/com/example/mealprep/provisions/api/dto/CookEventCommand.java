@@ -15,6 +15,11 @@ import java.util.UUID;
  * server-side (caller's session) and is NOT carried on this record. See LLD §CookEventCommand line
  * 449-455; 01g extends the LLD shape with the {@code strict} field (LLD divergence — line 535's
  * strict-mode rule needed a request-level toggle).
+ *
+ * <p>{@code batchSplit} is the optional fridge/freezer split directive consumed when {@code
+ * isBatchCook == true} (LLD §Flow 1 step 4 line 611); {@code batchLabel} is an optional display
+ * name for the prepared-portion rows the {@code BatchCookSplitter} creates (defaults to a
+ * recipe-derived label when blank).
  */
 public record CookEventCommand(
     @NotNull UUID recipeId,
@@ -26,4 +31,6 @@ public record CookEventCommand(
     @Nullable Boolean strict,
     @Nullable @Size(max = 64) String dedupeKey,
     @NotNull @NotEmpty @Valid List<RecipeIngredientUsage> ingredientsUsed,
+    @Nullable @Valid BatchCookSplitDirective batchSplit,
+    @Nullable @Size(max = 128) String batchLabel,
     @Nullable UUID traceId) {}

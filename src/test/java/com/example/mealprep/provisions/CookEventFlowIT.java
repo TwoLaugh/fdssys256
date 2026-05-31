@@ -11,6 +11,7 @@ import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.testdata.AuthTestData;
+import com.example.mealprep.provisions.api.dto.BatchCookSplitDirective;
 import com.example.mealprep.provisions.api.dto.CookEventCommand;
 import com.example.mealprep.provisions.api.dto.MealConsumptionCommand;
 import com.example.mealprep.provisions.api.dto.RecipeIngredientUsage;
@@ -53,7 +54,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *       coalesced AFTER_COMMIT {@link ItemQuantityAdjustedEvent}, exhaustion → staple {@code OUT} +
  *       {@link ItemRanOutEvent}, dedupe idempotency (caller key + auto-computed SHA key),
  *       non-strict partial underflow in the body, strict-mode 422, unit-mismatch underflow,
- *       batch-cook 422.
+ *       batch-cook fridge/freezer split.
  *   <li>{@code POST /meal-consumption}: decrement one specific row, floor-at-zero exhaustion, 404
  *       when the row belongs to another user.
  *   <li>{@code POST /standalone-consumption}: preview (no mutation) vs confirmed deduction of the
@@ -279,6 +280,8 @@ class CookEventFlowIT {
             false,
             "fixed-dedupe-key",
             List.of(new RecipeIngredientUsage("cheese:cheddar", new BigDecimal("50.000"), "g")),
+            null,
+            null,
             null);
     postCookEvent(user.cookie(), first, 200);
     assertThat(quantityOf(itemId)).isEqualTo(150.0);
@@ -319,6 +322,8 @@ class CookEventFlowIT {
             false,
             null,
             List.of(new RecipeIngredientUsage("cheese:cheddar", new BigDecimal("40.000"), "g")),
+            null,
+            null,
             null);
 
     postCookEvent(user.cookie(), cmd, 200);
@@ -381,6 +386,8 @@ class CookEventFlowIT {
             true, // strict
             null,
             List.of(new RecipeIngredientUsage("cheese:cheddar", new BigDecimal("100.000"), "g")),
+            null,
+            null,
             null);
 
     mvc.perform(
@@ -419,33 +426,54 @@ class CookEventFlowIT {
   }
 
   @Test
-  void cookEvent_batchCook_returns422_batchCookNotSupported() throws Exception {
+  void cookEvent_batchCook_deductsIngredients_andCreatesFridgeAndFreezerPortions()
+      throws Exception {
     AuthedUser user = registerUser();
-    seedItem(user.userId(), "cheese:cheddar", "200.000", LocalDate.parse("2026-06-01"));
+    UUID ingredientRow =
+        seedItem(user.userId(), "cheese:cheddar", "200.000", LocalDate.parse("2026-06-01"));
+    UUID recipeId = UUID.randomUUID();
 
+    // Batch cook: deduct 10g cheese AND split into 3 fridge + 2 freezer portions.
     CookEventCommand cmd =
         new CookEventCommand(
-            UUID.randomUUID(),
+            recipeId,
             null,
             UUID.randomUUID(),
-            1,
+            5,
             true, // isBatchCook
             null,
             false,
             null,
             List.of(new RecipeIngredientUsage("cheese:cheddar", new BigDecimal("10.000"), "g")),
+            new BatchCookSplitDirective(3, 2, null, null),
+            "Sunday chilli",
             null);
 
-    mvc.perform(
-            post("/api/v1/provisions/cook-event")
-                .cookie(user.cookie())
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(cmd)))
-        .andExpect(status().isUnprocessableEntity())
-        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
-        .andExpect(
-            jsonPath("$.type")
-                .value("https://mealprep.example.com/problems/batch-cook-not-supported"));
+    postCookEvent(user.cookie(), cmd, 200);
+
+    // Ingredient deducted FIFO.
+    assertThat(quantityOf(ingredientRow)).isEqualTo(190.0);
+
+    // One fridge prepared row (3 portions) + one freezer prepared row (2 portions).
+    Long fridgeRows =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM provision_inventory"
+                + " WHERE user_id = ? AND source = 'BATCH_COOK' AND storage_location = 'FRIDGE'"
+                + " AND quantity = 3 AND unit = 'portions' AND name = 'Sunday chilli'",
+            Long.class,
+            user.userId());
+    assertThat(fridgeRows).isEqualTo(1L);
+
+    Long freezerRows =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM provision_inventory"
+                + " WHERE user_id = ? AND source = 'BATCH_COOK' AND storage_location = 'FREEZER'"
+                + " AND quantity = 2 AND frozen_at IS NOT NULL AND max_freeze_weeks IS NOT NULL"
+                + " AND source_recipe_id = ?",
+            Long.class,
+            user.userId(),
+            recipeId);
+    assertThat(freezerRows).isEqualTo(1L);
   }
 
   @Test
@@ -466,6 +494,8 @@ class CookEventFlowIT {
             false,
             null,
             List.of(new RecipeIngredientUsage("cheese:cheddar", new BigDecimal("100.000"), "g")),
+            null,
+            null,
             null);
 
     postCookEvent(user.cookie(), cmd, 200);

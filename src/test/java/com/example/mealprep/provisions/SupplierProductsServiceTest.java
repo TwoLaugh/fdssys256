@@ -105,6 +105,8 @@ class SupplierProductsServiceTest {
         null,
         null,
         null,
+        null,
+        null,
         null);
   }
 

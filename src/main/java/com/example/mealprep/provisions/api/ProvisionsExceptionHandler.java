@@ -1,7 +1,6 @@
 package com.example.mealprep.provisions.api;
 
 import com.example.mealprep.config.ProblemDetailSupport;
-import com.example.mealprep.provisions.exception.BatchCookNotSupportedException;
 import com.example.mealprep.provisions.exception.BudgetCurrencyChangeException;
 import com.example.mealprep.provisions.exception.BudgetNotFoundException;
 import com.example.mealprep.provisions.exception.DuplicateGroceryImportException;
@@ -150,21 +149,6 @@ public class ProvisionsExceptionHandler {
             "Insufficient inventory for cook event",
             req.getRequestURI());
     pd.setProperty("underflows", ex.getUnderflows());
-    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
-        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-        .body(pd);
-  }
-
-  @ExceptionHandler(BatchCookNotSupportedException.class)
-  public ResponseEntity<ProblemDetail> handleBatchCookNotSupported(
-      BatchCookNotSupportedException ex, HttpServletRequest req) {
-    ProblemDetail pd =
-        ProblemDetailSupport.build(
-            HttpStatus.UNPROCESSABLE_ENTITY,
-            ex.getMessage(),
-            "batch-cook-not-supported",
-            "Batch cook is not supported in v1",
-            req.getRequestURI());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);

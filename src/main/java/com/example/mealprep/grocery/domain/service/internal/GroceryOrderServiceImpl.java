@@ -399,8 +399,9 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
   /**
    * {@code markUserConfirmed} ({@code AWAITING_USER_CONFIRMATION → CONFIRMED}). Optionally fetch
    * the confirmed total via {@code provider.checkStatus}; publish {@link
-   * GroceryOrderConfirmedEvent} — the event Provisions consumes (the dormant {@code
-   * GroceryOrderConfirmedListener}).
+   * GroceryOrderConfirmedEvent} as a lifecycle/notification signal (provisions does NOT consume it
+   * — inventory is added by {@code OrderReconciler} at reconcile time via a direct {@code
+   * applyGroceryOrder} call).
    */
   @Override
   @Transactional
