@@ -44,6 +44,7 @@ record NotificationDraft(
         payload,
         actionTargetUri,
         sourceEventId,
-        traceId);
+        traceId,
+        bundlingKey);
   }
 }

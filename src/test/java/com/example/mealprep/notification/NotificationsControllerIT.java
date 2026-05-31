@@ -102,7 +102,8 @@ class NotificationsControllerIT {
                 payload,
                 "/app/provisions/inventory",
                 UUID.randomUUID(),
-                UUID.randomUUID()))
+                UUID.randomUUID(),
+                null))
         .id();
   }
 

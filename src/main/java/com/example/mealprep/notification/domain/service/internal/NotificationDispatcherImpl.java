@@ -117,6 +117,9 @@ class NotificationDispatcherImpl implements NotificationDispatcher {
     }
 
     // Persist a fresh notification via the create seam (same module impl).
+    // The create seam carries draft.bundlingKey() through CreateNotificationRequest and seeds it
+    // into bundle_keys on the initial INSERT, so a later same-key draft bundles onto this row — no
+    // follow-up entity UPDATE here (which would break the scanner's no-entity-update invariant).
     NotificationDto created = notificationService.create(draft.toCreateRequest());
     Notification persisted =
         notificationRepository

@@ -24,6 +24,7 @@ import com.example.mealprep.notification.domain.service.internal.NotificationSer
 import com.example.mealprep.notification.exception.NotificationNotFoundException;
 import com.example.mealprep.notification.exception.NotificationStateTransitionException;
 import com.example.mealprep.notification.testdata.NotificationTestData;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -50,6 +51,7 @@ class NotificationServiceImplTest {
   private final NotificationPreferenceMapper preferenceMapper =
       new NotificationPreferenceMapper() {};
   private final DeliveryLogMapper deliveryLogMapper = new DeliveryLogMapper() {};
+  private final ObjectMapper objectMapper = new ObjectMapper();
   private final Clock clock = Clock.fixed(Instant.parse("2026-01-15T12:00:00Z"), ZoneOffset.UTC);
 
   @BeforeEach
@@ -63,6 +65,7 @@ class NotificationServiceImplTest {
             deliveryLogMapper,
             deliveryLogRepository,
             new NotificationProperties(null, null, null),
+            objectMapper,
             clock);
   }
 

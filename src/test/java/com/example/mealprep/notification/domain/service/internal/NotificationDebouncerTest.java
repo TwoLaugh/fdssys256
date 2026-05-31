@@ -92,6 +92,60 @@ class NotificationDebouncerTest {
     assertThat(target).isSameAs(existing);
   }
 
+  /**
+   * notification-3: a newer different-key open row of the same {@code (user, kind)} must not hide
+   * an older same-key row. The repository returns rows newest-first; a {@code LIMIT 1} lookup would
+   * only ever see the newer different-key row (slot-999) and split the bundle. The debouncer must
+   * scan the page and find the older same-key row (slot-123).
+   */
+  @Test
+  void findBundleTarget_perKey_olderSameKeyHiddenBehindNewerDifferentKey_returnsOlderRow() {
+    UUID user = UUID.randomUUID();
+    Notification newerDifferentKey =
+        NotificationTestData.notification(
+            user, NotificationKind.PROVISION_DEFROST_REMINDER, NotificationStatus.UNREAD);
+    newerDifferentKey.setBundleKeys(debouncer.singletonKeyArray("slot-999"));
+    Notification olderSameKey =
+        NotificationTestData.notification(
+            user, NotificationKind.PROVISION_DEFROST_REMINDER, NotificationStatus.UNREAD);
+    olderSameKey.setBundleKeys(debouncer.singletonKeyArray("slot-123"));
+    // Repository contract: newest-first. The hidden same-key row is older, so it comes second.
+    when(repository.findOpenForBundling(any(), any(), any(), any()))
+        .thenReturn(List.of(newerDifferentKey, olderSameKey));
+
+    Notification target =
+        debouncer.findBundleTarget(
+            user, NotificationKind.PROVISION_DEFROST_REMINDER, "slot-123", 30, Instant.now());
+
+    assertThat(target).isSameAs(olderSameKey);
+  }
+
+  /**
+   * notification-3 corollary: when no open row carries the draft's key, even across a page of
+   * different-key rows, the debouncer opens a fresh notification (returns null) rather than
+   * mis-bundling onto an unrelated row.
+   */
+  @Test
+  void findBundleTarget_perKey_pageHasNoMatchingKey_returnsNull() {
+    UUID user = UUID.randomUUID();
+    Notification rowA =
+        NotificationTestData.notification(
+            user, NotificationKind.PROVISION_DEFROST_REMINDER, NotificationStatus.UNREAD);
+    rowA.setBundleKeys(debouncer.singletonKeyArray("slot-998"));
+    Notification rowB =
+        NotificationTestData.notification(
+            user, NotificationKind.PROVISION_DEFROST_REMINDER, NotificationStatus.UNREAD);
+    rowB.setBundleKeys(debouncer.singletonKeyArray("slot-999"));
+    when(repository.findOpenForBundling(any(), any(), any(), any()))
+        .thenReturn(List.of(rowA, rowB));
+
+    Notification target =
+        debouncer.findBundleTarget(
+            user, NotificationKind.PROVISION_DEFROST_REMINDER, "slot-123", 30, Instant.now());
+
+    assertThat(target).isNull();
+  }
+
   @Test
   void applyBundle_accumulates_incrementsCountAndAppendsKey() {
     Notification target =
