@@ -7,7 +7,9 @@ import com.example.mealprep.feedback.domain.entity.CorrectionReplayStatus;
 import com.example.mealprep.feedback.domain.entity.FeedbackEntry;
 import com.example.mealprep.feedback.domain.entity.RoutingDecision;
 import com.example.mealprep.feedback.domain.entity.RoutingFailureKind;
+import com.example.mealprep.feedback.domain.entity.RoutingLogEntry;
 import com.example.mealprep.feedback.domain.entity.RoutingStatus;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
@@ -21,7 +23,12 @@ import org.springframework.stereotype.Component;
  * <p>Synthetic shape: {@code destination = newDestination}, {@code confidence = 1.0} (user-attested
  * ground truth), {@code extractedFeedback = entry.text} (full text — the original split is no
  * longer authoritative), {@code structuredPayload} derived from the entry's UI context (non-null
- * fields only). Decision is {@code AUTO_ROUTED} since confidence is 1.0.
+ * fields only), then back-filled from the <i>original</i> routing's {@code structuredPayload} for
+ * any key the UI context did not supply. The back-fill keeps the replay in step with {@link
+ * com.example.mealprep.feedback.domain.service.FeedbackServiceImpl}'s correct-to-RECIPE
+ * precondition, which accepts a {@code recipeId} from <i>either</i> source (feedback-2): without it
+ * a correction whose recipeId lived only in the original payload would pass the precondition yet
+ * replay against an empty payload. Decision is {@code AUTO_ROUTED} since confidence is 1.0.
  */
 @Component
 public class CorrectionReplayer {
@@ -34,9 +41,16 @@ public class CorrectionReplayer {
     this.objectMapper = objectMapper;
   }
 
-  /** Build the synthetic scored classification for the corrected destination. */
+  /**
+   * Build the synthetic scored classification for the corrected destination.
+   *
+   * @param entry the feedback entry being corrected (source of UI context + full text)
+   * @param original the original routing-log row whose {@code structuredPayload} back-fills any
+   *     structured field the UI context did not carry (feedback-2)
+   * @param request the correction request (target destination)
+   */
   public ConfidenceGate.ScoredClassification buildSynthetic(
-      FeedbackEntry entry, CorrectionRequest request) {
+      FeedbackEntry entry, RoutingLogEntry original, CorrectionRequest request) {
     ObjectNode payload = objectMapper.createObjectNode();
     UiContextDocument doc = entry.getUiContext();
     if (doc != null) {
@@ -50,10 +64,41 @@ public class CorrectionReplayer {
         payload.put("planId", doc.planId().toString());
       }
     }
+    // Back-fill structured fields the UI context did not supply from the original routing payload,
+    // so the precondition (which accepts recipeId from either source) and the replay agree on the
+    // payload the corrected destination receives. UI context wins on conflict (it is the user's
+    // current screen, the more recent truth).
+    backfillFromOriginalPayload(payload, original);
     ClassificationOutput synthetic =
         new ClassificationOutput(
             request.newDestination(), BigDecimal.ONE, entry.getText(), payload);
     return new ConfidenceGate.ScoredClassification(synthetic, RoutingDecision.AUTO_ROUTED);
+  }
+
+  /**
+   * Copy {@code recipeId}, {@code mealSlotId}, {@code planId} (the structured-context keys the
+   * confirmation view and precondition care about) from the original routing's {@code
+   * structuredPayload} into {@code payload}, but only for keys {@code payload} does not already
+   * carry a non-blank value for. Other free-form payload keys are intentionally not lifted: the
+   * corrected destination is different from the original, so destination-specific fields from the
+   * old payload would not apply.
+   */
+  private void backfillFromOriginalPayload(ObjectNode payload, RoutingLogEntry original) {
+    if (original == null) {
+      return;
+    }
+    JsonNode source = original.getStructuredPayload();
+    if (source == null || !source.isObject()) {
+      return;
+    }
+    for (String key : new String[] {"recipeId", "mealSlotId", "planId"}) {
+      if (payload.path(key).asText("").isEmpty()) {
+        String value = source.path(key).asText("");
+        if (!value.isEmpty()) {
+          payload.put(key, value);
+        }
+      }
+    }
   }
 
   /** Re-fire the synthetic classification through the router's replay path. */

@@ -95,6 +95,35 @@ class FeedbackQueryServiceIT {
     assertThat(a1Dto.routes().get(0).destination()).isEqualTo(Destination.RECIPE);
   }
 
+  /**
+   * feedback-7: the batched {@code getByIds} resolves each DTO's {@code
+   * pendingClarificationQueryId} through one batched clarification lookup (not a per-entry
+   * round-trip). Seed one entry WITH a PENDING clarification and one WITHOUT, then assert the batch
+   * returns the right id on each.
+   */
+  @Test
+  void getByIds_populatesPendingClarificationId_perEntry_viaBatchedLookup() {
+    UUID alice = UUID.randomUUID();
+
+    FeedbackEntry withPending = FeedbackTestData.feedbackEntry(alice, "which one?");
+    withPending.setSubmissionStatus(SubmissionStatus.CLARIFICATION_PENDING);
+    entryRepository.saveAndFlush(withPending);
+    ClarificationQuery pending =
+        clarificationRepository.saveAndFlush(FeedbackTestData.clarificationQuery(withPending));
+
+    UUID withoutPending = seedEntryWithRecipeRoute(alice, "routed");
+
+    List<FeedbackEntryDto> dtos =
+        queryService.getByIds(alice, List.of(withPending.getId(), withoutPending));
+
+    FeedbackEntryDto pendingDto =
+        dtos.stream().filter(d -> d.id().equals(withPending.getId())).findFirst().orElseThrow();
+    assertThat(pendingDto.pendingClarificationQueryId()).isEqualTo(pending.getId());
+    FeedbackEntryDto routedDto =
+        dtos.stream().filter(d -> d.id().equals(withoutPending)).findFirst().orElseThrow();
+    assertThat(routedDto.pendingClarificationQueryId()).isNull();
+  }
+
   @Test
   void getByIds_emptyOrNullInput_shortCircuitsToEmptyList() {
     assertThat(queryService.getByIds(UUID.randomUUID(), List.of())).isEmpty();

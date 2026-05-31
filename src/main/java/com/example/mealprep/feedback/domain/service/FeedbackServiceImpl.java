@@ -49,7 +49,9 @@ import com.example.mealprep.feedback.spi.RevertContext;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -67,13 +69,19 @@ import org.springframework.transaction.annotation.Transactional;
  * guide §Service Interfaces convention. Package-private — cross-module callers inject the
  * interfaces.
  *
- * <p>01b implements: {@link #submitFeedback}, {@link #getById}, {@link #getByIds}, {@link
- * #listByUser}, {@link #getRoutingDecision}. The other interface methods throw {@code
- * UnsupportedOperationException} pending feedback-01e/01f/01g.
+ * <p>The full interface surface is implemented: the write side ({@link #submitFeedback}, {@link
+ * #correctMisclassification}, {@link #answerClarificationQuery}) plus the read side ({@link
+ * #getById}, {@link #getByIds}, {@link #listByUser}, {@link #getRoutingDecision}, {@link
+ * #listClarificationQueries}, {@link #getClarificationQuery}, {@link #listCorrections}). Two
+ * scheduled sweeps are wired here and dispatch each item to a sibling {@code REQUIRES_NEW} bean:
+ * {@link #retryStuckClassifications} (the classifier graceful-degrade recovery half) and {@link
+ * #expireOldClarificationQueries} (the daily clarification-TTL sweep).
  *
  * <p>{@code submitFeedback} publishes {@link FeedbackSubmittedEvent} via the standard publisher;
- * Spring's {@code @TransactionalEventListener(phase = AFTER_COMMIT)} consumers (01c) see the event
- * only after the {@code feedback_entries} row is durably committed.
+ * Spring's {@code @TransactionalEventListener(phase = AFTER_COMMIT)} consumers see the event only
+ * after the {@code feedback_entries} row is durably committed. {@code correctMisclassification} and
+ * {@code answerClarificationQuery} likewise publish their events inside the active transaction so
+ * AFTER_COMMIT listeners fire on commit.
  */
 @Service
 class FeedbackServiceImpl implements FeedbackQueryService, FeedbackUpdateService {
@@ -220,7 +228,7 @@ class FeedbackServiceImpl implements FeedbackQueryService, FeedbackUpdateService
     // Actuator/Micrometer is on the classpath (not currently a project dependency — ticket §8).
 
     ConfidenceGate.ScoredClassification synthetic =
-        correctionReplayer.buildSynthetic(entry, request);
+        correctionReplayer.buildSynthetic(entry, original, request);
     FeedbackRouter.RouteReplayResult replay = correctionReplayer.replay(entry, synthetic);
 
     original.setSupersededById(replay.newRoutingLogId());
@@ -484,9 +492,23 @@ class FeedbackServiceImpl implements FeedbackQueryService, FeedbackUpdateService
     if (feedbackIds == null || feedbackIds.isEmpty()) {
       return List.of();
     }
-    List<FeedbackEntryDto> out = new ArrayList<>(feedbackIds.size());
-    for (UUID id : feedbackIds) {
-      getById(userId, id).ifPresent(out::add);
+    // One batched query loads every owned entry (cross-user ids dropped by the userId predicate,
+    // missing ids absent from the result) with its routing log eagerly fetched (feedback-7).
+    List<FeedbackEntry> entries = feedbackEntryRepository.findByIdInAndUserId(feedbackIds, userId);
+    if (entries.isEmpty()) {
+      return List.of();
+    }
+    // One batched lookup resolves the pending-clarification id for every entry at once, replacing
+    // the per-entry round-trip the old per-id getById() loop issued.
+    List<UUID> entryIds = entries.stream().map(FeedbackEntry::getId).toList();
+    Map<UUID, UUID> pendingByEntryId = new HashMap<>();
+    clarificationQueryRepository
+        .findClarificationRefsByFeedbackEntryIdInAndStatus(entryIds, ClarificationStatus.PENDING)
+        .forEach(ref -> pendingByEntryId.put(ref.getFeedbackEntryId(), ref.getQueryId()));
+    List<FeedbackEntryDto> out = new ArrayList<>(entries.size());
+    for (FeedbackEntry entry : entries) {
+      FeedbackEntryDto dto = entryMapper.toDto(entry);
+      out.add(dto.withPendingClarificationQueryId(pendingByEntryId.get(entry.getId())));
     }
     return out;
   }

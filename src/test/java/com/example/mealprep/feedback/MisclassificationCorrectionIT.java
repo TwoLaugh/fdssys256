@@ -193,6 +193,64 @@ class MisclassificationCorrectionIT {
         .andExpect(openApi().isValid(openApiValidator));
   }
 
+  /**
+   * feedback-2: a correction to RECIPE whose recipeId lived <i>only</i> in the original routing's
+   * structuredPayload (the UI context carries none). The precondition accepts the payload-sourced
+   * recipeId, and {@code CorrectionReplayer.buildSynthetic} must lift it so the synthetic payload —
+   * which the RecipeDestinationDispatcher resolves recipeId from first — carries it. Before the fix
+   * the synthetic payload was empty and the RECIPE replay failed DESTINATION_VALIDATION.
+   */
+  @Test
+  void correctToRecipe_recipeIdFromOriginalPayloadOnly_replaysApplied() throws Exception {
+    AuthedUser user = registerUser();
+    UUID recipeId = UUID.randomUUID();
+
+    FeedbackEntry entry = FeedbackTestData.feedbackEntry(user.userId(), "actually adjust the dish");
+    // UI context with NO recipeId (GENERAL screen) — the recipeId lives only in the routing
+    // payload.
+    entry.setUiContext(
+        new com.example.mealprep.feedback.domain.document.UiContextDocument(
+            com.example.mealprep.feedback.api.dto.Screen.GENERAL, null, null, null, null, null));
+    entry.setSubmissionStatus(SubmissionStatus.ROUTED);
+    entry.setClassificationAttempts(1);
+    entry.getRoutingLog().clear();
+    com.fasterxml.jackson.databind.node.ObjectNode payload = objectMapper.createObjectNode();
+    payload.put("recipeId", recipeId.toString());
+    var original =
+        FeedbackTestData.routingLogEntry(entry, Destination.PREFERENCE, RoutingStatus.APPLIED);
+    original.setStructuredPayload(payload);
+    entry.getRoutingLog().add(original);
+    entryRepository.save(entry);
+    UUID feedbackId = entry.getId();
+    UUID originalRoutingId =
+        routingLogRepository.findByFeedbackEntryIdOrderByRoutedAtAsc(feedbackId).get(0).getId();
+
+    mvc.perform(
+            post(
+                    "/api/v1/feedback/{feedbackId}/routes/{routingId}/correct",
+                    feedbackId,
+                    originalRoutingId)
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        new CorrectionRequest(Destination.RECIPE, "this is a recipe change"))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.submissionStatus").value("CORRECTED"))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    var rows = routingLogRepository.findByFeedbackEntryIdOrderByRoutedAtAsc(feedbackId);
+    assertThat(rows).hasSize(2);
+    var replay =
+        rows.stream().filter(r -> !r.getId().equals(originalRoutingId)).findFirst().orElseThrow();
+    // The replay routed to RECIPE and APPLIED (would be FAILED/DESTINATION_VALIDATION pre-fix).
+    assertThat(replay.getDestination()).isEqualTo(Destination.RECIPE);
+    assertThat(replay.getStatus()).isEqualTo(RoutingStatus.APPLIED);
+    // The lifted recipeId reached the recipe handler (which echoes input.recipeId() into payload).
+    assertThat(replay.getDestinationResultJson().path("recipeId").asText())
+        .isEqualTo(recipeId.toString());
+  }
+
   @Test
   void correctToSameDestination_returns422() throws Exception {
     AuthedUser user = registerUser();

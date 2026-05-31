@@ -29,11 +29,16 @@ public interface FeedbackEntryRepository extends JpaRepository<FeedbackEntry, UU
   @EntityGraph(attributePaths = {"routingLog"})
   Optional<FeedbackEntry> findWithRoutingByIdAndUserId(UUID id, UUID userId);
 
-  Page<FeedbackEntry> findByUserIdOrderByCreatedAtDesc(UUID userId, Pageable pageable);
+  /**
+   * Batched sibling of {@link #findWithRoutingByIdAndUserId} for {@code getByIds}: one query loads
+   * every owned entry in {@code ids} (cross-user ids are filtered out by the {@code userId}
+   * predicate, missing ids are simply absent from the result), with the routing log eagerly fetched
+   * via the entity graph. Replaces the per-id N+1 fan-out (feedback-7).
+   */
+  @EntityGraph(attributePaths = {"routingLog"})
+  List<FeedbackEntry> findByIdInAndUserId(Collection<UUID> ids, UUID userId);
 
-  /** Async sweep: anything stuck in CLASSIFYING beyond the threshold is retried by 01g. */
-  List<FeedbackEntry> findBySubmissionStatusInAndCreatedAtBefore(
-      Collection<SubmissionStatus> statuses, Instant before);
+  Page<FeedbackEntry> findByUserIdOrderByCreatedAtDesc(UUID userId, Pageable pageable);
 
   /**
    * Retry-sweep query (feedback-01i): entries stuck in one of {@code statuses} whose retry clock —
