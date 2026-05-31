@@ -58,7 +58,13 @@ public record GroceryConfig(
       @NotBlank String orderStatusCron,
       @NotBlank String archiveCron) {}
 
-  /** Order single-flight + provider-retry tunables. */
-  public record OrderConfig(
-      @Min(1) int singleFlightLockTtlSeconds, @Min(1) int providerUnavailableRetryHours) {}
+  /**
+   * Order provider-retry tunables.
+   *
+   * <p>grocery-5: the former {@code singleFlightLockTtlSeconds} was dropped — the single-flight
+   * lock is a transaction-scoped {@code pg_try_advisory_xact_lock} that auto-releases on
+   * commit/rollback and honours no TTL, so the field was dead config. See {@code
+   * GroceryOrderServiceImpl#acquireSingleFlight}.
+   */
+  public record OrderConfig(@Min(1) int providerUnavailableRetryHours) {}
 }

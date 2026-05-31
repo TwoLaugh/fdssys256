@@ -45,7 +45,7 @@ class PriceObservationWriterTest {
           new GroceryConfig.InflationConfig(0.005),
           new GroceryConfig.FreshnessConfig(8, 50),
           new GroceryConfig.SchedulerConfig("0 0 4 * * SUN", "0 0 * * * *", "0 0 5 * * *"),
-          new GroceryConfig.OrderConfig(300, 24));
+          new GroceryConfig.OrderConfig(24));
 
   @Mock private PriceDataGateway gateway;
   @Mock private NutritionQueryService nutritionQueryService;

@@ -12,11 +12,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.grocery.domain.entity.BoughtVia;
 import com.example.mealprep.grocery.domain.entity.GroceryOrder;
 import com.example.mealprep.grocery.domain.entity.GroceryOrderLine;
 import com.example.mealprep.grocery.domain.entity.GroceryOrderStatus;
+import com.example.mealprep.grocery.domain.entity.LineFulfilmentStatus;
 import com.example.mealprep.grocery.domain.entity.OrderLineStatus;
 import com.example.mealprep.grocery.domain.entity.PriceSource;
+import com.example.mealprep.grocery.domain.entity.ShoppingList;
+import com.example.mealprep.grocery.domain.entity.ShoppingListLine;
 import com.example.mealprep.grocery.event.GroceryOrderReconciledEvent;
 import com.example.mealprep.grocery.exception.GroceryOrderNotFoundException;
 import com.example.mealprep.grocery.exception.OrderHasOutstandingProposalsException;
@@ -54,6 +58,7 @@ class OrderReconcilerTest {
   private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
 
   @Mock private GroceryOrderDataGateway dataGateway;
+  @Mock private ShoppingListDataGateway shoppingListDataGateway;
   @Mock private PriceObservationWriter priceObservationWriter;
   @Mock private ProvisionUpdateService provisionUpdateService;
   @Mock private ApplicationEventPublisher eventPublisher;
@@ -61,6 +66,7 @@ class OrderReconcilerTest {
   private OrderReconciler reconciler() {
     return new OrderReconciler(
         dataGateway,
+        shoppingListDataGateway,
         new OrderStateMachine(),
         priceObservationWriter,
         provisionUpdateService,
@@ -561,6 +567,134 @@ class OrderReconcilerTest {
     assertThat(reconciled).isTrue(); // duplicate is swallowed (idempotent re-reconcile)
     assertThat(order.getStatus()).isEqualTo(GroceryOrderStatus.RECONCILED);
     verify(eventPublisher).publishEvent(any(GroceryOrderReconciledEvent.class));
+  }
+
+  // ============================== source shopping-list-line write-back (grocery-1)
+  // ==============================
+
+  private ShoppingListLine sourceLine(UUID id) {
+    ShoppingList parent =
+        ShoppingList.builder().id(UUID.randomUUID()).version(0L).lines(new ArrayList<>()).build();
+    return ShoppingListLine.builder()
+        .id(id)
+        .shoppingList(parent)
+        .ingredientMappingKey("flour")
+        .displayName("Flour")
+        .requestedQuantity(new BigDecimal("1.000"))
+        .requestedUnit("kg")
+        .lineType(com.example.mealprep.grocery.domain.entity.ShoppingListLineType.PLANNED_DEMAND)
+        .fulfilmentStatus(LineFulfilmentStatus.UNFILLED)
+        .staleEstimate(false)
+        .build();
+  }
+
+  @Test
+  void reconcile_deliveredLine_marksSourceLineBoughtViaOrder() {
+    UUID sourceId = UUID.randomUUID();
+    GroceryOrderLine ln = line("flour", OrderLineStatus.DELIVERED, 120, null);
+    ln.setShoppingListLineId(sourceId);
+    GroceryOrder order = order(GroceryOrderStatus.DELIVERED, ln);
+    ShoppingListLine source = sourceLine(sourceId);
+    when(dataGateway.countProposalsByOrderIdAndStatusIn(eq(order.getId()), anyList()))
+        .thenReturn(0L);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(provisionUpdateService.applyGroceryOrder(any(), any())).thenReturn(emptyImport());
+    when(shoppingListDataGateway.findLinesByIds(any())).thenReturn(List.of(source));
+
+    reconciler().tryReconcile(order.getId());
+
+    assertThat(source.getFulfilmentStatus()).isEqualTo(LineFulfilmentStatus.BOUGHT);
+    assertThat(source.getBoughtVia()).isEqualTo(BoughtVia.ORDER);
+    assertThat(source.getGroceryOrderId()).isEqualTo(order.getId());
+    assertThat(source.getBoughtPricePence()).isEqualTo(120);
+    assertThat(source.getBoughtAt()).isEqualTo(NOW);
+    verify(shoppingListDataGateway).saveLine(source);
+    verify(shoppingListDataGateway).touchListVersion(source.getShoppingList());
+  }
+
+  @Test
+  void reconcile_substitutedLine_marksSourceSubstituted() {
+    UUID sourceId = UUID.randomUUID();
+    GroceryOrderLine ln = line("flour", OrderLineStatus.SUBSTITUTED, 90, null);
+    ln.setShoppingListLineId(sourceId);
+    GroceryOrder order = order(GroceryOrderStatus.DELIVERED, ln);
+    ShoppingListLine source = sourceLine(sourceId);
+    when(dataGateway.countProposalsByOrderIdAndStatusIn(eq(order.getId()), anyList()))
+        .thenReturn(0L);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(provisionUpdateService.applyGroceryOrder(any(), any())).thenReturn(emptyImport());
+    when(shoppingListDataGateway.findLinesByIds(any())).thenReturn(List.of(source));
+
+    reconciler().tryReconcile(order.getId());
+
+    assertThat(source.getFulfilmentStatus()).isEqualTo(LineFulfilmentStatus.SUBSTITUTED);
+    assertThat(source.getBoughtVia()).isEqualTo(BoughtVia.ORDER);
+    assertThat(source.getBoughtPricePence()).isEqualTo(90);
+  }
+
+  @Test
+  void reconcile_rejectedOrUnavailableLine_marksSourceDropped_noBoughtPrice() {
+    UUID rejectedSource = UUID.randomUUID();
+    UUID unavailableSource = UUID.randomUUID();
+    GroceryOrderLine rejected = line("flour", OrderLineStatus.REJECTED, 100, null);
+    rejected.setShoppingListLineId(rejectedSource);
+    GroceryOrderLine unavailable = line("rice", OrderLineStatus.UNAVAILABLE, 100, null);
+    unavailable.setShoppingListLineId(unavailableSource);
+    GroceryOrder order = order(GroceryOrderStatus.DELIVERED, rejected, unavailable);
+    ShoppingListLine rejectedLine = sourceLine(rejectedSource);
+    ShoppingListLine unavailableLine = sourceLine(unavailableSource);
+    when(dataGateway.countProposalsByOrderIdAndStatusIn(eq(order.getId()), anyList()))
+        .thenReturn(0L);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(shoppingListDataGateway.findLinesByIds(any()))
+        .thenReturn(List.of(rejectedLine, unavailableLine));
+
+    reconciler().tryReconcile(order.getId());
+
+    assertThat(rejectedLine.getFulfilmentStatus()).isEqualTo(LineFulfilmentStatus.DROPPED);
+    assertThat(rejectedLine.getBoughtPricePence()).isNull();
+    assertThat(rejectedLine.getBoughtVia()).isEqualTo(BoughtVia.ORDER);
+    assertThat(unavailableLine.getFulfilmentStatus()).isEqualTo(LineFulfilmentStatus.DROPPED);
+    assertThat(unavailableLine.getBoughtPricePence()).isNull();
+  }
+
+  @Test
+  void reconcile_doesNotClobberAlreadyManuallyBoughtSourceLine() {
+    UUID sourceId = UUID.randomUUID();
+    GroceryOrderLine ln = line("flour", OrderLineStatus.DELIVERED, 120, null);
+    ln.setShoppingListLineId(sourceId);
+    GroceryOrder order = order(GroceryOrderStatus.DELIVERED, ln);
+    ShoppingListLine source = sourceLine(sourceId);
+    source.setFulfilmentStatus(LineFulfilmentStatus.BOUGHT);
+    source.setBoughtVia(BoughtVia.MANUAL);
+    source.setBoughtPricePence(55);
+    when(dataGateway.countProposalsByOrderIdAndStatusIn(eq(order.getId()), anyList()))
+        .thenReturn(0L);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(provisionUpdateService.applyGroceryOrder(any(), any())).thenReturn(emptyImport());
+    when(shoppingListDataGateway.findLinesByIds(any())).thenReturn(List.of(source));
+
+    reconciler().tryReconcile(order.getId());
+
+    // Untouched — a manual mark-bought is not overwritten by order reconciliation.
+    assertThat(source.getBoughtVia()).isEqualTo(BoughtVia.MANUAL);
+    assertThat(source.getBoughtPricePence()).isEqualTo(55);
+    verify(shoppingListDataGateway, never()).saveLine(any());
+  }
+
+  @Test
+  void reconcile_orderLineWithoutSourceFk_skipsSourceWriteEntirely() {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.DELIVERED, 120, null);
+    ln.setShoppingListLineId(null); // provider-added line maps to no source list line
+    GroceryOrder order = order(GroceryOrderStatus.DELIVERED, ln);
+    when(dataGateway.countProposalsByOrderIdAndStatusIn(eq(order.getId()), anyList()))
+        .thenReturn(0L);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(provisionUpdateService.applyGroceryOrder(any(), any())).thenReturn(emptyImport());
+
+    reconciler().tryReconcile(order.getId());
+
+    verifyNoInteractions(shoppingListDataGateway);
   }
 
   // ============================== householdId fallback ==============================

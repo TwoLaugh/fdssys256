@@ -211,9 +211,30 @@ class PriceHistoryControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
                     objectMapper.writeValueAsString(
-                        new RefreshPricesRequest(user.userId(), java.util.List.of(), false))))
+                        new RefreshPricesRequest(java.util.List.of(), false))))
         .andExpect(status().isOk())
+        .andExpect(openApi().isValid(openApiValidator))
         .andExpect(jsonPath("$.observationsWritten").value(0))
+        .andExpect(jsonPath("$.aiUnavailableFallbackUsed").value(false));
+  }
+
+  @Test
+  void refresh_withProviderQuote_noProviderConfigured_returns200_softNoOp() throws Exception {
+    // grocery-2 + grocery-7: the body carries no userId (server-resolved); with useProviderQuote
+    // and no provider bean under `test`, the on-demand path degrades to observationsWritten=0
+    // rather than erroring. Also asserts the request/response stay OpenAPI-valid post-schema-drop.
+    AuthedUser user = registerUser();
+    mvc.perform(
+            post(BASE + "/refresh")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        new RefreshPricesRequest(java.util.List.of("flour", "rice"), true))))
+        .andExpect(status().isOk())
+        .andExpect(openApi().isValid(openApiValidator))
+        .andExpect(jsonPath("$.observationsWritten").value(0))
+        .andExpect(jsonPath("$.ingredientsRefreshed").value(2))
         .andExpect(jsonPath("$.aiUnavailableFallbackUsed").value(false));
   }
 }

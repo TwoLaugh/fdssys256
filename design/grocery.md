@@ -251,6 +251,8 @@ The graceful-degrade contract: **the user can always complete the order manually
 
 The learning loop. Every price encounter — quoted, paid, manually entered — is captured. The aggregate becomes the planner's cost intelligence.
 
+> **v1 cut (grocery-6, mirroring ticket 01c).** v1 ships the SIMPLE source-weighted aggregator plus a `ReferencePriceSource` cold-start fallback. The advanced model described below — exponential **time-decay** (~3-month half-life), the **Bayesian `priorStrength`** confidence shape, and the **inflation-indexed fallback** (`InflationIndexer`) — is **deferred to a v2 follow-up** and is NOT implemented in v1. The shipped v1 aggregator computes a flat source-weighted mean with a fixed prior constant (no decay term, no configurable `priorStrength`), dampens confidence when the freshest observation is stale, and on cold start falls back to a bundled reference price (returning no estimate only for a truly novel, unmapped ingredient). The decay / Bayesian / inflation config fields exist but are unused in v1. Read the rest of this section as the v2 target; see [lld/grocery.md §Flow 5](../lld/grocery.md) for the precise v1-vs-v2 split.
+
 ### Capture sources
 
 | Source | When | Confidence weight |

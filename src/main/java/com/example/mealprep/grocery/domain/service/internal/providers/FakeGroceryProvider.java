@@ -59,6 +59,10 @@ public class FakeGroceryProvider implements GroceryProvider {
   private volatile FailureMode failureMode = FailureMode.NONE;
   private volatile String unavailableReason = "provider_down";
 
+  // placeOrder slot signal (grocery-4): when false, placeOrder reports no secured delivery slot, so
+  // the order pauses at PLACED rather than auto-advancing to AWAITING_USER_CONFIRMATION.
+  private volatile boolean deliverySlotSecured = true;
+
   // checkStatus tuning (grocery-01f): when delivered==true, checkStatus reports DELIVERED and
   // surfaces the configured substitutions (the realistic delivery-with-substitutions path that
   // persists proposals via SubstitutionPersister).
@@ -89,12 +93,21 @@ public class FakeGroceryProvider implements GroceryProvider {
     this.substitutions = substitutions == null ? List.of() : List.copyOf(substitutions);
   }
 
+  /**
+   * Whether the NEXT {@code placeOrder} reports a secured delivery slot (grocery-4). When {@code
+   * false} the placed order pauses at {@code PLACED} (the delivery-slot-fails failure mode).
+   */
+  public void setDeliverySlotSecured(boolean deliverySlotSecured) {
+    this.deliverySlotSecured = deliverySlotSecured;
+  }
+
   /** Reset to the happy path. */
   public void reset() {
     this.failureMode = FailureMode.NONE;
     this.unavailableReason = "provider_down";
     this.delivered = false;
     this.substitutions = List.of();
+    this.deliverySlotSecured = true;
   }
 
   @Override
@@ -159,7 +172,8 @@ public class FakeGroceryProvider implements GroceryProvider {
         }
       }
       PlaceOrderResult partial =
-          new PlaceOrderResult(providerOrderId, confirmLink, statuses, true, failures, now);
+          new PlaceOrderResult(
+              providerOrderId, confirmLink, statuses, true, deliverySlotSecured, failures, now);
       throw new ProviderPartialFailureException("fake partial place", partial);
     }
 
@@ -168,7 +182,8 @@ public class FakeGroceryProvider implements GroceryProvider {
     for (BasketDraftLine line : draft.lines()) {
       statuses.put(line.groceryOrderLineId(), OrderLineStatus.ADDED);
     }
-    return new PlaceOrderResult(providerOrderId, confirmLink, statuses, false, List.of(), now);
+    return new PlaceOrderResult(
+        providerOrderId, confirmLink, statuses, false, deliverySlotSecured, List.of(), now);
   }
 
   @Override

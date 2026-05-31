@@ -92,7 +92,7 @@ class GroceryServiceImplTest {
           new GroceryConfig.InflationConfig(0.005),
           new GroceryConfig.FreshnessConfig(8, 50),
           new GroceryConfig.SchedulerConfig("0 0 4 * * SUN", "0 0 * * * *", "0 0 5 * * *"),
-          new GroceryConfig.OrderConfig(300, 24));
+          new GroceryConfig.OrderConfig(24));
 
   @Mock private PriceDataGateway priceDataGateway;
   @Mock private PriceAggregator priceAggregator;
@@ -789,16 +789,16 @@ class GroceryServiceImplTest {
   // ============================ refreshOnDemand ============================
 
   @Test
-  void refreshOnDemand_countsNormalisedNonBlankKeys_writesNoObservations() {
-    // "Flour" + "flour" both normalise to "flour" but are counted as two distinct entries (the
-    // method counts per supplied element, not per distinct key); the blank entry is dropped.
+  void refreshOnDemand_countsDistinctNormalisedNonBlankKeys_writesNoObservations() {
+    // "Flour" + "flour" both normalise to "flour" and collapse to ONE distinct key; the blank
+    // entry is dropped. useProviderQuote=false → no provider call.
     RefreshPricesRequest req =
-        new RefreshPricesRequest(userId, List.of("Flour", "flour", "   ", "rice"), false);
+        new RefreshPricesRequest(List.of("Flour", "flour", "   ", "rice"), false);
 
     RefreshPricesResultDto out = tier4Service().refreshOnDemand(userId, req);
 
     assertThat(out.observationsWritten()).isEqualTo(0);
-    assertThat(out.ingredientsRefreshed()).isEqualTo(3); // flour, flour, rice — blank dropped
+    assertThat(out.ingredientsRefreshed()).isEqualTo(2); // flour, rice — duplicate + blank dropped
     assertThat(out.aiUnavailableFallbackUsed()).isFalse();
     assertThat(out.fallbackMessage()).isNull();
     verifyNoInteractions(priceObservationWriter);
@@ -806,12 +806,124 @@ class GroceryServiceImplTest {
 
   @Test
   void refreshOnDemand_nullKeys_refreshesZero() {
-    RefreshPricesRequest req = new RefreshPricesRequest(userId, null, true);
+    RefreshPricesRequest req = new RefreshPricesRequest(null, true);
 
     RefreshPricesResultDto out = tier4Service().refreshOnDemand(userId, req);
 
     assertThat(out.ingredientsRefreshed()).isEqualTo(0);
     assertThat(out.observationsWritten()).isEqualTo(0);
+  }
+
+  @Test
+  void refreshOnDemand_providerQuote_noOrderGateway_softNoOp() {
+    // useProviderQuote=true but the order gateway is absent (Tier-4-only wiring) → soft no-op.
+    RefreshPricesRequest req = new RefreshPricesRequest(List.of("flour"), true);
+
+    RefreshPricesResultDto out = tier4Service().refreshOnDemand(userId, req);
+
+    assertThat(out.observationsWritten()).isEqualTo(0);
+    assertThat(out.ingredientsRefreshed()).isEqualTo(1);
+    verifyNoInteractions(priceObservationWriter);
+  }
+
+  @Test
+  void refreshOnDemand_providerQuote_noEnabledProviderState_softNoOp() {
+    GroceryProviderState disabled =
+        GroceryTestData.providerState().userId(userId).enabled(false).build();
+    when(orderGateway.findProviderStatesByUserId(userId)).thenReturn(List.of(disabled));
+    RefreshPricesRequest req = new RefreshPricesRequest(List.of("flour"), true);
+
+    RefreshPricesResultDto out =
+        service(
+                providersOf(provider),
+                providerOf(recipeQueryService),
+                providerOf(guardrails),
+                providerOf(orderGateway))
+            .refreshOnDemand(userId, req);
+
+    assertThat(out.observationsWritten()).isEqualTo(0);
+    assertThat(out.ingredientsRefreshed()).isEqualTo(1);
+    verifyNoInteractions(priceObservationWriter);
+  }
+
+  @Test
+  void refreshOnDemand_providerQuote_writesObservationsPerLine() throws Exception {
+    GroceryProviderState state =
+        GroceryTestData.providerState().userId(userId).providerKey("fake").enabled(true).build();
+    when(orderGateway.findProviderStatesByUserId(userId)).thenReturn(List.of(state));
+    when(provider.providerKey()).thenReturn("fake");
+    when(provider.quote(any()))
+        .thenAnswer(
+            inv -> {
+              BasketDraft draft = inv.getArgument(0);
+              Map<UUID, QuoteLineResult> lineResults = new LinkedHashMap<>();
+              for (var line : draft.lines()) {
+                lineResults.put(
+                    line.groceryOrderLineId(),
+                    new QuoteLineResult(
+                        OrderLineStatus.ADDED, "sku-" + line.ingredientMappingKey(), 150, 1, null));
+              }
+              return new QuoteResult("prov-order-1", lineResults, 300, "GBP", NOW);
+            });
+    RefreshPricesRequest req = new RefreshPricesRequest(List.of("flour", "rice"), true);
+
+    RefreshPricesResultDto out =
+        service(
+                providersOf(provider),
+                providerOf(recipeQueryService),
+                providerOf(guardrails),
+                providerOf(orderGateway))
+            .refreshOnDemand(userId, req);
+
+    assertThat(out.observationsWritten()).isEqualTo(2);
+    assertThat(out.ingredientsRefreshed()).isEqualTo(2);
+    ArgumentCaptor<PriceObservationWriter.WriteCommand> cmd =
+        ArgumentCaptor.forClass(PriceObservationWriter.WriteCommand.class);
+    verify(priceObservationWriter, times(2)).write(cmd.capture());
+    assertThat(cmd.getAllValues()).allMatch(w -> w.source() == PriceSource.QUOTE);
+  }
+
+  @Test
+  void refreshOnDemand_providerQuote_providerUnavailable_surfaces503() throws Exception {
+    GroceryProviderState state =
+        GroceryTestData.providerState().userId(userId).providerKey("fake").enabled(true).build();
+    when(orderGateway.findProviderStatesByUserId(userId)).thenReturn(List.of(state));
+    when(provider.providerKey()).thenReturn("fake");
+    when(provider.quote(any()))
+        .thenThrow(new ProviderUnavailableException("fake", "provider_down", "down"));
+    RefreshPricesRequest req = new RefreshPricesRequest(List.of("flour"), true);
+
+    GroceryServiceImpl svc =
+        service(
+            providersOf(provider),
+            providerOf(recipeQueryService),
+            providerOf(guardrails),
+            providerOf(orderGateway));
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> svc.refreshOnDemand(userId, req))
+        .isInstanceOf(com.example.mealprep.grocery.exception.ProviderUnavailableException.class);
+  }
+
+  @Test
+  void refreshOnDemand_providerQuote_aiUnavailable_propagatesForFallbackMapping() throws Exception {
+    GroceryProviderState state =
+        GroceryTestData.providerState().userId(userId).providerKey("fake").enabled(true).build();
+    when(orderGateway.findProviderStatesByUserId(userId)).thenReturn(List.of(state));
+    when(provider.providerKey()).thenReturn("fake");
+    when(provider.quote(any())).thenThrow(new AiUnavailableException("cap reached"));
+    RefreshPricesRequest req = new RefreshPricesRequest(List.of("flour"), true);
+
+    GroceryServiceImpl svc =
+        service(
+            providersOf(provider),
+            providerOf(recipeQueryService),
+            providerOf(guardrails),
+            providerOf(orderGateway));
+
+    // AiUnavailableException propagates unchanged (GroceryExceptionHandler maps it to the 503 +
+    // aiUnavailableFallbackUsed=true response).
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> svc.refreshOnDemand(userId, req))
+        .isInstanceOf(AiUnavailableException.class);
   }
 
   // ============================ runScheduledBackgroundRefresh (01g) ============================
@@ -1114,25 +1226,31 @@ class GroceryServiceImplTest {
   // ============================ quoteAndWriteObservations (01g) ============================
 
   @Test
-  void quoteAndWrite_providerUnavailable_writesNothing() throws Exception {
+  void quoteAndWrite_providerUnavailable_propagates_writesNothing() throws Exception {
+    // The helper no longer swallows — it propagates so each caller (scheduled vs on-demand) applies
+    // its own contract. The scheduled-path swallow is covered by the scheduledRefresh_* tests.
     GroceryProviderState state =
         GroceryTestData.providerState().userId(userId).providerKey("fake").build();
     when(provider.quote(any()))
         .thenThrow(new ProviderUnavailableException("fake", "login_required", "down"));
+    GroceryServiceImpl svc = tier4Service();
 
-    tier4Service().quoteAndWriteObservations(userId, state, provider, List.of("flour"));
-
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> svc.quoteAndWriteObservations(userId, state, provider, List.of("flour")))
+        .isInstanceOf(ProviderUnavailableException.class);
     verifyNoInteractions(priceObservationWriter);
   }
 
   @Test
-  void quoteAndWrite_aiUnavailable_writesNothing() throws Exception {
+  void quoteAndWrite_aiUnavailable_propagates_writesNothing() throws Exception {
     GroceryProviderState state =
         GroceryTestData.providerState().userId(userId).providerKey("fake").build();
     when(provider.quote(any())).thenThrow(new AiUnavailableException("cap"));
+    GroceryServiceImpl svc = tier4Service();
 
-    tier4Service().quoteAndWriteObservations(userId, state, provider, List.of("flour"));
-
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> svc.quoteAndWriteObservations(userId, state, provider, List.of("flour")))
+        .isInstanceOf(AiUnavailableException.class);
     verifyNoInteractions(priceObservationWriter);
   }
 

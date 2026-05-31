@@ -74,12 +74,13 @@ import org.springframework.transaction.annotation.Transactional;
  * methods. Both impls live in the {@code internal} package; Spring injects one bean per interface.
  *
  * <p><b>Single-flight.</b> {@code quote} / {@code placeOrder} / {@code refreshStatus} acquire a
- * Postgres advisory xact-lock keyed on {@code (userId, shoppingListId)} via {@code
- * core.LockService}; a failed acquire → {@link OrderConcurrencyConflictException} (409). The lock
- * is transaction-scoped (auto-released on commit/rollback), so the provider call runs inside the
- * same lock-holding tx (LLD line 980 — the lock spans the provider call AND the tx). The {@code
- * singleFlightLockTtlSeconds} config is the documented intent; the advisory lock's lifecycle is the
- * transaction.
+ * Postgres advisory xact-lock keyed on a name-based UUID hash of {@code (userId, shoppingListId)}
+ * (see {@link #acquireSingleFlight}) via {@code core.LockService}; a failed acquire → {@link
+ * OrderConcurrencyConflictException} (409). The lock is TRANSACTION-SCOPED — {@code
+ * pg_try_advisory_xact_lock} auto-releases on commit/rollback, with no separate TTL — so the
+ * provider call runs inside the same lock-holding tx (LLD line 980 — the lock spans the provider
+ * call AND the tx). There is therefore no TTL config field for this lock (grocery-5: the unused
+ * {@code OrderConfig.singleFlightLockTtlSeconds} was dropped, as an xact-lock honours no TTL).
  *
  * <p><b>Provider availability.</b> v1 ships ONLY the test-scoped {@code FakeGroceryProvider}; in
  * production there is no provider bean, so {@code provider(...)} returns empty and {@code quote} /
@@ -323,11 +324,14 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
   /**
    * {@code placeOrder} ({@code QUOTED → PLACED | PLACED_PARTIAL}). Single-flight; call {@code
    * provider.placeOrder}; persist {@code confirm_link}, per-line statuses, failure log.
-   * Auto-advance to {@code AWAITING_USER_CONFIRMATION} (never auto-confirms). On {@link
-   * ProviderPartialFailureException} → {@code PLACED_PARTIAL} + persist added lines + confirm link
-   * (200 body, NOT an error). On {@link ProviderUnavailableException} → {@code
-   * PROVIDER_UNAVAILABLE} + event + 503. On {@link AiUnavailableException} → revert to {@code
-   * DRAFT} + 503.
+   * Auto-advance to {@code AWAITING_USER_CONFIRMATION} ONLY when the provider secured a delivery
+   * slot ({@link PlaceOrderResult#deliverySlotSecured}); when no slot is secured the order PAUSES
+   * at {@code PLACED} with {@code status_reason = "delivery_slot_required"} (grocery-4 / LLD line
+   * 922 — the user picks a slot in the provider UI and advances later). A {@code PLACED_PARTIAL}
+   * outcome always auto-advances. Never auto-confirms. On {@link ProviderPartialFailureException} →
+   * {@code PLACED_PARTIAL} + persist added lines + confirm link (200 body, NOT an error). On {@link
+   * ProviderUnavailableException} → {@code PROVIDER_UNAVAILABLE} + event + 503. On {@link
+   * AiUnavailableException} → revert to {@code DRAFT} + 503.
    */
   @Override
   @Transactional
@@ -375,16 +379,28 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
       order.getAutomationFailureLog().addAll(result.failureLog());
     }
 
-    // Transition placed/placed_partial, then auto-advance to AWAITING_USER_CONFIRMATION.
+    // Transition to placed / placed_partial.
     GroceryOrderStatus placedStatus =
         partial ? GroceryOrderStatus.PLACED_PARTIAL : GroceryOrderStatus.PLACED;
     stateMachine.assertCanTransition(order.getStatus(), placedStatus);
     order.setStatus(placedStatus);
 
-    stateMachine.assertCanTransition(
-        order.getStatus(), GroceryOrderStatus.AWAITING_USER_CONFIRMATION);
-    order.setStatus(GroceryOrderStatus.AWAITING_USER_CONFIRMATION);
-    order.setStatusReason(null);
+    // grocery-4: auto-advance to AWAITING_USER_CONFIRMATION ONLY when a delivery slot was secured.
+    // No slot on the non-partial PLACED path → PAUSE at PLACED with a reason (the LLD "delivery
+    // slot
+    // fails" failure mode, line 922); the user picks a slot in the provider UI and advances later.
+    // A
+    // PLACED_PARTIAL outcome always advances (its pause-for-manual-completion semantic is
+    // separate).
+    boolean autoAdvance = partial || result.deliverySlotSecured();
+    if (autoAdvance) {
+      stateMachine.assertCanTransition(
+          order.getStatus(), GroceryOrderStatus.AWAITING_USER_CONFIRMATION);
+      order.setStatus(GroceryOrderStatus.AWAITING_USER_CONFIRMATION);
+      order.setStatusReason(null);
+    } else {
+      order.setStatusReason("delivery_slot_required");
+    }
 
     clearFailure(providerState);
     dataGateway.saveOrder(order);
@@ -695,14 +711,34 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
     return order;
   }
 
-  /** Acquire the single-flight advisory lock; failed acquire → 409. */
+  /**
+   * Acquire the single-flight advisory lock keyed on {@code (userId, shoppingListId)}; failed
+   * acquire → 409.
+   *
+   * <p><b>Scope derivation (grocery-5).</b> The scope id is a name-based UUID hash over the BOTH
+   * full 128-bit UUIDs (all 32 bytes of {@code userId} ++ {@code shoppingListId}) via {@link
+   * UUID#nameUUIDFromBytes}. The previous form spliced {@code userId}'s MSB with {@code
+   * shoppingListId}'s LSB, discarding half of each id — two distinct {@code (user, list)} pairs
+   * that happened to share those halves would collide on the same lock. Hashing all bytes removes
+   * that collision class.
+   */
   private void acquireSingleFlight(UUID userId, UUID shoppingListId) {
-    UUID scopeId =
-        new UUID(userId.getMostSignificantBits(), shoppingListId.getLeastSignificantBits());
+    UUID scopeId = scopeHash(userId, shoppingListId);
     if (!lockService.tryAcquire(LockKey.forCustom(LOCK_SCOPE, scopeId))) {
       throw new OrderConcurrencyConflictException(
           "Another grocery operation is in progress for this list; retry shortly.");
     }
+  }
+
+  /** Name-based UUID over the 32 bytes of {@code userId} ++ {@code shoppingListId}. */
+  private static UUID scopeHash(UUID userId, UUID shoppingListId) {
+    byte[] bytes = new byte[32];
+    java.nio.ByteBuffer.wrap(bytes)
+        .putLong(userId.getMostSignificantBits())
+        .putLong(userId.getLeastSignificantBits())
+        .putLong(shoppingListId.getMostSignificantBits())
+        .putLong(shoppingListId.getLeastSignificantBits());
+    return UUID.nameUUIDFromBytes(bytes);
   }
 
   private GroceryProviderState requireEnabledProviderState(UUID userId, String providerKey) {

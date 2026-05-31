@@ -842,16 +842,59 @@ public class GroceryServiceImpl
   @Override
   @Transactional
   public RefreshPricesResultDto refreshOnDemand(UUID userId, RefreshPricesRequest request) {
-    // useProviderQuote=false → return latest aggregates, no provider call (LLD line 945). The
-    // useProviderQuote=true provider-quote leg depends on the GroceryProvider SPI (01e), which is
-    // NOT built yet. Per the ticket, 01c must NOT hard-depend on 01e: with no provider available we
-    // behave as useProviderQuote=false (observationsWritten=0). When 01e lands, the provider lookup
-    // (ObjectProvider<GroceryProvider>) + AiUnavailableException handling wire in here.
-    List<String> keys =
-        request.ingredientMappingKeys() == null ? List.of() : request.ingredientMappingKeys();
-    int refreshed =
-        (int) keys.stream().map(IngredientMappingKeys::normalise).filter(this::nonBlank).count();
-    return new RefreshPricesResultDto(0, refreshed, false, null);
+    // The distinct, normalised, non-blank keys the caller asked to refresh.
+    List<String> normalisedKeys =
+        (request.ingredientMappingKeys() == null
+                ? List.<String>of()
+                : request.ingredientMappingKeys())
+            .stream()
+                .map(IngredientMappingKeys::normalise)
+                .filter(this::nonBlank)
+                .distinct()
+                .toList();
+    int refreshed = normalisedKeys.size();
+
+    // useProviderQuote=false → no provider call; the latest aggregates are already readable via the
+    // aggregate endpoints (LLD §Flow 6, line 945). observationsWritten=0.
+    if (!request.useProviderQuote()) {
+      return new RefreshPricesResultDto(0, refreshed, false, null);
+    }
+
+    // useProviderQuote=true (grocery-2): assemble a 1-pack-per-key basket, quote against the user's
+    // enabled provider, and write QUOTE observations (shared with the scheduled path). With no
+    // provider configured / available, degrade to the no-quote behaviour (observationsWritten=0)
+    // rather than erroring — a deliberate refresh with no provider is a soft no-op, not a 4xx.
+    if (normalisedKeys.isEmpty()) {
+      return new RefreshPricesResultDto(0, 0, false, null);
+    }
+    GroceryOrderDataGateway orderGateway = orderGatewayProvider.getIfAvailable();
+    Optional<GroceryProviderState> enabledState =
+        orderGateway == null
+            ? Optional.empty()
+            : orderGateway.findProviderStatesByUserId(userId).stream()
+                .filter(GroceryProviderState::isEnabled)
+                .findFirst();
+    if (enabledState.isEmpty()) {
+      return new RefreshPricesResultDto(0, refreshed, false, null);
+    }
+    GroceryProviderState providerState = enabledState.get();
+    GroceryProvider provider = providerFor(providerState.getProviderKey());
+    if (provider == null) {
+      return new RefreshPricesResultDto(0, refreshed, false, null);
+    }
+
+    // The on-demand path surfaces provider failures as 503 (the user invoked it deliberately):
+    // an SPI ProviderUnavailableException → the HTTP-mapped unchecked variant; an
+    // AiUnavailableException propagates unchanged (GroceryExceptionHandler maps it to 503 with
+    // aiUnavailableFallbackUsed=true).
+    int written;
+    try {
+      written = quoteAndWriteObservations(userId, providerState, provider, normalisedKeys);
+    } catch (ProviderUnavailableException ex) {
+      throw new com.example.mealprep.grocery.exception.ProviderUnavailableException(
+          providerState.getProviderKey(), ex.reason(), ex.getMessage());
+    }
+    return new RefreshPricesResultDto(written, refreshed, false, null);
   }
 
   /**
@@ -939,7 +982,22 @@ public class GroceryServiceImpl
       return;
     }
 
-    quoteAndWriteObservations(userId, providerState, provider, keys);
+    // The scheduled path degrades silently on provider/AI failure (a probe failure is not a
+    // placement failure; the cap-exceeded listener will already have paused scheduled work).
+    try {
+      quoteAndWriteObservations(userId, providerState, provider, keys);
+    } catch (ProviderUnavailableException ex) {
+      log.info(
+          "scheduled refresh: provider {} unavailable for user {} ({})",
+          providerState.getProviderKey(),
+          userId,
+          ex.getMessage());
+    } catch (AiUnavailableException ex) {
+      log.info(
+          "scheduled refresh: AI cap reached during provider quote for user {} ({})",
+          userId,
+          ex.getMessage());
+    }
   }
 
   /**
@@ -990,14 +1048,18 @@ public class GroceryServiceImpl
 
   /**
    * Issue one provider quote covering {@code keys} and append a {@link PriceSource#QUOTE}
-   * observation per quoted line. Per LLD line 943 the on-demand and scheduled paths share the
-   * "quote → write observations" mechanic; this helper is the common implementation.
+   * observation per quoted line; returns the number of observations written. Per LLD line 943 the
+   * on-demand (grocery-2) and scheduled paths share the "quote → write observations" mechanic; this
+   * helper is the common implementation.
+   *
+   * <p>This method does NOT swallow provider failures — it propagates the SPI {@link
+   * ProviderUnavailableException} and the unchecked {@link AiUnavailableException} so each caller
+   * applies its own contract: the scheduled path degrades silently, while the deliberate on-demand
+   * path surfaces a 503.
    */
-  void quoteAndWriteObservations(
-      UUID userId,
-      GroceryProviderState providerState,
-      GroceryProvider provider,
-      List<String> keys) {
+  int quoteAndWriteObservations(
+      UUID userId, GroceryProviderState providerState, GroceryProvider provider, List<String> keys)
+      throws ProviderUnavailableException {
     // Synthetic basket — one line per key, pack count 1, no preferred SKU hint.
     List<BasketDraftLine> lines = new ArrayList<>(keys.size());
     Map<UUID, String> lineKey = new LinkedHashMap<>();
@@ -1013,26 +1075,10 @@ public class GroceryServiceImpl
             lines,
             new BasketDraftPreferences(false, false, false, null));
 
-    QuoteResult result;
-    try {
-      result = provider.quote(draft);
-    } catch (ProviderUnavailableException ex) {
-      log.info(
-          "scheduled refresh: provider {} unavailable for user {} ({})",
-          providerState.getProviderKey(),
-          userId,
-          ex.getMessage());
-      return;
-    } catch (AiUnavailableException ex) {
-      log.info(
-          "scheduled refresh: AI cap reached during provider quote for user {} ({})",
-          userId,
-          ex.getMessage());
-      return;
-    }
+    QuoteResult result = provider.quote(draft);
 
     if (result == null || result.lineResults() == null) {
-      return;
+      return 0;
     }
     Instant observedAt = clock.instant();
     int written = 0;
@@ -1066,16 +1112,17 @@ public class GroceryServiceImpl
               null,
               null,
               observedAt,
-              "scheduled refresh"));
+              "refresh quote"));
       written++;
     }
     if (written > 0) {
       log.info(
-          "scheduled refresh: wrote {} QUOTE observation(s) for user {} via provider {}",
+          "refresh: wrote {} QUOTE observation(s) for user {} via provider {}",
           written,
           userId,
           providerState.getProviderKey());
     }
+    return written;
   }
 
   private GroceryProvider providerFor(String providerKey) {

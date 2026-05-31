@@ -110,7 +110,7 @@ class GroceryOrderServiceImplTest {
           new GroceryConfig.InflationConfig(0.005),
           new GroceryConfig.FreshnessConfig(8, 50),
           new GroceryConfig.SchedulerConfig("0 0 4 * * SUN", "0 0 * * * *", "0 0 5 * * *"),
-          new GroceryConfig.OrderConfig(300, 24));
+          new GroceryConfig.OrderConfig(24));
 
   private ObjectProvider<GroceryProvider> providers;
   private GroceryOrderServiceImpl service;
@@ -321,6 +321,47 @@ class GroceryOrderServiceImplTest {
   }
 
   @Test
+  void singleFlight_lockScope_hashesBothFullUuids_noMsbLsbSpliceCollision() {
+    // grocery-5: the lock scope must be a name-based UUID over BOTH full UUIDs, not the old splice
+    // new UUID(userId.msb, listId.lsb). Two (user, list) pairs that share (userId.msb, listId.lsb)
+    // — which collided under the old splice — must now produce DISTINCT lock scopes.
+    UUID userA = new UUID(0x1111_1111_1111_1111L, 0xAAAA_AAAA_AAAA_AAAAL);
+    UUID userB = new UUID(0x1111_1111_1111_1111L, 0xBBBB_BBBB_BBBB_BBBBL); // same MSB as userA
+    UUID listA = new UUID(0xCCCC_CCCC_CCCC_CCCCL, 0x2222_2222_2222_2222L);
+    UUID listB = new UUID(0xDDDD_DDDD_DDDD_DDDDL, 0x2222_2222_2222_2222L); // same LSB as listA
+
+    UUID scopeA = captureScopeId(userA, listA);
+    UUID scopeB = captureScopeId(userB, listB);
+    UUID scopeARepeat = captureScopeId(userA, listA);
+
+    // Old splice gave both pairs new UUID(0x1111..., 0x2222...) → identical. New hash differs.
+    assertThat(scopeA).isNotEqualTo(scopeB);
+    // Deterministic: same inputs → same scope.
+    assertThat(scopeARepeat).isEqualTo(scopeA);
+  }
+
+  /** Drive a quote and capture the {@link LockKey.ForCustom} scopeId the service derives. */
+  private UUID captureScopeId(UUID userId, UUID shoppingListId) {
+    GroceryOrder order = order(GroceryOrderStatus.DRAFT, line("flour", OrderLineStatus.QUEUED));
+    order.setUserId(userId);
+    order.setShoppingListId(shoppingListId);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    // Fail the acquire so the call short-circuits at the lock — we only need the captured key.
+    when(lockService.tryAcquire(any(LockKey.class))).thenReturn(false);
+
+    ArgumentCaptor<LockKey> key = ArgumentCaptor.forClass(LockKey.class);
+    try {
+      service.quote(userId, new QuoteRequest(order.getId()));
+    } catch (OrderConcurrencyConflictException expected) {
+      // expected — the lock acquire failed by design.
+    }
+    verify(lockService, org.mockito.Mockito.atLeastOnce()).tryAcquire(key.capture());
+    org.mockito.Mockito.reset(lockService, dataGateway);
+    lenient().when(lockService.tryAcquire(any(LockKey.class))).thenReturn(true);
+    return ((LockKey.ForCustom) key.getValue()).scopeId();
+  }
+
+  @Test
   void quote_orderNotOwned_throws404() {
     GroceryOrder order = order(GroceryOrderStatus.DRAFT, line("flour", OrderLineStatus.QUEUED));
     order.setUserId(UUID.randomUUID()); // different owner
@@ -507,6 +548,7 @@ class GroceryOrderServiceImplTest {
                 "https://confirm",
                 Map.of(ln.getId(), OrderLineStatus.ADDED),
                 false,
+                true, // delivery slot secured → auto-advance
                 List.of(),
                 NOW));
 
@@ -525,6 +567,37 @@ class GroceryOrderServiceImplTest {
   }
 
   @Test
+  void placeOrder_noDeliverySlot_pausesAtPlaced_withReason() throws Exception {
+    // grocery-4: no secured delivery slot on the non-partial path → PAUSE at PLACED (the LLD
+    // "delivery slot fails" failure mode), with status_reason = "delivery_slot_required".
+    GroceryOrderLine ln = line("flour", OrderLineStatus.ADDED);
+    GroceryOrder order = order(GroceryOrderStatus.QUOTED, ln);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+    when(dataGateway.findProviderState(USER_ID, "fake"))
+        .thenReturn(Optional.of(providerState(true)));
+    when(basketDraftAssembler.assemble(order))
+        .thenReturn(new BasketDraft(order.getId(), USER_ID, List.of(), null));
+    when(provider.placeOrder(any()))
+        .thenReturn(
+            new PlaceOrderResult(
+                "po-1",
+                "https://confirm",
+                Map.of(ln.getId(), OrderLineStatus.ADDED),
+                false,
+                false, // NO delivery slot secured
+                List.of(),
+                NOW));
+
+    service.placeOrder(USER_ID, new PlaceOrderRequest(order.getId()));
+
+    assertThat(order.getStatus()).isEqualTo(GroceryOrderStatus.PLACED);
+    assertThat(order.getStatusReason()).isEqualTo("delivery_slot_required");
+    assertThat(order.getConfirmLink()).isEqualTo("https://confirm");
+    // The placed event still fires (the order WAS placed; it just paused for a slot).
+    verify(eventPublisher).publishEvent(any(GroceryOrderPlacedEvent.class));
+  }
+
+  @Test
   void placeOrder_partialFailure_advancesViaPlacedPartial_emitsPartialTrue() throws Exception {
     GroceryOrderLine ln = line("flour", OrderLineStatus.ADDED);
     GroceryOrder order = order(GroceryOrderStatus.QUOTED, ln);
@@ -539,6 +612,7 @@ class GroceryOrderServiceImplTest {
             "https://confirm-partial",
             Map.of(ln.getId(), OrderLineStatus.ADDED_PARTIAL),
             true,
+            false, // even with no slot, a PLACED_PARTIAL outcome auto-advances
             List.of(),
             NOW);
     when(provider.placeOrder(any()))
@@ -1205,6 +1279,7 @@ class GroceryOrderServiceImplTest {
                 "https://confirm.example",
                 Map.of(),
                 false,
+                true,
                 List.of(),
                 NOW.minus(60, java.time.temporal.ChronoUnit.SECONDS)));
 
@@ -1232,7 +1307,13 @@ class GroceryOrderServiceImplTest {
     when(provider.placeOrder(any()))
         .thenReturn(
             new PlaceOrderResult(
-                "po-1", "https://confirm", Map.of(), false, List.of(), null)); // null placedAt
+                "po-1",
+                "https://confirm",
+                Map.of(),
+                false,
+                true,
+                List.of(),
+                null)); // null placedAt
 
     service.placeOrder(USER_ID, new PlaceOrderRequest(order.getId()));
 
@@ -1252,7 +1333,7 @@ class GroceryOrderServiceImplTest {
         new com.example.mealprep.grocery.domain.entity.AutomationFailureRecord(
             "place", "oops", NOW);
     when(provider.placeOrder(any()))
-        .thenReturn(new PlaceOrderResult("po-1", "url", Map.of(), false, List.of(rec), NOW));
+        .thenReturn(new PlaceOrderResult("po-1", "url", Map.of(), false, true, List.of(rec), NOW));
 
     service.placeOrder(USER_ID, new PlaceOrderRequest(order.getId()));
 
@@ -1271,7 +1352,7 @@ class GroceryOrderServiceImplTest {
     when(basketDraftAssembler.assemble(order))
         .thenReturn(new BasketDraft(order.getId(), USER_ID, List.of(), null));
     when(provider.placeOrder(any()))
-        .thenReturn(new PlaceOrderResult("po-1", "url", null, false, List.of(), NOW));
+        .thenReturn(new PlaceOrderResult("po-1", "url", null, false, true, List.of(), NOW));
 
     service.placeOrder(USER_ID, new PlaceOrderRequest(order.getId()));
 
