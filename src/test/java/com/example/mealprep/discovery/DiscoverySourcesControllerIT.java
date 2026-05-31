@@ -21,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.Cookie;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -47,6 +48,18 @@ class DiscoverySourcesControllerIT {
   @Autowired private JdbcTemplate jdbcTemplate;
   @Autowired private AuthProperties authProperties;
   @Autowired private DiscoverySourceRepository sourceRepository;
+
+  // The R__discovery_seed_curated_sources repeatable migration seeds 15 rows into discovery_sources
+  // when each test context's Flyway runs. listSources() does a plain findAll(), so without a reset
+  // this IT's global-count assertion would see those 15 seed rows plus its own. Resetting BEFORE
+  // each test (not only after) makes the assertions deterministic regardless of test order or which
+  // context this class lands in — see DiscoverySourceSeedIT for the 15-row seed contract.
+  @BeforeEach
+  void resetSources() {
+    jdbcTemplate.update("DELETE FROM discovery_scrape_log");
+    jdbcTemplate.update("DELETE FROM discovery_jobs");
+    jdbcTemplate.update("DELETE FROM discovery_sources");
+  }
 
   @AfterEach
   void cleanup() {
