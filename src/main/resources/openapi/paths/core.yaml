@@ -51,6 +51,33 @@ decisionsByTrace:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+adminStatus:
+  get:
+    tags: [AdminStatus]
+    operationId: getAdminStatus
+    summary: 'Operational status: DB connectivity, last AI/USDA call, month-to-date AI cost.'
+    description: >-
+      Admin-only operational snapshot (capability C-G-032). status=UP when the database is
+      reachable, DEGRADED otherwise. lastAiCallAt / lastUsdaCallAt are null when no such call has
+      occurred; lastUsdaCallAt is a process-local liveness signal that resets on restart.
+    security:
+      - cookieAuth: [admin]
+    responses:
+      '200':
+        description: Current operational status snapshot.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/core.yaml#/AdminStatusDto' }
+      '401':
+        description: Missing or invalid authentication.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: Authenticated but not an admin.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 decisionAncestry:
   get:
     tags: [DecisionLog]

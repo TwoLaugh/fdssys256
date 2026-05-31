@@ -24,8 +24,9 @@ import org.hibernate.annotations.CreationTimestamp;
  * at write time and never changed.
  *
  * <p>Maps to {@code grocery_price_history}. Household-scoped aggregation; {@code householdId}
- * nullable for single-user mode. TODO(core-03): the write boundary normalises {@code
- * ingredientMappingKey} via {@code IngredientMappingKeys.normalise()} once core-03 lands.
+ * nullable for single-user mode. Mapping-key normalisation is enforced at the write boundary:
+ * {@code PriceObservationWriter} normalises {@code ingredientMappingKey} via {@code
+ * IngredientMappingKeys.normalise()} before persisting, so rows always carry normalised keys.
  */
 @Entity
 @Table(name = "grocery_price_history")

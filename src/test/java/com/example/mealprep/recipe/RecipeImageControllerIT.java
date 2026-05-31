@@ -1,5 +1,6 @@
 package com.example.mealprep.recipe;
 
+import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -9,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
@@ -17,6 +19,7 @@ import com.example.mealprep.auth.testdata.AuthTestData;
 import com.example.mealprep.recipe.event.RecipeImageUpdatedEvent;
 import com.example.mealprep.recipe.testdata.RecipeImageTestFixtures;
 import com.example.mealprep.recipe.testdata.RecipeTestData;
+import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.Cookie;
@@ -50,7 +53,11 @@ import org.springframework.transaction.event.TransactionalEventListener;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import({TestContainersConfig.class, RecipeImageControllerIT.RecipeImageEventCaptureConfig.class})
+@Import({
+  TestContainersConfig.class,
+  OpenApiValidatorConfig.class,
+  RecipeImageControllerIT.RecipeImageEventCaptureConfig.class
+})
 @ActiveProfiles("test")
 @TestPropertySource(
     properties = {
@@ -66,6 +73,15 @@ class RecipeImageControllerIT {
   @Autowired private JdbcTemplate jdbcTemplate;
   @Autowired private AuthProperties authProperties;
   @Autowired private RecipeImageEventCapture eventCapture;
+  @Autowired private OpenApiInteractionValidator openApiValidator;
+
+  // The upload is a multipart POST; swagger-request-validator's MockMvc matcher cannot reconstruct
+  // a multipart request body and would spuriously report validation.request.body.missing. The
+  // upload case therefore validates the RESPONSE contract only (this bean ignores
+  // validation.request.*); the serve GET below uses the full @Primary validator.
+  @Autowired
+  @org.springframework.beans.factory.annotation.Qualifier("responseOnlyOpenApiValidator")
+  private OpenApiInteractionValidator responseOnlyOpenApiValidator;
 
   @Value("${mealprep.recipe.image-storage.base-dir}")
   private Path baseDir;
@@ -136,7 +152,10 @@ class RecipeImageControllerIT {
         .andExpect(status().isOk())
         .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
         .andExpect(jsonPath("$.imageUrl").value("/api/v1/recipes/" + recipeId + "/image"))
-        .andExpect(jsonPath("$.contentType").value("image/jpeg"));
+        .andExpect(jsonPath("$.contentType").value("image/jpeg"))
+        // xcut-contract-2: the 200 upload RESPONSE must conform to the OpenAPI spec (response-only
+        // validator — the multipart request body can't be reconstructed by the MockMvc matcher).
+        .andExpect(openApi().isValid(responseOnlyOpenApiValidator));
 
     String shard = recipeId.toString().substring(0, 2);
     Path shardDir = baseDir.resolve("recipes").resolve(shard);
@@ -347,7 +366,10 @@ class RecipeImageControllerIT {
             header().string("Cache-Control", org.hamcrest.Matchers.containsString("max-age=86400")))
         .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("public")))
         .andExpect(
-            header().string("Cache-Control", org.hamcrest.Matchers.containsString("immutable")));
+            header().string("Cache-Control", org.hamcrest.Matchers.containsString("immutable")))
+        // xcut-contract-2: the load-bearing case — confirm the image/* binary response shape
+        // declared in the spec round-trips through the swagger-request-validator.
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test

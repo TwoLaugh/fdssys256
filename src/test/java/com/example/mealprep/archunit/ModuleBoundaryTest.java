@@ -1,5 +1,6 @@
 package com.example.mealprep.archunit;
 
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noFields;
@@ -7,13 +8,19 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
 
 import com.example.mealprep.core.api.markers.BoundedCollection;
 import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.Dependency;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
+import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
+import com.tngtech.archunit.lang.ConditionEvents;
+import com.tngtech.archunit.lang.SimpleConditionEvent;
 import java.util.Collection;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -205,6 +212,107 @@ class ModuleBoundaryTest {
               "notification repos are accessible only within the notification module —"
                   + " cross-module callers go through the notification service interfaces.")
           .allowEmptyShould(true);
+
+  /**
+   * xcut-8: cross-cutting <b>{@code .internal} boundary</b> — no class residing OUTSIDE module
+   * {@code X} may depend on any class in {@code com.example.mealprep.X..internal..}. This makes the
+   * internal-package boundary as enforced as the repository boundary already is, and — unlike the
+   * per-module {@code *BoundaryTest} rules — it is generic: a new module's {@code .internal}
+   * sub-packages are protected automatically without editing this file.
+   *
+   * <p>"Module" is the first package segment after {@code com.example.mealprep.} (e.g. {@code
+   * core}, {@code grocery}). An {@code .internal} segment anywhere below that (e.g. {@code
+   * core.origin.internal}, {@code grocery.domain.service.internal}, {@code recipe.spi.internal}) is
+   * module-private; only same-module classes may reach into it. Cross-module callers route through
+   * the module's public SPI / service interfaces (which live OUTSIDE {@code .internal}).
+   *
+   * <p><b>Sanctioned carve-out (auth → core.origin.internal).</b> {@code
+   * auth.config.AuthSecurityConfig} wires the {@code OriginFilter} bean (it must be added onto the
+   * {@code HttpSecurity} chain in the same {@code @Configuration} that defines the chain — see the
+   * {@code core.origin} carve-out note on {@code springWebStaysInApi} above) and therefore injects
+   * the {@code core.origin.internal.InMemoryTokenBucketRateLimiter} {@code @Component} as a
+   * constructor argument to that bean factory method. This is the single established cross-module
+   * {@code .internal} dependency in v1; it is narrow (one class, one field, the security-chain
+   * wiring seam) and intentional. All other cross-module {@code .internal} access is forbidden.
+   */
+  @ArchTest
+  static final ArchRule noCrossModuleInternalAccess =
+      classes()
+          .that()
+          .resideInAPackage("com.example.mealprep..")
+          .should(notDependOnAnotherModulesInternalPackage())
+          .as(
+              "no class outside module X may depend on com.example.mealprep.X..internal.. —"
+                  + " cross-module callers route through the module's public SPI / service"
+                  + " interfaces (one sanctioned carve-out: auth.config.AuthSecurityConfig may"
+                  + " inject core.origin.internal.InMemoryTokenBucketRateLimiter to wire the"
+                  + " OriginFilter bean onto the security chain).")
+          .allowEmptyShould(true);
+
+  /**
+   * Matches {@code com.example.mealprep.<module>...internal[.<...>].<Type>} — captures the module
+   * (group 1) of any class that lives in (or under) an {@code internal} package segment. The {@code
+   * \.internal(?:\.|$)} guard means a class literally in {@code ...internal} or any sub-package of
+   * it matches, while an unrelated package merely containing the substring "internal" in a longer
+   * word would not (the segment is bounded by dots).
+   */
+  private static final Pattern INTERNAL_FQN =
+      Pattern.compile("^com\\.example\\.mealprep\\.([^.]+)\\..*\\.internal(?:\\.|$).*");
+
+  /**
+   * Sanctioned cross-module {@code .internal} dependency — see {@link
+   * #noCrossModuleInternalAccess}.
+   */
+  private static boolean isSanctionedCarveOut(String originClass, String targetClass) {
+    return "com.example.mealprep.auth.config.AuthSecurityConfig".equals(originClass)
+        && "com.example.mealprep.core.origin.internal.InMemoryTokenBucketRateLimiter"
+            .equals(targetClass);
+  }
+
+  /** Module = first package segment after {@code com.example.mealprep.}, else null. */
+  private static String moduleOf(String fullyQualifiedName) {
+    if (!fullyQualifiedName.startsWith("com.example.mealprep.")) {
+      return null;
+    }
+    String rest = fullyQualifiedName.substring("com.example.mealprep.".length());
+    int dot = rest.indexOf('.');
+    return dot < 0 ? null : rest.substring(0, dot);
+  }
+
+  private static ArchCondition<JavaClass> notDependOnAnotherModulesInternalPackage() {
+    return new ArchCondition<>("not depend on another module's .internal package") {
+      @Override
+      public void check(JavaClass origin, ConditionEvents events) {
+        String originName = origin.getFullName();
+        String originModule = moduleOf(originName);
+        for (Dependency dependency : origin.getDirectDependenciesFromSelf()) {
+          JavaClass target = dependency.getTargetClass();
+          String targetName = target.getFullName();
+          Matcher m = INTERNAL_FQN.matcher(targetName);
+          if (!m.matches()) {
+            continue; // target is not in any module's .internal package
+          }
+          String targetModule = m.group(1);
+          if (targetModule.equals(originModule)) {
+            continue; // same-module access into its own .internal is fine
+          }
+          if (isSanctionedCarveOut(originName, targetName)) {
+            continue; // narrow documented carve-out
+          }
+          events.add(
+              SimpleConditionEvent.violated(
+                  origin,
+                  String.format(
+                      "%s (module '%s') depends on %s in module '%s' .internal package — %s",
+                      originName,
+                      originModule,
+                      targetName,
+                      targetModule,
+                      dependency.getDescription())));
+        }
+      }
+    };
+  }
 
   private static DescribedPredicate<JavaClass> returnsRawListOfDto() {
     return new DescribedPredicate<>("a raw List/Collection (assignable to java.util.Collection)") {
