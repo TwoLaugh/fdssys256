@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 
 /**
  * pgvector end-to-end IT for the taste-vector embedding pipeline (preference-5). Boots the full
@@ -34,6 +35,12 @@ import org.springframework.test.context.ActiveProfiles;
 @SpringBootTest
 @Import(TestContainersConfig.class)
 @ActiveProfiles("test")
+// The general test profile gates TasteProfileEmbeddingListener OFF (application-test.properties) so
+// its @Async AFTER_COMMIT ai_call_log write can't pollute cross-IT statement/row counts. This IT is
+// the dedicated taste-vector pipeline IT, so re-enable the listener here to keep the embedding path
+// (TasteProfileChangedEvent -> AiService.embed -> storeTasteVector) registered and tested
+// end-to-end.
+@TestPropertySource(properties = "mealprep.preference.embedding.listener-enabled=true")
 class TasteVectorPipelineIT {
 
   @Autowired private TasteProfileRepository repository;
