@@ -350,6 +350,79 @@ ImportRecipeFromUrlRequest:
         Optional. May be omitted or sent as null. Imported recipes are always
         created in the caller's USER catalogue regardless of this value
         (server-assigned); the field is retained for forward compatibility.
+ImportRecipeFromHtmlRequest:
+  type: object
+  required: [url, html]
+  description: >-
+    Frontend in-app browser supplies pre-rendered markup plus the source URL for
+    a preview-html import (recipe-3 / LLD Flow 2). Extraction runs against html;
+    url is carried for provenance + base-URI resolution.
+  properties:
+    url: { type: string, format: uri, minLength: 1, maxLength: 2048 }
+    html: { type: string, minLength: 1, maxLength: 4000000 }
+DedupCandidateDto:
+  type: object
+  required: [recipeId, ingredientOverlap]
+  description: >-
+    A near-duplicate found in the caller's library (recipe-2). Surfaced on the
+    import preview and as the candidateRecipeId extension on the 422
+    recipe-import-duplicate ProblemDetail.
+  properties:
+    recipeId: { type: string, format: uuid }
+    ingredientOverlap:
+      type: number
+      format: double
+      minimum: 0
+      maximum: 1
+      description: Jaccard overlap of normalised ingredient-mapping-key sets (0.0-1.0).
+RecipeImportPreview:
+  type: object
+  required: [parsedRecipe, sourceUrl, validationWarnings]
+  description: >-
+    Result of an import preview (recipe-3 / LLD Flow 2). Extraction has run but
+    nothing was persisted; parsedRecipe is the editable candidate the user
+    reviews before POSTing to /imports/confirm.
+  properties:
+    previewToken:
+      type: string
+      nullable: true
+      maxLength: 200
+      description: >-
+        Opaque correlation token echoed back on confirm. v1 keeps the flow
+        stateless — the confirm body carries the authoritative recipe.
+    parsedRecipe: { $ref: '#/CreateRecipeRequest' }
+    sourceUrl: { type: string, format: uri, maxLength: 2048 }
+    extractionMethod: { type: string, maxLength: 64, nullable: true }
+    validationWarnings:
+      type: array
+      items: { type: string }
+    dedupCandidate:
+      type: object
+      nullable: true
+      description: >-
+        Present only when a library recipe crosses the dedup threshold; null
+        otherwise. Inlined (not an allOf of DedupCandidateDto) so the contract
+        validator accepts the null case — the same self-contained-shape rationale
+        as common.yaml#/RecipeImportFailure.
+      required: [recipeId, ingredientOverlap]
+      properties:
+        recipeId: { type: string, format: uuid }
+        ingredientOverlap:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+ConfirmImportRequest:
+  type: object
+  required: [sourceUrl, recipe]
+  description: >-
+    Persist a previewed import the user reviewed/edited (recipe-3 / LLD Flow 2).
+    The recipe body is authoritative; dedup runs before persistence.
+  properties:
+    previewToken: { type: string, maxLength: 200, nullable: true }
+    sourceUrl: { type: string, format: uri, minLength: 1, maxLength: 2048 }
+    extractionMethod: { type: string, maxLength: 64, nullable: true }
+    recipe: { $ref: '#/CreateRecipeRequest' }
 RecipeImportDto:
   type: object
   required: [id, recipeId, sourceType, importedAt, importedByUserId]
@@ -835,6 +908,22 @@ RecipeRatingDtoPage:
     content:
       type: array
       items: { $ref: '#/RecipeRatingDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+RecipeVersionDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/RecipeVersionDto' }
     totalElements: { type: integer, format: int64 }
     totalPages: { type: integer }
     number: { type: integer }

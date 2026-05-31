@@ -99,14 +99,20 @@ class ArchiveFlowIT {
     return new AuthedUser(UUID.fromString(userIdJson), cookie);
   }
 
+  private final java.util.concurrent.atomic.AtomicInteger recipeCounter =
+      new java.util.concurrent.atomic.AtomicInteger();
+
   private UUID createUserRecipe(AuthedUser user) throws Exception {
+    // Unique ingredient set per call so multiple recipes for one user never trip recipe-2 dedup.
     MvcResult created =
         mvc.perform(
                 post("/api/v1/recipes")
                     .cookie(user.cookie())
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(
-                        objectMapper.writeValueAsString(RecipeTestData.defaultCreateRequest())))
+                        objectMapper.writeValueAsString(
+                            RecipeTestData.uniqueCreateRequest(
+                                "archive-" + recipeCounter.incrementAndGet()))))
             .andExpect(status().isCreated())
             .andReturn();
     JsonNode tree = objectMapper.readTree(created.getResponse().getContentAsString());

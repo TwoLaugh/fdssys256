@@ -98,6 +98,10 @@ class RecipeManualEditServiceTest {
         urlFetcher,
         htmlImportParser,
         parserToCreateRequestMapper,
+        com.example.mealprep.recipe.extraction.RecipeExtractionServices.defaultService(
+            objectMapper),
+        new com.example.mealprep.recipe.domain.service.internal.RecipeDeduplicationService(
+            recipeRepository),
         versionDiffer,
         divergenceCalculator,
         fingerprintDeriver,

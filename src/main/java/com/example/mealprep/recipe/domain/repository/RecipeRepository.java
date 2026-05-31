@@ -188,4 +188,36 @@ public interface RecipeRepository extends JpaRepository<Recipe, UUID> {
          and v.nutritionPerServing is not null
       """)
   List<Object[]> findCurrentVersionNutritionForUser(@Param("userId") UUID userId);
+
+  /**
+   * Deduplication probe (recipe-2 / LLD §Flow 1 + Flow 2 — {@code DeduplicationFingerprintHasher}).
+   * For each <b>active USER-catalogue</b> recipe owned by {@code userId}, returns one {@code
+   * (recipeId, ingredientMappingKey)} row per ingredient on that recipe's <b>current</b> version,
+   * plus the current version's total method-step count {@code (recipeId, mappingKey, methodSteps)}.
+   *
+   * <p>The method-step count is a correlated subquery so a recipe with zero ingredients (which the
+   * inner ingredient join would drop) is irrelevant to dedup — a recipe with no ingredients cannot
+   * collide on an ingredient-set hash. "Active" = {@code catalogue = USER AND userId = :userId AND
+   * archivedAt IS NULL AND deletedAt IS NULL}. Single query, no N+1; the dedup service groups the
+   * rows by {@code recipeId}.
+   */
+  @Query(
+      """
+      select r.id, i.ingredientMappingKey,
+             (select count(ms) from com.example.mealprep.recipe.domain.entity.RecipeMethodStep ms
+               where ms.version.id = v.id)
+        from Recipe r
+        join com.example.mealprep.recipe.domain.entity.RecipeVersion v
+          on v.recipe.id = r.id
+         and v.branch.id = r.currentBranchId
+         and v.versionNumber = r.currentVersion
+        join com.example.mealprep.recipe.domain.entity.RecipeIngredient i
+          on i.version.id = v.id
+       where r.userId = :userId
+         and r.catalogue = com.example.mealprep.recipe.domain.entity.Catalogue.USER
+         and r.archivedAt is null
+         and r.deletedAt is null
+      """)
+  List<Object[]> findCurrentVersionIngredientKeysAndMethodCountForUser(
+      @Param("userId") UUID userId);
 }

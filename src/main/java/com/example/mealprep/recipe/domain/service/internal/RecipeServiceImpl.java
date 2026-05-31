@@ -2,6 +2,7 @@ package com.example.mealprep.recipe.domain.service.internal;
 
 import com.example.mealprep.core.ingredient.IngredientMappingKeys;
 import com.example.mealprep.recipe.api.dto.CharacterFingerprintDto;
+import com.example.mealprep.recipe.api.dto.ConfirmImportRequest;
 import com.example.mealprep.recipe.api.dto.CreateBranchRequest;
 import com.example.mealprep.recipe.api.dto.CreateIngredientRequest;
 import com.example.mealprep.recipe.api.dto.CreateMethodStepRequest;
@@ -9,12 +10,15 @@ import com.example.mealprep.recipe.api.dto.CreateRecipeMetadataRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeTagsRequest;
 import com.example.mealprep.recipe.api.dto.CreateSubstitutionRequest;
+import com.example.mealprep.recipe.api.dto.DedupCandidateDto;
+import com.example.mealprep.recipe.api.dto.ImportRecipeFromHtmlRequest;
 import com.example.mealprep.recipe.api.dto.ImportRecipeFromUrlRequest;
 import com.example.mealprep.recipe.api.dto.MethodOverlayLineRequest;
 import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
 import com.example.mealprep.recipe.api.dto.RecipeDiffDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeImportDto;
+import com.example.mealprep.recipe.api.dto.RecipeImportPreview;
 import com.example.mealprep.recipe.api.dto.RecipeSubstitutionDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.api.dto.SubstitutionState;
@@ -71,7 +75,9 @@ import com.example.mealprep.recipe.exception.RecipeBranchPointInvalidException;
 import com.example.mealprep.recipe.exception.RecipeCatalogueViolationException;
 import com.example.mealprep.recipe.exception.RecipeDiffCrossBranchException;
 import com.example.mealprep.recipe.exception.RecipeDiffNotComputedException;
+import com.example.mealprep.recipe.exception.RecipeImportDuplicateException;
 import com.example.mealprep.recipe.exception.RecipeImportFailedException;
+import com.example.mealprep.recipe.exception.RecipeImportFailureException;
 import com.example.mealprep.recipe.exception.RecipeNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeSubstitutionNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeVersionConflictException;
@@ -80,6 +86,9 @@ import com.example.mealprep.recipe.exception.SubstitutionOriginalNotInVersionExc
 import com.example.mealprep.recipe.exception.SubstitutionPromotionPreconditionException;
 import com.example.mealprep.recipe.exception.SubstitutionRecordPreconditionException;
 import com.example.mealprep.recipe.exception.SubstitutionTerminalStateException;
+import com.example.mealprep.recipe.extraction.ExtractionInput;
+import com.example.mealprep.recipe.extraction.ParsedRecipe;
+import com.example.mealprep.recipe.extraction.RecipeExtractionService;
 import com.example.mealprep.recipe.spi.ImportedRecipeData;
 import com.example.mealprep.recipe.spi.ImportedRecipeResult;
 import com.example.mealprep.recipe.spi.RecipeSubstitutionRecorder;
@@ -105,6 +114,8 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -166,6 +177,8 @@ public class RecipeServiceImpl
   private final UrlFetcher urlFetcher;
   private final HtmlImportParser htmlImportParser;
   private final ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper;
+  private final RecipeExtractionService extractionService;
+  private final RecipeDeduplicationService deduplicationService;
   private final VersionDiffer versionDiffer;
   private final DivergenceScoreCalculator divergenceCalculator;
   private final FingerprintDeriver fingerprintDeriver;
@@ -190,6 +203,8 @@ public class RecipeServiceImpl
       UrlFetcher urlFetcher,
       HtmlImportParser htmlImportParser,
       ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper,
+      RecipeExtractionService extractionService,
+      RecipeDeduplicationService deduplicationService,
       VersionDiffer versionDiffer,
       DivergenceScoreCalculator divergenceCalculator,
       FingerprintDeriver fingerprintDeriver,
@@ -212,6 +227,8 @@ public class RecipeServiceImpl
     this.urlFetcher = urlFetcher;
     this.htmlImportParser = htmlImportParser;
     this.parserToCreateRequestMapper = parserToCreateRequestMapper;
+    this.extractionService = extractionService;
+    this.deduplicationService = deduplicationService;
     this.versionDiffer = versionDiffer;
     this.divergenceCalculator = divergenceCalculator;
     this.fingerprintDeriver = fingerprintDeriver;
@@ -343,13 +360,78 @@ public class RecipeServiceImpl
     return diffMapper.fromJsonNode(fromVersionId, toVersionId, to.getChangeDiff());
   }
 
+  // ---------------- recipe-5: version-history list / get-by-number ----------------
+
+  @Override
+  @Transactional(readOnly = true)
+  public Page<RecipeVersionDto> getVersionHistory(UUID recipeId, UUID branchId, Pageable pageable) {
+    Recipe recipe =
+        recipeRepository
+            .findByIdAndDeletedAtIsNull(recipeId)
+            .orElseThrow(() -> new RecipeNotFoundException(recipeId));
+    requireBranchOfRecipe(recipe.getId(), branchId);
+    Page<RecipeVersion> page =
+        versionRepository.findByRecipeIdAndBranchIdOrderByVersionNumberDesc(
+            recipe.getId(), branchId, pageable);
+    page.getContent().forEach(RecipeServiceImpl::touchLazyChildren);
+    return page.map(versionMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public RecipeVersionDto getVersionByNumber(UUID recipeId, UUID branchId, int versionNumber) {
+    Recipe recipe =
+        recipeRepository
+            .findByIdAndDeletedAtIsNull(recipeId)
+            .orElseThrow(() -> new RecipeNotFoundException(recipeId));
+    requireBranchOfRecipe(recipe.getId(), branchId);
+    RecipeVersion version =
+        versionRepository
+            .findFirstByRecipeIdAndBranchIdAndVersionNumber(recipe.getId(), branchId, versionNumber)
+            .orElseThrow(() -> new RecipeVersionNotFoundException(null));
+    touchLazyChildren(version);
+    return versionMapper.toDto(version);
+  }
+
+  /**
+   * Resolve a branch that must belong to {@code recipeId}, throwing {@code
+   * RecipeBranchNotFoundException} (404) when the branch is missing or belongs to a different
+   * recipe (don't leak other recipes' branch ids). Shared by the version-history reads.
+   */
+  private RecipeBranch requireBranchOfRecipe(UUID recipeId, UUID branchId) {
+    return branchRepository
+        .findById(branchId)
+        .filter(b -> b.getRecipe() != null && b.getRecipe().getId().equals(recipeId))
+        .orElseThrow(() -> new RecipeBranchNotFoundException(branchId));
+  }
+
   // ---------------- Update ----------------
 
   @Override
   @Transactional
   public RecipeDto createRecipe(UUID userId, CreateRecipeRequest request) {
+    // recipe-2 / LLD §Flow 1: dedup against the caller's library before persisting. A
+    // near-duplicate
+    // surfaces as 422 recipe-import-duplicate carrying the candidate id so the UI can prompt
+    // "merge / variant / import anyway".
+    guardAgainstDuplicate(userId, request);
     return createRecipeInternal(
         userId, request, DataQuality.USER_VERIFIED, VersionTrigger.MANUAL_CREATE);
+  }
+
+  /**
+   * Run the recipe-2 ingredient-set-hash dedup probe (HLD §Recipe deduplication) and throw {@code
+   * RecipeImportDuplicateException} (422) when the candidate duplicates a recipe already in {@code
+   * userId}'s library. No-op when the candidate is distinct or has no usable ingredient keys.
+   */
+  private void guardAgainstDuplicate(UUID userId, CreateRecipeRequest request) {
+    deduplicationService
+        .findDuplicate(userId, request)
+        .ifPresent(
+            match -> {
+              throw new RecipeImportDuplicateException(
+                  match.candidateRecipeId(), match.ingredientOverlap());
+            });
   }
 
   @Override
@@ -358,17 +440,124 @@ public class RecipeServiceImpl
     String html = urlFetcher.fetch(request.url());
     HtmlImportParser.ParsedRecipe parsed = htmlImportParser.parse(html, request.url());
     CreateRecipeRequest mapped = parserToCreateRequestMapper.map(parsed);
-    // TODO recipe-01g — dedupe on import (DeduplicationFingerprintHasher).
+    // recipe-2: dedup is wired into the create path and the preview-then-confirm import path
+    // (confirmImport) per the ticket; the legacy one-shot /imports/url stays a direct persist so
+    // its 422 contract remains the extraction-failure shape (RecipeImportFailure). The
+    // Paprika-style
+    // flow is the dedup'd import surface.
+    return persistImport(
+        userId, mapped, request.url(), parsed.extractionMethod(), parsed.rawPayload());
+  }
+
+  // ---------------- recipe-3: preview-then-confirm import (Paprika-style, LLD §Flow 2) ----------
+
+  @Override
+  public RecipeImportPreview previewImportFromUrl(UUID userId, ImportRecipeFromUrlRequest request) {
+    // Server fetches the page itself. Not @Transactional — extraction is read-only and may take
+    // seconds (LLD §Flow 2). The fetch + extract reuse the same UrlFetcher +
+    // RecipeExtractionService
+    // the one-shot path uses, so preview outcomes match a subsequent confirm.
+    String html = urlFetcher.fetch(request.url());
+    return buildPreview(userId, request.url(), html);
+  }
+
+  @Override
+  public RecipeImportPreview previewImportFromHtml(
+      UUID userId, ImportRecipeFromHtmlRequest request) {
+    // Frontend's in-app browser supplies the rendered markup; no server fetch. Used for JS-rendered
+    // / paywalled / fidelity-sensitive sites (LLD §Flow 2).
+    return buildPreview(userId, request.url(), request.html());
+  }
+
+  /**
+   * Shared preview builder for both preview entry points. Runs the shared {@link
+   * RecipeExtractionService} against the supplied markup (the realised {@code FromHtml} path),
+   * translates the extracted candidate to an editable {@link CreateRecipeRequest}, and attaches a
+   * dedup probe — <b>without persisting anything</b>. Empty extraction → {@code
+   * RecipeImportFailureException} (422), matching the one-shot path's failure contract.
+   */
+  private RecipeImportPreview buildPreview(UUID userId, String url, String html) {
+    Optional<ParsedRecipe> extracted =
+        extractionService.extract(new ExtractionInput.FromHtml(url, html));
+    if (extracted.isEmpty()) {
+      throw new RecipeImportFailureException("no_extractor_matched");
+    }
+    ParsedRecipe parsed = extracted.get();
+    HtmlImportParser.ParsedRecipe importParsed = toImportParsed(parsed);
+    CreateRecipeRequest candidate = parserToCreateRequestMapper.map(importParsed);
+
+    DedupCandidateDto dedupCandidate =
+        deduplicationService
+            .findDuplicate(userId, candidate)
+            .map(m -> new DedupCandidateDto(m.candidateRecipeId(), m.ingredientOverlap()))
+            .orElse(null);
+
+    List<String> warnings = new ArrayList<>();
+    if (candidate.metadata() != null
+        && candidate.metadata().servings() == 1
+        && (parsed.servings() == null || parsed.servings() <= 0)) {
+      warnings.add("servings_defaulted");
+    }
+
+    String previewToken = UUID.randomUUID().toString();
+    log.info(
+        "recipe import preview userId={} url={} extractionMethod={} ingredients={} steps={}"
+            + " dedupCandidate={} previewToken={}",
+        userId,
+        url,
+        importParsed.extractionMethod(),
+        candidate.ingredients().size(),
+        candidate.method().size(),
+        dedupCandidate != null ? dedupCandidate.recipeId() : null,
+        previewToken);
+
+    return new RecipeImportPreview(
+        previewToken, candidate, url, importParsed.extractionMethod(), warnings, dedupCandidate);
+  }
+
+  @Override
+  @Transactional
+  public RecipeDto confirmImport(UUID userId, ConfirmImportRequest request) {
+    // The user reviewed / edited the preview; the request body is authoritative. v1 keeps the flow
+    // stateless — previewToken is correlation/telemetry only (see RecipeImportPreview javadoc).
+    CreateRecipeRequest edited = request.recipe();
+    // recipe-2: dedup the (possibly-edited) candidate before persisting.
+    guardAgainstDuplicate(userId, edited);
+    String extractionMethod =
+        request.extractionMethod() == null || request.extractionMethod().isBlank()
+            ? "user_confirmed"
+            : request.extractionMethod();
+    log.info(
+        "recipe import confirm userId={} url={} extractionMethod={} previewToken={}",
+        userId,
+        request.sourceUrl(),
+        extractionMethod,
+        request.previewToken());
+    return persistImport(userId, edited, request.sourceUrl(), extractionMethod, null);
+  }
+
+  /**
+   * Shared import-persistence path for {@link #importFromUrl} and {@link #confirmImport}: writes
+   * the recipe ({@code dataQuality = IMPORTED}, {@code trigger = IMPORT}) + its {@code
+   * recipe_imports} provenance row in one transaction, then re-hydrates so {@code branches[]}
+   * reflects the new main branch. Caller has already run dedup.
+   */
+  private RecipeDto persistImport(
+      UUID userId,
+      CreateRecipeRequest body,
+      String sourceUrl,
+      String extractionMethod,
+      JsonNode sourcePayload) {
     RecipeDto created =
-        createRecipeInternal(userId, mapped, DataQuality.IMPORTED, VersionTrigger.IMPORT);
+        createRecipeInternal(userId, body, DataQuality.IMPORTED, VersionTrigger.IMPORT);
     RecipeImport provenance =
         RecipeImport.builder()
             .id(UUID.randomUUID())
             .recipeId(created.id())
             .sourceType(ImportSource.URL)
-            .sourceUrl(request.url())
-            .sourcePayload(parsed.rawPayload())
-            .extractionMethod(parsed.extractionMethod())
+            .sourceUrl(sourceUrl)
+            .sourcePayload(sourcePayload)
+            .extractionMethod(extractionMethod)
             .duplicateOfRecipeId(null)
             .importedAt(Instant.now(clock))
             .importedByUserId(userId)
@@ -376,6 +565,48 @@ public class RecipeServiceImpl
     importRepository.save(provenance);
     // Re-hydrate so branches[] reflects the just-created 'main' branch via the same mapper path.
     return getById(created.id()).orElse(created);
+  }
+
+  /**
+   * Map the canonical extraction shape onto the import path's {@link HtmlImportParser.ParsedRecipe}
+   * carrier (the one {@link ParsedRecipeToCreateRequestMapper} maps from). Mirrors the adapter in
+   * {@link HtmlImportParser} so preview/confirm reuse the same translation as the one-shot path.
+   */
+  private HtmlImportParser.ParsedRecipe toImportParsed(ParsedRecipe r) {
+    List<String> ingredientLines = new ArrayList<>();
+    for (ParsedRecipe.ParsedIngredient ingredient : r.ingredients()) {
+      ingredientLines.add(ingredient.rawLine());
+    }
+    List<String> methodSteps = new ArrayList<>();
+    for (ParsedRecipe.ParsedMethodStep step : r.methodSteps()) {
+      methodSteps.add(step.instruction());
+    }
+    String extractionMethod = r.provenance() == null ? null : extractionMethodLabel(r);
+    ObjectNode raw = objectMapper.createObjectNode();
+    raw.put("extractionMethod", extractionMethod == null ? "" : extractionMethod);
+    return new HtmlImportParser.ParsedRecipe(
+        r.name(),
+        r.description(),
+        ingredientLines,
+        methodSteps,
+        r.prepTimeMinutes(),
+        r.cookTimeMinutes(),
+        r.totalTimeMinutes(),
+        r.servings(),
+        r.cuisine(),
+        extractionMethod,
+        raw);
+  }
+
+  /** Winning-layer → {@code extraction_method} provenance string (json_ld / microdata / …). */
+  private static String extractionMethodLabel(ParsedRecipe r) {
+    return switch (r.provenance().winningLayer()) {
+      case JSON_LD -> "json_ld";
+      case MICRODATA ->
+          r.provenance().layerDetail() != null ? r.provenance().layerDetail() : "microdata";
+      case PER_SITE -> "per_site";
+      case AI_HTML -> "ai_html";
+    };
   }
 
   @Override

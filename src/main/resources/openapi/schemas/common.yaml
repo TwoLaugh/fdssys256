@@ -109,3 +109,42 @@ RecipeImportFailure:
         schema_mismatch, and the dynamic forms fetch_4xx_<status> /
         fetch_5xx_<status> (e.g. fetch_4xx_404). Treat as an open
         vocabulary; unknown tokens should degrade gracefully.
+RecipeImportDuplicate:
+  type: object
+  description: >-
+    RFC 9457 ProblemDetail returned by recipe create (POST /api/v1/recipes) and
+    import confirm (POST /api/v1/recipes/imports/confirm) when the recipe
+    duplicates one already in the caller's library (recipe-2 / HLD Recipe
+    deduplication). Self-contained superset of ProblemDetail (not an allOf
+    composition) for the same reason as RecipeImportFailure — keep the shared
+    members in sync. Adds the candidateRecipeId + ingredientOverlap extensions so
+    the UI can offer "merge / import as variant / import anyway".
+  required: [type, title, status, candidateRecipeId, ingredientOverlap]
+  properties:
+    type:
+      type: string
+      format: uri
+      example: https://mealprep.example.com/problems/recipe-import-duplicate
+    title:
+      type: string
+      example: Recipe duplicates an existing library recipe
+    status:
+      type: integer
+      example: 422
+    detail:
+      type: string
+      description: Human-readable explanation specific to this occurrence.
+    instance:
+      type: string
+      format: uri
+      description: A URI identifying the specific occurrence.
+    candidateRecipeId:
+      type: string
+      format: uuid
+      description: The existing library recipe this create/import resembles.
+    ingredientOverlap:
+      type: number
+      format: double
+      minimum: 0
+      maximum: 1
+      description: Measured Jaccard overlap of normalised ingredient-mapping-key sets.

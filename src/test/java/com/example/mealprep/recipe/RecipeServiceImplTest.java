@@ -87,6 +87,8 @@ class RecipeServiceImplTest {
   private final HtmlImportParser htmlImportParser = new HtmlImportParser(objectMapper);
   private final ParsedRecipeToCreateRequestMapper parserToCreateRequestMapper =
       new ParsedRecipeToCreateRequestMapper();
+  private final com.example.mealprep.recipe.extraction.RecipeExtractionService extractionService =
+      com.example.mealprep.recipe.extraction.RecipeExtractionServices.defaultService(objectMapper);
   private final VersionDiffer versionDiffer = new VersionDiffer(objectMapper);
   private final DivergenceScoreCalculator divergenceCalculator = new DivergenceScoreCalculator();
   private final FingerprintDeriver fingerprintDeriver = new FingerprintDeriver();
@@ -110,6 +112,9 @@ class RecipeServiceImplTest {
         urlFetcher,
         htmlImportParser,
         parserToCreateRequestMapper,
+        extractionService,
+        new com.example.mealprep.recipe.domain.service.internal.RecipeDeduplicationService(
+            recipeRepository),
         versionDiffer,
         divergenceCalculator,
         fingerprintDeriver,
@@ -447,6 +452,9 @@ class RecipeServiceImplTest {
             urlFetcher,
             stubParser,
             parserToCreateRequestMapper,
+            extractionService,
+            new com.example.mealprep.recipe.domain.service.internal.RecipeDeduplicationService(
+                recipeRepository),
             versionDiffer,
             divergenceCalculator,
             fingerprintDeriver,

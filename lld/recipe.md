@@ -173,12 +173,12 @@ CREATE TABLE recipe_substitutions (
     notes text, temporary boolean NOT NULL DEFAULT true,
     applied_in_plan_ids uuid[] NOT NULL DEFAULT '{}',
     application_count integer NOT NULL DEFAULT 0, last_applied_at timestamptz,
-    state varchar(16) NOT NULL DEFAULT 'active',     -- active | inactive | promoted
+    state varchar(16) NOT NULL DEFAULT 'PROPOSED',   -- PROPOSED | ACCEPTED | REJECTED | SUPERSEDED (recipe-01e; was active|inactive|promoted)
     promoted_to_version_id uuid REFERENCES recipe_versions(id),
     created_at timestamptz NOT NULL, created_by_actor varchar(32) NOT NULL, adapter_trace_id uuid
 );
-CREATE INDEX idx_recipe_substitutions_version    ON recipe_substitutions (version_id) WHERE state = 'active';
-CREATE INDEX idx_recipe_substitutions_promotion  ON recipe_substitutions (recipe_id, application_count DESC) WHERE state = 'active';
+CREATE INDEX idx_recipe_substitutions_version    ON recipe_substitutions (version_id) WHERE state = 'ACCEPTED';
+CREATE INDEX idx_recipe_substitutions_promotion  ON recipe_substitutions (recipe_id, application_count DESC) WHERE state = 'ACCEPTED';
 
 CREATE TABLE recipe_ingredients (
     id uuid PRIMARY KEY,
@@ -553,11 +553,12 @@ public interface RecipeUpdateService {
     //   - importFromUrl: server fetches the URL itself
     //   - importFromHtml: frontend in-app browser supplies pre-fetched HTML + URL
     // Both return a preview that the user reviews/edits before final save.
-    RecipeDto create(UUID userId, CreateRecipeRequest request);
+    RecipeDto createRecipe(UUID userId, CreateRecipeRequest request);    // runs recipe-2 dedup
     RecipeDto manualEdit(UUID recipeId, UpdateRecipeManualEditRequest request, UUID actorUserId);
-    RecipeImportPreview previewImportFromUrl(UUID userId, ImportRecipeFromUrlRequest request);
-    RecipeImportPreview previewImportFromHtml(UUID userId, ImportRecipeFromHtmlRequest request);
-    RecipeDto confirmImport(UUID userId, ConfirmImportRequest request);   // user clicks Save on the preview
+    RecipeDto importFromUrl(UUID userId, ImportRecipeFromUrlRequest request);             // one-shot
+    RecipeImportPreview previewImportFromUrl(UUID userId, ImportRecipeFromUrlRequest request);   // recipe-3
+    RecipeImportPreview previewImportFromHtml(UUID userId, ImportRecipeFromHtmlRequest request); // recipe-3
+    RecipeDto confirmImport(UUID userId, ConfirmImportRequest request);   // user clicks Save on the preview; runs recipe-2 dedup
 
     // Catalogue moves.
     RecipeDto promoteToUserCatalogue(UUID systemRecipeId, UUID userId);
@@ -568,10 +569,14 @@ public interface RecipeUpdateService {
     RecipeVersionDto revertToVersion(UUID recipeId, UUID branchId, int versionNumber, UUID actorUserId);
 
     // Substitution lifecycle (catalogue-level — planner attaches at plan time).
+    // recipe-01e renamed the state machine to PROPOSED | ACCEPTED | REJECTED | SUPERSEDED and
+    // replaced the original `deactivate` with explicit accept / reject (see §Events and
+    // design/recipe-system.md §Substitution lifecycle). createSubstitution inserts at PROPOSED.
     RecipeSubstitutionDto createSubstitution(UUID recipeId, CreateSubstitutionRequest request, UUID actorUserId);
     void recordSubstitutionApplication(UUID substitutionId, UUID planId);
-    void deactivateSubstitution(UUID substitutionId, UUID actorUserId);
-    RecipeVersionDto promoteSubstitutionToVersion(UUID substitutionId, UUID actorUserId);
+    RecipeSubstitutionDto acceptSubstitution(UUID substitutionId, UUID actorUserId, long expectedVersion);
+    RecipeSubstitutionDto rejectSubstitution(UUID substitutionId, UUID actorUserId, long expectedVersion, String reason);
+    RecipeVersionDto promoteSubstitutionToVersion(UUID substitutionId, UUID actorUserId, long expectedVersion, String changeReason);
 
     // Plan-time touch — planner / cook listener bumps last_used_in_plan_at.
     void markUsedInPlan(List<UUID> recipeIds);
@@ -649,13 +654,18 @@ All endpoints under `/api/v1/recipes/...`. `userId` resolved server-side from au
 | `RecipeBranchesController` (`/{id}/branches`) | GET `/` | — | `List<RecipeBranchDto>` | 200 |
 |  | POST `/` | `CreateBranchRequest` | `RecipeBranchDto` | 201 / 400 / 404 / 409 |
 |  | GET  `/{branchId}` | — | `RecipeBranchDto` | 200 / 404 |
-| `RecipeSubstitutionsController` (`/{id}/substitutions`) | GET `?state=active` | — | `List<RecipeSubstitutionDto>` | 200 |
+| `RecipeSubstitutionsController` (`/{id}/substitutions`) | GET `/active` | — | `List<RecipeSubstitutionDto>` | 200 |
 |  | POST `/` | `CreateSubstitutionRequest` | `RecipeSubstitutionDto` | 201 / 400 / 404 |
-|  | POST `/{subId}/promote` · `/{subId}/deactivate` | — | `RecipeVersionDto` or `204` | 200 / 404 |
+|  | POST `/{subId}/{action}` (`accept` \| `reject` \| `promote-to-version`) | action body | `RecipeSubstitutionDto` or `RecipeVersionDto` | 200 / 404 / 422 |
 | `RecipeImportsController` (`/imports`) | POST `/url` | `ImportRecipeFromUrlRequest` | `RecipeDto` | 201 / 400 / 422 |
+|  | POST `/preview-url` | `ImportRecipeFromUrlRequest` | `RecipeImportPreview` | 200 / 400 / 422 |
+|  | POST `/preview-html` | `ImportRecipeFromHtmlRequest` | `RecipeImportPreview` | 200 / 400 / 422 |
+|  | POST `/confirm` | `ConfirmImportRequest` | `RecipeDto` | 201 / 400 / 422 (`recipe-import-duplicate`) |
 | `RecipeAdminController` (`/admin`) | POST `/run-archive-scan` | — | `{ flaggedCount }` | 200 |
 
-The AI-extraction import path is **deferred**. The v1 `HtmlImportParser` extracts what it can deterministically (microdata, JSON-LD `Recipe` schema, common selectors); ambiguous fields are stored with `needs_review = true`. When the AI extractor lands, the endpoint is unchanged; only the parser strategy changes. The admin `/run-archive-scan` is a manual trigger for the daily archive-eligibility scan.
+The preview-then-confirm flow (`/imports/preview-url`, `/imports/preview-html`, `/imports/confirm`) ships in recipe-3 (the Paprika-style flow of Flow 2). All three delegate extraction to the shared `RecipeExtractionService`; `confirm` (and `createRecipe`) run the recipe-2 ingredient-set-hash dedup probe and return 422 `recipe-import-duplicate` (carrying `candidateRecipeId`) on a near-duplicate. The one-shot `/imports/url` is retained for backward compatibility and persists directly without the dedup gate.
+
+The AI-extraction layer (Layer 4) is still **deferred**. The v1 stack extracts what it can deterministically (JSON-LD `Recipe`, microdata, common selectors); when the AI extractor lands, the endpoints are unchanged — only the extraction layer strategy changes. The admin `/run-archive-scan` is a manual trigger for the daily archive-eligibility scan.
 
 ### Error responses
 
@@ -825,6 +835,20 @@ Unit tests use `@ExtendWith(MockitoExtension.class)`. Integration tests are `*IT
 
 ---
 
+## Recipe images (recipe-02a — implemented)
+
+Recipe image storage **shipped in recipe-02a**, satisfying HLD §Recipe images. A recipe carries an optional `image_url` column on `recipe_recipes`; a recipe without an image is fully functional (images are a cosmetic enhancement with no planning impact). The surface:
+
+- **`RecipeImageStore` SPI** (`recipe.spi`) with a v1 **`LocalFilesystemImageStore`** implementation — stores the binary under an opaque, unguessable storage key and serves it back as a `StoredImage(resource, contentType)`. The store is a seam: an S3/object-store implementation can replace it without touching the controller.
+- **`RecipeImageController`** under `/api/v1/recipes/{recipeId}/image`:
+  - `POST` (multipart `file`) — owner-only (403 for non-owner), max 5 MB, MIME allow-list (JPEG / PNG / WebP) enforced by **Tika magic-byte detection** (not the client-declared content type). Returns `RecipeImageDto { url, sizeBytes, contentType }`. Oversize uploads → 413; unsupported MIME → 415.
+  - `GET` — anonymous-accessible (recipe images are public assets; the URL is unguessable but not secret), streams the binary with a long `Cache-Control: public, immutable`. 404 when no image is stored, and orphan-tolerant when `image_url` is set but the file is missing on disk.
+- **`RecipeImageWriteService`** (internal) coordinates the ownership check, MIME validation, store write, and `image_url` update.
+
+Contract: `RecipeImageController` endpoints are covered by `RecipeImageControllerIT`. **Open follow-up:** auto-populating `image_url` from a source page's `schema.org/Recipe` `image` field at import time is not yet wired (see Out of Scope).
+
+---
+
 ## Out of Scope
 
 Deferred deliberately — these belong elsewhere or to a later phase:
@@ -833,7 +857,7 @@ Deferred deliberately — these belong elsewhere or to a later phase:
 - **Recipe discovery / scraping pipeline.** Search engine choice, web crawl, robots.txt, rate limits, the discovery → URL-import handoff. The catalogue's URL-import endpoint is the persistence sink the discovery pipeline will write into.
 - **URL import AI extraction prompt.** The deterministic shared `RecipeExtractionService` (5-layer pipeline; see [recipe-extraction-pipeline.md](recipe-extraction-pipeline.md)) covers the v1 data path — the recipe URL-import adapter (`HtmlImportParser`) is the recipe module's view of it. The AI extractor (Layer 4, mid-tier model, tool-use structured output per HLD) is reserved; it activates when its prompt and schema are specified — the catalogue endpoint is unchanged.
 - **Per-section AI generation of new recipes.** Enters via `RecipeWriteApi.saveAdaptedVersion` after the pipeline produces a body.
-- **Recipe images.** Image storage **shipped in recipe-02a**: there is an `image_url` column, a `RecipeImageStore` SPI with a `LocalFilesystemImageStore` v1 implementation, the `RecipeImageController` upload/serve endpoints, and Tika magic-byte MIME validation. (The extraction pipeline reads a source page's `schema.org/Recipe` `image` field but does **not** yet populate `image_url` from it at import time — wiring import-time image capture is a follow-up.)
+- **Import-time image capture only.** Recipe image *storage* is shipped (see §Recipe images below); what remains deferred is auto-populating `image_url` from a source page's `schema.org/Recipe` `image` field at import time. The extraction pipeline reads that field but does not yet write it through to the recipe — wiring import-time image capture is the open follow-up.
 - **Embedding pipeline.** The `embedding` column is reserved with the HNSW index; `RecipeWriteApi.storeEmbedding` exposes the write path. The producer is the planner LLD's concern.
 - **Frontend / UI / API consumer concerns.** Recipe browser, diff view, import progress UI, divergence-promotion prompt — all deferred to the frontend LLD.
 - **Branch divergence formula.** Catalogue stores `divergence_score` and exposes `updateBranchDivergence`; the formula and threshold for "promote to standalone" prompts are pipeline LLD concerns.

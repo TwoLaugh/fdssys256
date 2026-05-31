@@ -1,11 +1,14 @@
 package com.example.mealprep.recipe.domain.service;
 
+import com.example.mealprep.recipe.api.dto.ConfirmImportRequest;
 import com.example.mealprep.recipe.api.dto.CreateBranchRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.CreateSubstitutionRequest;
+import com.example.mealprep.recipe.api.dto.ImportRecipeFromHtmlRequest;
 import com.example.mealprep.recipe.api.dto.ImportRecipeFromUrlRequest;
 import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
+import com.example.mealprep.recipe.api.dto.RecipeImportPreview;
 import com.example.mealprep.recipe.api.dto.RecipeSubstitutionDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
@@ -36,11 +39,43 @@ public interface RecipeUpdateService {
   RecipeDto createRecipe(UUID userId, CreateRecipeRequest request);
 
   /**
-   * Imports a recipe from a URL by fetching the page, running the deterministic {@code
-   * HtmlImportParser}, and persisting the recipe + a {@code RecipeImport} provenance row
-   * atomically. Throws {@code RecipeImportFailureException} on fetch or extraction failure.
+   * Imports a recipe from a URL by fetching the page, running the shared {@code
+   * RecipeExtractionService} pipeline, and persisting the recipe + a {@code RecipeImport}
+   * provenance row atomically. Throws {@code RecipeImportFailureException} on fetch or extraction
+   * failure.
+   *
+   * <p>One-shot variant retained for the existing {@code POST /imports/url} contract; the
+   * preview-then-confirm pair ({@link #previewImportFromUrl} / {@link #confirmImport}) is the
+   * Paprika-style flow the frontend uses. Both run dedup (recipe-2): a near-duplicate of an
+   * existing library recipe throws {@code RecipeImportDuplicateException} (422 with the candidate
+   * id).
    */
   RecipeDto importFromUrl(UUID userId, ImportRecipeFromUrlRequest request);
+
+  /**
+   * Preview an import from a URL (recipe-3 / LLD §Flow 2). Fetches the page, runs the shared {@code
+   * RecipeExtractionService}, and returns the extracted candidate as an editable {@link
+   * RecipeImportPreview} <b>without persisting anything</b>. A dedup probe against the caller's
+   * library is included on the preview so the UI can warn before the user edits. Throws {@code
+   * RecipeImportFailureException} (422) on fetch or extraction failure.
+   */
+  RecipeImportPreview previewImportFromUrl(UUID userId, ImportRecipeFromUrlRequest request);
+
+  /**
+   * Preview an import from frontend-supplied HTML (recipe-3 / LLD §Flow 2). Same as {@link
+   * #previewImportFromUrl} but extraction runs against the supplied {@code html} (the in-app
+   * browser already rendered the page); no server fetch is performed. Nothing is persisted.
+   */
+  RecipeImportPreview previewImportFromHtml(UUID userId, ImportRecipeFromHtmlRequest request);
+
+  /**
+   * Persist a previewed import the user has reviewed / edited (recipe-3 / LLD §Flow 2).
+   * Re-validates and runs dedup (recipe-2) against the caller's library — a near-duplicate throws
+   * {@code RecipeImportDuplicateException} (422 with the candidate id). Persists the recipe ({@code
+   * dataQuality = IMPORTED}, {@code trigger = IMPORT}) + a {@code RecipeImport} provenance row
+   * atomically and publishes {@code RecipeCreatedEvent} {@code AFTER_COMMIT}.
+   */
+  RecipeDto confirmImport(UUID userId, ConfirmImportRequest request);
 
   /**
    * Apply a manual edit to a recipe. Inserts a new {@code RecipeVersion} (v2+) on the recipe's

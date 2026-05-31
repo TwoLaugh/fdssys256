@@ -212,12 +212,22 @@ paths:
     $ref: 'paths/recipe.yaml#/recipeRoot'
   /api/v1/recipes/imports/url:
     $ref: 'paths/recipe.yaml#/recipeImports'
+  /api/v1/recipes/imports/preview-url:
+    $ref: 'paths/recipe.yaml#/recipeImportsPreviewUrl'
+  /api/v1/recipes/imports/preview-html:
+    $ref: 'paths/recipe.yaml#/recipeImportsPreviewHtml'
+  /api/v1/recipes/imports/confirm:
+    $ref: 'paths/recipe.yaml#/recipeImportsConfirm'
   /api/v1/recipes/{recipeId}/import-provenance:
     $ref: 'paths/recipe.yaml#/recipeImportProvenance'
   /api/v1/recipes/{recipeId}/branches:
     $ref: 'paths/recipe.yaml#/recipeBranches'
   /api/v1/recipes/{recipeId}/branches/{branchId}:
     $ref: 'paths/recipe.yaml#/recipeBranch'
+  /api/v1/recipes/{recipeId}/versions:
+    $ref: 'paths/recipe.yaml#/recipeVersions'
+  /api/v1/recipes/{recipeId}/versions/{versionNumber}:
+    $ref: 'paths/recipe.yaml#/recipeVersionByNumber'
   /api/v1/recipes/{recipeId}/versions/revert:
     $ref: 'paths/recipe.yaml#/recipeVersionsRevert'
   /api/v1/recipes/{recipeId}/versions/{fromVersionId}/diff/{toVersionId}:
@@ -703,6 +713,11 @@ components:
     CreateRecipeRequest: { $ref: 'schemas/recipe.yaml#/CreateRecipeRequest' }
     ImportSource: { $ref: 'schemas/recipe.yaml#/ImportSource' }
     ImportRecipeFromUrlRequest: { $ref: 'schemas/recipe.yaml#/ImportRecipeFromUrlRequest' }
+    ImportRecipeFromHtmlRequest: { $ref: 'schemas/recipe.yaml#/ImportRecipeFromHtmlRequest' }
+    DedupCandidateDto: { $ref: 'schemas/recipe.yaml#/DedupCandidateDto' }
+    RecipeImportPreview: { $ref: 'schemas/recipe.yaml#/RecipeImportPreview' }
+    ConfirmImportRequest: { $ref: 'schemas/recipe.yaml#/ConfirmImportRequest' }
+    RecipeVersionDtoPage: { $ref: 'schemas/recipe.yaml#/RecipeVersionDtoPage' }
     RecipeImportDto: { $ref: 'schemas/recipe.yaml#/RecipeImportDto' }
     RecipeBranchDto: { $ref: 'schemas/recipe.yaml#/RecipeBranchDto' }
     ChangeAction: { $ref: 'schemas/recipe.yaml#/ChangeAction' }
@@ -890,6 +905,7 @@ components:
     ProblemDetail: { $ref: 'schemas/common.yaml#/ProblemDetail' }
     PageEnvelope: { $ref: 'schemas/common.yaml#/PageEnvelope' }
     RecipeImportFailure: { $ref: 'schemas/common.yaml#/RecipeImportFailure' }
+    RecipeImportDuplicate: { $ref: 'schemas/common.yaml#/RecipeImportDuplicate' }
   responses:
     # Cross-module re-usable responses kept inline (these are tiny and rarely change).
     BadRequest:

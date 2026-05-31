@@ -4,6 +4,8 @@ import com.example.mealprep.recipe.domain.entity.RecipeVersion;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -22,6 +24,14 @@ public interface RecipeVersionRepository extends JpaRepository<RecipeVersion, UU
 
   Optional<RecipeVersion> findFirstByRecipeIdAndBranchIdAndVersionNumber(
       UUID recipeId, UUID branchId, int versionNumber);
+
+  /**
+   * Version-history listing (recipe-5). Returns the versions on a branch of a recipe, newest
+   * version-number first, bounded by {@link Pageable}. The service force-loads each row's lazy body
+   * children inside the read transaction before mapping (see {@code touchLazyChildren}).
+   */
+  Page<RecipeVersion> findByRecipeIdAndBranchIdOrderByVersionNumberDesc(
+      UUID recipeId, UUID branchId, Pageable pageable);
 
   /**
    * Resolve the id of the recipe's current-branch current-version row in a single query. Used by

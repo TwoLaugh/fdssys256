@@ -13,6 +13,7 @@ import com.example.mealprep.recipe.exception.RecipeDiffCrossBranchException;
 import com.example.mealprep.recipe.exception.RecipeDiffNotComputedException;
 import com.example.mealprep.recipe.exception.RecipeImageNotFoundException;
 import com.example.mealprep.recipe.exception.RecipeImageStorageException;
+import com.example.mealprep.recipe.exception.RecipeImportDuplicateException;
 import com.example.mealprep.recipe.exception.RecipeImportFailedException;
 import com.example.mealprep.recipe.exception.RecipeImportFailureException;
 import com.example.mealprep.recipe.exception.RecipeImportNotFoundException;
@@ -74,6 +75,23 @@ public class RecipeExceptionHandler {
             "Recipe import failed",
             req.getRequestURI());
     pd.setProperty("failureReason", ex.failureReason());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(RecipeImportDuplicateException.class)
+  public ResponseEntity<ProblemDetail> handleRecipeImportDuplicate(
+      RecipeImportDuplicateException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "recipe-import-duplicate",
+            "Recipe duplicates an existing library recipe",
+            req.getRequestURI());
+    pd.setProperty("candidateRecipeId", ex.candidateRecipeId());
+    pd.setProperty("ingredientOverlap", ex.ingredientOverlap());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);

@@ -54,6 +54,39 @@ public final class RecipeTestData {
         defaultTags());
   }
 
+  /**
+   * A create request with a <b>unique ingredient set</b> keyed off {@code discriminator}, so two
+   * recipes built with different discriminators never collide on the recipe-2 ingredient-set-hash
+   * dedup probe. Use this when a test needs several distinct recipes in one user's library.
+   */
+  public static CreateRecipeRequest uniqueCreateRequest(String discriminator) {
+    List<CreateIngredientRequest> ingredients =
+        List.of(
+            new CreateIngredientRequest(
+                0,
+                "unique." + discriminator + ".a",
+                "Ingredient A",
+                new BigDecimal("100.000"),
+                "g",
+                null,
+                false),
+            new CreateIngredientRequest(
+                1,
+                "unique." + discriminator + ".b",
+                "Ingredient B",
+                new BigDecimal("200.000"),
+                "g",
+                null,
+                false));
+    return new CreateRecipeRequest(
+        "Recipe " + discriminator,
+        "Distinct recipe " + discriminator,
+        ingredients,
+        defaultMethod(),
+        defaultMetadata(),
+        defaultTags());
+  }
+
   public static CreateRecipeRequest createRequestWithoutTags() {
     return new CreateRecipeRequest(
         "Spaghetti Bolognese",

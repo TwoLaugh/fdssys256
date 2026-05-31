@@ -60,6 +60,8 @@ class MarkUsedInPlanTest {
         null,
         null,
         null,
+        null,
+        null,
         events,
         fixedClock);
   }

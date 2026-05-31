@@ -505,11 +505,13 @@ This turns a silent failure mode (bad USDA mapping → wrong nutrition → stale
 
 ### Recipe deduplication
 
-On import, a normalised ingredient-set hash (sorted mapping keys, ignoring quantities) is computed. Collisions above a threshold (default: 80% ingredient overlap + method length within ±20%) surface a dialog:
+On create / import, a normalised ingredient-set hash (sorted mapping keys, ignoring quantities) is computed. Collisions above a threshold (default: 80% ingredient overlap + method length within ±20%) surface a dialog:
 
 > *This looks similar to "Chicken Stir Fry" in your library. Merge, import as a variant branch, or import anyway?*
 
 Prevents duplicate proliferation from users importing the same recipe from multiple sources, or from discovery finding near-duplicates of recipes the user already has.
+
+**Shipped (recipe-2).** `RecipeDeduplicationService` implements this: a Jaccard overlap of the normalised `ingredient_mapping_key` sets ≥80% plus a current-version method-step count within ±20% flags the candidate. It is wired into `createRecipe` and the import-confirm path (`confirmImport`); a hit throws `RecipeImportDuplicateException` → 422 `recipe-import-duplicate` carrying `candidateRecipeId` + `ingredientOverlap`, so the UI can offer "merge / import as variant / import anyway". The candidate scope is the caller's own active USER-catalogue library; discovery's pool dedup is a separate content-fingerprint path on `recipe_imports`. The 80% threshold remains an open tuning question (see Open Questions).
 
 ### Failure handling
 
@@ -646,12 +648,19 @@ PENDING (created by pipeline)
 
 ### Substitution
 
+The shipped state machine is four states (`recipe.api.dto.SubstitutionState`), renamed from the original `active | inactive | promoted` sketch during recipe-01e:
+
 ```
-ACTIVE (applied in one or more plans)
+PROPOSED (created by user or pipeline)
     │
-    ├── constraint lifted / user reverts → INACTIVE (retained in history)
-    └── applied N times without revert → prompt surfaced → (user confirms) → PROMOTED (overlay converted to version)
+    ├── user/pipeline accepts → ACCEPTED (overlay is live; applied in plans, applicationCount bumps)
+    ├── user rejects          → REJECTED   (terminal; retained in history)
+    └── (from ACCEPTED) applied / promoted → SUPERSEDED (overlay converted to a version; terminal)
 ```
+
+`PROPOSED → ACCEPTED | REJECTED`; `ACCEPTED → SUPERSEDED` on promote-to-version. `REJECTED` and `SUPERSEDED` are terminal.
+
+**Lifecycle reconciliation (recipe-6).** The original sketch had a distinct `INACTIVE` ("constraint lifted / user reverts") state separate from a user rejection. The shipped four-state machine collapses both "user rejected it" and "constraint no longer applies" into **`REJECTED`** — there is no separate `INACTIVE`, and the original `deactivate` action was dropped in favour of explicit `accept` / `reject`. **Accepted v1 contract:** the planner does not currently need to distinguish "rejected by user" from "constraint no longer applies" — a substitution that is not `ACCEPTED` is simply not part of the active overlay set, which is all the overlay applier and planner read. If a future planner requirement needs that distinction (e.g. to auto-re-propose a constraint-lifted substitution when the constraint returns), a fifth state would be added then rather than pre-emptively in v1.
 
 ---
 
