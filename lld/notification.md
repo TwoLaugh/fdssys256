@@ -20,26 +20,38 @@ com.example.mealprep.notification/
 │   ├── dto/                                 records (see DTOs)
 │   └── mapper/                              NotificationMapper, NotificationPreferenceMapper, DeliveryLogMapper
 ├── domain/
-│   ├── entity/                              Notification, NotificationPreference, DeliveryLog
+│   ├── entity/                              Notification, NotificationPreference, DeliveryLog,
+│   │                                        NotificationKind, NotificationPayload (+ status/severity/outcome enums)
 │   ├── repository/                          package-private Spring Data interfaces
+│   │                                        (Notification/Preference/DeliveryLog + the five scanner dispatch-log repos)
 │   └── service/
 │       ├── NotificationQueryService.java    public interface
 │       ├── NotificationUpdateService.java   public interface
 │       ├── NotificationServiceImpl.java     single impl of both
 │       └── internal/                        package-private — see internal helpers below
-│           ├── NotificationDispatcher
-│           ├── NotificationKindResolver
+│           ├── NotificationDispatcher (+ NotificationDispatcherImpl)
+│           ├── NotificationDispatcherFacade   public listener-facing bridge (see Service Interfaces)
+│           ├── NotificationKindResolver       event → NotificationDraft (single source of truth for §Consumed)
 │           ├── QuietHoursEvaluator
 │           ├── NotificationDebouncer
+│           ├── NotificationDefaults / NotificationDraft
 │           └── delivery/                    DeliveryChannel SPI + InAppDeliveryChannel + DeliveryChannelRegistry
+├── scanner/                                 scheduled producers — see §Scanners
+│   ├── ExpiryWarningScanner, DefrostReminderScanner, PrepReminderScanner,
+│   │   NutritionAlertScanner, StapleReplenishmentScanner
+│   ├── config/                              ScannerProperties (@ConfigurationProperties)
+│   └── internal/                            ScannerSupport (base), DispatchLogCleanupScheduler,
+│                                            entity/ (five *DispatchLog idempotency-log entities)
 ├── event/                                   ProvisionEventListener, NutritionEventListener, PlannerEventListener,
-│                                            NotificationCreatedEvent (published)
+│                                            FeedbackEventListener, NotificationCreatedEvent (published),
+│                                            StapleReplenishmentNeededEvent (defined here — see §Scanners)
 ├── exception/                               module-root + per-failure subclasses
 ├── validation/                              @ValidQuietHours validator
-└── config/                                  NotificationProperties (@ConfigurationProperties)
+├── config/                                  NotificationProperties (@ConfigurationProperties)
+└── testing/                                 E2e seed/scan controllers (test-profile only)
 ```
 
-`NotificationModule.java` re-exports `NotificationQueryService` and `NotificationUpdateService`. The internal `NotificationDispatcher` is package-private — listeners only.
+`NotificationModule.java` re-exports `NotificationQueryService` and `NotificationUpdateService`. The internal `NotificationDispatcher` is package-private — listeners reach it through the public `NotificationDispatcherFacade` only.
 
 ---
 
@@ -146,9 +158,13 @@ public enum NotificationKind {
     HEALTH_DIRECTIVE_RECEIVED,     // HealthDirectiveReceivedEvent
     PLANNER_PREP_REMINDER,         // PrepReminderEvent
     PLANNER_REOPT_SUGGESTED,       // ReoptSuggestedEvent
-    PLANNER_PLAN_GENERATED         // PlanGeneratedEvent (optional, default OFF)
+    PLANNER_PLAN_GENERATED,        // PlanGeneratedEvent (optional, default OFF)
+    STAPLE_REPLENISHMENT_NEEDED,   // StapleReplenishmentNeededEvent (notification/01b — staple scanner)
+    FEEDBACK_CONFIRMATION          // FeedbackProcessedEvent (NOTIF-16 — positive-outcome only)
 }
 ```
+
+`STAPLE_REPLENISHMENT_NEEDED` is raised by the weekly `StapleReplenishmentScanner` (see [Scanners](#scanners)); its producer `StapleReplenishmentNeededEvent` is defined inside this module rather than a producer module (the scanner is the sole producer and the listener the sole consumer). `FEEDBACK_CONFIRMATION` is a positive-outcome confirmation that the user's feedback was applied — it fires **only** when ≥1 destination actually applied a change, gated in `FeedbackEventListener` (see [Consumed](#consumed)).
 
 `PLANNER_PLAN_GENERATED` is optional per the brief — `PlanGeneratedEvent` is mostly an analytics signal per [meal-planner.md](../design/meal-planner.md#observability) and surfacing it as a notification doubles up with the UI's natural "your plan is ready" state. **Default OFF**, toggleable via preferences. **Worth user review.** The recipe module does not publish notifications directly — its pending-change UI per [recipe-system.md](../design/recipe-system.md) is client-rendered from query data.
 
@@ -158,7 +174,8 @@ Each kind carries a kind-specific payload record via a sealed interface (Jackson
 public sealed interface NotificationPayload permits
     ItemNearExpiryPayload, ItemSpoiledPayload, DefrostReminderPayload,
     NutritionDivergedPayload, HealthDirectivePayload,
-    PrepReminderPayload, ReoptSuggestedPayload, PlanGeneratedPayload {
+    PrepReminderPayload, ReoptSuggestedPayload, PlanGeneratedPayload,
+    StapleReplenishmentPayload, FeedbackConfirmationPayload {
 
     NotificationKind kind();
 
@@ -192,6 +209,16 @@ public sealed interface NotificationPayload permits
         implements NotificationPayload {}
 
     record PlanGeneratedPayload(NotificationKind kind, UUID planId, int generation)
+        implements NotificationPayload {}
+
+    record StapleReplenishmentPayload(NotificationKind kind, List<UUID> inventoryItemIds,
+                                      List<String> ingredientMappingKeys, BigDecimal lowestStockRatio)
+        implements NotificationPayload {}
+
+    // appliedDestinations are Destination names as plain strings — keeps the notification
+    // module off a hard dependency on the feedback SPI enum.
+    record FeedbackConfirmationPayload(NotificationKind kind, UUID feedbackId,
+                                       List<String> appliedDestinations)
         implements NotificationPayload {}
 }
 ```
@@ -286,8 +313,10 @@ interface NotificationRepository extends JpaRepository<Notification, UUID> {
 
     long countByUserIdAndStatus(UUID userId, NotificationStatus status);
 
-    // Debouncer: most recent open (UNREAD) notification of a given (user, kind)
-    // within the dedup window. The single-flight bundle target.
+    // Debouncer: open (UNREAD) notifications of a given (user, kind) within the dedup
+    // window, newest-first. Aggregate kinds page (0,1) — the newest row is the target.
+    // Per-key kinds page a bounded window and scan for the row whose bundle_keys carries
+    // the draft's key, so a newer different-key row never hides an older same-key row (F9).
     @Query("""
         select n from Notification n
         where n.userId = :userId
@@ -300,7 +329,7 @@ interface NotificationRepository extends JpaRepository<Notification, UUID> {
         @Param("userId") UUID userId,
         @Param("kind") NotificationKind kind,
         @Param("since") Instant since,
-        Pageable pageable);    // pageable used to LIMIT 1 — caller passes PageRequest.of(0, 1)
+        Pageable pageable);
 }
 
 interface NotificationPreferenceRepository
@@ -346,7 +375,7 @@ public interface NotificationUpdateService {
     NotificationDto markRead(UUID userId, UUID notificationId);
     NotificationDto markDismissed(UUID userId, UUID notificationId);
     NotificationDto markActioned(UUID userId, UUID notificationId);
-    void markAllRead(UUID userId, Set<NotificationKind> kinds);    // empty kinds == all
+    int markAllRead(UUID userId, Set<NotificationKind> kinds);     // returns rows updated; empty kinds == all
 
     NotificationPreferenceDto updatePreferences(UUID userId, UpdateNotificationPreferenceRequest request);
 
@@ -368,7 +397,11 @@ interface NotificationDispatcher {
 }
 ```
 
-`NotificationDraft` is a package-private working type — same shape as `CreateNotificationRequest` plus carry-through of the originating event for metric tagging.
+`NotificationDraft` is a package-private working type — same shape as `CreateNotificationRequest` plus carry-through of the originating event (`Origin`, originating-event id and trace) for metric tagging and the published `NotificationCreatedEvent`.
+
+#### `NotificationDispatcherFacade` (listener seam)
+
+`NotificationDispatcher` and `NotificationKindResolver` are both package-private in `internal/`, but the event listeners live in the public `event/` package and must reach them. `NotificationDispatcherFacade` is the thin **public** bridge that closes that gap: one `dispatch<Event>(event)` method per producer event, each resolving the event to a `NotificationDraft` via the resolver and handing it to the dispatcher. Listeners inject only the facade — the dispatcher and resolver stay internal (listeners-only), preserving the single-producer assumption that the debouncer relies on. The facade is the only public type in `internal/`.
 
 ---
 
@@ -423,12 +456,13 @@ Validation failures bubble up as `MethodArgumentNotValidException` → 400 Probl
 
 ### Consumed
 
-Producer event classes are imported from their owner modules' `event/` packages — this module does not redefine them. Listeners live in three classes (`ProvisionEventListener`, `NutritionEventListener`, `PlannerEventListener`), each `@RequiredArgsConstructor`-injected with `NotificationDispatcher` and `NotificationKindResolver`. Every handler is the same shape:
+Most producer event classes are imported from their owner modules' `event/` packages — this module does not redefine them. The exception is `StapleReplenishmentNeededEvent`, defined inside this module because its sole producer (the staple scanner) and sole consumer (this listener) both live here (see [Scanners](#scanners)). Listeners live in four classes — `ProvisionEventListener` (incl. `onStapleReplenishmentNeeded`), `NutritionEventListener`, `PlannerEventListener`, and `FeedbackEventListener` — each injected with the public `NotificationDispatcherFacade`. Every handler is the same shape:
 
 ```java
 @TransactionalEventListener(phase = AFTER_COMMIT)
 public void onItemNearingExpiry(ItemNearingExpiryEvent event) {
-    dispatcher.dispatch(resolver.resolve(event));
+    try { dispatcher.dispatchItemNearingExpiry(event); }   // facade resolves → dispatches
+    catch (Exception e) { /* log + metric-count; never rethrow */ }
 }
 ```
 
@@ -446,8 +480,21 @@ Listeners never throw — failures are logged and metric-counted; the publishing
 | `PrepReminderEvent` | `PlannerEventListener.onPrepReminder` | `PLANNER_PREP_REMINDER` | `ATTENTION` | no | per-`mealSlotId` | F6 |
 | `ReoptSuggestedEvent` | `PlannerEventListener.onReoptSuggested` | `PLANNER_REOPT_SUGGESTED` | `ATTENTION` | yes | `(userId, planId)` (replacement) | F7 |
 | `PlanGeneratedEvent` | `PlannerEventListener.onPlanGenerated` | `PLANNER_PLAN_GENERATED` | `INFO` | yes | per-`planId` | F7 |
+| `StapleReplenishmentNeededEvent` | `ProvisionEventListener.onStapleReplenishmentNeeded` | `STAPLE_REPLENISHMENT_NEEDED` | `INFO` | no | `(userId, kind)` | F12 |
+| `FeedbackProcessedEvent` | `FeedbackEventListener.onFeedbackProcessed` | `FEEDBACK_CONFIRMATION` | `INFO` | no | per-`feedbackId` | F13 |
 
 The technical-architecture catalogue lists `ExpiryApproachingEvent`; the brief uses `ItemNearingExpiryEvent`. Treating them as the same event — the brief's name takes precedence here; the listener binds to whichever class the provisions LLD ships. **Worth user review.**
+
+`StapleReplenishmentNeededEvent` is emitted by the in-module `StapleReplenishmentScanner` (per [Scanners](#scanners)); per-batch deduplication happens upstream in the scanner's idempotency log, so the listener-side bundling key is the simple `(userId, kind)` aggregate.
+
+**`FeedbackEventListener` fire-condition gate (NOTIF-16, F13).** Unlike the other listeners, `FeedbackEventListener` does **not** dispatch unconditionally — `FEEDBACK_CONFIRMATION` is a *positive-outcome confirmation* and must fire only when the user's feedback actually changed something. The gate lives in the listener (so the resolver maps unconditionally and the dispatcher never runs for a non-firing outcome):
+
+```java
+event.appliedDestinations() != null && !event.appliedDestinations().isEmpty()
+    && !event.clarificationPending()
+```
+
+Gating on `appliedDestinations` (the *succeeded* subset) rather than `destinationsTouched` (every destination *attempted*) is the correctness point: a routed-but-all-FAILED feedback has a non-empty `destinationsTouched` yet applied nothing. So all-success and partial-success fire (the payload lists exactly the succeeded destinations); non-actionable/empty, clarification-pending and total-failure outcomes are skipped (each carries an empty `appliedDestinations` or sets `clarificationPending`). Per-destination failure detail on partial success (HLD-GAP G15) is deferred — v1 fires plainly when anything applied.
 
 ### Published
 
@@ -525,11 +572,12 @@ When suppressed, the dispatcher still writes a `DeliveryLog` row with the struct
 
 ### F9: Debouncer
 
-`NotificationDebouncer.findBundleTarget(userId, kind, bundlingKey, now)`:
+`NotificationDebouncer.findBundleTarget(userId, kind, bundlingKey, debounceWindowMinutes, now)`:
 
 1. `since = now - debounce_window_minutes` (default 30, per-user-overridable).
-2. `findOpenForBundling(userId, kind, since, PageRequest.of(0, 1))`. Empty → no bundle target.
-3. Otherwise, mutate the existing notification (`bundle_count++`, append `bundle_keys`, regenerate `title`/`body` from a kind-specific template). JPA `@Version` increments via the bundle target's optimistic-lock check.
+2. **Aggregate kinds** (null `bundlingKey`, e.g. `PROVISION_ITEM_NEAR_EXPIRY`): `findOpenForBundling(userId, kind, since, PageRequest.of(0, 1))` — the single newest open row is the target. Empty → no target.
+3. **Per-key kinds** (non-null `bundlingKey`, e.g. `PROVISION_DEFROST_REMINDER` per `mealSlotId`): fetch a **bounded page** of open rows newest-first and scan for the row whose `bundle_keys` contains the draft's key. A `LIMIT 1` lookup would only ever inspect the single newest row, so a newer open row of the same kind but a *different* key (e.g. another `mealSlotId`) would silently hide an older same-key row and split the bundle — the scan prevents that. No key-matching row in the page → no target (open a fresh notification).
+4. On a target, mutate the existing notification (`bundle_count++`, append `bundle_keys`, regenerate `body` from a kind-specific template; `PLANNER_REOPT_SUGGESTED` replaces instead — latest wins, count stays 1). JPA `@Version` increments via the bundle target's optimistic-lock check.
 
 Bundling key is kind-specific — see the [event mapping table](#consumed).
 
@@ -538,6 +586,34 @@ Bundling key is kind-specific — see the [event mapping table](#consumed).
 `markRead` / `markDismissed` / `markActioned` each: `findByIdAndUserId` (404), validate the state transition (illegal → `NotificationStateTransitionException` 409), mutate `status` and the matching timestamp, return the DTO. No event published — these are user-local UI state.
 
 `updatePreferences` is `@Transactional`, optimistic-lock-checked via `expectedVersion`, asserts the `enabled_kinds` map's key set matches the `NotificationKind` enum exactly, persists. No event published.
+
+### F12: Staple replenishment
+
+`StapleReplenishmentNeededEvent` (in-module producer — see [Scanners](#scanners)) follows the shared F1–F7 shape with an aggregate `(userId, kind)` bundling key and `INFO` severity. Per-batch dedup is the scanner's responsibility (its `(userId, scanDate)` idempotency log), so the listener path is otherwise unremarkable.
+
+### F13: Feedback confirmation (NOTIF-16)
+
+`FeedbackEventListener.onFeedbackProcessed` applies the positive-outcome gate (see [Consumed](#consumed)) **before** dispatching. When it fires, the flow is the shared shape with a per-`feedbackId` bundling key (a re-delivered event for the same entry collapses onto the one row — the "no storm" guarantee) and `INFO` severity. The payload's applied-destinations list is built from the event's `appliedDestinations` (the succeeded subset), so a partial success lists only the destinations that took.
+
+---
+
+## Scanners
+
+Five `@Scheduled` scanners under `scanner/` are the in-module producers for kinds the source modules do not push directly (per `tickets/notification/01b-scanners.md` and `01c-scanners-real-times.md`). Each extends `ScannerSupport` (base supplying the injected `Clock` — the single time seam tests pin via `Clock.fixed` — plus the `ApplicationEventPublisher`), is gated by `@ConditionalOnProperty(mealprep.notification.scanners.<name>.enabled, matchIfMissing=true)`, reads its threshold/cron knobs from `ScannerProperties`, and is **idempotent** via a per-scanner dispatch-log table (so a re-run within the same window is a no-op). Each scanner exposes a `@Transactional scan()` (or `sweep()`) the unit/IT tests call directly; the production `@Scheduled` cron is far-future in the test profile so it never auto-fires under test. Scanners read collaborator data through other modules' **public** query services only (provisions/nutrition/planner/household), never their internals, and isolate per-user failures (one user's exception is logged + counted, the scan continues).
+
+| Scanner | Default cadence | Emits | Source query | Idempotency key |
+|---|---|---|---|---|
+| `ExpiryWarningScanner` | daily 06:00 | `ItemNearingExpiryEvent` | `ProvisionQueryService` (per-location expiry threshold) | `(userId, scanDate)` |
+| `DefrostReminderScanner` | every 15 min | `DefrostReminderEvent` | `ProvisionQueryService` (frozen candidates; v1 anchors on `expiryDate`, not slot meal time — see 01c) | `(inventoryItemId, defrostTargetTime)` |
+| `PrepReminderScanner` | every 5 min | `PrepReminderEvent` | `PlanQueryService.getUpcomingSlots` (anchors on `UpcomingSlotView.mealTime()`) | `(slotId, prepStepAtTime)` |
+| `NutritionAlertScanner` | daily 21:00 | `NutritionIntakeDivergedEvent` (per diverged nutrient) | `NutritionQueryService` (`divergencePct ≥ threshold`, default 0.30) | `(userId, alertDate, nutrientKey)` |
+| `StapleReplenishmentScanner` | weekly Sun 10:00 | `StapleReplenishmentNeededEvent` (in-module event) | `ProvisionQueryService` (staples `LOW`/`OUT`) | `(userId, scanDate)` |
+
+The scanner severity tiering is delegated downstream: the scanner emits the producer event and the `NotificationKindResolver` decides severity (e.g. `NUTRITION_INTAKE_DIVERGED` tiers `≥ 0.40 → ATTENTION`, the scanner only fires above its lower 0.30 alert threshold).
+
+`DispatchLogCleanupScheduler` (in `scanner/internal/`, daily 02:00) is a maintenance sweep — not a producer, so it does **not** extend `ScannerSupport` — that hard-deletes dispatch-log rows older than `dispatchLogRetentionDays` (default 30) across all five idempotency-log tables to keep them bounded.
+
+`StapleReplenishmentNeededEvent` is the one consumed event defined in this module (`event/`): the scanner is its only producer and the listener its only consumer, so there is no producer-module contract to publish from (decision §10 Option A in `01b-scanners.md`). It implements `core.events.ScopeChangedEvent` with `scopeKind = "staple-replenishment"`, `scopeId = userId`.
 
 ---
 
@@ -596,7 +672,7 @@ Unit tests use `@ExtendWith(MockitoExtension.class)`. Integration tests are `*IT
 | `NotificationServiceImplTest` | `create` happy path; `markRead`/`markDismissed`/`markActioned` legal and illegal transitions; `getById` enforces `userId` scoping; `markAllRead` kind filter; `updatePreferences` rejects stale `expectedVersion`. |
 | `NotificationDispatcherTest` | Disabled-kind suppression (no row, `DeliveryLog(SKIPPED, DISABLED_BY_PREF)`); quiet-hours suppression; URGENT bypass; bundling increments `bundle_count`; per-id bundling kinds never bundle; `NotificationCreatedEvent` published once on persist, never on suppression. |
 | `QuietHoursEvaluatorTest` | Wrap-around windows (22:00–06:00); timezone resolution (same `Instant` in `Europe/London` vs `America/Los_Angeles`). |
-| `NotificationDebouncerTest` | Window math: events at T, T+10, T+25 (window=30) all bundle; T+31 opens a fresh notification. Cross-kind isolation. Replacement semantics for `PLANNER_REOPT_SUGGESTED`. |
+| `NotificationDebouncerTest` | Window math: events at T, T+10, T+25 (window=30) all bundle; T+31 opens a fresh notification. Cross-kind isolation. Replacement semantics for `PLANNER_REOPT_SUGGESTED`. Per-key match/mismatch, and an older same-key open row hidden behind a newer different-key row still bundles (not LIMIT 1). |
 | `NotificationKindResolverTest` | One test per producer event → expected (kind, severity, payload, action URI, householdId). Severity tiering for `NUTRITION_INTAKE_DIVERGED`. |
 | `*EventListenerTest` | Each listener calls resolver → dispatcher; dispatcher exceptions are caught and logged, never escape (Mockito `doThrow` + assert no throw). |
 | `InAppDeliveryChannelTest` | `deliver` writes one `DeliveryLog(IN_APP, DELIVERED)`; `accepts` returns true for every kind in v1. |

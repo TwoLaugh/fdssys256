@@ -87,7 +87,8 @@ public class E2eNotificationSeedController {
             payload,
             null,
             UUID.randomUUID(),
-            UUID.randomUUID());
+            UUID.randomUUID(),
+            null);
     NotificationDto created = updateService.create(request);
     return ResponseEntity.status(HttpStatus.CREATED).body(created);
   }

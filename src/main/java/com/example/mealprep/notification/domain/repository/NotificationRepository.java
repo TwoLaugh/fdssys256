@@ -64,9 +64,11 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
       UUID userId, NotificationStatus status, Collection<NotificationKind> kinds);
 
   /**
-   * Most-recent open ({@code UNREAD}) notifications of a given {@code (user, kind)} created on or
-   * after {@code since} — the debouncer's single-flight bundle-target lookup. Caller passes {@code
-   * PageRequest.of(0, 1)} to LIMIT 1.
+   * Most-recent-first open ({@code UNREAD}) notifications of a given {@code (user, kind)} created
+   * on or after {@code since} — the debouncer's bundle-target lookup. Aggregate kinds pass {@code
+   * PageRequest.of(0, 1)} (the single newest row is the target); per-key kinds pass a bounded page
+   * and scan it for the row whose {@code bundle_keys} contains the draft's key, so a newer
+   * different-key row cannot hide an older same-key row (per {@code lld/notification.md} §F9).
    */
   @Query(
       """

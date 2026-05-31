@@ -24,6 +24,8 @@ import com.example.mealprep.notification.domain.service.NotificationUpdateServic
 import com.example.mealprep.notification.exception.NotificationNotFoundException;
 import com.example.mealprep.notification.exception.NotificationPreferenceNotFoundException;
 import com.example.mealprep.notification.exception.NotificationStateTransitionException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -58,6 +60,7 @@ public class NotificationServiceImpl
   private final DeliveryLogMapper deliveryLogMapper;
   private final DeliveryLogRepository deliveryLogRepository;
   private final NotificationProperties properties;
+  private final ObjectMapper objectMapper;
   private final Clock clock;
 
   public NotificationServiceImpl(
@@ -68,6 +71,7 @@ public class NotificationServiceImpl
       DeliveryLogMapper deliveryLogMapper,
       DeliveryLogRepository deliveryLogRepository,
       NotificationProperties properties,
+      ObjectMapper objectMapper,
       Clock clock) {
     this.notificationRepository = notificationRepository;
     this.preferenceRepository = preferenceRepository;
@@ -76,6 +80,7 @@ public class NotificationServiceImpl
     this.deliveryLogMapper = deliveryLogMapper;
     this.deliveryLogRepository = deliveryLogRepository;
     this.properties = properties;
+    this.objectMapper = objectMapper;
     this.clock = clock;
   }
 
@@ -179,6 +184,10 @@ public class NotificationServiceImpl
             .status(NotificationStatus.UNREAD)
             .actionTargetUri(request.actionTargetUri())
             .bundleCount(1)
+            // Per-key kinds carry the bundling key; seed it into bundle_keys on the initial INSERT
+            // so a later same-key draft bundles onto this row (no follow-up UPDATE). Null for
+            // aggregate kinds, leaving bundle_keys null.
+            .bundleKeys(singletonKeyArray(request.bundlingKey()))
             .sourceEventId(request.sourceEventId())
             .traceId(request.traceId())
             .build();
@@ -302,6 +311,19 @@ public class NotificationServiceImpl
         preferenceRepository.save(newDefaultPreference(userId, Instant.now(clock)));
     log.info("notification preferences seeded userId={} preferenceId={}", userId, created.getId());
     return preferenceMapper.toDto(created);
+  }
+
+  /**
+   * Build a single-element {@code bundle_keys} JSON array for a per-key kind, or {@code null} for
+   * an aggregate kind (null {@code bundlingKey}) so the column stays null.
+   */
+  private ArrayNode singletonKeyArray(String bundlingKey) {
+    if (bundlingKey == null) {
+      return null;
+    }
+    ArrayNode array = objectMapper.createArrayNode();
+    array.add(bundlingKey);
+    return array;
   }
 
   private NotificationPreference newDefaultPreference(UUID userId, Instant now) {

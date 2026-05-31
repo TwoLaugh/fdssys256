@@ -26,6 +26,16 @@ import org.springframework.stereotype.Component;
 @Component
 public class NotificationDebouncer {
 
+  /**
+   * Open rows scanned for a per-key bundle target. A per-key match can sit behind newer
+   * different-key rows of the same {@code (user, kind)} (e.g. several distinct {@code mealSlotId}
+   * defrost reminders), so we cannot inspect only the single newest row — a {@code LIMIT 1} lookup
+   * would silently miss the older same-key open row and split the bundle. We fetch a bounded window
+   * and scan it newest-first for the key match. The window is generous relative to the realistic
+   * count of concurrently-open distinct keys for one user/kind inside a 30-minute debounce window.
+   */
+  static final int BUNDLE_SCAN_PAGE_SIZE = 50;
+
   private final NotificationRepository notificationRepository;
   private final ObjectMapper objectMapper;
 
@@ -35,7 +45,14 @@ public class NotificationDebouncer {
     this.objectMapper = objectMapper;
   }
 
-  /** The most-recent open notification eligible to absorb this draft, or null when none. */
+  /**
+   * The most-recent open notification eligible to absorb this draft, or null when none.
+   *
+   * <p>Aggregate kinds (null {@code bundlingKey}) bundle onto the single newest open row. Per-key
+   * kinds scan a bounded page of open rows newest-first for the one whose {@code bundle_keys}
+   * contains {@code bundlingKey}; a newer open row of the same kind but a <em>different</em> key
+   * must never hide an older same-key row (per {@code lld/notification.md} §F9).
+   */
   public Notification findBundleTarget(
       java.util.UUID userId,
       NotificationKind kind,
@@ -43,17 +60,23 @@ public class NotificationDebouncer {
       int debounceWindowMinutes,
       Instant now) {
     Instant since = now.minus(debounceWindowMinutes, ChronoUnit.MINUTES);
+    if (bundlingKey == null) {
+      // Aggregate kind — the single newest open row is the bundle target.
+      List<Notification> open =
+          notificationRepository.findOpenForBundling(userId, kind, since, PageRequest.of(0, 1));
+      return open.isEmpty() ? null : open.get(0);
+    }
+    // Per-key kind — scan the bounded window newest-first for the key-matching row so a newer
+    // different-key row does not hide an older same-key row.
     List<Notification> open =
-        notificationRepository.findOpenForBundling(userId, kind, since, PageRequest.of(0, 1));
-    if (open.isEmpty()) {
-      return null;
+        notificationRepository.findOpenForBundling(
+            userId, kind, since, PageRequest.of(0, BUNDLE_SCAN_PAGE_SIZE));
+    for (Notification candidate : open) {
+      if (bundleKeysContain(candidate, bundlingKey)) {
+        return candidate;
+      }
     }
-    Notification candidate = open.get(0);
-    if (bundlingKey != null && !bundleKeysContain(candidate, bundlingKey)) {
-      // A different per-key origin (e.g. a different mealSlotId) does not bundle into this row.
-      return null;
-    }
-    return candidate;
+    return null;
   }
 
   /**
