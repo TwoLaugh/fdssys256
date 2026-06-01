@@ -15,8 +15,8 @@ import com.example.mealprep.ai.config.AiProperties;
 import com.example.mealprep.ai.domain.entity.CallErrorKind;
 import com.example.mealprep.ai.domain.service.internal.AiCallRecorder;
 import com.example.mealprep.ai.domain.service.internal.AiServiceImpl;
-import com.example.mealprep.ai.domain.service.internal.AnthropicClient;
-import com.example.mealprep.ai.domain.service.internal.AnthropicResponse;
+import com.example.mealprep.ai.domain.service.internal.ChatClient;
+import com.example.mealprep.ai.domain.service.internal.ChatResponse;
 import com.example.mealprep.ai.domain.service.internal.CostBudgetGuard;
 import com.example.mealprep.ai.domain.service.internal.CostCalculator;
 import com.example.mealprep.ai.domain.service.internal.OpenAiEmbeddingClient;
@@ -48,14 +48,15 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 /**
- * Unit tests for {@link AiServiceImpl}. {@link AnthropicClient}, {@link AiCallRecorder}, and {@link
- * CostBudgetGuard} are mocked at the seam; the real {@link ObjectMapper} and {@link CostCalculator}
- * stay in.
+ * Unit tests for {@link AiServiceImpl}. The {@link ChatClient} seam, {@link AiCallRecorder}, and
+ * {@link CostBudgetGuard} are mocked at the seam; the real {@link ObjectMapper} and {@link
+ * CostCalculator} stay in. Mocking {@link ChatClient} (not a concrete provider) is the point of the
+ * abstraction — the dispatcher is provider-agnostic.
  */
 @ExtendWith(MockitoExtension.class)
 class AiServiceImplTest {
 
-  @Mock private AnthropicClient anthropicClient;
+  @Mock private ChatClient chatClient;
   @Mock private OpenAiEmbeddingClient embeddingClient;
   @Mock private AiCallRecorder recorder;
   @Mock private ApplicationEventPublisher eventPublisher;
@@ -71,7 +72,7 @@ class AiServiceImplTest {
 
   private AiServiceImpl service() {
     return new AiServiceImpl(
-        anthropicClient,
+        chatClient,
         embeddingClient,
         recorder,
         eventPublisher,
@@ -89,8 +90,8 @@ class AiServiceImplTest {
     AiTask<String> task =
         AiTestData.task(String.class).ofType(TaskType.FEEDBACK_CLASSIFICATION).build();
     when(recorder.recordPending(eq(task), eq(ModelTier.CHEAP), eq("haiku-id"))).thenReturn(callId);
-    when(anthropicClient.call(eq(task), eq("haiku-id")))
-        .thenReturn(new AnthropicResponse("ok", 12, 4, "haiku-id"));
+    when(chatClient.chat(eq(task), eq("haiku-id")))
+        .thenReturn(new ChatResponse("ok", 12, 4, "haiku-id"));
 
     String result = service().execute(task);
 
@@ -119,8 +120,7 @@ class AiServiceImplTest {
             .withTraceId(traceId)
             .build();
     when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
-    when(anthropicClient.call(any(), any()))
-        .thenReturn(new AnthropicResponse("ok", null, null, "haiku-id"));
+    when(chatClient.chat(any(), any())).thenReturn(new ChatResponse("ok", null, null, "haiku-id"));
 
     service().execute(task);
 
@@ -135,8 +135,7 @@ class AiServiceImplTest {
     UUID callId = UUID.randomUUID();
     AiTask<String> task = AiTestData.task(String.class).build();
     when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
-    when(anthropicClient.call(any(), any()))
-        .thenThrow(new AiInvalidRequestException("bad request"));
+    when(chatClient.chat(any(), any())).thenThrow(new AiInvalidRequestException("bad request"));
 
     assertThatThrownBy(() -> service().execute(task)).isInstanceOf(AiInvalidRequestException.class);
 
@@ -153,8 +152,7 @@ class AiServiceImplTest {
     UUID callId = UUID.randomUUID();
     AiTask<String> task = AiTestData.task(String.class).build();
     when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
-    when(anthropicClient.call(any(), any()))
-        .thenThrow(new AiUnavailableException("retries exhausted"));
+    when(chatClient.chat(any(), any())).thenThrow(new AiUnavailableException("retries exhausted"));
 
     assertThatThrownBy(() -> service().execute(task)).isInstanceOf(AiUnavailableException.class);
     verify(recorder).recordFailure(eq(callId), eq(CallErrorKind.AI_UNAVAILABLE), anyInt());
@@ -166,8 +164,8 @@ class AiServiceImplTest {
     AiTask<TypedPayload> task =
         AiTestData.task(TypedPayload.class).ofType(TaskType.RECIPE_ADAPTATION).build();
     when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
-    when(anthropicClient.call(any(), any()))
-        .thenReturn(new AnthropicResponse("not-json", null, null, "haiku-id"));
+    when(chatClient.chat(any(), any()))
+        .thenReturn(new ChatResponse("not-json", null, null, "haiku-id"));
 
     assertThatThrownBy(() -> service().execute(task))
         .isInstanceOf(AiInvalidResponseException.class);
@@ -179,8 +177,8 @@ class AiServiceImplTest {
     UUID callId = UUID.randomUUID();
     AiTask<TypedPayload> task = AiTestData.task(TypedPayload.class).build();
     when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
-    when(anthropicClient.call(any(), any()))
-        .thenReturn(new AnthropicResponse("{\"answer\":\"42\"}", 1, 1, "haiku-id"));
+    when(chatClient.chat(any(), any()))
+        .thenReturn(new ChatResponse("{\"answer\":\"42\"}", 1, 1, "haiku-id"));
 
     TypedPayload result = service().execute(task);
     assertThat(result.answer()).isEqualTo("42");
@@ -191,8 +189,7 @@ class AiServiceImplTest {
     UUID callId = UUID.randomUUID();
     AiTask<String> task = AiTestData.task(String.class).build();
     when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
-    when(anthropicClient.call(any(), any()))
-        .thenThrow(new AiUnavailableException("upstream blew up"));
+    when(chatClient.chat(any(), any())).thenThrow(new AiUnavailableException("upstream blew up"));
     Mockito.doThrow(new RuntimeException("audit save failed"))
         .when(recorder)
         .recordFailure(any(), any(), anyInt());
@@ -378,7 +375,7 @@ class AiServiceImplTest {
     verify(recorder).recordPending(task, ModelTier.CHEAP, "haiku-id");
     verify(recorder).recordFailure(eq(callId), eq(CallErrorKind.BUDGET_EXCEEDED), anyInt());
     // Anthropic was never called.
-    verify(anthropicClient, never()).call(any(), any());
+    verify(chatClient, never()).chat(any(), any());
     // recordSuccess is never called for a budget rejection.
     verify(recorder, never()).recordSuccess(any(), any(), any(), anyInt());
     verify(recorder, never()).recordSuccess(any(), any(), any(), anyInt(), anyLong());
@@ -420,7 +417,7 @@ class AiServiceImplTest {
     verify(recorder).recordFailure(eq(callId), eq(CallErrorKind.TOKEN_CAP_EXCEEDED), anyInt());
     // Token cap short-circuits before the budget guard and the wire call.
     verify(budgetGuard, never()).checkOrThrow(any());
-    verify(anthropicClient, never()).call(any(), any());
+    verify(chatClient, never()).chat(any(), any());
     verify(eventPublisher).publishEvent(any(AiCallFailedEvent.class));
   }
 

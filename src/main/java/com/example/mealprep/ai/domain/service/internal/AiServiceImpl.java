@@ -34,8 +34,9 @@ import org.springframework.stereotype.Service;
 
 /**
  * Production {@link AiService} dispatcher. Records a PENDING audit row, runs the {@link
- * CostBudgetGuard} pre-check, calls Anthropic via {@link AnthropicClient}, then UPDATEs the row to
- * SUCCEEDED / FAILED and publishes the matching event.
+ * CostBudgetGuard} pre-check, calls the configured chat provider via the {@link ChatClient} seam
+ * (Anthropic or OpenAI, selected by {@code mealprep.ai.chat-provider} — see {@code
+ * AiClientConfig}), then UPDATEs the row to SUCCEEDED / FAILED and publishes the matching event.
  *
  * <p>Not {@code @Transactional} — the network call holds for seconds, and the audit-row writes are
  * owned by {@link AiCallRecorder}'s {@code REQUIRES_NEW} transactions so they survive caller
@@ -50,7 +51,7 @@ public class AiServiceImpl implements AiService {
 
   private static final Logger log = LoggerFactory.getLogger(AiServiceImpl.class);
 
-  private final AnthropicClient anthropicClient;
+  private final ChatClient chatClient;
   private final OpenAiEmbeddingClient embeddingClient;
   private final AiCallRecorder recorder;
   private final ApplicationEventPublisher eventPublisher;
@@ -63,7 +64,7 @@ public class AiServiceImpl implements AiService {
   private final CostCalculator costCalculator;
 
   public AiServiceImpl(
-      AnthropicClient anthropicClient,
+      ChatClient chatClient,
       OpenAiEmbeddingClient embeddingClient,
       AiCallRecorder recorder,
       ApplicationEventPublisher eventPublisher,
@@ -73,7 +74,7 @@ public class AiServiceImpl implements AiService {
       CostBudgetGuard budgetGuard,
       TokenCapGuard tokenCapGuard,
       CostCalculator costCalculator) {
-    this.anthropicClient = anthropicClient;
+    this.chatClient = chatClient;
     this.embeddingClient = embeddingClient;
     this.recorder = recorder;
     this.eventPublisher = eventPublisher;
@@ -118,7 +119,7 @@ public class AiServiceImpl implements AiService {
       throw ex;
     }
     try {
-      AnthropicResponse response = anthropicClient.call(task, modelId);
+      ChatResponse response = chatClient.chat(task, modelId);
       int latencyMs = elapsedMs(startNanos);
       T payload = deserialise(response.body(), task.outputType());
       long costMicroPence =
@@ -231,7 +232,7 @@ public class AiServiceImpl implements AiService {
       return objectMapper.readValue(body == null ? "" : body, type);
     } catch (Exception ex) {
       throw new AiInvalidResponseException(
-          "Failed to deserialise Anthropic response into " + type.getSimpleName(), ex);
+          "Failed to deserialise AI response into " + type.getSimpleName(), ex);
     }
   }
 

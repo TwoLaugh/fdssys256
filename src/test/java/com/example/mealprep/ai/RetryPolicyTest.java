@@ -52,6 +52,15 @@ class RetryPolicyTest {
     assertThat(RetryPolicy.classifyStatus(302)).isEqualTo(RetryPolicy.Category.TIMEOUT);
   }
 
+  @Test
+  void openAiTransportException_isTimeout_andRetryable() {
+    // A transport-level OpenAI SDK failure (no HTTP status) is transient — retried, like an IO
+    // error
+    // on the Anthropic path.
+    assertThat(RetryPolicy.classifyOpenAiTransport()).isEqualTo(RetryPolicy.Category.TIMEOUT);
+    assertThat(RetryPolicy.classifyOpenAiTransport().retryable()).isTrue();
+  }
+
   // ---- category retryability flags ----
 
   @Test

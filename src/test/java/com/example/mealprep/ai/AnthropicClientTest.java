@@ -129,6 +129,22 @@ class AnthropicClientTest {
   }
 
   @Test
+  void chat_seam_adaptsCallResultToChatResponse_fieldForField() {
+    // The ChatClient.chat seam must carry through all four fields of the underlying call() result.
+    String responseBody =
+        "{\"model\":\"claude-haiku-4-5-20251001\","
+            + "\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],"
+            + "\"usage\":{\"input_tokens\":7,\"output_tokens\":2}}";
+    scripted.add(RoundTrip.ok(responseBody));
+    com.example.mealprep.ai.domain.service.internal.ChatResponse chat =
+        client.chat(stubTask(), "haiku");
+    assertThat(chat.body()).isEqualTo("hi");
+    assertThat(chat.requestTokens()).isEqualTo(7);
+    assertThat(chat.responseTokens()).isEqualTo(2);
+    assertThat(chat.modelId()).isEqualTo("claude-haiku-4-5-20251001");
+  }
+
+  @Test
   void call_translates4xxToInvalidRequest_andDoesNotRetry() {
     scripted.add(RoundTrip.status(HttpStatus.BAD_REQUEST, "{\"error\":\"bad\"}"));
     assertThatThrownBy(() -> client.call(stubTask(), "haiku"))
