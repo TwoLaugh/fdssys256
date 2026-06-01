@@ -59,7 +59,7 @@ import org.springframework.web.client.RestClient;
  * the {@link RestClient} bean. {@code anthropic-version} is pinned per Anthropic docs.
  */
 @Component
-public class AnthropicClient {
+public class AnthropicClient implements ChatClient {
 
   private static final Logger log = LoggerFactory.getLogger(AnthropicClient.class);
 
@@ -180,6 +180,17 @@ public class AnthropicClient {
           System.nanoTime() - start, java.util.concurrent.TimeUnit.NANOSECONDS, unexpected);
       throw unexpected;
     }
+  }
+
+  /**
+   * {@link ChatClient} seam — adapts the Anthropic-specific {@link #call} to the provider-neutral
+   * {@link ChatResponse} the dispatcher consumes. Behaviour is identical to {@link #call}; only the
+   * return type is the provider-agnostic view (same four fields).
+   */
+  @Override
+  public ChatResponse chat(AiTask<?> task, String modelId) {
+    AnthropicResponse r = call(task, modelId);
+    return new ChatResponse(r.body(), r.requestTokens(), r.responseTokens(), r.modelId());
   }
 
   /**

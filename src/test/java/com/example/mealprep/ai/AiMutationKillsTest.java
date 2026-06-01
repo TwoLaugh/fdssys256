@@ -17,6 +17,7 @@ import com.example.mealprep.ai.domain.service.internal.AiCallRecorder;
 import com.example.mealprep.ai.domain.service.internal.AiServiceImpl;
 import com.example.mealprep.ai.domain.service.internal.AnthropicClient;
 import com.example.mealprep.ai.domain.service.internal.AnthropicResponse;
+import com.example.mealprep.ai.domain.service.internal.ChatResponse;
 import com.example.mealprep.ai.domain.service.internal.CostBudgetGuard;
 import com.example.mealprep.ai.domain.service.internal.CostCalculator;
 import com.example.mealprep.ai.domain.service.internal.OpenAiEmbeddingClient;
@@ -637,8 +638,8 @@ class AiMutationKillsTest {
         AiTestData.task(String.class).ofType(TaskType.FEEDBACK_CLASSIFICATION).build();
     when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
     // Sonnet model id on response — should be used for pricing (MID tier), not haiku-id.
-    when(anthropic.call(any(), eq("haiku-id")))
-        .thenReturn(new AnthropicResponse("ok", 1, 1, "claude-sonnet-4-6"));
+    when(anthropic.chat(any(), eq("haiku-id")))
+        .thenReturn(new ChatResponse("ok", 1, 1, "claude-sonnet-4-6"));
 
     AiServiceImpl svc =
         new AiServiceImpl(
@@ -682,7 +683,7 @@ class AiMutationKillsTest {
     AiTask<String> task =
         AiTestData.task(String.class).ofType(TaskType.FEEDBACK_CLASSIFICATION).build();
     when(recorder.recordPending(any(), any(), any())).thenReturn(callId);
-    when(anthropic.call(any(), any()))
+    when(anthropic.chat(any(), any()))
         .thenThrow(
             new com.example.mealprep.ai.exception.AiCircuitOpenException(
                 "circuit open for ai-FEEDBACK_CLASSIFICATION"));

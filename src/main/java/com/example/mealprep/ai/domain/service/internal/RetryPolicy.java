@@ -25,6 +25,16 @@ import java.util.random.RandomGenerator;
  * <p>{@code SEMANTIC} (missing / malformed {@code tool_use}, JSR-303 failure → one corrective
  * re-prompt) is a structured-output concern owned downstream of the wire call; it is enumerated
  * here for completeness but the dispatch-layer retry decorator only acts on transport categories.
+ *
+ * <p><b>OpenAI reuse.</b> OpenAI's chat-completions API uses the <em>same</em> HTTP failure
+ * semantics as Anthropic — 429 rate-limit (incl. {@code insufficient_quota}), 401/403 auth, 400
+ * invalid-request / context-length-exceeded, and 5xx — so {@link OpenAiChatClient} classifies via
+ * the same {@link #classifyStatus(int)} table, reading the status off {@code
+ * com.openai.errors.OpenAIServiceException#statusCode()}. Transport-level SDK exceptions (no HTTP
+ * status — {@code OpenAIIoException}) classify as {@link Category#TIMEOUT} via {@link
+ * #classifyOpenAiTransport()}, matching how an {@link java.io.IOException} is treated on the
+ * Anthropic path. This keeps the two providers' retry/no-retry/circuit decisions identical rather
+ * than forking a parallel policy.
  */
 public final class RetryPolicy {
 
@@ -95,6 +105,20 @@ public final class RetryPolicy {
    */
   public static boolean isRetryableStatus(int httpStatus) {
     return classifyStatus(httpStatus).retryable();
+  }
+
+  /**
+   * Classify a transport-level OpenAI SDK failure that carries no HTTP status (the SDK's {@code
+   * OpenAIIoException} — connection reset, read timeout, DNS, etc.). Mirrors the Anthropic path's
+   * treatment of a raw {@link java.io.IOException}: a transient {@link Category#TIMEOUT} that is
+   * retried with the short exponential backoff. Exposed as its own method (rather than inlining a
+   * constant) so the OpenAI client's classification reads identically to the status-based path and
+   * stays exhaustively unit-testable.
+   *
+   * @return {@link Category#TIMEOUT} — transient, retryable.
+   */
+  public static Category classifyOpenAiTransport() {
+    return Category.TIMEOUT;
   }
 
   /**
