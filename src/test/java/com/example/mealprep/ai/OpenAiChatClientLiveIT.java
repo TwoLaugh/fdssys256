@@ -89,10 +89,15 @@ class OpenAiChatClientLiveIT {
 
     AiTask<JsonNode> task = classifyTask();
 
+    // OpenAiChatClient.chat reads the assistant content via the SDK's raw/untyped JSON path
+    // (choice._message().asObject()), so a strict structured-output response — whose `content`
+    // comes back as a JSON OBJECT, not a string — no longer throws OpenAIInvalidDataException out
+    // of the typed choice.message() accessor (the original failure at this line). We then assert on
+    // the parsed structured output below, never touching the throwing typed accessor.
     ChatResponse response = client.chat(task, cheapModel);
 
     // Schema-valid: parsing through the same StructuredOutputParser the dispatcher uses must not
-    // throw, and the body must carry both required fields.
+    // throw, and the body must carry both required fields (sentiment + confidence).
     JsonNode parsed = parser.parse(response.body(), schema(), JsonNode.class);
     assertThat(parsed.has("sentiment")).isTrue();
     assertThat(parsed.get("sentiment").asText()).isIn("positive", "negative", "neutral");

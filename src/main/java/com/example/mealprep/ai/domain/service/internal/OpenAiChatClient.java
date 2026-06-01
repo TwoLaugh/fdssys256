@@ -17,6 +17,7 @@ import com.openai.errors.OpenAIIoException;
 import com.openai.errors.OpenAIServiceException;
 import com.openai.models.ChatCompletion;
 import com.openai.models.ChatCompletionCreateParams;
+import com.openai.models.ChatCompletionMessage;
 import com.openai.models.CompletionUsage;
 import com.openai.models.ResponseFormatJsonSchema;
 import java.util.Iterator;
@@ -289,12 +290,13 @@ public class OpenAiChatClient implements ChatClient {
     if (choices == null || choices.isEmpty()) {
       throw new AiInvalidResponseException("OpenAI chat response had no choices");
     }
-    var message = choices.get(0).message();
-    Optional<String> refusal = message.refusal();
-    if (refusal.isPresent() && !refusal.get().isBlank()) {
-      throw new AiInvalidResponseException("OpenAI model refused the request: " + refusal.get());
-    }
-    String body = message.content().orElse("");
+    // Raw/untyped access — do NOT call the strict typed choice.message(), which validates the
+    // whole assistant message and throws OpenAIInvalidDataException when `content` is a JSON object
+    // (the real shape strict structured-output responses return). We pull `content` and `refusal`
+    // off the message as raw JsonValues instead. See checkRefusal/extractContent below.
+    RawMessage message = rawMessage(choices.get(0));
+    checkRefusal(message.refusal());
+    String body = extractContent(message.content());
 
     String modelId = completion.model();
     if (modelId == null || modelId.isBlank()) {
@@ -317,6 +319,110 @@ public class OpenAiChatClient implements ChatClient {
     }
     return new ChatResponse(body, requestTokens, responseTokens, modelId);
   }
+
+  /**
+   * The first choice's assistant {@code content} and {@code refusal} as raw {@link JsonValue}s,
+   * read <b>without</b> the strict typed {@link ChatCompletion.Choice#message()} accessor.
+   *
+   * <p>This is the crux of the structured-output fix. The typed {@code message()} eagerly coerces
+   * the whole {@link com.openai.models.ChatCompletionMessage}, whose {@code content} is modelled as
+   * a {@code JsonField<String>}; when OpenAI returns strict structured output the {@code content}
+   * arrives as a JSON <em>object</em>, so {@code message()} (and {@code message.content()}) throw
+   * {@code OpenAIInvalidDataException: 'message' is invalid}. We sidestep that strict {@code
+   * String} typing entirely.
+   *
+   * <p>Two equivalent representations are handled, because the SDK models a field differently
+   * depending on how the {@link ChatCompletion} was produced:
+   *
+   * <ul>
+   *   <li><b>Deserialised from the wire</b> (production) — {@code choice._message()} is an
+   *       <em>unknown</em> {@link JsonValue}, so {@code _message().asObject()} yields the message's
+   *       field map and we pick {@code content}/{@code refusal} straight out of it.
+   *   <li><b>A typed/known value</b> — {@code _message().asObject()} is empty, so we fall back to
+   *       the message's own raw field accessors {@code _content()}/{@code _refusal()} (themselves
+   *       {@link JsonValue}s — {@code JsonObject}/{@code JsonString}/{@code JsonNull}).
+   * </ul>
+   */
+  private static RawMessage rawMessage(ChatCompletion.Choice choice) {
+    Map<String, JsonValue> object = choice._message().asObject().orElse(null);
+    if (object != null) {
+      return new RawMessage(object.get("content"), object.get("refusal"));
+    }
+    ChatCompletionMessage known =
+        choice
+            ._message()
+            .asKnown()
+            .orElseThrow(
+                () ->
+                    new AiInvalidResponseException(
+                        "OpenAI chat response choice had no assistant message"));
+    return new RawMessage(asJsonValue(known._content()), asJsonValue(known._refusal()));
+  }
+
+  /**
+   * A {@code JsonField} narrowed to its raw {@link JsonValue}, or {@code null} if it is neither.
+   */
+  private static JsonValue asJsonValue(com.openai.core.JsonField<?> field) {
+    return field instanceof JsonValue ? (JsonValue) field : null;
+  }
+
+  /**
+   * Surface a real model refusal (structured outputs can still refuse) as {@link
+   * AiInvalidResponseException}, reading the raw {@code refusal} value so a non-string body
+   * elsewhere in the message can never make this throw the SDK's typed-coercion error.
+   */
+  private static void checkRefusal(JsonValue refusal) {
+    if (refusal == null || refusal.isNull() || refusal.isMissing()) {
+      return;
+    }
+    JsonNode node = refusal.convert(JsonNode.class);
+    if (node == null || !node.isTextual()) {
+      return;
+    }
+    String text = node.asText();
+    if (!text.isBlank()) {
+      throw new AiInvalidResponseException("OpenAI model refused the request: " + text);
+    }
+  }
+
+  /**
+   * The assistant {@code content} as a JSON string, robust to whichever shape OpenAI used:
+   *
+   * <ul>
+   *   <li><b>JSON string</b> (free-text path, or a model that stringified its structured output) —
+   *       the string's text is already the JSON body, returned verbatim.
+   *   <li><b>JSON object/array</b> (the strict structured-output shape that broke the typed
+   *       accessor) — serialised back to its JSON text so {@link StructuredOutputParser} can
+   *       validate it against the task schema.
+   *   <li><b>absent/null</b> — empty string, matching the previous {@code content().orElse("")}.
+   * </ul>
+   *
+   * The {@code content} {@link JsonValue} is converted to a Jackson {@link JsonNode} via the SDK's
+   * untyped {@link JsonValue#convert(Class)} accessor, so no strict {@code String} coercion is ever
+   * attempted.
+   */
+  private String extractContent(JsonValue content) {
+    if (content == null || content.isNull() || content.isMissing()) {
+      return "";
+    }
+    JsonNode node = content.convert(JsonNode.class);
+    if (node == null || node.isNull()) {
+      return "";
+    }
+    if (node.isTextual()) {
+      // content was a JSON string: its text IS the body the parser/dispatcher expects.
+      return node.asText();
+    }
+    try {
+      // content was a JSON object/array: re-serialise to its JSON text for the parser.
+      return objectMapper.writeValueAsString(node);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+      throw new AiInvalidResponseException("Failed to serialise OpenAI assistant content", ex);
+    }
+  }
+
+  /** The raw {@code content} and {@code refusal} fields of an assistant message, untyped. */
+  private record RawMessage(JsonValue content, JsonValue refusal) {}
 
   /**
    * The task's structured-output JSON Schema, taken from its first {@link ToolDefinition}, or

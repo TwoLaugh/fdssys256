@@ -23,9 +23,12 @@ import com.example.mealprep.ai.spi.TaskType;
 import com.example.mealprep.ai.testdata.AiTestData;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.openai.client.OpenAIClient;
+import com.openai.core.JsonValue;
 import com.openai.errors.BadRequestException;
 import com.openai.errors.InternalServerException;
+import com.openai.errors.OpenAIInvalidDataException;
 import com.openai.errors.OpenAIIoException;
 import com.openai.errors.RateLimitException;
 import com.openai.errors.UnauthorizedException;
@@ -89,25 +92,63 @@ class OpenAiChatClientTest {
         .build();
   }
 
-  /** Build a mocked ChatCompletion returning {@code content} with the given usage. */
+  /**
+   * Build a real SDK {@link ChatCompletion} whose assistant {@code content} is a plain JSON
+   * <b>string</b> (the free-text / stringified shape), with the given usage. Real SDK objects (not
+   * a {@code mock(ChatCompletion.class)}) so the client's raw-JSON extraction path is genuinely
+   * exercised end to end.
+   */
   private ChatCompletion completionWith(String content, Long promptTokens, Long completionTokens) {
-    ChatCompletion completion = mock(ChatCompletion.class);
-    ChatCompletion.Choice choice = mock(ChatCompletion.Choice.class);
-    ChatCompletionMessage message = mock(ChatCompletionMessage.class);
-    when(message.content()).thenReturn(Optional.ofNullable(content));
-    when(message.refusal()).thenReturn(Optional.empty());
-    when(choice.message()).thenReturn(message);
-    when(completion.choices()).thenReturn(List.of(choice));
-    when(completion.model()).thenReturn("gpt-test");
-    if (promptTokens != null) {
-      CompletionUsage usage = mock(CompletionUsage.class);
-      when(usage.promptTokens()).thenReturn(promptTokens);
-      when(usage.completionTokens()).thenReturn(completionTokens);
-      when(completion.usage()).thenReturn(Optional.of(usage));
+    JsonValue contentValue = content == null ? null : JsonValue.from(content);
+    return completion(contentValue, JsonValue.from(null), promptTokens, completionTokens);
+  }
+
+  /**
+   * Build a real SDK {@link ChatCompletion} whose assistant {@code content} is a JSON <b>object</b>
+   * — the exact strict structured-output shape a live {@code gpt-*} call returns (e.g. {@code
+   * {"sentiment":"positive","confidence":0.99}}). This is the shape that makes the SDK's strict
+   * typed {@code choice.message()} throw {@link OpenAIInvalidDataException}; the regression that
+   * {@code OpenAiChatClient} now reads via the raw/untyped path.
+   */
+  private ChatCompletion completionWithObjectContent(
+      ObjectNode content, Long promptTokens, Long completionTokens) {
+    return completion(
+        JsonValue.fromJsonNode(content), JsonValue.from(null), promptTokens, completionTokens);
+  }
+
+  private ChatCompletion completion(
+      JsonValue content, JsonValue refusal, Long promptTokens, Long completionTokens) {
+    ChatCompletionMessage.Builder messageBuilder =
+        ChatCompletionMessage.builder().role(JsonValue.from("assistant")).refusal(refusal);
+    if (content != null) {
+      // content() is typed JsonField<String>, but JsonValue IS a JsonField, so we can plant the
+      // raw object/string value the wire would carry — mirroring the real response shape.
+      messageBuilder.content(content);
     } else {
-      when(completion.usage()).thenReturn(Optional.empty());
+      messageBuilder.content(Optional.empty());
     }
-    return completion;
+    ChatCompletion.Choice choice =
+        ChatCompletion.Choice.builder()
+            .index(0)
+            .finishReason(ChatCompletion.Choice.FinishReason.STOP)
+            .logprobs(Optional.empty())
+            .message(messageBuilder.build())
+            .build();
+    ChatCompletion.Builder builder =
+        ChatCompletion.builder()
+            .id("chatcmpl-test")
+            .created(1L)
+            .model("gpt-test")
+            .choices(List.of(choice));
+    if (promptTokens != null) {
+      builder.usage(
+          CompletionUsage.builder()
+              .promptTokens(promptTokens)
+              .completionTokens(completionTokens)
+              .totalTokens(promptTokens + completionTokens)
+              .build());
+    }
+    return builder.build();
   }
 
   @Test
@@ -159,16 +200,38 @@ class OpenAiChatClientTest {
 
   @Test
   void chat_modelRefusal_throwsInvalidResponse() {
-    ChatCompletion completion = mock(ChatCompletion.class);
-    ChatCompletion.Choice choice = mock(ChatCompletion.Choice.class);
-    ChatCompletionMessage message = mock(ChatCompletionMessage.class);
-    when(message.refusal()).thenReturn(Optional.of("I cannot help with that"));
-    when(choice.message()).thenReturn(message);
-    when(completion.choices()).thenReturn(List.of(choice));
+    // refusal present, no content — a real refusal response.
+    ChatCompletion completion =
+        completion(null, JsonValue.from("I cannot help with that"), null, null);
     when(completionService.create(any(ChatCompletionCreateParams.class))).thenReturn(completion);
 
     assertThatThrownBy(() -> client().chat(freeTextTask(), "gpt-cheap"))
         .isInstanceOf(AiInvalidResponseException.class);
+  }
+
+  @Test
+  void chat_structuredOutput_contentAsJsonObject_isExtractedAndValidated() {
+    // REGRESSION: a strict structured-output response returns `content` as a JSON OBJECT, not a
+    // string. The SDK's typed choice.message() throws OpenAIInvalidDataException on this shape;
+    // OpenAiChatClient must read it via the raw/untyped path instead. Build the exact live shape.
+    ObjectNode content = objectMapper.createObjectNode();
+    content.put("answer", "42");
+    ChatCompletion completion = completionWithObjectContent(content, 3L, 5L);
+
+    // Guard: prove the mocked completion really reproduces the bug — the strict typed accessor
+    // throws on this content shape, so a naive .message().content() client could not read it.
+    assertThatThrownBy(() -> completion.choices().get(0).message().content())
+        .isInstanceOf(OpenAIInvalidDataException.class);
+
+    when(completionService.create(any(ChatCompletionCreateParams.class))).thenReturn(completion);
+
+    ChatResponse response = client().chat(structuredTask(), "gpt-cheap");
+
+    // The object content is serialised to JSON, validated against the tool schema, and returned;
+    // usage/cost extraction is preserved through the new raw-content path.
+    assertThat(response.body()).contains("\"answer\"").contains("42");
+    assertThat(response.requestTokens()).isEqualTo(3);
+    assertThat(response.responseTokens()).isEqualTo(5);
   }
 
   @Test
