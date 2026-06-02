@@ -10,6 +10,9 @@ import com.example.mealprep.ai.spi.AiTask;
 import com.example.mealprep.ai.spi.ToolDefinition;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.openai.client.OpenAIClient;
 import com.openai.core.JsonValue;
 import com.openai.errors.OpenAIException;
@@ -24,6 +27,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -252,11 +256,20 @@ public class OpenAiChatClient implements ChatClient {
     JsonNode schema = schemaFor(task);
     if (schema != null) {
       String schemaName = schemaName(task);
+      // OpenAI strict structured outputs only accept a constrained dialect: every object must set
+      // additionalProperties:false and list ALL its properties in `required` (optionals are
+      // expressed as nullable type unions instead), and a number of JSON-Schema keywords the
+      // task ToolDefinitions use (numeric/length/array bounds, oneOf, …) are rejected. The task
+      // schemas are authored provider-neutrally for Anthropic tool-use, so we transform a strict
+      // -valid COPY here for the request only. StructuredOutputParser still validates the model's
+      // response against the ORIGINAL `schema` (see parse()), so dropping bounds from the request
+      // does not lose correctness — the parser re-enforces them and the retry handles a violation.
+      JsonNode strictSchema = toStrictSchema(schema);
       ResponseFormatJsonSchema.JsonSchema.Schema.Builder schemaBuilder =
           ResponseFormatJsonSchema.JsonSchema.Schema.builder();
       // Each top-level schema field (type / properties / required / additionalProperties / ...) is
       // copied onto the SDK's Schema as an additional property — the SDK serialises it verbatim.
-      Iterator<Map.Entry<String, JsonNode>> fields = schema.fields();
+      Iterator<Map.Entry<String, JsonNode>> fields = strictSchema.fields();
       while (fields.hasNext()) {
         Map.Entry<String, JsonNode> field = fields.next();
         schemaBuilder.putAdditionalProperty(
@@ -446,6 +459,150 @@ public class OpenAiChatClient implements ChatClient {
       return tools.get().get(0).name();
     }
     return task.type().name().toLowerCase();
+  }
+
+  /**
+   * JSON-Schema keywords OpenAI strict structured outputs accept on a node. Everything else
+   * (numeric {@code minimum}/{@code maximum}, {@code minLength}/{@code maxLength}, {@code
+   * minItems}/{@code maxItems}, {@code format}, {@code default}, {@code pattern}, {@code
+   * multipleOf}, {@code uniqueItems}, {@code const}, …) is dropped from the request copy — the
+   * {@link StructuredOutputParser} re-enforces those bounds against the ORIGINAL schema on the
+   * response. {@code oneOf} is rewritten to {@code anyOf} below (strict supports {@code anyOf}, not
+   * {@code oneOf}). This conservative allow-list is deliberately narrow; the orchestrator's live
+   * re-run confirms acceptance for free on a 400.
+   */
+  private static final Set<String> STRICT_KEEP_KEYWORDS =
+      Set.of(
+          "type",
+          "properties",
+          "required",
+          "items",
+          "enum",
+          "description",
+          "additionalProperties",
+          "anyOf",
+          "oneOf",
+          "title");
+
+  /**
+   * Recursively rewrite a provider-neutral task JSON Schema into the OpenAI strict-structured
+   * -output dialect, returning a fresh copy (the original is never mutated — it is still the
+   * validation schema {@link StructuredOutputParser} enforces on the response).
+   *
+   * <p>Rules applied to every node:
+   *
+   * <ul>
+   *   <li>Drop any keyword not in {@link #STRICT_KEEP_KEYWORDS} (bounds, {@code format}, {@code
+   *       default}, {@code const}, …) — strict mode 400s on them.
+   *   <li>For every {@code type:object} that declares {@code properties}: set {@code
+   *       additionalProperties:false}; recurse into each property; set {@code required} to ALL
+   *       property keys; and for any property that was NOT in the original {@code required}, make
+   *       it nullable by widening its {@code type} to a union with {@code "null"} (strict mode
+   *       forbids true optionals, requiring nullable instead).
+   *   <li>Recurse into {@code items} (array element schema) and into each branch of {@code anyOf} /
+   *       {@code oneOf}; rename {@code oneOf} to {@code anyOf} (the keyword strict accepts).
+   * </ul>
+   */
+  public static JsonNode toStrictSchema(JsonNode node) {
+    if (node == null || !node.isObject()) {
+      return node == null ? null : node.deepCopy();
+    }
+    ObjectNode source = (ObjectNode) node;
+    ObjectNode out = source.objectNode();
+
+    // Original required set — drives which properties stay non-nullable.
+    Set<String> originalRequired = new java.util.LinkedHashSet<>();
+    JsonNode requiredNode = source.get("required");
+    if (requiredNode != null && requiredNode.isArray()) {
+      requiredNode.forEach(r -> originalRequired.add(r.asText()));
+    }
+
+    Iterator<Map.Entry<String, JsonNode>> fields = source.fields();
+    while (fields.hasNext()) {
+      Map.Entry<String, JsonNode> field = fields.next();
+      String key = field.getKey();
+      JsonNode value = field.getValue();
+      if (!STRICT_KEEP_KEYWORDS.contains(key)) {
+        continue; // unsupported keyword — re-enforced by the parser against the original schema.
+      }
+      switch (key) {
+        case "properties" -> {
+          // Rewritten in full below from the original property set; skip the verbatim copy.
+        }
+        case "required" -> {
+          // Replaced below with the all-properties list; skip the original subset.
+        }
+        case "items" -> out.set("items", toStrictSchema(value));
+        case "oneOf", "anyOf" -> out.set("anyOf", transformBranches(value));
+        default -> out.set(key, value.deepCopy());
+      }
+    }
+
+    JsonNode propsNode = source.get("properties");
+    if (propsNode != null && propsNode.isObject()) {
+      ObjectNode outProps = out.putObject("properties");
+      ArrayNode allRequired = out.putArray("required");
+      Iterator<Map.Entry<String, JsonNode>> propFields = propsNode.fields();
+      while (propFields.hasNext()) {
+        Map.Entry<String, JsonNode> prop = propFields.next();
+        String propName = prop.getKey();
+        JsonNode strictProp = toStrictSchema(prop.getValue());
+        if (!originalRequired.contains(propName)) {
+          strictProp = makeNullable(strictProp);
+        }
+        outProps.set(propName, strictProp);
+        allRequired.add(propName); // strict: EVERY property is required.
+      }
+      out.put("additionalProperties", false);
+    }
+    return out;
+  }
+
+  /** Apply {@link #toStrictSchema} to every branch of an {@code anyOf}/{@code oneOf} array. */
+  private static ArrayNode transformBranches(JsonNode branches) {
+    ArrayNode out = JsonNodeFactory.instance.arrayNode();
+    if (branches != null && branches.isArray()) {
+      branches.forEach(branch -> out.add(toStrictSchema(branch)));
+    }
+    return out;
+  }
+
+  /**
+   * Widen a strict property schema so OpenAI accepts a missing value as {@code null} (strict mode
+   * forbids absent properties but allows nullable ones). For a scalar {@code "type":"string"} this
+   * becomes {@code "type":["string","null"]}; an existing array type gains {@code "null"} if
+   * absent; a schema without a {@code type} (e.g. an {@code anyOf}) is left unchanged.
+   */
+  private static JsonNode makeNullable(JsonNode strictProp) {
+    if (strictProp == null || !strictProp.isObject()) {
+      return strictProp;
+    }
+    ObjectNode obj = (ObjectNode) strictProp;
+    JsonNode typeNode = obj.get("type");
+    if (typeNode == null) {
+      return obj; // no concrete type to widen (composition keyword) — leave as-is.
+    }
+    if (typeNode.isTextual()) {
+      if (!"null".equals(typeNode.asText())) {
+        ArrayNode union = obj.putArray("type");
+        union.add(typeNode.asText());
+        union.add("null");
+      }
+      return obj;
+    }
+    if (typeNode.isArray()) {
+      boolean hasNull = false;
+      for (JsonNode t : typeNode) {
+        if ("null".equals(t.asText())) {
+          hasNull = true;
+          break;
+        }
+      }
+      if (!hasNull) {
+        ((ArrayNode) typeNode).add("null");
+      }
+    }
+    return obj;
   }
 
   private void sleepBackoff(

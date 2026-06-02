@@ -337,4 +337,200 @@ class OpenAiChatClientTest {
     assertThat(params.responseFormat()).isEmpty();
     assertThat(ignored).isNull();
   }
+
+  // --------------------------------------------------------------------------------------------
+  // OpenAI strict-structured-output schema transform (regression guard for the live 400:
+  // "'additionalProperties' is required to be supplied and to be false"). The task ToolDefinitions
+  // are authored provider-neutrally for Anthropic and violate strict rules; OpenAiChatClient must
+  // transform a strict-valid COPY for the request while StructuredOutputParser keeps validating the
+  // response against the ORIGINAL schema.
+  // --------------------------------------------------------------------------------------------
+
+  /**
+   * A schema exercising every shape the transform must handle: an object with a SUBSET {@code
+   * required} list, an OPTIONAL property, a NUMERIC-BOUNDED property ({@code minimum}/{@code
+   * maximum}), length/array bounds ({@code minLength}/{@code minItems}/{@code maxItems}), a NESTED
+   * object inside array {@code items}, a nested string array, and a {@code oneOf} discriminated
+   * union (the strict-incompatible keyword). Mirrors the real classify_feedback / phase2 schemas.
+   */
+  private ObjectNode representativeSchema() {
+    ObjectNode schema = objectMapper.createObjectNode();
+    schema.put("type", "object");
+    ObjectNode props = schema.putObject("properties");
+
+    // classifications: bounded array of nested objects.
+    ObjectNode classifications = props.putObject("classifications");
+    classifications.put("type", "array");
+    classifications.put("minItems", 0);
+    classifications.put("maxItems", 4);
+    ObjectNode item = classifications.putObject("items");
+    item.put("type", "object");
+    ObjectNode itemProps = item.putObject("properties");
+    itemProps.putObject("destination").put("type", "string");
+    ObjectNode confidence = itemProps.putObject("confidence");
+    confidence.put("type", "number");
+    confidence.put("minimum", 0.0);
+    confidence.put("maximum", 1.0);
+    ObjectNode extracted = itemProps.putObject("extractedFeedback");
+    extracted.put("type", "string");
+    extracted.put("minLength", 1);
+    item.putArray("required").add("destination").add("confidence").add("extractedFeedback");
+
+    // optional aggregate (NOT in top-level required) with numeric bounds.
+    ObjectNode overall = props.putObject("overallConfidence");
+    overall.put("type", "number");
+    overall.put("minimum", 0.0);
+    overall.put("maximum", 1.0);
+
+    // optional notes (NOT in top-level required).
+    props.putObject("classifierNotes").put("type", "string");
+
+    // a oneOf discriminated union nested under an array — must become anyOf.
+    ObjectNode variants = props.putObject("variants");
+    variants.put("type", "array");
+    ObjectNode variantItem = variants.putObject("items");
+    variantItem.put("type", "object");
+    ObjectNode a = objectMapper.createObjectNode();
+    a.put("type", "object");
+    a.putObject("properties").putObject("kind").put("type", "string");
+    a.putArray("required").add("kind");
+    ObjectNode b = objectMapper.createObjectNode();
+    b.put("type", "object");
+    b.putObject("properties").putObject("other").put("type", "string");
+    b.putArray("required").add("other");
+    variantItem.putArray("oneOf").add(a).add(b);
+
+    // top-level required is a SUBSET (classifications only).
+    schema.putArray("required").add("classifications");
+    return schema;
+  }
+
+  /**
+   * Recursively assert a transformed schema node satisfies OpenAI strict rules: every {@code
+   * type:object} with properties sets {@code additionalProperties:false} and lists ALL its
+   * properties in {@code required}; no unsupported keyword survives anywhere; {@code oneOf} is gone
+   * (rewritten to {@code anyOf}).
+   */
+  private void assertStrictValid(JsonNode node) {
+    if (node == null || !node.isObject()) {
+      return;
+    }
+    // No unsupported keyword survived anywhere in the tree.
+    for (String banned :
+        List.of(
+            "minimum",
+            "maximum",
+            "minItems",
+            "maxItems",
+            "minLength",
+            "maxLength",
+            "format",
+            "default",
+            "pattern",
+            "multipleOf",
+            "uniqueItems",
+            "const",
+            "oneOf")) {
+      assertThat(node.has(banned)).as("keyword %s must be stripped", banned).isFalse();
+    }
+    JsonNode type = node.get("type");
+    JsonNode propsNode = node.get("properties");
+    if (type != null && "object".equals(type.asText()) && propsNode != null) {
+      // additionalProperties:false on every object.
+      assertThat(node.path("additionalProperties").isBoolean()).isTrue();
+      assertThat(node.path("additionalProperties").asBoolean()).isFalse();
+      // required lists ALL property keys.
+      java.util.Set<String> propKeys = new java.util.HashSet<>();
+      propsNode.fieldNames().forEachRemaining(propKeys::add);
+      java.util.Set<String> requiredKeys = new java.util.HashSet<>();
+      node.path("required").forEach(r -> requiredKeys.add(r.asText()));
+      assertThat(requiredKeys).isEqualTo(propKeys);
+      propsNode.fields().forEachRemaining(e -> assertStrictValid(e.getValue()));
+    }
+    if (node.has("items")) {
+      assertStrictValid(node.get("items"));
+    }
+    if (node.has("anyOf")) {
+      node.get("anyOf").forEach(this::assertStrictValid);
+    }
+  }
+
+  @Test
+  void toStrictSchema_makesSchemaOpenAiStrictValid() {
+    JsonNode strict = OpenAiChatClient.toStrictSchema(representativeSchema());
+
+    // Whole tree satisfies strict rules.
+    assertStrictValid(strict);
+
+    // Originally-optional top-level properties became nullable type unions.
+    assertThat(typeUnion(strict.path("properties").path("overallConfidence")))
+        .containsExactlyInAnyOrder("number", "null");
+    assertThat(typeUnion(strict.path("properties").path("classifierNotes")))
+        .containsExactlyInAnyOrder("string", "null");
+
+    // A required nested property stays a plain scalar type (not nullable).
+    JsonNode requiredItem =
+        strict.path("properties").path("classifications").path("items").path("properties");
+    assertThat(requiredItem.path("destination").path("type").asText()).isEqualTo("string");
+
+    // oneOf was rewritten to anyOf with both strict-valid branches.
+    JsonNode variantItem = strict.path("properties").path("variants").path("items");
+    assertThat(variantItem.has("oneOf")).isFalse();
+    assertThat(variantItem.path("anyOf").isArray()).isTrue();
+    assertThat(variantItem.path("anyOf")).hasSize(2);
+  }
+
+  @Test
+  void toStrictSchema_doesNotMutateOriginal_soParserStillEnforcesIt() {
+    ObjectNode original = representativeSchema();
+    String before = original.toString();
+
+    OpenAiChatClient.toStrictSchema(original);
+
+    // The transform works on a copy — the original (the StructuredOutputParser validation schema)
+    // keeps its subset `required`, its numeric bounds, and its oneOf, untouched.
+    assertThat(original.toString()).isEqualTo(before);
+    assertThat(original.path("required")).hasSize(1); // still the subset
+    assertThat(original.path("properties").path("overallConfidence").has("minimum")).isTrue();
+  }
+
+  @Test
+  void buildParams_structuredOutput_carriesStrictTransformedSchema() {
+    AiTask<String> task =
+        AiTestData.task(String.class)
+            .ofType(TaskType.FEEDBACK_CLASSIFICATION)
+            .withTier(ModelTier.CHEAP)
+            .withTool(
+                new com.example.mealprep.ai.spi.ToolDefinition(
+                    "classify_feedback", "test", representativeSchema()))
+            .build();
+
+    ChatCompletionCreateParams params = client().buildParams(task, "gpt-cheap");
+    assertThat(params.responseFormat()).isPresent();
+    var jsonSchema = params.responseFormat().get().asJsonSchema().jsonSchema();
+    assertThat(jsonSchema.strict()).hasValue(true);
+
+    // Re-read the schema the SDK will serialise (its top-level fields are stored as additional
+    // properties, each a raw JsonValue) and reassemble the JsonNode the wire will carry, then
+    // assert it is strict-valid end to end.
+    ObjectNode built = objectMapper.createObjectNode();
+    jsonSchema
+        .schema()
+        .orElseThrow()
+        ._additionalProperties()
+        .forEach((k, v) -> built.set(k, v.convert(JsonNode.class)));
+    assertStrictValid(built);
+    assertThat(built.path("additionalProperties").asBoolean()).isFalse();
+    java.util.Set<String> topRequired = new java.util.HashSet<>();
+    built.path("required").forEach(r -> topRequired.add(r.asText()));
+    assertThat(topRequired)
+        .containsExactlyInAnyOrder(
+            "classifications", "overallConfidence", "classifierNotes", "variants");
+  }
+
+  private java.util.List<String> typeUnion(JsonNode node) {
+    java.util.List<String> out = new java.util.ArrayList<>();
+    node.path("type").forEach(t -> out.add(t.asText()));
+    return out;
+  }
 }
