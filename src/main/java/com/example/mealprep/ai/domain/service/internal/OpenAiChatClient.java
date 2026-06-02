@@ -10,9 +10,6 @@ import com.example.mealprep.ai.spi.AiTask;
 import com.example.mealprep.ai.spi.ToolDefinition;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.openai.client.OpenAIClient;
 import com.openai.core.JsonValue;
 import com.openai.errors.OpenAIException;
@@ -27,7 +24,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,13 +40,17 @@ import org.springframework.stereotype.Component;
  * mapping the embedding client already uses ({@code prompt_tokens} / {@code completion_tokens}).
  *
  * <p><b>Structured output.</b> When the task carries a {@link ToolDefinition} (the codebase's
- * structured-output mechanism), its JSON Schema is sent as {@code
- * response_format.json_schema.schema} with {@code strict=true}, so OpenAI constrains the decode to
- * that schema. The returned assistant {@code content} is validated against the same schema by
- * {@link StructuredOutputParser} (the provider-agnostic validator the Anthropic path reuses) —
- * defence-in-depth, since structured outputs can still emit a {@code refusal}. When the task
- * carries no schema we fall back to free-text JSON ({@code response_format} unset) and let the
- * dispatcher deserialise.
+ * structured-output mechanism), its ORIGINAL provider-neutral JSON Schema is sent as {@code
+ * response_format.json_schema.schema} with {@code strict=false}: OpenAI uses the schema to GUIDE
+ * the model toward schema-valid JSON without enforcing the strict structural dialect (which forbids
+ * free-form objects, numeric/length/array bounds, {@code oneOf}, and true-optional fields — all of
+ * which the task schemas, authored for Anthropic tool-use, legitimately use, and which a strict
+ * transform cannot represent without destroying their purpose). The returned assistant {@code
+ * content} is then validated against that same ORIGINAL schema by {@link StructuredOutputParser}
+ * (the provider-agnostic validator the Anthropic path reuses) — the correctness guarantee: a
+ * violation (or a {@code refusal}, which structured outputs can still emit) surfaces as {@link
+ * AiInvalidResponseException} and the retry handles it. When the task carries no schema we fall
+ * back to free-text JSON ({@code response_format} unset) and let the dispatcher deserialise.
  *
  * <p><b>Resilience approach mirrors {@link AnthropicClient}</b> — programmatic Resilience4j (not
  * AOP) for the same reasons documented there (no self-invocation trap; unit-testable via {@code
@@ -244,7 +244,8 @@ public class OpenAiChatClient implements ChatClient {
    * Build the chat-completions request. The single rendered user message is the exact text {@link
    * AnthropicClient#renderUserMessage} produces, so the two providers send the same prompt body
    * (and {@code TokenCapGuard}'s estimate stays accurate). When the task declares a
-   * structured-output schema, it is attached as a strict {@code json_schema} response format.
+   * structured-output schema, it is attached as a non-strict ({@code strict:false}) {@code
+   * json_schema} response format carrying the task's ORIGINAL schema.
    */
   public ChatCompletionCreateParams buildParams(AiTask<?> task, String modelId) {
     ChatCompletionCreateParams.Builder builder =
@@ -256,20 +257,23 @@ public class OpenAiChatClient implements ChatClient {
     JsonNode schema = schemaFor(task);
     if (schema != null) {
       String schemaName = schemaName(task);
-      // OpenAI strict structured outputs only accept a constrained dialect: every object must set
-      // additionalProperties:false and list ALL its properties in `required` (optionals are
-      // expressed as nullable type unions instead), and a number of JSON-Schema keywords the
-      // task ToolDefinitions use (numeric/length/array bounds, oneOf, …) are rejected. The task
-      // schemas are authored provider-neutrally for Anthropic tool-use, so we transform a strict
-      // -valid COPY here for the request only. StructuredOutputParser still validates the model's
-      // response against the ORIGINAL `schema` (see parse()), so dropping bounds from the request
-      // does not lose correctness — the parser re-enforces them and the retry handles a violation.
-      JsonNode strictSchema = toStrictSchema(schema);
+      // The task ToolDefinitions are authored provider-neutrally for Anthropic tool-use: they use
+      // free-form objects (no declared `properties`, for arbitrary extracted keys), numeric/length
+      // /array bounds, `oneOf`, and TRUE-optional fields (omitted, not nulled, when unused). OpenAI
+      // STRICT structured outputs reject all of those, and no strict transform can represent a
+      // free-form object without destroying its purpose. So we send the schema with strict:false:
+      // OpenAI still uses the schema (name + body) to GUIDE the model toward schema-valid JSON, but
+      // does not enforce the strict structural rules — free-form objects, numeric bounds, and true
+      // optionals are all accepted, and the model OMITS (not nulls) absent optionals. Correctness
+      // is
+      // still guaranteed by StructuredOutputParser, which re-validates the response against this
+      // same
+      // ORIGINAL `schema` (see parse()); a violation surfaces and the retry handles it.
       ResponseFormatJsonSchema.JsonSchema.Schema.Builder schemaBuilder =
           ResponseFormatJsonSchema.JsonSchema.Schema.builder();
       // Each top-level schema field (type / properties / required / additionalProperties / ...) is
       // copied onto the SDK's Schema as an additional property — the SDK serialises it verbatim.
-      Iterator<Map.Entry<String, JsonNode>> fields = strictSchema.fields();
+      Iterator<Map.Entry<String, JsonNode>> fields = schema.fields();
       while (fields.hasNext()) {
         Map.Entry<String, JsonNode> field = fields.next();
         schemaBuilder.putAdditionalProperty(
@@ -280,7 +284,7 @@ public class OpenAiChatClient implements ChatClient {
               .jsonSchema(
                   ResponseFormatJsonSchema.JsonSchema.builder()
                       .name(schemaName)
-                      .strict(true)
+                      .strict(false)
                       .schema(schemaBuilder.build())
                       .build())
               .build();
@@ -459,150 +463,6 @@ public class OpenAiChatClient implements ChatClient {
       return tools.get().get(0).name();
     }
     return task.type().name().toLowerCase();
-  }
-
-  /**
-   * JSON-Schema keywords OpenAI strict structured outputs accept on a node. Everything else
-   * (numeric {@code minimum}/{@code maximum}, {@code minLength}/{@code maxLength}, {@code
-   * minItems}/{@code maxItems}, {@code format}, {@code default}, {@code pattern}, {@code
-   * multipleOf}, {@code uniqueItems}, {@code const}, …) is dropped from the request copy — the
-   * {@link StructuredOutputParser} re-enforces those bounds against the ORIGINAL schema on the
-   * response. {@code oneOf} is rewritten to {@code anyOf} below (strict supports {@code anyOf}, not
-   * {@code oneOf}). This conservative allow-list is deliberately narrow; the orchestrator's live
-   * re-run confirms acceptance for free on a 400.
-   */
-  private static final Set<String> STRICT_KEEP_KEYWORDS =
-      Set.of(
-          "type",
-          "properties",
-          "required",
-          "items",
-          "enum",
-          "description",
-          "additionalProperties",
-          "anyOf",
-          "oneOf",
-          "title");
-
-  /**
-   * Recursively rewrite a provider-neutral task JSON Schema into the OpenAI strict-structured
-   * -output dialect, returning a fresh copy (the original is never mutated — it is still the
-   * validation schema {@link StructuredOutputParser} enforces on the response).
-   *
-   * <p>Rules applied to every node:
-   *
-   * <ul>
-   *   <li>Drop any keyword not in {@link #STRICT_KEEP_KEYWORDS} (bounds, {@code format}, {@code
-   *       default}, {@code const}, …) — strict mode 400s on them.
-   *   <li>For every {@code type:object} that declares {@code properties}: set {@code
-   *       additionalProperties:false}; recurse into each property; set {@code required} to ALL
-   *       property keys; and for any property that was NOT in the original {@code required}, make
-   *       it nullable by widening its {@code type} to a union with {@code "null"} (strict mode
-   *       forbids true optionals, requiring nullable instead).
-   *   <li>Recurse into {@code items} (array element schema) and into each branch of {@code anyOf} /
-   *       {@code oneOf}; rename {@code oneOf} to {@code anyOf} (the keyword strict accepts).
-   * </ul>
-   */
-  public static JsonNode toStrictSchema(JsonNode node) {
-    if (node == null || !node.isObject()) {
-      return node == null ? null : node.deepCopy();
-    }
-    ObjectNode source = (ObjectNode) node;
-    ObjectNode out = source.objectNode();
-
-    // Original required set — drives which properties stay non-nullable.
-    Set<String> originalRequired = new java.util.LinkedHashSet<>();
-    JsonNode requiredNode = source.get("required");
-    if (requiredNode != null && requiredNode.isArray()) {
-      requiredNode.forEach(r -> originalRequired.add(r.asText()));
-    }
-
-    Iterator<Map.Entry<String, JsonNode>> fields = source.fields();
-    while (fields.hasNext()) {
-      Map.Entry<String, JsonNode> field = fields.next();
-      String key = field.getKey();
-      JsonNode value = field.getValue();
-      if (!STRICT_KEEP_KEYWORDS.contains(key)) {
-        continue; // unsupported keyword — re-enforced by the parser against the original schema.
-      }
-      switch (key) {
-        case "properties" -> {
-          // Rewritten in full below from the original property set; skip the verbatim copy.
-        }
-        case "required" -> {
-          // Replaced below with the all-properties list; skip the original subset.
-        }
-        case "items" -> out.set("items", toStrictSchema(value));
-        case "oneOf", "anyOf" -> out.set("anyOf", transformBranches(value));
-        default -> out.set(key, value.deepCopy());
-      }
-    }
-
-    JsonNode propsNode = source.get("properties");
-    if (propsNode != null && propsNode.isObject()) {
-      ObjectNode outProps = out.putObject("properties");
-      ArrayNode allRequired = out.putArray("required");
-      Iterator<Map.Entry<String, JsonNode>> propFields = propsNode.fields();
-      while (propFields.hasNext()) {
-        Map.Entry<String, JsonNode> prop = propFields.next();
-        String propName = prop.getKey();
-        JsonNode strictProp = toStrictSchema(prop.getValue());
-        if (!originalRequired.contains(propName)) {
-          strictProp = makeNullable(strictProp);
-        }
-        outProps.set(propName, strictProp);
-        allRequired.add(propName); // strict: EVERY property is required.
-      }
-      out.put("additionalProperties", false);
-    }
-    return out;
-  }
-
-  /** Apply {@link #toStrictSchema} to every branch of an {@code anyOf}/{@code oneOf} array. */
-  private static ArrayNode transformBranches(JsonNode branches) {
-    ArrayNode out = JsonNodeFactory.instance.arrayNode();
-    if (branches != null && branches.isArray()) {
-      branches.forEach(branch -> out.add(toStrictSchema(branch)));
-    }
-    return out;
-  }
-
-  /**
-   * Widen a strict property schema so OpenAI accepts a missing value as {@code null} (strict mode
-   * forbids absent properties but allows nullable ones). For a scalar {@code "type":"string"} this
-   * becomes {@code "type":["string","null"]}; an existing array type gains {@code "null"} if
-   * absent; a schema without a {@code type} (e.g. an {@code anyOf}) is left unchanged.
-   */
-  private static JsonNode makeNullable(JsonNode strictProp) {
-    if (strictProp == null || !strictProp.isObject()) {
-      return strictProp;
-    }
-    ObjectNode obj = (ObjectNode) strictProp;
-    JsonNode typeNode = obj.get("type");
-    if (typeNode == null) {
-      return obj; // no concrete type to widen (composition keyword) — leave as-is.
-    }
-    if (typeNode.isTextual()) {
-      if (!"null".equals(typeNode.asText())) {
-        ArrayNode union = obj.putArray("type");
-        union.add(typeNode.asText());
-        union.add("null");
-      }
-      return obj;
-    }
-    if (typeNode.isArray()) {
-      boolean hasNull = false;
-      for (JsonNode t : typeNode) {
-        if ("null".equals(t.asText())) {
-          hasNull = true;
-          break;
-        }
-      }
-      if (!hasNull) {
-        ((ArrayNode) typeNode).add("null");
-      }
-    }
-    return obj;
   }
 
   private void sleepBackoff(
