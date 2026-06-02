@@ -1,13 +1,23 @@
 package com.example.mealprep.ai;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.example.mealprep.ai.config.AiProperties;
+import com.example.mealprep.ai.config.AiTokenCapProperties;
 import com.example.mealprep.ai.config.OpenAiChatProperties;
-import com.example.mealprep.ai.domain.service.internal.ChatResponse;
+import com.example.mealprep.ai.domain.service.AiService;
+import com.example.mealprep.ai.domain.service.internal.AiCallRecorder;
+import com.example.mealprep.ai.domain.service.internal.AiServiceImpl;
+import com.example.mealprep.ai.domain.service.internal.ChatClient;
+import com.example.mealprep.ai.domain.service.internal.CostBudgetGuard;
+import com.example.mealprep.ai.domain.service.internal.CostCalculator;
 import com.example.mealprep.ai.domain.service.internal.OpenAiChatClient;
-import com.example.mealprep.ai.domain.service.internal.PromptTemplateRenderer;
+import com.example.mealprep.ai.domain.service.internal.OpenAiEmbeddingClient;
 import com.example.mealprep.ai.domain.service.internal.StructuredOutputParser;
+import com.example.mealprep.ai.domain.service.internal.TokenCapGuard;
 import com.example.mealprep.ai.spi.AiTask;
 import com.example.mealprep.ai.spi.ModelTier;
 import com.example.mealprep.ai.spi.PromptRef;
@@ -19,9 +29,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,23 +38,29 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationEventPublisher;
 
 /**
  * Opt-in, single-run LIVE validation of the engineered chat prompts (audit item ai-1) — EXCLUDED
- * from the blocking gate. For every chat task that is <b>wired end-to-end today</b> it renders the
- * real production prompt file (the {@code prompts/&lt;module&gt;/*.txt} body the dispatcher will
- * send under the conventional {@code "prompt"} variable) against representative inputs, sends it
- * through the REAL {@link OpenAiChatClient} (provider = openai, key from {@code OPENAI_API_KEY}),
- * and asserts (a) the output is schema-valid against the task's own {@link ToolDefinition} schema
- * (or, for the free-text discovery filter, that it parses to the right shape) and (b) a basic
- * sanity check (an obviously-negative feedback routes to the expected destination; a clear
- * non-recipe roundup is rejected; etc.).
+ * from the blocking gate. For every chat task that is <b>wired end-to-end today</b> it builds a
+ * production-shaped {@link AiTask} (carrying the real {@code variables()} the calling module would
+ * pass — <b>no</b> pre-rendered {@code "prompt"} string) and dispatches it through the REAL {@link
+ * AiService#execute} path. That path renders the production {@code prompts/<module>/*.txt} file
+ * from the task's {@link TaskType} (the ai-1 wiring) and sends it through the REAL {@link
+ * OpenAiChatClient} (provider = openai, key from {@code OPENAI_API_KEY}). It asserts (a) the
+ * structured output is schema-valid against the task's own {@link ToolDefinition} (or, for the
+ * free-text discovery filter, parses to the right shape) and (b) a basic sanity check (an
+ * obviously-negative feedback routes to the expected destination; a clear non-recipe roundup is
+ * rejected; etc.).
  *
- * <p><b>Construction mirrors {@link OpenAiChatClientLiveIT}</b>: no Spring context, the client is
- * built with {@code new} from a real {@link OpenAIClient}, so the {@code TestAiService} stub is
- * irrelevant here and the normal gate still makes ZERO live calls. The model id per tier comes from
- * the {@code OPENAI_*_MODEL} env overrides, else the {@link OpenAiChatProperties.OpenAi}
- * placeholders the runner can pin without a code change.
+ * <p><b>Why through {@code AiService.execute} now (not the client directly).</b> The point of ai-1
+ * is that production dispatch renders the engineered file; routing this harness through the real
+ * dispatcher validates that exact wiring rather than re-implementing the render in the test. The
+ * {@link AiServiceImpl} is built with {@code new} (no Spring context); its DB-touching
+ * collaborators ({@link AiCallRecorder}, {@link CostBudgetGuard}) are Mockito no-ops, the token-cap
+ * guard is real but disabled, and the {@link ChatClient} is a real {@link OpenAiChatClient} over a
+ * live {@link OpenAIClient}. So the {@code TestAiService} stub is irrelevant here and the normal
+ * gate still makes ZERO live calls.
  *
  * <p><b>Call budget — one full run is ~11 calls, all on the cheapest tier the task allows:</b>
  * feedback ×2, recipe-adaptation ×2, discovery-filter ×2, planner Stage-C ×2, planner Phase-2 ×1,
@@ -80,54 +94,51 @@ import org.springframework.beans.factory.ObjectProvider;
 class PromptLiveValidationIT {
 
   private final ObjectMapper objectMapper = new ObjectMapper();
-  private final PromptTemplateRenderer renderer = new PromptTemplateRenderer();
   private final StructuredOutputParser parser = new StructuredOutputParser(objectMapper);
 
   // --- Feedback classification (CHEAP) ------------------------------------------------------
 
   @Test
   void feedbackClassification_routesNegativeRecipeFeedback() {
-    OpenAiChatClient client = client();
-    String model = modelFor(ModelTier.CHEAP);
+    AiService ai = liveService();
 
     // Recipe-specific complaint pinned to the recipe page -> should classify to RECIPE.
     JsonNode out =
-        runStructured(
-            client,
-            model,
-            TaskType.FEEDBACK_CLASSIFICATION,
-            ModelTier.CHEAP,
-            new PromptRef("feedback/classify-feedback", 1),
-            "prompts/feedback/classify-feedback.txt",
-            Map.of(
-                "feedback_text", "This stir fry was way too salty",
-                "screen_context", "recipe_page",
-                "recent_classifications", "[]"),
-            com.example.mealprep.feedback.domain.service.internal.ToolDefinitions
-                .classifyFeedback());
+        ai.execute(
+            task(
+                TaskType.FEEDBACK_CLASSIFICATION,
+                ModelTier.CHEAP,
+                new PromptRef("feedback/classify-feedback", 1),
+                Map.of(
+                    "feedback_text", "This stir fry was way too salty",
+                    "screen_context", "recipe_page",
+                    "recent_classifications", List.of()),
+                Optional.of(
+                    List.of(
+                        com.example.mealprep.feedback.domain.service.internal.ToolDefinitions
+                            .classifyFeedback()))));
 
     JsonNode classifications = out.get("classifications");
     assertThat(classifications).as("classifications array present").isNotNull();
     assertThat(classifications.isArray()).isTrue();
     assertThat(classifications).as("non-empty for a clear single-aspect complaint").isNotEmpty();
-    String dest = classifications.get(0).get("destination").asText();
-    assertThat(dest).isEqualTo("RECIPE");
+    assertThat(classifications.get(0).get("destination").asText()).isEqualTo("RECIPE");
 
     // General taste statement -> PREFERENCE, never RECIPE.
     JsonNode pref =
-        runStructured(
-            client,
-            model,
-            TaskType.FEEDBACK_CLASSIFICATION,
-            ModelTier.CHEAP,
-            new PromptRef("feedback/classify-feedback", 1),
-            "prompts/feedback/classify-feedback.txt",
-            Map.of(
-                "feedback_text", "I generally don't like coriander in anything",
-                "screen_context", "general",
-                "recent_classifications", "[]"),
-            com.example.mealprep.feedback.domain.service.internal.ToolDefinitions
-                .classifyFeedback());
+        ai.execute(
+            task(
+                TaskType.FEEDBACK_CLASSIFICATION,
+                ModelTier.CHEAP,
+                new PromptRef("feedback/classify-feedback", 1),
+                Map.of(
+                    "feedback_text", "I generally don't like coriander in anything",
+                    "screen_context", "general",
+                    "recent_classifications", List.of()),
+                Optional.of(
+                    List.of(
+                        com.example.mealprep.feedback.domain.service.internal.ToolDefinitions
+                            .classifyFeedback()))));
     JsonNode prefClassifications = pref.get("classifications");
     assertThat(prefClassifications).isNotEmpty();
     assertThat(prefClassifications.get(0).get("destination").asText()).isEqualTo("PREFERENCE");
@@ -137,47 +148,49 @@ class PromptLiveValidationIT {
 
   @Test
   void discoveryFilter_keepsRecipe_rejectsRoundup() {
-    OpenAiChatClient client = client();
-    String model = modelFor(ModelTier.CHEAP);
+    AiService ai = liveService();
 
     // A clear single recipe within constraints -> relevant = true.
     JsonNode recipe =
-        runFreeText(
-            client,
-            model,
-            TaskType.DISCOVERY_FILTERING,
-            ModelTier.CHEAP,
-            new PromptRef("discovery/candidate-filter", 1),
-            "prompts/discovery/candidate-filter.txt",
-            Map.of(
-                "candidate.canonicalUrl", "https://example.com/15-min-tofu-bibimbap",
-                "candidate.title", "15-minute tofu bibimbap",
-                "candidate.snippet",
+        ai.execute(
+            task(
+                TaskType.DISCOVERY_FILTERING,
+                ModelTier.CHEAP,
+                new PromptRef("discovery/candidate-filter", 1),
+                Map.of(
+                    "candidate.canonicalUrl",
+                    "https://example.com/15-min-tofu-bibimbap",
+                    "candidate.title",
+                    "15-minute tofu bibimbap",
+                    "candidate.snippet",
                     "A weeknight take on the Korean rice bowl with crispy tofu and quick-pickled veg.",
-                "constraints.cuisines", "[Korean, Japanese]",
-                "constraints.dietaryFlags", "[]",
-                "constraints.maxPrepMins", "30"));
+                    "constraints.cuisines",
+                    List.of("Korean", "Japanese"),
+                    "constraints.dietaryFlags",
+                    List.of(),
+                    "constraints.maxPrepMins",
+                    30),
+                Optional.empty()));
     assertThat(recipe.get("relevant").asBoolean()).isTrue();
     assertThat(recipe.get("confidence").asDouble()).isBetween(0.0, 1.0);
     assertThat(recipe.get("reason").asText()).isNotBlank();
 
     // A roundup listicle -> relevant = false.
     JsonNode roundup =
-        runFreeText(
-            client,
-            model,
-            TaskType.DISCOVERY_FILTERING,
-            ModelTier.CHEAP,
-            new PromptRef("discovery/candidate-filter", 1),
-            "prompts/discovery/candidate-filter.txt",
-            Map.of(
-                "candidate.canonicalUrl", "https://example.com/30-quick-mediterranean-dinners",
-                "candidate.title", "30 quick Mediterranean dinners for busy weeknights",
-                "candidate.snippet",
-                    "Lemon chicken, sheet-pan salmon, chickpea stew and 27 more easy ideas.",
-                "constraints.cuisines", "[Mediterranean]",
-                "constraints.dietaryFlags", "[]",
-                "constraints.maxPrepMins", "n/a"));
+        ai.execute(
+            task(
+                TaskType.DISCOVERY_FILTERING,
+                ModelTier.CHEAP,
+                new PromptRef("discovery/candidate-filter", 1),
+                Map.of(
+                    "candidate.canonicalUrl", "https://example.com/30-quick-mediterranean-dinners",
+                    "candidate.title", "30 quick Mediterranean dinners for busy weeknights",
+                    "candidate.snippet",
+                        "Lemon chicken, sheet-pan salmon, chickpea stew and 27 more easy ideas.",
+                    "constraints.cuisines", List.of("Mediterranean"),
+                    "constraints.dietaryFlags", List.of(),
+                    "constraints.maxPrepMins", "n/a"),
+                Optional.empty()));
     assertThat(roundup.get("relevant").asBoolean()).isFalse();
   }
 
@@ -185,26 +198,23 @@ class PromptLiveValidationIT {
 
   @Test
   void recipeAdaptation_picksMinimalChange_andSignalsNoChange() {
-    OpenAiChatClient client = client();
-    String model = modelFor(ModelTier.MID);
+    AiService ai = liveService();
     ToolDefinition tool = adaptationTool();
 
     // Clear minimal-change pick: complaint is saltiness; candidate 0 reduces salt directly.
     JsonNode pick =
-        runStructured(
-            client,
-            model,
-            TaskType.RECIPE_ADAPTATION,
-            ModelTier.MID,
-            new PromptRef("RecipeAdaptationTask", 1),
-            "prompts/adaptation/recipe-adaptation.txt",
-            adaptationVars(
-                "FEEDBACK",
-                "Chicken stir-fry with soy sauce, garlic, ginger, peppers.",
-                "[{\"index\":0,\"change\":\"reduce soy sauce by 30%\"},"
-                    + "{\"index\":1,\"change\":\"swap soy for tamari and add lime, chilli, sesame\"}]",
-                "User feedback: too salty"),
-            tool);
+        ai.execute(
+            task(
+                TaskType.RECIPE_ADAPTATION,
+                ModelTier.MID,
+                new PromptRef("RecipeAdaptationTask", 1),
+                adaptationVars(
+                    "FEEDBACK",
+                    "Chicken stir-fry with soy sauce, garlic, ginger, peppers.",
+                    "[{\"index\":0,\"change\":\"reduce soy sauce by 30%\"},"
+                        + "{\"index\":1,\"change\":\"swap soy for tamari and add lime, chilli, sesame\"}]",
+                    "User feedback: too salty"),
+                Optional.of(List.of(tool))));
     assertThat(pick.get("chosenCandidateIndex").asInt()).isEqualTo(0);
     assertThat(pick.get("classification").asText()).isNotBlank();
     assertThat(pick.get("confidence").asDouble()).isBetween(0.0, 1.0);
@@ -212,19 +222,17 @@ class PromptLiveValidationIT {
 
     // No candidate fits -> NO_CHANGE with chosenCandidateIndex = -1.
     JsonNode noChange =
-        runStructured(
-            client,
-            model,
-            TaskType.RECIPE_ADAPTATION,
-            ModelTier.MID,
-            new PromptRef("RecipeAdaptationTask", 1),
-            "prompts/adaptation/recipe-adaptation.txt",
-            adaptationVars(
-                "IMPORT",
-                "A well-formed imported margherita pizza recipe with no issues.",
-                "[{\"index\":0,\"change\":\"replace the entire base and sauce with a calzone\"}]",
-                "Import normalisation; the recipe is already clean."),
-            tool);
+        ai.execute(
+            task(
+                TaskType.RECIPE_ADAPTATION,
+                ModelTier.MID,
+                new PromptRef("RecipeAdaptationTask", 1),
+                adaptationVars(
+                    "IMPORT",
+                    "A well-formed imported margherita pizza recipe with no issues.",
+                    "[{\"index\":0,\"change\":\"replace the entire base and sauce with a calzone\"}]",
+                    "Import normalisation; the recipe is already clean."),
+                Optional.of(List.of(tool))));
     assertThat(noChange.get("chosenCandidateIndex").asInt()).isEqualTo(-1);
     assertThat(noChange.get("classification").asText()).isEqualTo("NO_CHANGE");
   }
@@ -233,8 +241,7 @@ class PromptLiveValidationIT {
 
   @Test
   void plannerStageC_picksInRangeIndex() {
-    OpenAiChatClient client = client();
-    String model = modelFor(ModelTier.MID);
+    AiService ai = liveService();
     ToolDefinition tool = stageCTool();
 
     String candidates =
@@ -242,40 +249,37 @@ class PromptLiveValidationIT {
             + "{\"index\":1,\"perDay\":[{\"date\":\"2026-06-01\",\"calories\":2000,\"proteinG\":120}]}]";
 
     JsonNode out =
-        runStructured(
-            client,
-            model,
-            TaskType.PLANNER_STAGE_C,
-            ModelTier.MID,
-            new PromptRef("planner/stage-c-pick", 1),
-            "prompts/planner/stage-c-pick.txt",
-            Map.of(
-                "constraints_summary", "Targets: ~2000 kcal/day, >=100g protein/day. No allergens.",
-                "household_size", "2",
-                "week_start", "2026-06-01",
-                "trigger", "SCHEDULED_WEEKLY",
-                "candidates", candidates),
-            tool);
+        ai.execute(
+            task(
+                TaskType.PLANNER_STAGE_C,
+                ModelTier.MID,
+                new PromptRef("planner/stage-c-pick", 1),
+                Map.of(
+                    "constraints_summary",
+                        "Targets: ~2000 kcal/day, >=100g protein/day. No allergens.",
+                    "household_size", 2,
+                    "week_start", "2026-06-01",
+                    "trigger", "SCHEDULED_WEEKLY",
+                    "candidates", candidates),
+                Optional.of(List.of(tool))));
     int idx = out.get("chosenIndex").asInt();
     assertThat(idx).as("chosenIndex within candidate range").isBetween(0, 1);
     assertThat(out.get("reasoning").asText()).isNotBlank();
 
     // Second, slightly different shaping to confirm stable structured output.
     JsonNode out2 =
-        runStructured(
-            client,
-            model,
-            TaskType.PLANNER_STAGE_C,
-            ModelTier.MID,
-            new PromptRef("planner/stage-c-pick", 1),
-            "prompts/planner/stage-c-pick.txt",
-            Map.of(
-                "constraints_summary", "Vegetarian household; protein target 90g/day.",
-                "household_size", "3",
-                "week_start", "2026-06-08",
-                "trigger", "MID_WEEK_REOPT",
-                "candidates", candidates),
-            tool);
+        ai.execute(
+            task(
+                TaskType.PLANNER_STAGE_C,
+                ModelTier.MID,
+                new PromptRef("planner/stage-c-pick", 1),
+                Map.of(
+                    "constraints_summary", "Vegetarian household; protein target 90g/day.",
+                    "household_size", 3,
+                    "week_start", "2026-06-08",
+                    "trigger", "MID_WEEK_REOPT",
+                    "candidates", candidates),
+                Optional.of(List.of(tool))));
     assertThat(out2.get("chosenIndex").asInt()).isBetween(0, 1);
   }
 
@@ -283,28 +287,28 @@ class PromptLiveValidationIT {
 
   @Test
   void plannerPhase2_returnsBoundedProposals() {
-    OpenAiChatClient client = client();
-    String model = modelFor(ModelTier.HIGH);
+    AiService ai = liveService();
 
     JsonNode out =
-        runStructured(
-            client,
-            model,
-            TaskType.PLANNER_PHASE2_AUGMENTATION,
-            ModelTier.HIGH,
-            new PromptRef("planner/phase2-augmentation", 1),
-            "prompts/planner/phase2-augmentation.txt",
-            Map.of(
-                "constraints_summary", "Protein target 120g/day; budget moderate; no shellfish.",
-                "chosen_plan",
+        ai.execute(
+            task(
+                TaskType.PLANNER_PHASE2_AUGMENTATION,
+                ModelTier.HIGH,
+                new PromptRef("planner/phase2-augmentation", 1),
+                Map.of(
+                    "constraints_summary",
+                    "Protein target 120g/day; budget moderate; no shellfish.",
+                    "chosen_plan",
                     "{\"slots\":[{\"slotId\":\"s1\",\"recipe\":\"porridge\"},"
                         + "{\"slotId\":\"s2\",\"recipe\":\"pasta\"}]}",
-                "nutrition_gaps",
+                    "nutrition_gaps",
                     "[{\"date\":\"2026-06-01\",\"macro\":\"protein\",\"actual\":80,"
                         + "\"target\":120,\"direction\":\"under\"}]",
-                "max_augmentations", "5",
-                "max_refine_directives", "2"),
-            phase2Tool());
+                    "max_augmentations",
+                    5,
+                    "max_refine_directives",
+                    2),
+                Optional.of(List.of(phase2Tool()))));
     JsonNode augs = out.get("augmentations");
     JsonNode dirs = out.get("refineDirectives");
     assertThat(augs).isNotNull();
@@ -318,8 +322,7 @@ class PromptLiveValidationIT {
 
   @Test
   void preferenceTasteDelta_addsExplicit_skipsOneOff() {
-    OpenAiChatClient client = client();
-    String model = modelFor(ModelTier.MID);
+    AiService ai = liveService();
     ToolDefinition tool = com.example.mealprep.feedback.ai.task.PreferenceDeltaToolDefinition.get();
 
     String profile =
@@ -329,22 +332,20 @@ class PromptLiveValidationIT {
 
     // Explicit positive single statement -> at least one Add.
     JsonNode add =
-        runStructured(
-            client,
-            model,
-            TaskType.PREFERENCE_DELTA_UPDATE,
-            ModelTier.MID,
-            new PromptRef("preference/taste-profile-delta-user", 1),
-            "prompts/preference/taste-profile-delta-user.txt",
-            Map.of(
-                "current_taste_profile",
-                profile,
-                "feedback_batch",
-                "[{\"feedbackId\":\"f1\",\"userText\":\"I've decided I really love prawns in"
-                    + " stir fries\",\"classifierConfidence\":0.92}]",
-                "recent_archive_ids",
-                "[]"),
-            tool);
+        ai.execute(
+            task(
+                TaskType.PREFERENCE_DELTA_UPDATE,
+                ModelTier.MID,
+                new PromptRef("preference/taste-profile-delta-user", 1),
+                Map.of(
+                    "current_taste_profile",
+                    profile,
+                    "feedback_batch",
+                    "[{\"feedbackId\":\"f1\",\"userText\":\"I've decided I really love prawns in"
+                        + " stir fries\",\"classifierConfidence\":0.92}]",
+                    "recent_archive_ids",
+                    "[]"),
+                Optional.of(List.of(tool))));
     assertThat(add.get("deltas")).isNotNull();
     assertThat(add.get("deltas").isArray()).isTrue();
     assertThat(add.get("deltas")).as("explicit positive warrants at least one delta").isNotEmpty();
@@ -352,22 +353,20 @@ class PromptLiveValidationIT {
 
     // One-off "too salty" on one dish -> empty deltas (three-event rule).
     JsonNode oneOff =
-        runStructured(
-            client,
-            model,
-            TaskType.PREFERENCE_DELTA_UPDATE,
-            ModelTier.MID,
-            new PromptRef("preference/taste-profile-delta-user", 1),
-            "prompts/preference/taste-profile-delta-user.txt",
-            Map.of(
-                "current_taste_profile",
-                profile,
-                "feedback_batch",
-                "[{\"feedbackId\":\"f1\",\"userText\":\"this was a bit too salty\","
-                    + "\"contextSummary\":\"one chicken stir fry\",\"classifierConfidence\":0.7}]",
-                "recent_archive_ids",
-                "[]"),
-            tool);
+        ai.execute(
+            task(
+                TaskType.PREFERENCE_DELTA_UPDATE,
+                ModelTier.MID,
+                new PromptRef("preference/taste-profile-delta-user", 1),
+                Map.of(
+                    "current_taste_profile",
+                    profile,
+                    "feedback_batch",
+                    "[{\"feedbackId\":\"f1\",\"userText\":\"this was a bit too salty\","
+                        + "\"contextSummary\":\"one chicken stir fry\",\"classifierConfidence\":0.7}]",
+                    "recent_archive_ids",
+                    "[]"),
+                Optional.of(List.of(tool))));
     assertThat(oneOff.get("deltas").isEmpty())
         .as("a single one-off 'too salty' should not warrant a delta")
         .isTrue();
@@ -377,62 +376,61 @@ class PromptLiveValidationIT {
   // Helpers
   // ==========================================================================================
 
-  /** Render the engineered prompt file, send through the real client, validate against schema. */
-  private JsonNode runStructured(
-      OpenAiChatClient client,
-      String model,
-      TaskType type,
-      ModelTier tier,
-      PromptRef ref,
-      String promptClasspath,
-      Map<String, Object> vars,
-      ToolDefinition tool) {
-    String prompt = render(promptClasspath, vars);
-    AiTask<JsonNode> task = task(type, tier, ref, prompt, Optional.of(List.of(tool)));
-    ChatResponse response = client.chat(task, model);
-    JsonNode parsed = parser.parse(response.body(), tool.inputSchema(), JsonNode.class);
-    assertThat(response.requestTokens()).isNotNull().isPositive();
-    return parsed;
-  }
-
-  /** Free-text path (no tool schema) — assert the body parses to the expected JSON object shape. */
-  private JsonNode runFreeText(
-      OpenAiChatClient client,
-      String model,
-      TaskType type,
-      ModelTier tier,
-      PromptRef ref,
-      String promptClasspath,
-      Map<String, Object> vars) {
-    String prompt = render(promptClasspath, vars);
-    AiTask<JsonNode> task = task(type, tier, ref, prompt, Optional.empty());
-    ChatResponse response = client.chat(task, model);
-    try {
-      JsonNode body = objectMapper.readTree(response.body());
-      assertThat(body.isObject()).as("free-text discovery output is a JSON object").isTrue();
-      assertThat(body.has("relevant")).isTrue();
-      assertThat(body.has("confidence")).isTrue();
-      assertThat(body.has("reason")).isTrue();
-      return body;
-    } catch (IOException ex) {
-      throw new AssertionError("discovery filter returned non-JSON body: " + response.body(), ex);
-    }
-  }
-
-  private OpenAiChatClient client() {
+  /**
+   * A real {@link AiServiceImpl} over a live {@link OpenAiChatClient}, with the DB-touching
+   * collaborators mocked away. This is the production dispatch path: {@code execute} renders the
+   * engineered prompt file from the task's {@link TaskType}, sends it to OpenAI, validates the
+   * structured output, and deserialises it into {@code task.outputType()} ({@link JsonNode} here).
+   * Self-skips when {@code OPENAI_API_KEY} is unset.
+   */
+  private AiService liveService() {
     String apiKey = System.getenv("OPENAI_API_KEY");
     Assumptions.assumeTrue(
         apiKey != null && !apiKey.isBlank(),
         "OPENAI_API_KEY unset — skipping the live prompt validation");
+
     OpenAIClient openAiClient = OpenAIOkHttpClient.builder().apiKey(apiKey).build();
     AiProperties properties =
-        new AiProperties(null, null, null, null, null, 60, 2, apiKey, null, null);
-    return new OpenAiChatClient(
-        singleProvider(openAiClient),
+        new AiProperties(
+            null,
+            null,
+            modelFor(ModelTier.CHEAP),
+            modelFor(ModelTier.MID),
+            modelFor(ModelTier.HIGH),
+            60,
+            2,
+            apiKey,
+            null,
+            null);
+
+    ChatClient chatClient =
+        new OpenAiChatClient(
+            singleProvider(openAiClient),
+            properties,
+            objectMapper,
+            parser,
+            CircuitBreakerRegistry.ofDefaults());
+
+    // DB-touching collaborators are no-ops; we are validating the render + provider path only.
+    AiCallRecorder recorder = mock(AiCallRecorder.class);
+    when(recorder.recordPending(any(), any(), any())).thenReturn(UUID.randomUUID());
+    CostBudgetGuard budgetGuard = mock(CostBudgetGuard.class); // checkOrThrow is a no-op
+
+    // Real token-cap guard, disabled so a large representative prompt is never rejected.
+    TokenCapGuard tokenCapGuard =
+        new TokenCapGuard(new AiTokenCapProperties(false, null, null, null), objectMapper);
+
+    return new AiServiceImpl(
+        chatClient,
+        mock(OpenAiEmbeddingClient.class),
+        recorder,
+        mock(ApplicationEventPublisher.class),
         properties,
         objectMapper,
-        parser,
-        CircuitBreakerRegistry.ofDefaults());
+        Clock.systemUTC(),
+        budgetGuard,
+        tokenCapGuard,
+        new CostCalculator());
   }
 
   /**
@@ -451,23 +449,17 @@ class PromptLiveValidationIT {
     return new OpenAiChatProperties(null, null).openai().modelIdFor(tier);
   }
 
-  private String render(String classpath, Map<String, Object> vars) {
-    try (InputStream in = getClass().getClassLoader().getResourceAsStream(classpath)) {
-      if (in == null) {
-        throw new AssertionError("prompt file not on classpath: " + classpath);
-      }
-      String template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-      return renderer.render(template, vars);
-    } catch (IOException ex) {
-      throw new AssertionError("could not read prompt file " + classpath, ex);
-    }
-  }
-
+  /**
+   * A production-shaped {@link AiTask}: it carries ONLY the real context {@code variables()} (no
+   * pre-rendered {@code "prompt"} key), so {@code AiService.execute} must render the engineered
+   * file for the given {@link TaskType}. Output type is {@link JsonNode} so the dispatcher's
+   * deserialise step yields a tree the assertions can read.
+   */
   private static AiTask<JsonNode> task(
       TaskType type,
       ModelTier tier,
       PromptRef ref,
-      String prompt,
+      Map<String, Object> vars,
       Optional<List<ToolDefinition>> tools) {
     return new AiTask<>() {
       @Override
@@ -493,7 +485,7 @@ class PromptLiveValidationIT {
 
       @Override
       public Map<String, Object> variables() {
-        return Map.of("prompt", prompt);
+        return vars;
       }
 
       @Override

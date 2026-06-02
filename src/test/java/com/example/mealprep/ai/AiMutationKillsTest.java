@@ -312,9 +312,11 @@ class AiMutationKillsTest {
   }
 
   /**
-   * Kills {@code renderUserMessage:166,173} EmptyObjectReturnVals — two distinct branches: (a)
-   * empty variables map falls back to {@code task.prompt().name()}; (b) non-empty vars without a
-   * "prompt" string entry serialise the whole map as JSON.
+   * Kills {@code renderUserMessage} EmptyObjectReturnVals on the legacy fallback branches — for a
+   * task type with NO engineered prompt file (ai-1 wires file rendering for the six wired task
+   * types; unmapped types keep the fallback): (a) empty variables map falls back to {@code
+   * task.prompt().name()}; (b) non-empty vars without a "prompt" string entry serialise the whole
+   * map as JSON.
    */
   @Test
   void anthropic_buildRequestBody_emptyVars_usesPromptName_andMapVars_serialisesJson()
@@ -325,15 +327,12 @@ class AiMutationKillsTest {
         new AnthropicClient(
             mock(RestClient.class), properties, objectMapper, CircuitBreakerRegistry.ofDefaults());
 
-    // (a) empty vars — content = prompt.name()
+    // (a) empty vars (unmapped task type) — content = prompt.name()
     AiTask<String> emptyVars = emptyVariablesTask();
     JsonNode wire = objectMapper.readTree(client.buildRequestBody(emptyVars, "haiku-id"));
     assertThat(wire.get("messages").get(0).get("content").asText()).isEqualTo("test/echo");
 
-    // (b) non-empty vars without "prompt" entry — JSON serialisation of the whole map
-    AiTask<String> jsonVars =
-        AiTestData.task(String.class).ofType(TaskType.FEEDBACK_CLASSIFICATION).build();
-    // AiTestData inserts a default "prompt" — wrap a task with a non-"prompt" var only.
+    // (b) non-empty vars without "prompt" entry (unmapped task type) — JSON-dump of the whole map
     AiTask<String> custom = nonPromptVariableTask("foo", "bar");
     JsonNode wire2 = objectMapper.readTree(client.buildRequestBody(custom, "haiku-id"));
     String content = wire2.get("messages").get(0).get("content").asText();
@@ -1184,7 +1183,9 @@ class AiMutationKillsTest {
     return new AiTask<>() {
       @Override
       public TaskType type() {
-        return TaskType.FEEDBACK_CLASSIFICATION;
+        // INGREDIENT_MAPPING has no engineered prompt file (not wired yet), so renderUserMessage
+        // takes the legacy fallback branches under test here rather than the file-render path.
+        return TaskType.INGREDIENT_MAPPING;
       }
 
       @Override
@@ -1228,7 +1229,8 @@ class AiMutationKillsTest {
     return new AiTask<>() {
       @Override
       public TaskType type() {
-        return TaskType.FEEDBACK_CLASSIFICATION;
+        // Unmapped task type (no engineered prompt file) → exercises the JSON-dump fallback.
+        return TaskType.INGREDIENT_MAPPING;
       }
 
       @Override
