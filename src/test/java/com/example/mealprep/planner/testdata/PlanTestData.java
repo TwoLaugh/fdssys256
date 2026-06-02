@@ -448,6 +448,73 @@ public final class PlanTestData {
   }
 
   /**
+   * A {@link RecipeDto} like {@link #scoredRecipe} but whose current-version body carries the
+   * supplied pgvector {@code embedding} (recipe-01i). A {@code null} embedding models a recipe
+   * whose vector has not yet landed; the planner's {@code PreferenceSubScore} scores those neutral.
+   */
+  public static RecipeDto scoredRecipeWithEmbedding(UUID id, float[] embedding) {
+    RecipeDto base = scoredRecipe(id, 30, "Generic", "tofu", "fry", List.<String>of());
+    RecipeVersionDto v = base.currentVersionBody();
+    RecipeVersionDto withEmbedding =
+        new RecipeVersionDto(
+            v.id(),
+            v.branchId(),
+            v.versionNumber(),
+            v.parentVersionId(),
+            v.trigger(),
+            v.changeReason(),
+            v.embeddingStatus(),
+            v.createdAt(),
+            v.createdByActor(),
+            v.adapterTraceId(),
+            v.ingredients(),
+            v.methodSteps(),
+            v.metadata(),
+            v.tags(),
+            v.appliedSubstitutionIds(),
+            embedding);
+    return new RecipeDto(
+        base.id(),
+        base.userId(),
+        base.catalogue(),
+        base.name(),
+        base.description(),
+        base.currentVersion(),
+        base.currentBranchId(),
+        base.dataQuality(),
+        base.nutritionStatus(),
+        base.forkedFromRecipeId(),
+        base.lastUsedInPlanAt(),
+        base.archivedAt(),
+        base.deletedAt(),
+        base.imageUrl(),
+        base.optimisticVersion(),
+        base.createdAt(),
+        base.updatedAt(),
+        withEmbedding,
+        base.branches());
+  }
+
+  /**
+   * A {@link MealSlotSkeleton} for {@code slotId} on {@code onDate} carrying the given {@code
+   * eaters}. The {@code slotId} must equal the {@link SlotAssignment#slotId()} of the matching
+   * assignment so the preference / time sub-scores resolve the slot's eaters and time budget.
+   */
+  public static MealSlotSkeleton skeletonWithEaters(
+      UUID slotId, LocalDate onDate, int slotIndex, List<UUID> eaters) {
+    return new MealSlotSkeleton(
+        UUID.randomUUID(),
+        slotId,
+        slotIndex,
+        onDate,
+        SlotKind.DINNER,
+        "dinner",
+        30,
+        eaters.size() != 1,
+        new ArrayList<>(eaters));
+  }
+
+  /**
    * A {@link SlotAssignment} on {@code onDate} for {@code recipeId} with the given slot id and
    * servings. {@code slotId} must match the {@link MealSlotSkeleton#slotId()} used by the
    * time-budget lookup.
