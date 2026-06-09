@@ -17,6 +17,8 @@ public enum TaskType {
   RECIPE_ADAPTATION,
   RECIPE_HTML_EXTRACTION,
   DISCOVERY_FILTERING,
+  NUTRITION_INGREDIENT_PARSE,
+  NUTRITION_INGREDIENT_MATCH,
   PLANNER_STAGE_C,
   PLANNER_PHASE2_AUGMENTATION,
   // Embedding sources — one per EmbeddingTaskType. Stored on ai_call_log.task_type so 01b's

@@ -19,7 +19,9 @@ import java.util.Optional;
  * <p>Tasks <b>without</b> an engineered file (e.g. the embedding task types, or the not-yet-wired
  * {@code INTAKE_PARSE} / {@code INGREDIENT_MAPPING} / {@code RECIPE_HTML_EXTRACTION} tasks) are
  * absent from the map; for those the render path keeps the legacy fallback (an explicit {@code
- * "prompt"} variable, else a JSON dump of the variables).
+ * "prompt"} variable, else a JSON dump of the variables). The nutrition ingredient parse + match
+ * tasks (nutrition-01k) ARE wired here — their engineered files live under {@code
+ * prompts/nutrition/}.
  */
 final class PromptFiles {
 
@@ -43,6 +45,8 @@ final class PromptFiles {
     map.put(TaskType.PLANNER_STAGE_C, "prompts/planner/stage-c-pick.txt");
     map.put(TaskType.PLANNER_PHASE2_AUGMENTATION, "prompts/planner/phase2-augmentation.txt");
     map.put(TaskType.PREFERENCE_DELTA_UPDATE, "prompts/preference/taste-profile-delta-user.txt");
+    map.put(TaskType.NUTRITION_INGREDIENT_PARSE, "prompts/nutrition/ingredient-parse.txt");
+    map.put(TaskType.NUTRITION_INGREDIENT_MATCH, "prompts/nutrition/ingredient-match.txt");
     return map;
   }
 }
