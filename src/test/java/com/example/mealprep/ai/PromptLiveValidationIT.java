@@ -23,6 +23,10 @@ import com.example.mealprep.ai.spi.ModelTier;
 import com.example.mealprep.ai.spi.PromptRef;
 import com.example.mealprep.ai.spi.TaskType;
 import com.example.mealprep.ai.spi.ToolDefinition;
+import com.example.mealprep.nutrition.domain.service.internal.IngredientMatchResult;
+import com.example.mealprep.nutrition.domain.service.internal.IngredientMatchTask;
+import com.example.mealprep.nutrition.domain.service.internal.IngredientParseResult;
+import com.example.mealprep.nutrition.domain.service.internal.IngredientParseTask;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -62,9 +66,9 @@ import org.springframework.context.ApplicationEventPublisher;
  * live {@link OpenAIClient}. So the {@code TestAiService} stub is irrelevant here and the normal
  * gate still makes ZERO live calls.
  *
- * <p><b>Call budget — one full run is ~11 calls, all on the cheapest tier the task allows:</b>
+ * <p><b>Call budget — one full run is ~14 calls, all on the cheapest tier the task allows:</b>
  * feedback ×2, recipe-adaptation ×2, discovery-filter ×2, planner Stage-C ×2, planner Phase-2 ×1,
- * preference taste-delta ×2.
+ * preference taste-delta ×2, nutrition ingredient-parse ×1, nutrition ingredient-match ×2.
  *
  * <p><b>Tasks NOT covered (live validation deferred):</b> {@code INTAKE_PARSE} and {@code
  * INGREDIENT_MAPPING} have no {@code AiTask} implementation or caller yet (only the {@link
@@ -370,6 +374,66 @@ class PromptLiveValidationIT {
     assertThat(oneOff.get("deltas").isEmpty())
         .as("a single one-off 'too salty' should not warrant a delta")
         .isTrue();
+  }
+
+  // --- Nutrition ingredient parse (CHEAP, nutrition-01k) ------------------------------------
+
+  @Test
+  void nutritionIngredientParse_cleansSearchTerm() {
+    AiService ai = liveService();
+
+    // A messy line with quantity + prep — the model should strip those and return a clean,
+    // searchable food term (no nutrition values), driving the downstream USDA/OFF search.
+    IngredientParseResult out =
+        ai.execute(
+            new IngredientParseTask(
+                "2 cups all-purpose flour, sifted", "all-purpose flour", null, null));
+
+    assertThat(out).isNotNull();
+    assertThat(out.searchTermOrNull()).as("a usable USDA search term").isNotBlank();
+    assertThat(out.usdaSearchTerm().toLowerCase()).as("still about flour").contains("flour");
+    assertThat(out.confidence()).isNotNull();
+    assertThat(out.confidence().doubleValue()).isBetween(0.0, 1.0);
+  }
+
+  // --- Nutrition ingredient match (CHEAP, nutrition-01k) ------------------------------------
+
+  @Test
+  void nutritionIngredientMatch_picksBestCandidate_andCanDecline() {
+    AiService ai = liveService();
+
+    // Candidate 1 is the raw chicken breast the term names -> the model should pick index 1.
+    IngredientMatchResult pick =
+        ai.execute(
+            new IngredientMatchTask(
+                "2 chicken breasts",
+                "chicken breast",
+                List.of(
+                    new IngredientMatchTask.Candidate("USDA", "u-1", "Beef, ground, raw"),
+                    new IngredientMatchTask.Candidate(
+                        "USDA", "u-2", "Chicken, broilers or fryers, breast, meat only, raw"),
+                    new IngredientMatchTask.Candidate("OFF", "o-3", "Chicken nuggets, frozen")),
+                null,
+                null));
+    assertThat(pick.chosenIndex()).as("picks the raw chicken breast").isEqualTo(1);
+    assertThat(pick.confidenceOrZero()).isBetween(0.0, 1.0);
+
+    // None of the candidates is basil — the model must stay schema-valid (an in-range index or
+    // -1 "no good match"), never an out-of-range/hallucinated index.
+    IngredientMatchResult hard =
+        ai.execute(
+            new IngredientMatchTask(
+                "fresh basil leaves",
+                "basil",
+                List.of(
+                    new IngredientMatchTask.Candidate("USDA", "u-9", "Beef, ground, raw"),
+                    new IngredientMatchTask.Candidate("USDA", "u-10", "Sugar, granulated")),
+                null,
+                null));
+    assertThat(hard.chosenIndex())
+        .as("schema-valid: -1 (decline) or an in-range index, never out of range")
+        .isBetween(-1, 1);
+    assertThat(hard.confidenceOrZero()).isBetween(0.0, 1.0);
   }
 
   // ==========================================================================================
