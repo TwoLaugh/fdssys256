@@ -1,6 +1,7 @@
 package com.example.mealprep.recipe.api.dto;
 
 import com.example.mealprep.recipe.domain.entity.VersionTrigger;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -21,6 +22,12 @@ import java.util.UUID;
  * the user/household taste vector) and falls back to a neutral score when it is {@code null}. The
  * trailing position keeps the legacy 15-arg constructor (below) source-compatible for callers that
  * do not carry an embedding.
+ *
+ * <p>{@code embedding} is {@code @JsonIgnore}d: it is an internal scoring signal consumed
+ * in-process by the planner ({@code RecipeQueryService} hands the planner the Java object
+ * directly), and is deliberately kept off the REST contract — a 1536-dim vector has no place in the
+ * public API response, and the strict OpenAPI response validator ({@code
+ * additionalProperties:false}) would reject it. It therefore never appears in serialised JSON.
  */
 public record RecipeVersionDto(
     UUID id,
@@ -38,7 +45,7 @@ public record RecipeVersionDto(
     RecipeMetadataDto metadata,
     RecipeTagsDto tags,
     List<UUID> appliedSubstitutionIds,
-    float[] embedding) {
+    @JsonIgnore float[] embedding) {
 
   /**
    * Legacy 15-arg constructor (no embedding) — defaults {@code embedding} to {@code null}. Retained
