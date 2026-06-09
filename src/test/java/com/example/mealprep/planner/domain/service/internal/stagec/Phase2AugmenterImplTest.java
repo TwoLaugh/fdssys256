@@ -51,7 +51,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 /**
  * Unit tests for {@link Phase2AugmenterImpl} — pure Mockito, no Spring context. Covers ticket
  * planner-01h §"Edge-case checklist": happy path, over-limit capping, empty payload, the two
- * fallback paths, and the always-empty {@code emittedDirectives} (cross-classpath deferral).
+ * fallback paths, and the now-live {@code emittedDirectives} (refine directives parsed verbatim
+ * from the AI response, capped at {@code maxRefineDirectives}, empty on an absent array).
  */
 @ExtendWith(MockitoExtension.class)
 class Phase2AugmenterImplTest {
@@ -210,18 +211,51 @@ class Phase2AugmenterImplTest {
   }
 
   @Test
-  void refineDirectivesAlwaysEmpty_crossClasspathDeferral() {
-    registerResponse(
-        new Phase2AugmentationResponse(
-            List.of(),
-            List.of(
-                new RefineDirectiveProposal(
-                    "SUBSTITUTE_INGREDIENT", slotId, "butter", "ghee", null, null, "swap"),
-                new RefineDirectiveProposal("REDUCE_TIME", slotId, null, null, 60, 30, "faster"))));
+  void refineDirectives_emittedVerbatimFromAiResponse_allFieldsPreserved() {
+    RefineDirectiveProposal swap =
+        new RefineDirectiveProposal(
+            "SUBSTITUTE_INGREDIENT", slotId, "butter", "ghee", null, null, "swap");
+    RefineDirectiveProposal time =
+        new RefineDirectiveProposal("REDUCE_TIME", slotId, null, null, 60, 30, "faster");
+    registerResponse(new Phase2AugmentationResponse(List.of(), List.of(swap, time)));
+
+    AugmentationResult result = augmenter.augment(chosenPlan(), rollup(), ctx, UUID.randomUUID());
+
+    // Stage-D is live: Phase 2 now emits the raw proposals verbatim (no lossy round-trip), so the
+    // current/target time minutes on the REDUCE_TIME directive survive — the placeholder DTO used
+    // to drop them. maxRefineDirectives is 2 here, so both pass the cap.
+    assertThat(result.emittedDirectives()).containsExactly(swap, time);
+    assertThat(result.emittedDirectives().get(1).currentTimeMin()).isEqualTo(60);
+    assertThat(result.emittedDirectives().get(1).targetTimeMin()).isEqualTo(30);
+  }
+
+  @Test
+  void refineDirectives_exceedingCap_truncatedToMaxRefineDirectives() {
+    // PlanTestData.scoringProperties() pins maxRefineDirectives = 2; a 3rd proposal is dropped.
+    RefineDirectiveProposal a =
+        new RefineDirectiveProposal(
+            "SUBSTITUTE_INGREDIENT", slotId, "butter", "ghee", null, null, "1");
+    RefineDirectiveProposal b =
+        new RefineDirectiveProposal(
+            "SUBSTITUTE_INGREDIENT", slotId, "rice", "quinoa", null, null, "2");
+    RefineDirectiveProposal c =
+        new RefineDirectiveProposal("REDUCE_TIME", slotId, null, null, 60, 30, "3");
+    registerResponse(new Phase2AugmentationResponse(List.of(), List.of(a, b, c)));
+
+    AugmentationResult result = augmenter.augment(chosenPlan(), rollup(), ctx, UUID.randomUUID());
+
+    assertThat(result.emittedDirectives()).containsExactly(a, b);
+  }
+
+  @Test
+  void refineDirectives_absentOrEmptyArray_yieldsEmpty() {
+    // A null refineDirectives array (sparse LLM payload) is null-safe via the response accessor.
+    registerResponse(new Phase2AugmentationResponse(List.of(addSnack(slotId, recipeId)), null));
 
     AugmentationResult result = augmenter.augment(chosenPlan(), rollup(), ctx, UUID.randomUUID());
 
     assertThat(result.emittedDirectives()).isEmpty();
+    assertThat(result.applied()).hasSize(1);
   }
 
   @Test

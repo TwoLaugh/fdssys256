@@ -893,9 +893,9 @@ interface Phase2Augmenter {
 }
 
 record AugmentationResult(
-    List<Augmentation> applied,                 // post-filter — only those that survived the verifier
+    List<Augmentation> applied,                       // post-filter — only those that survived the verifier
     List<Augmentation> discardedByVerifier,
-    List<RefineDirectiveDto> emittedDirectives  // forwarded to OptimiserService (Stage D)
+    List<RefineDirectiveProposal> emittedDirectives   // raw proposals, routed to the adaptation pipeline at Stage D
 ) {}
 
 sealed interface Augmentation
@@ -1247,7 +1247,7 @@ No update-service injections — the planner is read-only against the data model
 8. **Stage B.** `RollupBuilder.build(plan, context)` for each candidate.
 9. **Stage C.** `StageCInvoker.pickOne(...)` — outside any tx. On `AiUnavailable`, deterministic top-scored fallback. Records reasoning in the decision log.
 10. **Phase 2.** `Phase2Augmenter.augment(...)` — outside any tx. Augmentations verified against `HardConstraintFilterService` post-hoc; failures discarded silently and logged WARN.
-11. **Stage D (optional).** For each `RefineDirectiveDto`, call `OptimiserService.adapt(directive)` synchronously, wait for the adapted recipe, re-run Stage A on the affected slot. Bounded by iteration budget (3 cycles per [optimisation-loop.md §Iteration budget](../design/optimisation-loop.md#iteration-budget)).
+11. **Stage D (refine routing — wired).** For each emitted `RefineDirectiveProposal` (capped at `max-refine-directives`, default 2), `RefineDirectiveMapper` assembles a `PlanTimeRefineDirectiveRequest` and the composer calls `AdaptationService.runPlanTimeRefineJob(request)` synchronously, applying the adapted recipe back onto the affected slot (VERSION/BRANCH swap; SUBSTITUTION/NO_CHANGE retain the original). `AdaptationAiUnavailableException` degrades per-directive (original recipe kept, `qualityWarning = true`). The single-pass routing is live; the fixed-point re-run-Stage-A cycle bounded by the 3-cycle iteration budget (per [optimisation-loop.md §Iteration budget](../design/optimisation-loop.md#iteration-budget)) is still v2-deferred — see Flow 7.
 12. **Persist.** Open a `@Transactional` write block: insert `Plan` + cascade `Day`, `MealSlot`, `ScheduledRecipe`. Status starts as `GENERATED`. Score breakdown + rollup serialised to JSONB columns.
 13. Publish `PlanGeneratedEvent` after commit.
 14. Release the lease (always, even on failure — `finally` block, via `core.LockService.releaseLease(handle)`). The persist tx no longer re-checks single-flight: the lease taken at step 1 covers the whole call, and the DB-level partial unique index on active plans is the persist-time safety net against a double-active insert.
@@ -1331,42 +1331,39 @@ Listener fires (Flow per [§Listeners](#listeners--converting-external-events-to
 
 User accepts a suggestion → `acceptReoptSuggestion(...)` (Flow 2). User rejects → `rejectReoptSuggestion(...)` → status `REJECTED`. A daily `@Scheduled` sweep (`PlannerSweepScheduler.runReoptExpirySweep` → `PlanWriteService.sweepExpiredReoptSuggestions`, cron `mealprep.planner.reopt-expiry-sweep-cron`, default `0 0 4 * * *`) scans `findAllByStatusAndSweptFalseAndExpiresAtBefore(PENDING, now)` and transitions stale suggestions to `EXPIRED` (and marks them `swept`). **TTL reconciled (planner-10):** `expiresAt = weekStartDate + 7 days` (the LLD value) — the materialised `MealPrepPlanReoptSuggestion` written by `MidWeekReoptCoordinator` uses this, replacing an earlier flat 24h window.
 
-### Flow 7: Stage D refine-directive — **v1-DEFERRED (planner-11)**
+### Flow 7: Stage D refine-directive — **WIRED (single-pass routing live); fixed-point re-run loop still v2-deferred**
 
-> **Shipped reality + decision (planner-11): the Stage D refine loop is deferred to v2; the routing
-> mechanism is built and exercised but inert in production.** The composer (`PlanComposer`) *does*
-> route any emitted refine-directive to the adaptation pipeline via
-> `AdaptationService.runPlanTimeRefineJob(...)`, applying the adapted recipe back onto the chosen
-> plan and bounding the pass by `mealprep.planner.max-refine-directives`. **However**, the directive
-> *list is always empty in production*: `Phase2AugmenterImpl.parseRefineDirectives` returns
-> `List.of()` because the cross-module `RefineDirectiveDto` contract it would map onto does not exist
-> as a resolvable top-level type — the adaptation pipeline (merged through adaptation-01b/01e)
-> defines `RefineDirectiveDto` as a *nested* record inside `PlanTimeRefineDirectiveRequest` with an
-> incompatible shape (`DirectiveKind kind, String description, JsonNode targetDelta`), reached only
-> via `runPlanTimeRefineJob`. So Stage D never iterates in production (only `PlanComposerIT` exercises
-> the routing with a stubbed `AdaptationService`).
+> **Shipped reality (planner Stage-D refine, wired): Phase 2 now emits real refine-directives and the
+> composer routes them to the adaptation pipeline.** `Phase2AugmenterImpl.parseRefineDirectives`
+> returns the raw `RefineDirectiveProposal`s from the Phase-2 AI response verbatim (bounded by
+> `mealprep.planner.max-refine-directives`, default 2). The composer (`PlanComposer`) maps each
+> proposal onto the cross-module `PlanTimeRefineDirectiveRequest` via `RefineDirectiveMapper`
+> (free-text `type` → typed `DirectiveKind`; per-kind `targetDelta`: ingredient swaps carry
+> `{from,to}`, time deltas carry `{currentMin,targetMin}`), then calls
+> `AdaptationService.runPlanTimeRefineJob(...)` **synchronously** and applies the adapted recipe back
+> onto the chosen plan. The cross-module contract is the adaptation pipeline's nested
+> `PlanTimeRefineDirectiveRequest.RefineDirectiveDto` (`DirectiveKind kind, String description,
+> JsonNode targetDelta`) — there is no planner-local placeholder DTO any more; the raw proposal flows
+> end-to-end with no lossy round-trip. Every plan generation now fires up to
+> `max-refine-directives` synchronous adaptation jobs (stubbed by `TestAiService` in test → zero CI
+> cost; a real AI call in prod).
 >
-> **Two consequences, both accepted for v1:**
-> - The 3-cycle **`iterationBudget` is not enforced by any fixed-point loop** — there is no
->   re-run-Stage-A-on-the-affected-slot cycle. The composer makes a single bounded pass over the
->   (empty) directive list; `mealprep.planner.iteration-budget` is currently unconsumed by a real
->   loop and is reserved for the v2 wiring.
-> - Phase 2's `emittedDirectives` is structurally always empty.
+> **Degradation:** `AdaptationAiUnavailableException` is caught per-directive — the original recipe
+> is retained, the plan still persists with `qualityWarning = true`, and a `STAGE_D_OUTCOME` row with
+> `classification = "AI_UNAVAILABLE"` is written (block-and-prompt fallback).
 >
-> **Why deferred, not wired now:** emitting real directives requires reconciling the cross-module
-> `RefineDirectiveDto` contract (planner ↔ adaptation) — a non-trivial cross-module change touching
-> the adaptation pipeline's request shape, out of scope for a planner-only conformance sweep and
-> explicitly carved out by the brief. The seam is left intact (`isRefineDirectiveDtoOnClasspath`
-> probe + the composer's routing loop) so a future v2 ticket flips it on by introducing the shared
-> contract; no behaviour changes for v1.
+> **Still v2-deferred — the fixed-point re-run cycle:** the composer makes a single bounded pass over
+> the directive list; it does **not** re-run Stage A on the affected slot and re-score after each
+> adaptation. The 3-cycle `mealprep.planner.iteration-budget` therefore governs no real fixed-point
+> loop yet and is reserved for the v2 wiring (steps 3 + 5 below).
 
-The designed loop (kept here for the v2 target):
+The routing as shipped (single pass), with the v2 fixed-point steps marked:
 
-1. For each directive, `AdaptationService.runPlanTimeRefineJob(directive)` is called *synchronously*.
-2. On success, swap the affected slot's recipe to the adapted version/branch.
-3. Re-run `BeamSearchEngine.search(...)` over the affected slot to re-score (the unimplemented cycle).
-4. Decision-log `STAGE_D_OUTCOME` row written per routed directive (this *is* implemented).
-5. Loop until the 3-cycle budget is exhausted or no more directives emitted (the loop/budget is the deferred part).
+1. For each emitted directive (capped at `max-refine-directives`), `AdaptationService.runPlanTimeRefineJob(request)` is called *synchronously*. **(wired)**
+2. On success, swap the affected slot's recipe to the adapted version/branch (VERSION/BRANCH); SUBSTITUTION/NO_CHANGE keep the original recipe id. **(wired)**
+3. Re-run `BeamSearchEngine.search(...)` over the affected slot to re-score. **(v2-deferred — no fixed-point cycle)**
+4. Decision-log `STAGE_D_OUTCOME` row written per routed directive (and on AI-unavailable). **(wired)**
+5. Loop until the 3-cycle budget is exhausted or no more directives emitted. **(v2-deferred — single pass only)**
 
 ---
 

@@ -14,7 +14,7 @@ import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.GeneratePlanRequest;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.RecipePoolSnapshot;
-import com.example.mealprep.planner.api.dto.RefineDirectiveDto;
+import com.example.mealprep.planner.api.dto.RefineDirectiveProposal;
 import com.example.mealprep.planner.api.dto.ScoreResult;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
 import com.example.mealprep.planner.api.dto.StageCResult;
@@ -153,8 +153,9 @@ class PlanComposerOrchestrationIT {
     return new GeneratePlanRequest(household, WEEK, false);
   }
 
-  private RefineDirectiveDto directive(UUID targetSlotId) {
-    return new RefineDirectiveDto("SUBSTITUTE_INGREDIENT", targetSlotId, "swap", "rice", "quinoa");
+  private RefineDirectiveProposal directive(UUID targetSlotId) {
+    return new RefineDirectiveProposal(
+        "SUBSTITUTE_INGREDIENT", targetSlotId, "rice", "quinoa", null, null, "swap");
   }
 
   private AdaptationResultDto result(

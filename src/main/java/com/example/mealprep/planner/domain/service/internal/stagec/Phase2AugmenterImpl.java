@@ -12,7 +12,7 @@ import com.example.mealprep.planner.api.dto.AugmentationResult;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
-import com.example.mealprep.planner.api.dto.RefineDirectiveDto;
+import com.example.mealprep.planner.api.dto.RefineDirectiveProposal;
 import com.example.mealprep.planner.config.PlannerProperties;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -123,7 +123,7 @@ class Phase2AugmenterImpl implements Phase2Augmenter {
       }
     }
 
-    List<RefineDirectiveDto> directives =
+    List<RefineDirectiveProposal> directives =
         parseRefineDirectives(response, properties.maxRefineDirectives());
 
     return new AugmentationResult(
@@ -131,59 +131,20 @@ class Phase2AugmenterImpl implements Phase2Augmenter {
   }
 
   /**
-   * Convert raw refine-directives to the planner-local {@link RefineDirectiveDto}. <b>01h always
-   * returns empty.</b> The real downstream contract is the adaptation module's {@code
-   * PlanTimeRefineDirectiveRequest} (which carries the nested {@code RefineDirectiveDto}); the
-   * directive→request assembly (recipeId / planId / slotId / constraints snapshot /
-   * parentDecisionId) is the composer's job in planner-01j, not Phase 2's. See {@link
-   * RefineDirectiveDto} Javadoc for the full reconciliation. The LLM's raw proposals still flow
-   * through {@link Phase2AugmentationResponse#refineDirectives()} so 01j can pick them up.
+   * Select the refine-directive proposals to forward to Stage D. The raw {@link
+   * RefineDirectiveProposal}s from the Phase-2 AI response are passed through verbatim (bounded by
+   * {@code max} = {@code maxRefineDirectives}), null-safe via {@link
+   * Phase2AugmentationResponse#refineDirectives()} so an absent/empty {@code refineDirectives}
+   * array yields an empty list. The composer (planner-01j) maps each proposal onto the adaptation
+   * module's {@code PlanTimeRefineDirectiveRequest} (kind mapping + per-kind {@code targetDelta})
+   * and dispatches {@code AdaptationService.runPlanTimeRefineJob(...)} — see {@code
+   * RefineDirectiveMapper} and {@code PlanComposer}'s Stage-D loop. Carrying the raw proposal keeps
+   * every directive field (kind, target slot, from/to ingredient keys, current/target time minutes,
+   * reasoning) intact for the cross-module assembly with no lossy round-trip.
    */
-  private List<RefineDirectiveDto> parseRefineDirectives(
+  private List<RefineDirectiveProposal> parseRefineDirectives(
       Phase2AugmentationResponse response, int max) {
-    if (!isRefineDirectiveDtoOnClasspath()) {
-      log.info(
-          "Phase 2: cross-module RefineDirectiveDto contract not resolvable as a top-level type"
-              + " (adaptation pipeline defines it as a nested record inside"
-              + " PlanTimeRefineDirectiveRequest); emitting empty emittedDirectives — the composer"
-              + " (planner-01j) assembles the adaptation request from the {} raw proposal(s)",
-          response.refineDirectives().size());
-      return List.of();
-    }
-    // Unreachable in 01h by design (see isRefineDirectiveDtoOnClasspath); kept so 01j has a
-    // single seam to flip when it wires the real adaptation request.
-    return response.refineDirectives().stream()
-        .limit(max)
-        .map(
-            p ->
-                new RefineDirectiveDto(
-                    p.type(),
-                    p.targetSlotId(),
-                    p.reasoning(),
-                    p.fromIngredientKey(),
-                    p.toIngredientKey()))
-        .toList();
-  }
-
-  /**
-   * Whether a top-level {@code com.example.mealprep.adaptation.api.dto.RefineDirectiveDto} is
-   * resolvable. <b>It is not</b> in this codebase: the adaptation pipeline (merged through 01b/01e)
-   * defines {@code RefineDirectiveDto} as a <i>nested</i> record inside {@code
-   * PlanTimeRefineDirectiveRequest} (binary name {@code ...PlanTimeRefineDirectiveRequest$
-   * RefineDirectiveDto}), with an incompatible shape ({@code DirectiveKind kind, String
-   * description, JsonNode targetDelta}) reached via {@code
-   * AdaptationService.runPlanTimeRefineJob(...)}. The predicted top-level name therefore never
-   * resolves, so 01h's {@code emittedDirectives} stays empty per the ticket's documented deferral.
-   * Kept as a {@code Class.forName} probe (not a hard import) so this class compiles whether or not
-   * a future wave-3 reconciliation introduces the predicted type.
-   */
-  private boolean isRefineDirectiveDtoOnClasspath() {
-    try {
-      Class.forName("com.example.mealprep.adaptation.api.dto.RefineDirectiveDto");
-      return true;
-    } catch (ClassNotFoundException e) {
-      return false;
-    }
+    return response.refineDirectives().stream().limit(max).filter(Objects::nonNull).toList();
   }
 
   /** Short human-readable constraint context for the prompt. No PII — counts only. */

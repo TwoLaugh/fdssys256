@@ -15,7 +15,7 @@ import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.GeneratePlanRequest;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.RecipePoolSnapshot;
-import com.example.mealprep.planner.api.dto.RefineDirectiveDto;
+import com.example.mealprep.planner.api.dto.RefineDirectiveProposal;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
 import com.example.mealprep.planner.api.dto.StageCResult;
 import com.example.mealprep.planner.domain.entity.AugmentationSource;
@@ -153,7 +153,7 @@ class PlanComposerIT {
             BigDecimal.ONE, PlanTestData.zeroScoreBreakdown()));
   }
 
-  private void wireDeterministicStages(UUID household, List<RefineDirectiveDto> directives) {
+  private void wireDeterministicStages(UUID household, List<RefineDirectiveProposal> directives) {
     PlanCompositionContext context = ctx(household);
     CandidatePlan candidate = oneSlotCandidate();
     when(contextBuilder.build(any(), any(), any(), any())).thenReturn(context);
@@ -194,8 +194,9 @@ class PlanComposerIT {
     return new GeneratePlanRequest(household, WEEK, false);
   }
 
-  private RefineDirectiveDto directive() {
-    return new RefineDirectiveDto("SUBSTITUTE_INGREDIENT", slotId, "swap", "rice", "quinoa");
+  private RefineDirectiveProposal directive() {
+    return new RefineDirectiveProposal(
+        "SUBSTITUTE_INGREDIENT", slotId, "rice", "quinoa", null, null, "swap");
   }
 
   @Test
