@@ -35,7 +35,8 @@ class ScoringEngineImplTest {
   private List<SubScoreCalculator> realCalculators() {
     var props = PlanTestData.scoringProperties();
     return List.of(
-        new PreferenceSubScore(),
+        new PreferenceSubScore(
+            Mockito.mock(com.example.mealprep.preference.PreferenceModule.class)),
         new NutritionSubScore(),
         new CostSubScore(
             props,

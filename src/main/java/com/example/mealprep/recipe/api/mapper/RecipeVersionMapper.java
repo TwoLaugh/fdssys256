@@ -62,7 +62,8 @@ public class RecipeVersionMapper {
         methodStepMapper.toDtoList(entity.getMethodSteps()),
         metadataMapper.toDto(entity.getMetadata()),
         tagsMapper.toDto(entity.getTags()),
-        appliedSubs);
+        appliedSubs,
+        entity.getEmbedding());
   }
 
   /**
@@ -118,6 +119,7 @@ public class RecipeVersionMapper {
         steps,
         metadataMapper.toDto(baseVersion.getMetadata()),
         tagsMapper.toDto(baseVersion.getTags()),
-        appliedSubs);
+        appliedSubs,
+        baseVersion.getEmbedding());
   }
 }

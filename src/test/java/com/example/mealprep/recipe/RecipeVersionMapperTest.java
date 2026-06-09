@@ -88,6 +88,33 @@ class RecipeVersionMapperTest {
     assertThat(mapper.toDto(v, subs).appliedSubstitutionIds()).isEqualTo(subs);
   }
 
+  @Test
+  void toDto_carriesPersistedEmbedding() {
+    RecipeVersion v = bareVersion(UUID.randomUUID());
+    float[] embedding = {0.1f, 0.2f, 0.3f};
+    v.setEmbedding(embedding);
+
+    assertThat(mapper.toDto(v).embedding()).containsExactly(0.1f, 0.2f, 0.3f);
+  }
+
+  @Test
+  void toDto_nullEmbedding_yieldsNull() {
+    RecipeVersion v = bareVersion(UUID.randomUUID());
+    v.setEmbedding(null);
+
+    assertThat(mapper.toDto(v).embedding()).isNull();
+  }
+
+  @Test
+  void toOverlayDto_carriesBaseVersionEmbedding() {
+    RecipeVersion base = bareVersion(UUID.randomUUID());
+    base.setEmbedding(new float[] {0.5f, 0.5f});
+
+    RecipeVersionDto dto = mapper.toOverlayDto(base, List.of(), List.of(), List.of());
+
+    assertThat(dto.embedding()).containsExactly(0.5f, 0.5f);
+  }
+
   // ---------------- toOverlayDto ----------------
 
   @Test
