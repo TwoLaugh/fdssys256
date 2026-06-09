@@ -51,6 +51,8 @@ class InHouseRobotsTxtGateTest {
             Duration.ofSeconds(60),
             Duration.ofHours(1),
             Duration.ofHours(6),
+            null,
+            false,
             null);
     String template = String.format("http://localhost:%d/{host}/robots.txt", wm.port());
     gate = new InHouseRobotsTxtGate(restClient, props, fixedClock, template);

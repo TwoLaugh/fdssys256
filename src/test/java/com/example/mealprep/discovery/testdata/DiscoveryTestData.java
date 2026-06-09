@@ -16,6 +16,9 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Test data builders for the discovery module. Centralised so the migration IT, future flow ITs,
@@ -81,6 +84,50 @@ public final class DiscoveryTestData {
         .sourcesFailed(new ArrayList<>())
         .traceId(UUID.randomUUID())
         .build();
+  }
+
+  /**
+   * A same-thread {@link ExecutorService} for unit tests: {@code execute}/{@code submit} run the
+   * task synchronously on the caller. Lets a runner unit test construct {@code DiscoveryJobRunner}
+   * with a real (non-mock) fan-out executor — the default-off path never submits to it, and a
+   * flag-on test that wants deterministic, leak-free fan-out can drive search() concurrency via
+   * latches inside the source stubs rather than via real pool threads. {@code shutdown} is a no-op.
+   */
+  public static ExecutorService sameThreadExecutor() {
+    return new AbstractExecutorService() {
+      private volatile boolean shutdown = false;
+
+      @Override
+      public void execute(Runnable command) {
+        command.run();
+      }
+
+      @Override
+      public void shutdown() {
+        shutdown = true;
+      }
+
+      @Override
+      public List<Runnable> shutdownNow() {
+        shutdown = true;
+        return List.of();
+      }
+
+      @Override
+      public boolean isShutdown() {
+        return shutdown;
+      }
+
+      @Override
+      public boolean isTerminated() {
+        return shutdown;
+      }
+
+      @Override
+      public boolean awaitTermination(long timeout, TimeUnit unit) {
+        return true;
+      }
+    };
   }
 
   public static DiscoveryScrapeLog sampleScrapeLog(UUID jobId) {

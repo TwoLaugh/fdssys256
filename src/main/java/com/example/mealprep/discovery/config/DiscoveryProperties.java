@@ -17,6 +17,13 @@ import org.springframework.validation.annotation.Validated;
  * for curated {@code SITEMAP} sources in 01e (default 6h; long-running runner instances refresh
  * rather than caching once-per-jvm).
  *
+ * <p>{@link #parallelSources} — opt-in cross-source parallelism for the runner's search phase
+ * (default {@code false}). When {@code false} the search phase iterates requested sources
+ * sequentially on the single runner thread, exactly as v1 ships (see {@code lld/discovery.md}
+ * §Concurrency). When {@code true} each source's {@code search(...)} is fanned out onto a bounded
+ * pool and the merged results are deterministically re-ordered + capped after join. {@link
+ * #parallelSourceTimeout} bounds each per-source search future when the flag is on (default 30s).
+ *
  * <p>Spring Boot 3.x supports record-shaped {@code @ConfigurationProperties}; defaults assigned in
  * the canonical constructor below to keep the bean usable when no overrides are configured.
  */
@@ -28,7 +35,9 @@ public record DiscoveryProperties(
     @NotNull Duration syncTimeout,
     @NotNull Duration robotsCacheTtl,
     @NotNull Duration sitemapCacheTtl,
-    @NotNull BigDecimal candidateFilterMinConfidence) {
+    @NotNull BigDecimal candidateFilterMinConfidence,
+    boolean parallelSources,
+    @NotNull Duration parallelSourceTimeout) {
 
   public DiscoveryProperties {
     if (heartbeatTimeout == null) {
@@ -48,6 +57,10 @@ public record DiscoveryProperties(
     }
     if (candidateFilterMinConfidence == null) {
       candidateFilterMinConfidence = new BigDecimal("0.6");
+    }
+    // parallelSources is a primitive boolean → defaults to false when unbound (v1 default-off).
+    if (parallelSourceTimeout == null) {
+      parallelSourceTimeout = Duration.ofSeconds(30);
     }
   }
 }
