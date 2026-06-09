@@ -89,6 +89,8 @@ class DiscoveryRunnerMutationKillsTest {
             Duration.ofSeconds(60),
             Duration.ofHours(1),
             Duration.ofHours(6),
+            null,
+            false,
             null);
     runner =
         new DiscoveryJobRunner(
@@ -104,7 +106,8 @@ class DiscoveryRunnerMutationKillsTest {
             eventPublisher,
             properties,
             new ObjectMapper(),
-            recipeWriteApi);
+            recipeWriteApi,
+            DiscoveryTestData.sameThreadExecutor());
     lenient()
         .when(recipeWriteApi.saveImportedRecipe(any(ImportedRecipeData.class)))
         .thenAnswer(

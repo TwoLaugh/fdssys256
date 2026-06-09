@@ -80,6 +80,8 @@ class DiscoveryRunJobSyncTest {
                 SYNC_CAP,
                 Duration.ofHours(1),
                 Duration.ofHours(6),
+                null,
+                false,
                 null),
             jobStarter);
   }

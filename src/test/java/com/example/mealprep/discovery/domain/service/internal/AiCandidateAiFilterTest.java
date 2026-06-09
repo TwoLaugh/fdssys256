@@ -44,7 +44,9 @@ class AiCandidateAiFilterTest {
             Duration.ofSeconds(60),
             Duration.ofHours(1),
             Duration.ofHours(6),
-            new BigDecimal("0.6"));
+            new BigDecimal("0.6"),
+            false,
+            null);
     filter = new AiCandidateAiFilter(aiService, properties);
   }
 

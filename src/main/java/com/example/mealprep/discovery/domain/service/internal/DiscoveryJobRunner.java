@@ -101,6 +101,15 @@ public class DiscoveryJobRunner {
   private final RecipeWriteApi recipeWriteApi;
 
   /**
+   * Bounded pool for the opt-in cross-source search fan-out (flag {@code
+   * mealprep.discovery.parallel-sources}). Separate from {@code discoveryRunnerExecutor} (which
+   * runs the per-job {@code run()} task) to avoid pool-exhaustion deadlock — see {@link
+   * com.example.mealprep.discovery.config.DiscoveryAsyncConfig#discoverySourceFanoutExecutor()}.
+   * Only touched when the flag is true; the sequential default never submits to it.
+   */
+  private final java.util.concurrent.ExecutorService sourceFanoutExecutor;
+
+  /**
    * In-memory cancellation flags. Written by the controller thread via {@link
    * #requestCancellation(UUID)}, read by the runner thread on every fetch-loop iteration. {@code
    * ConcurrentHashMap} + {@code AtomicBoolean} for thread-safety; cleared in the runner's {@code
@@ -134,7 +143,9 @@ public class DiscoveryJobRunner {
       ApplicationEventPublisher eventPublisher,
       DiscoveryProperties properties,
       ObjectMapper objectMapper,
-      RecipeWriteApi recipeWriteApi) {
+      RecipeWriteApi recipeWriteApi,
+      @org.springframework.beans.factory.annotation.Qualifier("discoverySourceFanoutExecutor")
+          java.util.concurrent.ExecutorService sourceFanoutExecutor) {
     this.jobRepository = jobRepository;
     this.sourceRepository = sourceRepository;
     this.sourceRegistry = sourceRegistry;
@@ -148,6 +159,7 @@ public class DiscoveryJobRunner {
     this.properties = properties;
     this.objectMapper = objectMapper;
     this.recipeWriteApi = recipeWriteApi;
+    this.sourceFanoutExecutor = sourceFanoutExecutor;
   }
 
   // ===== Listener =====
@@ -354,74 +366,205 @@ public class DiscoveryJobRunner {
     }
   }
 
+  /**
+   * Immutable per-source search outcome. Produced by {@link #searchSingleSource} — which may run on
+   * a fan-out worker thread in parallel mode — and consumed (merged into the shared accumulators)
+   * by the runner thread AFTER join. Because every field is final and the worker mutates no
+   * runner-thread state, the merge step is the single point where {@code merged} / {@code
+   * sourcesFailed} are written, eliminating the lost-update / {@code
+   * ConcurrentModificationException} hazards the LLD flagged for cross-source parallelism.
+   */
+  private record SourceSearchResult(
+      String sourceKey, List<DiscoveryCandidate> candidates, boolean failed) {}
+
   private SearchPhaseOutcome searchPhase(
       DiscoveryJob job,
       List<DiscoverySource> active,
       DiscoveryConstraints constraints,
       List<String> sourcesFailed) {
-    List<DiscoveryCandidate> merged = new ArrayList<>();
     Integer cap = constraints.maxRecipesPerSource();
     int perSourceCap = cap == null ? 20 : Math.max(1, cap);
 
-    for (DiscoverySource source : active) {
-      String sourceKey = source.key();
-      String userAgent = userAgentFor(sourceKey);
-      DiscoveryQuery query = new DiscoveryQuery(constraints, perSourceCap, userAgent);
+    List<SourceSearchResult> results =
+        properties.parallelSources()
+            ? searchSourcesParallel(job, active, constraints, perSourceCap)
+            : searchSourcesSequential(job, active, constraints, perSourceCap);
 
-      if (!rateLimiterRegistry.tryAcquire(sourceKey)) {
-        writeScrapeRow(
-            scrapeRowBuilder(job.getId(), sourceKey, sourceKey + ":search")
-                .status(ScrapeOutcome.RATE_LIMITED)
-                .robotsTxtOutcome(RobotsTxtOutcome.SKIPPED)
-                .skipReason(ScrapeSkipReason.RATE_LIMITED)
-                .occurredAt(Instant.now())
-                .build());
-        if (!sourcesFailed.contains(sourceKey)) {
-          sourcesFailed.add(sourceKey);
-        }
-        continue;
+    // Single-threaded merge of the per-source results in deterministic `active` order. This is the
+    // ONLY writer of `merged` / `sourcesFailed` in this phase, so it is race-free in both modes and
+    // produces an identical, order-stable candidate list regardless of source-completion order.
+    List<DiscoveryCandidate> merged = new ArrayList<>();
+    for (SourceSearchResult result : results) {
+      if (result.failed() && !sourcesFailed.contains(result.sourceKey())) {
+        sourcesFailed.add(result.sourceKey());
       }
-
-      try {
-        Instant start = Instant.now();
-        List<DiscoveryCandidate> raw = source.search(query);
-        int latencyMs = (int) Duration.between(start, Instant.now()).toMillis();
-        log.debug("source {} returned {} candidate(s) in {}ms", sourceKey, raw.size(), latencyMs);
-        // Cap per source per LLD line 253.
-        List<DiscoveryCandidate> capped =
-            raw.size() > perSourceCap ? raw.subList(0, perSourceCap) : raw;
-        merged.addAll(capped);
-      } catch (DiscoverySourceUnavailableException ex) {
-        log.warn("source {} unavailable: {}", sourceKey, ex.getMessage());
-        sourceRegistry.recordFailure(sourceKey);
-        if (!sourcesFailed.contains(sourceKey)) {
-          sourcesFailed.add(sourceKey);
-        }
-        writeScrapeRow(
-            scrapeRowBuilder(job.getId(), sourceKey, sourceKey + ":search")
-                .status(ScrapeOutcome.HTTP_ERROR)
-                .robotsTxtOutcome(RobotsTxtOutcome.SKIPPED)
-                .errorClass(ex.getClass().getSimpleName())
-                .errorMessage(ex.getMessage())
-                .occurredAt(Instant.now())
-                .build());
-      } catch (RuntimeException ex) {
-        log.warn("source {} search threw {}: {}", sourceKey, ex.getClass(), ex.getMessage());
-        sourceRegistry.recordFailure(sourceKey);
-        if (!sourcesFailed.contains(sourceKey)) {
-          sourcesFailed.add(sourceKey);
-        }
-        writeScrapeRow(
-            scrapeRowBuilder(job.getId(), sourceKey, sourceKey + ":search")
-                .status(ScrapeOutcome.HTTP_ERROR)
-                .robotsTxtOutcome(RobotsTxtOutcome.SKIPPED)
-                .errorClass(ex.getClass().getSimpleName())
-                .errorMessage(ex.getMessage())
-                .occurredAt(Instant.now())
-                .build());
-      }
+      merged.addAll(result.candidates());
     }
     return new SearchPhaseOutcome(merged);
+  }
+
+  /**
+   * Sequential search path — the v1 default (flag {@code
+   * mealprep.discovery.parallel-sources=false}). Iterates the requested sources in order on the
+   * single runner thread, exactly as v1 ships. The per-source body is shared with the parallel path
+   * via {@link #searchSingleSource}; behaviour, ordering, scrape-row writes, and circuit-breaker
+   * bookkeeping are byte-for-byte unchanged from the pre-feature loop.
+   */
+  private List<SourceSearchResult> searchSourcesSequential(
+      DiscoveryJob job,
+      List<DiscoverySource> active,
+      DiscoveryConstraints constraints,
+      int perSourceCap) {
+    List<SourceSearchResult> results = new ArrayList<>(active.size());
+    for (DiscoverySource source : active) {
+      results.add(searchSingleSource(job, source, constraints, perSourceCap));
+    }
+    return results;
+  }
+
+  /**
+   * Parallel-across-sources search path (flag ON). Each source's {@link #searchSingleSource} runs
+   * on the bounded {@code discoverySourceFanoutExecutor}; the runner thread blocks on {@code
+   * allOf(...)} with a per-source timeout, then collects results in the original {@code active}
+   * order so the downstream merge is deterministic.
+   *
+   * <p><strong>Thread-safety.</strong> A worker touches only already-thread-safe collaborators —
+   * {@code rateLimiterRegistry} (ConcurrentHashMap + Resilience4j), {@code sourceRegistry}
+   * (per-key @Transactional DB writes), and {@code transitions.writeScrapeRow} (append-only, own
+   * tx). It returns an immutable {@link SourceSearchResult}; no shared runner-thread state is
+   * mutated off-thread. Partial failure is isolated per future ({@code exceptionally}) so one
+   * source throwing never sinks the others. On timeout/cancellation the source is recorded as
+   * failed and the in-flight future is cancelled, mirroring the sequential failure outcome.
+   */
+  private List<SourceSearchResult> searchSourcesParallel(
+      DiscoveryJob job,
+      List<DiscoverySource> active,
+      DiscoveryConstraints constraints,
+      int perSourceCap) {
+    List<CompletableFuture<SourceSearchResult>> futures = new ArrayList<>(active.size());
+    for (DiscoverySource source : active) {
+      String sourceKey = source.key();
+      CompletableFuture<SourceSearchResult> future =
+          CompletableFuture.supplyAsync(
+                  () -> searchSingleSource(job, source, constraints, perSourceCap),
+                  sourceFanoutExecutor)
+              .exceptionally(
+                  ex -> {
+                    // Defence-in-depth: searchSingleSource already catches RuntimeException and
+                    // records the failure inline, so this only fires on an Error or executor-level
+                    // fault. Record as failed (no candidates) so one source can never sink the
+                    // batch.
+                    log.warn(
+                        "source {} search future failed: {}: {}",
+                        sourceKey,
+                        ex.getClass().getSimpleName(),
+                        ex.getMessage());
+                    return new SourceSearchResult(sourceKey, Collections.emptyList(), true);
+                  });
+      futures.add(future);
+    }
+
+    Duration timeout = properties.parallelSourceTimeout();
+    try {
+      CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+          .get(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+    } catch (InterruptedException ie) {
+      Thread.currentThread().interrupt();
+      log.warn(
+          "discovery job {} search fan-out interrupted; collecting completed results", job.getId());
+    } catch (java.util.concurrent.ExecutionException ee) {
+      // Individual failures are already absorbed by exceptionally(); this is unreachable for the
+      // per-future faults but kept for completeness.
+      log.warn("discovery job {} search fan-out execution error: {}", job.getId(), ee.getMessage());
+    } catch (java.util.concurrent.TimeoutException te) {
+      log.warn(
+          "discovery job {} search fan-out exceeded {} — cancelling in-flight source searches",
+          job.getId(),
+          timeout);
+    }
+
+    // Collect in `active` order. Any future that did not finish (timeout/interrupt) is cancelled
+    // and
+    // recorded as a failed source so the terminal status reflects it, matching sequential
+    // semantics.
+    List<SourceSearchResult> results = new ArrayList<>(active.size());
+    for (int i = 0; i < active.size(); i++) {
+      CompletableFuture<SourceSearchResult> future = futures.get(i);
+      String sourceKey = active.get(i).key();
+      if (future.isDone() && !future.isCompletedExceptionally() && !future.isCancelled()) {
+        results.add(future.join());
+      } else {
+        future.cancel(true);
+        log.warn(
+            "source {} search did not complete within fan-out window; marking failed", sourceKey);
+        results.add(new SourceSearchResult(sourceKey, Collections.emptyList(), true));
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Runs ONE source's search: rate-limit gate → {@code source.search} → per-source cap, writing the
+   * same scrape rows + circuit-breaker bookkeeping as the original sequential loop. Returns an
+   * immutable {@link SourceSearchResult}; it never mutates {@code merged} / {@code sourcesFailed}
+   * directly so it is safe to call from a fan-out worker thread. The collaborators it touches
+   * ({@code rateLimiterRegistry}, {@code sourceRegistry}, {@code writeScrapeRow}) are all already
+   * thread-safe.
+   */
+  private SourceSearchResult searchSingleSource(
+      DiscoveryJob job,
+      DiscoverySource source,
+      DiscoveryConstraints constraints,
+      int perSourceCap) {
+    String sourceKey = source.key();
+    String userAgent = userAgentFor(sourceKey);
+    DiscoveryQuery query = new DiscoveryQuery(constraints, perSourceCap, userAgent);
+
+    if (!rateLimiterRegistry.tryAcquire(sourceKey)) {
+      writeScrapeRow(
+          scrapeRowBuilder(job.getId(), sourceKey, sourceKey + ":search")
+              .status(ScrapeOutcome.RATE_LIMITED)
+              .robotsTxtOutcome(RobotsTxtOutcome.SKIPPED)
+              .skipReason(ScrapeSkipReason.RATE_LIMITED)
+              .occurredAt(Instant.now())
+              .build());
+      return new SourceSearchResult(sourceKey, Collections.emptyList(), true);
+    }
+
+    try {
+      Instant start = Instant.now();
+      List<DiscoveryCandidate> raw = source.search(query);
+      int latencyMs = (int) Duration.between(start, Instant.now()).toMillis();
+      log.debug("source {} returned {} candidate(s) in {}ms", sourceKey, raw.size(), latencyMs);
+      // Cap per source per LLD line 253. Copy out of any view so the result is self-contained.
+      List<DiscoveryCandidate> capped =
+          raw.size() > perSourceCap ? new ArrayList<>(raw.subList(0, perSourceCap)) : raw;
+      return new SourceSearchResult(sourceKey, capped, false);
+    } catch (DiscoverySourceUnavailableException ex) {
+      log.warn("source {} unavailable: {}", sourceKey, ex.getMessage());
+      sourceRegistry.recordFailure(sourceKey);
+      writeScrapeRow(
+          scrapeRowBuilder(job.getId(), sourceKey, sourceKey + ":search")
+              .status(ScrapeOutcome.HTTP_ERROR)
+              .robotsTxtOutcome(RobotsTxtOutcome.SKIPPED)
+              .errorClass(ex.getClass().getSimpleName())
+              .errorMessage(ex.getMessage())
+              .occurredAt(Instant.now())
+              .build());
+      return new SourceSearchResult(sourceKey, Collections.emptyList(), true);
+    } catch (RuntimeException ex) {
+      log.warn("source {} search threw {}: {}", sourceKey, ex.getClass(), ex.getMessage());
+      sourceRegistry.recordFailure(sourceKey);
+      writeScrapeRow(
+          scrapeRowBuilder(job.getId(), sourceKey, sourceKey + ":search")
+              .status(ScrapeOutcome.HTTP_ERROR)
+              .robotsTxtOutcome(RobotsTxtOutcome.SKIPPED)
+              .errorClass(ex.getClass().getSimpleName())
+              .errorMessage(ex.getMessage())
+              .occurredAt(Instant.now())
+              .build());
+      return new SourceSearchResult(sourceKey, Collections.emptyList(), true);
+    }
   }
 
   private String userAgentFor(String sourceKey) {

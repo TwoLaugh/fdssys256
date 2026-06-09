@@ -55,6 +55,8 @@ class ReferenceCuratedSourceTest {
           Duration.ofSeconds(60),
           Duration.ofHours(1),
           Duration.ofHours(6),
+          null,
+          false,
           null);
 
   @BeforeEach

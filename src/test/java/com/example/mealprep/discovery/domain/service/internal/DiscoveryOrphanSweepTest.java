@@ -62,6 +62,8 @@ class DiscoveryOrphanSweepTest {
             Duration.ofSeconds(60),
             Duration.ofHours(1),
             Duration.ofHours(6),
+            null,
+            false,
             null);
     runner =
         new DiscoveryJobRunner(
@@ -77,7 +79,8 @@ class DiscoveryOrphanSweepTest {
             eventPublisher,
             properties,
             new ObjectMapper(),
-            recipeWriteApi);
+            recipeWriteApi,
+            DiscoveryTestData.sameThreadExecutor());
   }
 
   @Test

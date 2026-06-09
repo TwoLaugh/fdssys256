@@ -82,7 +82,14 @@ class ReferenceCuratedSourceIT {
 
   private DiscoveryProperties props(Duration sitemapTtl) {
     return new DiscoveryProperties(
-        Duration.ofMinutes(10), 30, Duration.ofSeconds(60), Duration.ofHours(1), sitemapTtl, null);
+        Duration.ofMinutes(10),
+        30,
+        Duration.ofSeconds(60),
+        Duration.ofHours(1),
+        sitemapTtl,
+        null,
+        false,
+        null);
   }
 
   private DiscoveryQuery query(int max) {

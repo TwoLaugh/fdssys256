@@ -47,6 +47,8 @@ class RobotsTxtGateIT {
             Duration.ofSeconds(60),
             Duration.ofHours(1),
             Duration.ofHours(6),
+            null,
+            false,
             null);
     SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
     factory.setConnectTimeout(2_000);
@@ -135,6 +137,8 @@ class RobotsTxtGateIT {
             Duration.ofSeconds(60),
             Duration.ofMinutes(1),
             Duration.ofHours(6),
+            null,
+            false,
             null);
     InHouseRobotsTxtGate gate = gateWithClock(shortTtl, clock);
 

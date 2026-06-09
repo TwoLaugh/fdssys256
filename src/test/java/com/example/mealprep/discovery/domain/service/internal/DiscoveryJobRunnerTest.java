@@ -92,6 +92,8 @@ class DiscoveryJobRunnerTest {
             Duration.ofSeconds(60),
             Duration.ofHours(1),
             Duration.ofHours(6),
+            null,
+            false,
             null);
     runner =
         new DiscoveryJobRunner(
@@ -107,7 +109,8 @@ class DiscoveryJobRunnerTest {
             eventPublisher,
             properties,
             new ObjectMapper(),
-            recipeWriteApi);
+            recipeWriteApi,
+            DiscoveryTestData.sameThreadExecutor());
     // discovery-01g: default-stub the SPI to a "newly created" result so the happy-path branch
     // emits a SUCCESS scrape row. Individual tests override with .thenReturn / .thenThrow as
     // needed.
