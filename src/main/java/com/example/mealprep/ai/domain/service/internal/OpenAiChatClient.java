@@ -40,13 +40,17 @@ import org.springframework.stereotype.Component;
  * mapping the embedding client already uses ({@code prompt_tokens} / {@code completion_tokens}).
  *
  * <p><b>Structured output.</b> When the task carries a {@link ToolDefinition} (the codebase's
- * structured-output mechanism), its JSON Schema is sent as {@code
- * response_format.json_schema.schema} with {@code strict=true}, so OpenAI constrains the decode to
- * that schema. The returned assistant {@code content} is validated against the same schema by
- * {@link StructuredOutputParser} (the provider-agnostic validator the Anthropic path reuses) —
- * defence-in-depth, since structured outputs can still emit a {@code refusal}. When the task
- * carries no schema we fall back to free-text JSON ({@code response_format} unset) and let the
- * dispatcher deserialise.
+ * structured-output mechanism), its ORIGINAL provider-neutral JSON Schema is sent as {@code
+ * response_format.json_schema.schema} with {@code strict=false}: OpenAI uses the schema to GUIDE
+ * the model toward schema-valid JSON without enforcing the strict structural dialect (which forbids
+ * free-form objects, numeric/length/array bounds, {@code oneOf}, and true-optional fields — all of
+ * which the task schemas, authored for Anthropic tool-use, legitimately use, and which a strict
+ * transform cannot represent without destroying their purpose). The returned assistant {@code
+ * content} is then validated against that same ORIGINAL schema by {@link StructuredOutputParser}
+ * (the provider-agnostic validator the Anthropic path reuses) — the correctness guarantee: a
+ * violation (or a {@code refusal}, which structured outputs can still emit) surfaces as {@link
+ * AiInvalidResponseException} and the retry handles it. When the task carries no schema we fall
+ * back to free-text JSON ({@code response_format} unset) and let the dispatcher deserialise.
  *
  * <p><b>Resilience approach mirrors {@link AnthropicClient}</b> — programmatic Resilience4j (not
  * AOP) for the same reasons documented there (no self-invocation trap; unit-testable via {@code
@@ -240,7 +244,8 @@ public class OpenAiChatClient implements ChatClient {
    * Build the chat-completions request. The single rendered user message is the exact text {@link
    * AnthropicClient#renderUserMessage} produces, so the two providers send the same prompt body
    * (and {@code TokenCapGuard}'s estimate stays accurate). When the task declares a
-   * structured-output schema, it is attached as a strict {@code json_schema} response format.
+   * structured-output schema, it is attached as a non-strict ({@code strict:false}) {@code
+   * json_schema} response format carrying the task's ORIGINAL schema.
    */
   public ChatCompletionCreateParams buildParams(AiTask<?> task, String modelId) {
     ChatCompletionCreateParams.Builder builder =
@@ -252,6 +257,18 @@ public class OpenAiChatClient implements ChatClient {
     JsonNode schema = schemaFor(task);
     if (schema != null) {
       String schemaName = schemaName(task);
+      // The task ToolDefinitions are authored provider-neutrally for Anthropic tool-use: they use
+      // free-form objects (no declared `properties`, for arbitrary extracted keys), numeric/length
+      // /array bounds, `oneOf`, and TRUE-optional fields (omitted, not nulled, when unused). OpenAI
+      // STRICT structured outputs reject all of those, and no strict transform can represent a
+      // free-form object without destroying its purpose. So we send the schema with strict:false:
+      // OpenAI still uses the schema (name + body) to GUIDE the model toward schema-valid JSON, but
+      // does not enforce the strict structural rules — free-form objects, numeric bounds, and true
+      // optionals are all accepted, and the model OMITS (not nulls) absent optionals. Correctness
+      // is
+      // still guaranteed by StructuredOutputParser, which re-validates the response against this
+      // same
+      // ORIGINAL `schema` (see parse()); a violation surfaces and the retry handles it.
       ResponseFormatJsonSchema.JsonSchema.Schema.Builder schemaBuilder =
           ResponseFormatJsonSchema.JsonSchema.Schema.builder();
       // Each top-level schema field (type / properties / required / additionalProperties / ...) is
@@ -267,7 +284,7 @@ public class OpenAiChatClient implements ChatClient {
               .jsonSchema(
                   ResponseFormatJsonSchema.JsonSchema.builder()
                       .name(schemaName)
-                      .strict(true)
+                      .strict(false)
                       .schema(schemaBuilder.build())
                       .build())
               .build();

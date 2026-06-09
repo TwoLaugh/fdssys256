@@ -337,4 +337,144 @@ class OpenAiChatClientTest {
     assertThat(params.responseFormat()).isEmpty();
     assertThat(ignored).isNull();
   }
+
+  // --------------------------------------------------------------------------------------------
+  // OpenAI structured-output response_format shape. The task ToolDefinitions are authored provider
+  // -neutrally for Anthropic and use shapes OpenAI STRICT mode rejects (free-form objects, numeric/
+  // length/array bounds, oneOf, true-optional fields). Two live 400s (classify_feedback's free-form
+  // object; propose_taste_profile_deltas' nulled optionals failing the original schema) proved no
+  // strict transform can fix this. The fix: send the ORIGINAL schema with strict:false, so OpenAI
+  // only GUIDES the model and StructuredOutputParser keeps validating the response against that
+  // same
+  // ORIGINAL schema (the correctness guarantee).
+  // --------------------------------------------------------------------------------------------
+
+  /**
+   * A schema exercising every shape that OpenAI STRICT structured outputs reject but that {@code
+   * strict:false} must carry through UNTRANSFORMED: a {@code type:object} with a SUBSET {@code
+   * required} list, an OPTIONAL property, a NUMERIC-BOUNDED property ({@code minimum}/{@code
+   * maximum}), length/array bounds ({@code minLength}/{@code minItems}/{@code maxItems}), a NESTED
+   * object inside array {@code items}, a {@code oneOf} discriminated union, and — the case no
+   * strict transform can represent — a FREE-FORM object ({@code type:object} with NO declared
+   * {@code properties}, for arbitrary extracted keys). Mirrors the real classify_feedback / phase2
+   * schemas.
+   */
+  private ObjectNode representativeSchema() {
+    ObjectNode schema = objectMapper.createObjectNode();
+    schema.put("type", "object");
+    ObjectNode props = schema.putObject("properties");
+
+    // classifications: bounded array of nested objects.
+    ObjectNode classifications = props.putObject("classifications");
+    classifications.put("type", "array");
+    classifications.put("minItems", 0);
+    classifications.put("maxItems", 4);
+    ObjectNode item = classifications.putObject("items");
+    item.put("type", "object");
+    ObjectNode itemProps = item.putObject("properties");
+    itemProps.putObject("destination").put("type", "string");
+    ObjectNode confidence = itemProps.putObject("confidence");
+    confidence.put("type", "number");
+    confidence.put("minimum", 0.0);
+    confidence.put("maximum", 1.0);
+    ObjectNode extracted = itemProps.putObject("extractedFeedback");
+    extracted.put("type", "string");
+    extracted.put("minLength", 1);
+    item.putArray("required").add("destination").add("confidence").add("extractedFeedback");
+
+    // optional aggregate (NOT in top-level required) with numeric bounds.
+    ObjectNode overall = props.putObject("overallConfidence");
+    overall.put("type", "number");
+    overall.put("minimum", 0.0);
+    overall.put("maximum", 1.0);
+
+    // optional notes (NOT in top-level required).
+    props.putObject("classifierNotes").put("type", "string");
+
+    // FREE-FORM object: type:object with NO `properties` (arbitrary extracted keys). This is the
+    // classify_feedback case OpenAI strict mode forbids outright; strict:false must carry it as-is.
+    props.putObject("structuredPayload").put("type", "object");
+
+    // a oneOf discriminated union nested under an array.
+    ObjectNode variants = props.putObject("variants");
+    variants.put("type", "array");
+    ObjectNode variantItem = variants.putObject("items");
+    variantItem.put("type", "object");
+    ObjectNode a = objectMapper.createObjectNode();
+    a.put("type", "object");
+    a.putObject("properties").putObject("kind").put("type", "string");
+    a.putArray("required").add("kind");
+    ObjectNode b = objectMapper.createObjectNode();
+    b.put("type", "object");
+    b.putObject("properties").putObject("other").put("type", "string");
+    b.putArray("required").add("other");
+    variantItem.putArray("oneOf").add(a).add(b);
+
+    // top-level required is a SUBSET (classifications only).
+    schema.putArray("required").add("classifications");
+    return schema;
+  }
+
+  @Test
+  void buildParams_structuredOutput_usesStrictFalse_andCarriesOriginalSchemaUntransformed() {
+    // After the strict-mode fix: the request response_format is json_schema with strict:false and
+    // the task's ORIGINAL schema (untransformed). OpenAI uses it only to GUIDE the model; the
+    // free-form object, numeric bounds, length/array bounds, oneOf, and true-optional fields all
+    // survive verbatim. StructuredOutputParser still re-validates the response against this same
+    // ORIGINAL schema (the correctness guarantee — see the parse/validate tests above).
+    ObjectNode original = representativeSchema();
+    String originalJson = original.toString();
+    AiTask<String> task =
+        AiTestData.task(String.class)
+            .ofType(TaskType.FEEDBACK_CLASSIFICATION)
+            .withTier(ModelTier.CHEAP)
+            .withTool(
+                new com.example.mealprep.ai.spi.ToolDefinition(
+                    "classify_feedback", "test", original))
+            .build();
+
+    ChatCompletionCreateParams params = client().buildParams(task, "gpt-cheap");
+
+    assertThat(params.responseFormat()).isPresent();
+    var jsonSchema = params.responseFormat().get().asJsonSchema().jsonSchema();
+    // strict:false — OpenAI does NOT enforce the strict structural dialect.
+    assertThat(jsonSchema.strict()).hasValue(false);
+    assertThat(jsonSchema.name()).isEqualTo("classify_feedback");
+
+    // Re-read the schema the SDK will serialise (its top-level fields are stored as additional
+    // properties, each a raw JsonValue) and reassemble the JsonNode the wire will carry.
+    ObjectNode built = objectMapper.createObjectNode();
+    jsonSchema
+        .schema()
+        .orElseThrow()
+        ._additionalProperties()
+        .forEach((k, v) -> built.set(k, v.convert(JsonNode.class)));
+
+    // The carried schema equals the ORIGINAL byte-for-byte — nothing was transformed.
+    assertThat(built).isEqualTo(original);
+
+    // And the strict-incompatible shapes are all present, untransformed:
+    JsonNode builtProps = built.path("properties");
+    // free-form object survives (type:object, NO properties / additionalProperties).
+    JsonNode payload = builtProps.path("structuredPayload");
+    assertThat(payload.path("type").asText()).isEqualTo("object");
+    assertThat(payload.has("properties")).isFalse();
+    assertThat(payload.has("additionalProperties")).isFalse();
+    // numeric bounds survive.
+    assertThat(builtProps.path("overallConfidence").path("minimum").asDouble()).isEqualTo(0.0);
+    assertThat(builtProps.path("overallConfidence").path("maximum").asDouble()).isEqualTo(1.0);
+    // top-level required stays the ORIGINAL SUBSET (optionals NOT forced required/nullable).
+    assertThat(built.path("required")).hasSize(1);
+    assertThat(built.path("required").get(0).asText()).isEqualTo("classifications");
+    assertThat(builtProps.path("classifierNotes").path("type").asText()).isEqualTo("string");
+    // oneOf survives as oneOf (NOT rewritten to anyOf).
+    JsonNode variantItem = builtProps.path("variants").path("items");
+    assertThat(variantItem.has("oneOf")).isTrue();
+    assertThat(variantItem.path("oneOf")).hasSize(2);
+    // array/length bounds survive.
+    assertThat(builtProps.path("classifications").path("maxItems").asInt()).isEqualTo(4);
+
+    // The transform did not mutate the original ToolDefinition schema either.
+    assertThat(original.toString()).isEqualTo(originalJson);
+  }
 }

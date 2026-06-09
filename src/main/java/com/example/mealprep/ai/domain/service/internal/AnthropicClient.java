@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -349,27 +350,101 @@ public class AnthropicClient implements ChatClient {
     return renderUserMessage(task, objectMapper);
   }
 
+  /** Sentinel substituted for a {@code null} context variable so the renderer never rejects it. */
+  public static final String NULL_SENTINEL = "none";
+
+  /** Stateless; the substitution logic is pure, so a single shared instance is safe. */
+  private static final PromptTemplateRenderer PROMPT_RENDERER = new PromptTemplateRenderer();
+
   /**
-   * Render the single user-message string the dispatcher sends to Anthropic (and that {@link
+   * Render the single user-message string the dispatcher sends to the provider (and that {@link
    * TokenCapGuard} measures against the per-task input-token cap). Exposed as a static so the
    * token-cap pre-check measures the exact text that will go on the wire — no drift between the cap
    * estimate and the real request body.
+   *
+   * <p>Resolution order (ai-1 — engineered prompt files are now the production body):
+   *
+   * <ol>
+   *   <li><b>Explicit {@code "prompt"} variable.</b> When the task ships a non-blank {@code
+   *       "prompt"} string, it is the body verbatim — the pre-render escape hatch (and what the
+   *       test fixtures rely on). Unchanged from 01a.
+   *   <li><b>Engineered prompt file.</b> When the {@link TaskType} maps to a {@link PromptFiles}
+   *       entry, the {@code prompts/<module>/<task>.txt} body is loaded from the classpath and
+   *       rendered with the task's {@link AiTask#variables()} via the simple {@link
+   *       PromptTemplateRenderer} ({@code {{var}}} substitution). Replaces the raw-JSON-dump for
+   *       every wired task.
+   *   <li><b>Legacy fallback.</b> No {@code "prompt"} variable and no file mapping → the prompt
+   *       name (empty variables) or a JSON dump of the variables (the pre-ai-1 behaviour), kept
+   *       only for task types that genuinely have no engineered file yet.
+   * </ol>
    */
   public static String renderUserMessage(AiTask<?> task, ObjectMapper objectMapper) {
     Map<String, Object> vars = task.variables();
-    if (vars == null || vars.isEmpty()) {
-      // The prompt-template loader (01d) materialises the body; until then the calling module is
-      // expected to put the rendered prompt under the conventional "prompt" variable.
-      return task.prompt().name();
-    }
-    Object explicit = vars.get("prompt");
+    Object explicit = vars == null ? null : vars.get("prompt");
     if (explicit instanceof String s && !s.isBlank()) {
       return s;
+    }
+    Optional<String> classpath = PromptFiles.classpathFor(task.type());
+    if (classpath.isPresent()) {
+      return renderPromptFile(classpath.get(), vars, objectMapper);
+    }
+    if (vars == null || vars.isEmpty()) {
+      // No engineered file and nothing to render — the prompt name is the only stable handle.
+      return task.prompt().name();
     }
     try {
       return objectMapper.writeValueAsString(vars);
     } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
       throw new IllegalStateException("Failed to serialise prompt variables", ex);
+    }
+  }
+
+  /**
+   * Load the engineered prompt file from the classpath and render its {@code {{placeholder}}}s with
+   * the task variables. Each variable is converted to a render-safe value first (see {@link
+   * #toRenderValue}) so the {@link PromptTemplateRenderer} — which rejects {@code null} and would
+   * otherwise emit a Java {@code toString()} for a collection / DTO — receives a {@code null}-free
+   * map whose complex values are JSON, exactly the shape the prompt bodies expect.
+   */
+  private static String renderPromptFile(
+      String classpath, Map<String, Object> vars, ObjectMapper objectMapper) {
+    String template = PromptFileLoader.load(classpath);
+    Map<String, Object> renderVars = new java.util.HashMap<>();
+    if (vars != null) {
+      for (Map.Entry<String, Object> entry : vars.entrySet()) {
+        renderVars.put(entry.getKey(), toRenderValue(entry.getValue(), objectMapper));
+      }
+    }
+    return PROMPT_RENDERER.render(template, renderVars);
+  }
+
+  /**
+   * Coerce a single prompt variable into a value the simple renderer can substitute without
+   * tripping its {@code null}-hostile contract:
+   *
+   * <ul>
+   *   <li>{@code null} → {@link #NULL_SENTINEL} (so a nullable context field renders as {@code
+   *       "none"} rather than rejecting the whole dispatch),
+   *   <li>{@code String} / {@code Number} / {@code Boolean} / {@code Enum} → unchanged (the
+   *       renderer's {@code String.valueOf} produces the right text),
+   *   <li>anything else (collection, map, DTO, document) → its JSON, so the prompt sees structured
+   *       JSON rather than a Java {@code toString()}.
+   * </ul>
+   */
+  public static Object toRenderValue(Object value, ObjectMapper objectMapper) {
+    if (value == null) {
+      return NULL_SENTINEL;
+    }
+    if (value instanceof String
+        || value instanceof Number
+        || value instanceof Boolean
+        || value instanceof Enum<?>) {
+      return value;
+    }
+    try {
+      return objectMapper.writeValueAsString(value);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+      throw new IllegalStateException("Failed to serialise prompt variable to JSON", ex);
     }
   }
 
