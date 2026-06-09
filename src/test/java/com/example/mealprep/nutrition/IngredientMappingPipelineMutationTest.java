@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.ai.domain.service.AiService;
+import com.example.mealprep.ai.exception.AiUnavailableException;
+import com.example.mealprep.ai.spi.AiTask;
 import com.example.mealprep.nutrition.api.dto.IngredientMappingSource;
 import com.example.mealprep.nutrition.api.mapper.IngredientMappingMapper;
 import com.example.mealprep.nutrition.config.OpenFoodFactsClient;
@@ -52,7 +55,15 @@ class IngredientMappingPipelineMutationTest {
     usda = Mockito.mock(UsdaApiClient.class);
     off = Mockito.mock(OpenFoodFactsClient.class);
     IngredientMappingMapper mapper = new IngredientMappingMapper() {};
-    pipeline = new IngredientMappingPipeline(repo, new IntakeKeyNormaliser(), usda, off, mapper);
+    // AI dispatch FAILS in these mutation killers, so the pipeline runs its deterministic fallback
+    // (parse -> normalised term; match -> first-hit capped) — the exact paths these mutations
+    // probe.
+    AiService aiService = Mockito.mock(AiService.class);
+    when(aiService.execute(any(AiTask.class)))
+        .thenThrow(new AiUnavailableException("stubbed AI outage"));
+    pipeline =
+        new IngredientMappingPipeline(
+            repo, new IntakeKeyNormaliser(), usda, off, mapper, aiService);
   }
 
   // ---------------- L72: empty / blank term short-circuit ----------------

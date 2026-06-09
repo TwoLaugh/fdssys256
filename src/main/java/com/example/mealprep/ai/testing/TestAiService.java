@@ -106,6 +106,48 @@ public class TestAiService implements AiService {
       }
       """;
 
+  /**
+   * Built-in default for {@link TaskType#NUTRITION_INGREDIENT_PARSE} (nutrition-01k). The
+   * ingredient -mapping pipeline calls the parse task on every cache-miss; without a default, any
+   * IT / e2e flow that resolves a novel ingredient would hard-fail with "No canned response
+   * registered". This default deliberately omits {@code usdaSearchTerm}, so {@code
+   * IngredientParseResult.searchTermOrNull()} returns {@code null} and the pipeline degrades to its
+   * normalised search term verbatim — keeping the deterministic search-term behaviour the existing
+   * USDA/OFF-mocked ITs depend on, while still exercising the real parse-dispatch (and recording a
+   * zero-cost stubbed AI call). A scenario that wants a specific cleaned term registers its own
+   * JSON. Confidence is plausible but unused on the degrade path. Deserialised through the real
+   * {@code ObjectMapper} into {@code task.outputType()}.
+   */
+  static final String DEFAULT_NUTRITION_INGREDIENT_PARSE_JSON =
+      """
+      {
+        "ingredient": "",
+        "quantity": null,
+        "unit": null,
+        "gramsEstimate": null,
+        "isCooked": false,
+        "confidence": 0.8
+      }
+      """;
+
+  /**
+   * Built-in default for {@link TaskType#NUTRITION_INGREDIENT_MATCH} (nutrition-01k). {@code
+   * chosenIndex = -1} is the "no good match" signal: the pipeline then degrades to its
+   * deterministic first-hit (highest source score, capped at 0.85) — exactly the pre-01k behaviour
+   * the existing ITs assert (e.g. {@code confidence == 0.85} for a USDA hit). This makes a real,
+   * zero-cost stubbed match call (proving the dispatch wiring) without disturbing those
+   * deterministic outcomes; a scenario that wants the model to PICK a candidate registers its own
+   * JSON with {@code chosenIndex >= 0}.
+   */
+  static final String DEFAULT_NUTRITION_INGREDIENT_MATCH_JSON =
+      """
+      {
+        "chosenIndex": -1,
+        "confidence": 0.0,
+        "reason": "default stub: decline so the pipeline takes its first-hit fallback"
+      }
+      """;
+
   private final Map<TaskType, Object> cannedResponses = new EnumMap<>(TaskType.class);
   private final Map<TaskType, String> cannedJson = new EnumMap<>(TaskType.class);
 
@@ -145,6 +187,8 @@ public class TestAiService implements AiService {
    */
   private void seedDefaults() {
     defaultJson.put(TaskType.RECIPE_ADAPTATION, DEFAULT_RECIPE_ADAPTATION_NO_CHANGE_JSON);
+    defaultJson.put(TaskType.NUTRITION_INGREDIENT_PARSE, DEFAULT_NUTRITION_INGREDIENT_PARSE_JSON);
+    defaultJson.put(TaskType.NUTRITION_INGREDIENT_MATCH, DEFAULT_NUTRITION_INGREDIENT_MATCH_JSON);
   }
 
   /** Register a canned response for a task type. Subsequent calls for that type return this. */
