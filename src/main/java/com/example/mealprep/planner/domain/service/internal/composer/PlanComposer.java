@@ -404,33 +404,25 @@ public class PlanComposer {
                     + " refine-directive(s) emitted",
                 "user"));
 
-    // Stage D — route emitted refine-directive proposals to the adaptation pipeline. The
-    // current Phase-2 impl emits an empty directive list (it defers the cross-module assembly to
-    // the composer per RefineDirectiveDto's javadoc); the routing is exercised end-to-end by
-    // PlanComposerIT which stubs AdaptationService. We bound the routing to the configured
-    // max-refine-directive budget.
+    // Stage D — route the Phase-2 refine-directive proposals to the adaptation pipeline. Phase 2
+    // emits the LLM's raw RefineDirectiveProposal(s) (bounded there by maxRefineDirectives);
+    // RefineDirectiveMapper assembles each into the cross-module PlanTimeRefineDirectiveRequest and
+    // we dispatch AdaptationService.runPlanTimeRefineJob synchronously, applying the adapted recipe
+    // back onto the chosen plan. We bound the routing to the configured max-refine-directive budget
+    // as a defence-in-depth cap (Phase 2 already caps the emitted list).
     List<SlotAssignment> mutatedAssignments = new ArrayList<>(chosen.assignments());
     int directivesRouted = 0;
-    for (var directive : phase2.emittedDirectives()) {
+    for (var proposal : phase2.emittedDirectives()) {
       if (directivesRouted >= properties.maxRefineDirectives()) {
         break;
       }
       directivesRouted++;
-      int slotIdx = indexOfSlot(mutatedAssignments, directive.targetSlotId());
+      int slotIdx = indexOfSlot(mutatedAssignments, proposal.targetSlotId());
       if (slotIdx < 0) {
-        log.info("Refine-directive targets unknown slot {}; skipping", directive.targetSlotId());
+        log.info("Refine-directive targets unknown slot {}; skipping", proposal.targetSlotId());
         continue;
       }
       SlotAssignment target = mutatedAssignments.get(slotIdx);
-      var proposal =
-          new com.example.mealprep.planner.api.dto.RefineDirectiveProposal(
-              directive.kind(),
-              directive.targetSlotId(),
-              directive.fromKey(),
-              directive.toKey(),
-              null,
-              null,
-              directive.description());
       PlanTimeRefineDirectiveRequest stageDRequest =
           refineDirectiveMapper.toRequest(
               proposal,
@@ -459,7 +451,7 @@ public class PlanComposer {
                 objectMapper
                     .createObjectNode()
                     .put("slotId", String.valueOf(target.slotId()))
-                    .put("directiveKind", String.valueOf(directive.kind())),
+                    .put("directiveKind", String.valueOf(stageDRequest.directive().kind())),
                 stageDOutputs(result),
                 "Stage D routed directive -> " + result.classification(),
                 "user"));
@@ -481,7 +473,7 @@ public class PlanComposer {
                 objectMapper
                     .createObjectNode()
                     .put("slotId", String.valueOf(target.slotId()))
-                    .put("directiveKind", String.valueOf(directive.kind())),
+                    .put("directiveKind", String.valueOf(stageDRequest.directive().kind())),
                 objectMapper
                     .createObjectNode()
                     .put("adaptationJobId", (String) null)

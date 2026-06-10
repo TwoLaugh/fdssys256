@@ -140,7 +140,7 @@ class Phase2AugmenterIT {
     assertThat(result.applied()).hasSize(1);
     assertThat(result.discardedByVerifier()).isEmpty();
     assertThat(result.emittedDirectives())
-        .as("RefineDirectiveDto cross-module deferral — always empty in 01h")
+        .as("no refineDirectives in this canned response → empty emitted list")
         .isEmpty();
   }
 
@@ -201,19 +201,18 @@ class Phase2AugmenterIT {
   }
 
   @Test
-  void refineDirectivesAlwaysEmpty_crossClasspathDeferral() {
+  void refineDirectives_emittedFromAiResponse_forStageDRouting() {
     Object[] e = env();
     PlanCompositionContext ctx = (PlanCompositionContext) e[0];
     UUID slotId = (UUID) e[1];
-    canned(
-        new Phase2AugmentationResponse(
-            List.of(),
-            List.of(
-                PlanTestData.refineDirectiveProposal(slotId, "butter", "ghee"),
-                PlanTestData.refineDirectiveProposal(slotId, "rice", "quinoa"))));
+    var swap = PlanTestData.refineDirectiveProposal(slotId, "butter", "ghee");
+    var swap2 = PlanTestData.refineDirectiveProposal(slotId, "rice", "quinoa");
+    canned(new Phase2AugmentationResponse(List.of(), List.of(swap, swap2)));
 
     AugmentationResult result = augmenter.augment(chosenPlan(), rollup(), ctx, UUID.randomUUID());
 
-    assertThat(result.emittedDirectives()).isEmpty();
+    // Stage-D is now live: Phase 2 emits the raw proposals (capped at max-refine-directives=2 in
+    // the test profile) for the composer to route to the adaptation pipeline.
+    assertThat(result.emittedDirectives()).containsExactly(swap, swap2);
   }
 }

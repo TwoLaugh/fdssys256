@@ -3,10 +3,12 @@ package com.example.mealprep.planner.api.dto;
 import java.util.UUID;
 
 /**
- * Planner-local raw LLM output shape for a refine-directive. Per ticket planner-01h §"LLD
- * divergence — {@code RefineDirectiveDto} shape": this is the LLM's untyped output; {@link
- * RefineDirectiveDto} is the (planner-local placeholder for the) cross-module contract forwarded to
- * the adaptation pipeline by the composer (01j).
+ * Planner-local raw LLM output shape for a refine-directive — the Phase-2 AI response carries these
+ * verbatim. The composer (planner-01j) forwards each proposal to the adaptation pipeline by mapping
+ * it onto the cross-module {@code PlanTimeRefineDirectiveRequest} (and its nested {@code
+ * RefineDirectiveDto}) via {@code RefineDirectiveMapper}, then dispatching {@code
+ * AdaptationService.runPlanTimeRefineJob(...)}. This proposal is the carrier element of {@code
+ * AugmentationResult.emittedDirectives()}.
  *
  * <p>Field relevance depends on {@code type}:
  *

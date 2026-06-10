@@ -16,7 +16,7 @@ import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.GeneratePlanRequest;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.RecipePoolSnapshot;
-import com.example.mealprep.planner.api.dto.RefineDirectiveDto;
+import com.example.mealprep.planner.api.dto.RefineDirectiveProposal;
 import com.example.mealprep.planner.api.dto.ScoreResult;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
 import com.example.mealprep.planner.api.dto.StageCResult;
@@ -165,8 +165,9 @@ class PlannerDecisionLogChainIT {
     when(stageCInvoker.pickOne(any(), any(), any(), any()))
         .thenReturn(new StageCResult(0, "picked", AugmentationSource.LLM, false));
     // Phase 2 emits one refine-directive so Stage D runs and writes a STAGE_D_OUTCOME row.
-    RefineDirectiveDto directive =
-        new RefineDirectiveDto("SUBSTITUTE_INGREDIENT", slotId, "swap", "rice", "quinoa");
+    RefineDirectiveProposal directive =
+        new RefineDirectiveProposal(
+            "SUBSTITUTE_INGREDIENT", slotId, "rice", "quinoa", null, null, "swap");
     when(phase2Augmenter.augment(any(), any(), any(), any()))
         .thenReturn(
             new com.example.mealprep.planner.api.dto.AugmentationResult(

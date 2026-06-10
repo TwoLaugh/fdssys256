@@ -22,8 +22,10 @@ public interface Phase2Augmenter {
    * @param chosenRollup the chosen plan's per-day macro rollup (from planner-01f via nutrition)
    * @param context the frozen plan-composition context (recipe pool, slots, constraints)
    * @param traceId decision-log correlation id
-   * @return augmentations that survived the verifier, those discarded, and emitted directives
-   *     (always empty in 01h — see {@link com.example.mealprep.planner.api.dto.RefineDirectiveDto})
+   * @return augmentations that survived the verifier, those discarded, and the emitted refine
+   *     directives (raw {@link com.example.mealprep.planner.api.dto.RefineDirectiveProposal}s,
+   *     capped at {@code maxRefineDirectives}) the composer routes to the adaptation pipeline at
+   *     Stage D
    */
   AugmentationResult augment(
       CandidatePlan chosenPlan,
