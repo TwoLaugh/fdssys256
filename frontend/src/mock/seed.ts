@@ -6,10 +6,19 @@
  */
 
 import type {
+  ActivityState,
+  DiscoveryResult,
+  DiscoverySource,
+  DiscoveryState,
   GroceryState,
+  HouseholdState,
+  NotificationPrefs,
+  NutritionState,
+  NutritionTargets,
   PantryState,
   PlanCandidate,
   PlanState,
+  PreferencesState,
   Recipe,
   StoreState,
   TodayState,
@@ -916,11 +925,289 @@ const todaySeed: TodayState = {
     sub: "From your feedback on Tuesday — “too salty”",
     recipeId: "chicken-stir-fry",
   },
+  // Calories reconcile with the nutrition intake slice: breakfast 380 +
+  // morning smoothie 420 + flat white 90. Behind = value/target < 0.55.
   nutrition: [
-    { label: "Calories", value: 1420, target: 2000, unit: "" },
+    { label: "Calories", value: 890, target: 2000, unit: "", behind: true },
     { label: "Protein", value: 64, target: 120, unit: " g", behind: true },
     { label: "Carbs", value: 150, target: 220, unit: " g" },
     { label: "Fat", value: 48, target: 70, unit: " g" },
+  ],
+};
+
+/* ---- nutrition --------------------------------------------------------------------- */
+
+const nutritionSeed: NutritionState = {
+  intake: [
+    { slot: "breakfast", plannedKcal: 380, actualKcal: 380, status: "confirmed" },
+    { slot: "lunch", plannedKcal: 520, actualKcal: null, status: "pending" },
+    { slot: "dinner", plannedKcal: 520, actualKcal: null, status: "pending" },
+  ],
+  snacks: [
+    { name: "Morning smoothie", kcal: 420 },
+    { name: "Flat white", kcal: 90 },
+  ],
+  week: [
+    { day: "Mon", kcal: 1980 },
+    { day: "Tue", kcal: 2150 },
+    { day: "Wed", kcal: 0, today: true }, // live from today's calories entry
+    { day: "Thu", kcal: 0 },
+    { day: "Fri", kcal: 0 },
+    { day: "Sat", kcal: 0 },
+    { day: "Sun", kcal: 0 },
+  ],
+  journal: [
+    {
+      when: "Today 09:10",
+      text: "Slept badly — went for the bigger breakfast and felt better for it.",
+      mood: "tired → steady",
+    },
+    {
+      when: "Tue 9 June",
+      text: "Post-gym dinner felt right, not stuffed.",
+      mood: "energised",
+    },
+    {
+      when: "Mon 8 June",
+      text: "Afternoon slump around 4pm again — maybe a bigger lunch.",
+      mood: "sluggish",
+    },
+  ],
+};
+
+const targetsSeed: NutritionTargets = {
+  calories: 2000,
+  protein: 120,
+  carbs: 220,
+  fat: 70,
+};
+
+/* ---- preferences --------------------------------------------------------------------- */
+
+const preferencesSeed: PreferencesState = {
+  profileVersion: 5,
+  refreshing: false,
+  groups: [
+    {
+      name: "Cuisines",
+      likes: ["Korean", "Italian", "Mexican", "Middle Eastern"],
+      dislikes: ["Creamy French"],
+    },
+    {
+      name: "Ingredients",
+      likes: ["Tofu", "Salmon", "Chickpeas", "Aubergine", "Lime"],
+      dislikes: ["Celery", "Blue cheese"],
+    },
+    {
+      name: "Methods",
+      likes: ["Traybakes", "Stir-fries", "One-pot", "Batch cooking"],
+      dislikes: ["Deep-frying"],
+    },
+    {
+      name: "Flavour notes",
+      likes: ["Gochujang heat", "Citrus", "Fresh herbs", "Smoky paprika"],
+      dislikes: ["Very salty", "Overly sweet mains"],
+    },
+  ],
+  allergies: ["Peanuts", "Tree nuts"],
+  dietary: ["Maya · vegetarian"],
+  lifestyle: {
+    slotTimes: { breakfast: "08:00", lunch: "13:00", dinner: "19:00" },
+    portionScale: 1.0,
+    weeklyBudget: 55,
+  },
+};
+
+/* ---- activity --------------------------------------------------------------------------- */
+
+const activitySeed: ActivityState = {
+  feedback: [
+    {
+      id: "f1",
+      when: "Tue 9 June",
+      text: "The stir fry was way too salty and honestly the portions have been small all week",
+      routes: [
+        {
+          dest: "Recipe",
+          conf: 0.92,
+          action:
+            "The recipe optimiser will propose a lower-salt version of chicken stir-fry.",
+        },
+        {
+          dest: "Nutrition",
+          conf: 0.71,
+          action:
+            "Increase per-meal portion targets for dinners — I think this is what you meant.",
+        },
+        {
+          dest: "Preference",
+          conf: 0.44,
+          question:
+            "Is “too salty” about this one dish, or do you generally prefer less salt?",
+          options: ["Just this dish", "Generally less salt", "Skip"],
+        },
+      ],
+    },
+    {
+      id: "f2",
+      when: "Sun 7 June",
+      text: "Loved the shakshuka, would happily have it every week",
+      routes: [
+        {
+          dest: "Preference",
+          conf: 0.91,
+          action:
+            "Logged as a strong like — shakshuka weighted up in future plans.",
+        },
+        {
+          dest: "Plan",
+          conf: 0.62,
+          action:
+            "I could add it to next week's rotation — check this is what you meant.",
+        },
+      ],
+    },
+    {
+      id: "f3",
+      when: "Thu 4 June",
+      text: "Friday felt rushed, dinner took way too long to cook",
+      routes: [
+        {
+          dest: "Plan",
+          conf: 0.84,
+          action: "School-night dinners capped at 25 minutes going forward.",
+        },
+      ],
+      corrected: true,
+    },
+  ],
+  clarifications: [
+    {
+      id: "c-f1",
+      question:
+        "Is “too salty” about this one dish, or do you generally prefer less salt?",
+      options: ["Just this dish", "Generally less salt", "Skip"],
+      context:
+        "The stir fry was way too salty and honestly the portions have been small all week",
+    },
+    {
+      id: "c2",
+      question:
+        "When you say “more veg”, is that at dinner specifically or across the whole day?",
+      options: ["Dinner specifically", "Across the day", "Skip"],
+      context: "Could we get more veg in",
+    },
+  ],
+};
+
+/* ---- notification prefs --------------------------------------------------------------------- */
+
+const notificationPrefsSeed: NotificationPrefs = {
+  muted: [],
+  quietStart: "21:00",
+  quietEnd: "07:00",
+};
+
+/* ---- household ----------------------------------------------------------------------------- */
+
+const householdSeed: HouseholdState = {
+  name: "Veer household",
+  members: [
+    { id: "m1", name: "Iren", role: "owner", color: "var(--mp-terra)" },
+    { id: "m2", name: "Sam", role: "adult", color: "var(--mp-olive)" },
+    { id: "m3", name: "Maya", role: "child", color: "var(--mp-amber)" },
+    { id: "m4", name: "Theo", role: "child", color: "var(--mp-mark-planned)" },
+  ],
+  invites: [{ email: "grandma.veer@example.com", sent: "Sent Mon 8 June" }],
+  slotConfig: [
+    {
+      dayType: "School days",
+      slots: [
+        { slot: "breakfast", time: "07:30", shared: false },
+        { slot: "lunch", time: "12:30", shared: false },
+        { slot: "dinner", time: "18:30", shared: true },
+      ],
+    },
+    {
+      dayType: "Weekend",
+      slots: [
+        { slot: "breakfast", time: "09:00", shared: true },
+        { slot: "lunch", time: "13:00", shared: true },
+        { slot: "dinner", time: "19:00", shared: true },
+      ],
+    },
+  ],
+  email: "irenveer@gmail.com",
+};
+
+/* ---- discovery -------------------------------------------------------------------------------- */
+
+/** Canned result set applied when a discovery job reaches DONE. */
+export const DISCOVERY_RESULTS: ReadonlyArray<Omit<DiscoveryResult, "status">> =
+  [
+    {
+      id: "d1",
+      title: "Harissa chickpea traybake",
+      domain: "bbcgoodfood.com",
+      conf: 0.93,
+      timeMin: 30,
+      cuisine: "Middle Eastern",
+    },
+    {
+      id: "d2",
+      title: "Peanut-free satay noodles",
+      domain: "seriouseats.com",
+      conf: 0.88,
+      timeMin: 25,
+      cuisine: "Thai",
+    },
+    {
+      id: "d3",
+      title: "Charred corn & black bean salad",
+      domain: "budgetbytes.com",
+      conf: 0.81,
+      timeMin: 20,
+      cuisine: "Mexican",
+    },
+    {
+      id: "d4",
+      title: "Miso aubergine rice bowls",
+      domain: "bbcgoodfood.com",
+      conf: 0.74,
+      timeMin: 35,
+      cuisine: "Japanese",
+    },
+    {
+      id: "d5",
+      title: "Spiced lamb flatbreads",
+      domain: "ottolenghi.co.uk",
+      conf: 0.58,
+      timeMin: 40,
+      cuisine: "Middle Eastern",
+    },
+  ];
+
+/** Per-source transparency: pages scanned per domain for a finished job. */
+export const DISCOVERY_SOURCES: ReadonlyArray<DiscoverySource> = [
+  { domain: "bbcgoodfood.com", hits: 14 },
+  { domain: "seriouseats.com", hits: 9 },
+  { domain: "budgetbytes.com", hits: 7 },
+  { domain: "ottolenghi.co.uk", hits: 4 },
+];
+
+/** Image pool for recipes kept from discovery. */
+export const DISCOVERY_IMGS: ReadonlyArray<string> = [
+  IMG_BOWL,
+  IMG_PLATE,
+  IMG_TACOS,
+  IMG_SALMON,
+];
+
+const discoverySeed: DiscoveryState = {
+  job: null,
+  history: [
+    { query: "vegetarian one-pot dinners", when: "Sun 7 June", found: 6, kept: 2 },
+    { query: "high-protein breakfasts", when: "Tue 2 June", found: 5, kept: 1 },
   ],
 };
 
@@ -973,5 +1260,12 @@ export function createSeed(): StoreState {
       },
     ],
     today: todaySeed,
+    nutrition: nutritionSeed,
+    targets: targetsSeed,
+    preferences: preferencesSeed,
+    activity: activitySeed,
+    notificationPrefs: notificationPrefsSeed,
+    household: householdSeed,
+    discovery: discoverySeed,
   };
 }

@@ -289,6 +289,213 @@ export interface TodayState {
   nutrition: NutritionEntry[];
 }
 
+/* ---- nutrition -------------------------------------------------------------- */
+
+export type IntakeStatus = "pending" | "confirmed" | "skipped";
+
+/** Per-slot intake record for today: planned kcal vs what was actually eaten. */
+export interface IntakeSlot {
+  slot: MealSlotKey;
+  plannedKcal: number;
+  /** Set when confirmed; null while pending or skipped. */
+  actualKcal: number | null;
+  status: IntakeStatus;
+}
+
+export interface SnackEntry {
+  name: string;
+  kcal: number;
+}
+
+/** Mutable macro targets — canonical; today's stat bars mirror these. */
+export interface NutritionTargets {
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+}
+
+export type MacroKey = keyof NutritionTargets;
+
+export interface JournalEntry {
+  when: string;
+  text: string;
+  /** Free-form mood note, e.g. "energised". */
+  mood?: string;
+}
+
+export interface WeekDayIntake {
+  day: string;
+  /** kcal logged that day; 0 = nothing logged yet. */
+  kcal: number;
+  today?: boolean;
+}
+
+export interface NutritionState {
+  intake: IntakeSlot[];
+  snacks: SnackEntry[];
+  /** Mon → Sun; today's kcal is read live from the calories entry. */
+  week: WeekDayIntake[];
+  journal: JournalEntry[];
+}
+
+/* ---- preferences ------------------------------------------------------------- */
+
+export interface TasteGroup {
+  name: string;
+  likes: string[];
+  dislikes: string[];
+}
+
+export type ConstraintKind = "allergy" | "dietary";
+
+export interface LifestyleConfig {
+  slotTimes: Record<MealSlotKey, string>;
+  /** Portion multiplier, e.g. 1.0. */
+  portionScale: number;
+  /** Weekly grocery budget in £ — mirrored to pantry budget + grocery headroom. */
+  weeklyBudget: number;
+}
+
+export interface PreferencesState {
+  profileVersion: number;
+  refreshing: boolean;
+  groups: TasteGroup[];
+  /** Hard constraints — removal requires the GAP-04 interstitial. */
+  allergies: string[];
+  dietary: string[];
+  lifestyle: LifestyleConfig;
+}
+
+/* ---- activity / feedback -------------------------------------------------------- */
+
+/** ✓ olive ≥0.8 routed · ? amber 0.5–0.8 check me · … terra <0.5 needs you. */
+export type ConfidenceTier = "high" | "mid" | "low";
+
+export interface FeedbackRoute {
+  dest: string;
+  conf: number;
+  /** Routed/check-me description of what the destination will do. */
+  action?: string;
+  /** Low-confidence clarification question (advisor voice). */
+  question?: string;
+  options?: string[];
+  /** The chosen clarification option once answered. */
+  answered?: string;
+}
+
+export interface FeedbackEntry {
+  id: string;
+  when: string;
+  /** The user's words, shown plain and quoted — never serif. */
+  text: string;
+  routes: FeedbackRoute[];
+  /** "This isn't right" pressed — correction recorded. */
+  corrected?: boolean;
+}
+
+export interface Clarification {
+  id: string;
+  question: string;
+  options: string[];
+  /** The feedback text that raised the question. */
+  context?: string;
+}
+
+export interface ActivityState {
+  feedback: FeedbackEntry[];
+  clarifications: Clarification[];
+}
+
+/* ---- notification preferences ----------------------------------------------------- */
+
+export interface NotificationPrefs {
+  /** Muted kinds drop out of the bell dropdown + rail badge. */
+  muted: NotificationKind[];
+  quietStart: string;
+  quietEnd: string;
+}
+
+/* ---- household / settings ----------------------------------------------------------- */
+
+export type MemberRole = "owner" | "adult" | "child";
+
+export interface HouseholdMember {
+  id: string;
+  name: string;
+  role: MemberRole;
+  /** Per-member identity dot (CSS colour value). */
+  color: string;
+}
+
+export interface PendingInvite {
+  email: string;
+  sent: string;
+}
+
+export interface SlotConfigEntry {
+  slot: MealSlotKey;
+  time: string;
+  /** Shared household meal vs per-person. */
+  shared: boolean;
+}
+
+export interface DayTypeSlots {
+  dayType: string;
+  slots: SlotConfigEntry[];
+}
+
+export interface HouseholdState {
+  name: string;
+  members: HouseholdMember[];
+  invites: PendingInvite[];
+  slotConfig: DayTypeSlots[];
+  /** Account email (display only). */
+  email: string;
+}
+
+/* ---- discovery ------------------------------------------------------------------------ */
+
+export type DiscoveryStep = "QUEUED" | "SEARCHING" | "FILTERING" | "DONE";
+
+export interface DiscoveryResult {
+  id: string;
+  title: string;
+  domain: string;
+  /** AI-filter confidence, 0–1. */
+  conf: number;
+  status: "new" | "kept" | "skipped";
+  timeMin: number;
+  cuisine: string;
+}
+
+export interface DiscoverySource {
+  domain: string;
+  hits: number;
+}
+
+export interface DiscoveryJob {
+  id: string;
+  query: string;
+  constraints: string[];
+  step: DiscoveryStep;
+  /** Populated when the job reaches DONE. */
+  results: DiscoveryResult[];
+  sources: DiscoverySource[];
+}
+
+export interface DiscoveryHistoryEntry {
+  query: string;
+  when: string;
+  found: number;
+  kept: number;
+}
+
+export interface DiscoveryState {
+  job: DiscoveryJob | null;
+  history: DiscoveryHistoryEntry[];
+}
+
 /* ---- root ------------------------------------------------------------------ */
 
 export interface StoreState {
@@ -299,4 +506,11 @@ export interface StoreState {
   pantry: PantryState;
   notifications: AppNotification[];
   today: TodayState;
+  nutrition: NutritionState;
+  targets: NutritionTargets;
+  preferences: PreferencesState;
+  activity: ActivityState;
+  notificationPrefs: NotificationPrefs;
+  household: HouseholdState;
+  discovery: DiscoveryState;
 }
