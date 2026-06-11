@@ -264,3 +264,40 @@ Reads `DailyAggregateDto.microsActualSoFar` (map) joined against
 7. Add Directives + Data quality tabs (seed 2 directives — one with warnings, one
    blocked — and 3 needs-review ingredients).
 8. Journal: add meal-slot selector + edit/delete + pagination.
+
+## 10. Amendments (2026-06-12)
+
+Dated corrections from the pilot mock rebuild. Each amends the referenced
+section; the original text above is left as written.
+
+- **(a) §3b — sat-fat cell has no aggregate field.** The band's sixth cell
+  currently reads `DailyAggregateDto.microsActualSoFar["saturated_fat_g"]` —
+  `DailyAggregateDto` carries macro aggregates for protein/carbs/fat/fibre only,
+  no satFat `MacroAggregateDto` (so no `plannedG`/`remainingG` for the cell,
+  and the value rides the micros map by key convention). Backend ticket
+  pending: add a `satFat` aggregate to `DailyAggregateDto`. Until then the cell
+  renders actual-vs-target only (target from `TargetsDto.satFat`), with no
+  remaining sub-line.
+- **(b) §3c — `floorViolations` is key-only.** `WeeklyAggregateDto.floorViolations`
+  is `string[]` of macro/micro keys ("weekly total fell below 7-day-summed
+  floor") with **no day attribution**; the "protein floor missed · Tue" day
+  labels are derived client-side by scanning `perDay[i]` against the summed
+  floor. The schema already defines an unused `FloorViolationDto`
+  (`{date, macroOrMicro, floor, actual}`) — backend ticket pending: have
+  `floorViolations` adopt it. Until then chips may name the macro without a
+  reliable day ("protein floor missed this week") when per-day derivation is
+  ambiguous.
+- **(c) §3d — `planned.recipeId` is nullable.** `PlannedIntakeDto.recipeId` is
+  null for slots whose plan slot has no scheduled recipe (eating-out, stripped
+  or unfilled slots). Display fallback: the active plan-day slot's `label`
+  (via `plans/active` join); failing that, the meal-slot enum name. No recipe
+  deep-link on such rows.
+- **(d) §3a — "default" activity = no row for that date.** Verified against
+  `lld/nutrition.md` + the shipped module: `DailyActivityLog` rows exist only
+  when the user sets a level (last-write-wins per `(user, date)`); when absent,
+  `GET targets/activity` simply returns no entry for that date and **no
+  activity adjustment is applied** — targets render unmodified. Absent-row is
+  *not* REST_DAY: REST_DAY is an explicit level carrying its own modifiers
+  (HLD example: `rest_day.carb_modifier_g = -30`, while `light_activity` is the
+  zero-modifier row). UI rule: no chip and no targets-band footnote on dates
+  without a row; the segmented control shows no selection until the user picks.
