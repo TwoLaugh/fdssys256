@@ -5,6 +5,7 @@
  * inventory with expiry dates, notifications.
  */
 
+import { createNutritionSeed, targetsSeed } from "./nutritionSeed";
 import type {
   ActivityState,
   DiscoveryResult,
@@ -13,8 +14,6 @@ import type {
   GroceryState,
   HouseholdState,
   NotificationPrefs,
-  NutritionState,
-  NutritionTargets,
   PantryState,
   PlanCandidate,
   PlanState,
@@ -25,8 +24,9 @@ import type {
 } from "./types";
 
 /** The mock's fixed "today" (Wednesday 10 June 2026) — keeps expiry colour
- *  coding and date labels deterministic. */
-export const MOCK_TODAY_ISO = "2026-06-10";
+ *  coding and date labels deterministic. Defined with the nutrition seed,
+ *  whose intake days are keyed on the same week. */
+export { MOCK_TODAY_ISO } from "./nutritionSeed";
 
 /* ---- photography ----------------------------------------------------------
  * A small pool of food photos reused across cards; every <img> falls back to
@@ -925,61 +925,6 @@ const todaySeed: TodayState = {
     sub: "From your feedback on Tuesday — “too salty”",
     recipeId: "chicken-stir-fry",
   },
-  // Calories reconcile with the nutrition intake slice: breakfast 380 +
-  // morning smoothie 420 + flat white 90. Behind = value/target < 0.55.
-  nutrition: [
-    { label: "Calories", value: 890, target: 2000, unit: "", behind: true },
-    { label: "Protein", value: 64, target: 120, unit: " g", behind: true },
-    { label: "Carbs", value: 150, target: 220, unit: " g" },
-    { label: "Fat", value: 48, target: 70, unit: " g" },
-  ],
-};
-
-/* ---- nutrition --------------------------------------------------------------------- */
-
-const nutritionSeed: NutritionState = {
-  intake: [
-    { slot: "breakfast", plannedKcal: 380, actualKcal: 380, status: "confirmed" },
-    { slot: "lunch", plannedKcal: 520, actualKcal: null, status: "pending" },
-    { slot: "dinner", plannedKcal: 520, actualKcal: null, status: "pending" },
-  ],
-  snacks: [
-    { name: "Morning smoothie", kcal: 420 },
-    { name: "Flat white", kcal: 90 },
-  ],
-  week: [
-    { day: "Mon", kcal: 1980 },
-    { day: "Tue", kcal: 2150 },
-    { day: "Wed", kcal: 0, today: true }, // live from today's calories entry
-    { day: "Thu", kcal: 0 },
-    { day: "Fri", kcal: 0 },
-    { day: "Sat", kcal: 0 },
-    { day: "Sun", kcal: 0 },
-  ],
-  journal: [
-    {
-      when: "Today 09:10",
-      text: "Slept badly — went for the bigger breakfast and felt better for it.",
-      mood: "tired → steady",
-    },
-    {
-      when: "Tue 9 June",
-      text: "Post-gym dinner felt right, not stuffed.",
-      mood: "energised",
-    },
-    {
-      when: "Mon 8 June",
-      text: "Afternoon slump around 4pm again — maybe a bigger lunch.",
-      mood: "sluggish",
-    },
-  ],
-};
-
-const targetsSeed: NutritionTargets = {
-  calories: 2000,
-  protein: 120,
-  carbs: 220,
-  fat: 70,
 };
 
 /* ---- preferences --------------------------------------------------------------------- */
@@ -1260,7 +1205,7 @@ export function createSeed(): StoreState {
       },
     ],
     today: todaySeed,
-    nutrition: nutritionSeed,
+    nutrition: createNutritionSeed(),
     targets: targetsSeed,
     preferences: preferencesSeed,
     activity: activitySeed,

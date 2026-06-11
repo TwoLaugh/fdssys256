@@ -6,13 +6,20 @@ import { MealRow } from "../components/MealRow";
 import type { MealRowMeal } from "../components/MealRow";
 import { SegmentBar } from "../components/SegmentBar";
 import { StatBand } from "../components/StatBand";
+import { MOCK_TODAY_ISO, QUICK_SNACKS } from "../mock/nutritionSeed";
 import {
   acceptTodaySuggestion,
-  logSnack,
+  addSnack,
+  computeDailyAggregate,
+  macroWarn,
   setSlotState,
   useStore,
 } from "../mock/store";
-import type { MealSlotKey, SlotState } from "../mock/types";
+import type {
+  MacroTargetDto,
+  MealSlotKey,
+  SlotState,
+} from "../mock/types";
 
 const SLOT_KEYS: MealSlotKey[] = ["breakfast", "lunch", "dinner"];
 
@@ -25,19 +32,18 @@ const NEXT_ACTION: Partial<
   cooked: { label: "Mark eaten", next: "eaten" },
 };
 
-const SNACKS: Array<{ name: string; kcal: number }> = [
-  { name: "Banana", kcal: 105 },
-  { name: "Greek yoghurt", kcal: 150 },
-  { name: "Protein bar", kcal: 210 },
-  { name: "Handful of nuts", kcal: 180 },
-];
-
 export function Today() {
   const today = useStore((s) => s.today);
   const todayRow = useStore((s) => s.plan.days.find((d) => d.today));
   const budget = useStore((s) => s.pantry.budget);
+  const intakeDay = useStore((s) => s.nutrition.intakeDays[MOCK_TODAY_ISO]);
+  const targets = useStore((s) => s.targets);
   const navigate = useNavigate();
   const [snackOpen, setSnackOpen] = useState(false);
+
+  // Stat band reads the computed daily aggregate (same numbers as the
+  // Nutrition page); four cells here, six on /nutrition per the page spec.
+  const agg = computeDailyAggregate(intakeDay, targets);
 
   const meals: Array<{ slot: MealSlotKey; meal: MealRowMeal }> = todayRow
     ? SLOT_KEYS.map((slot) => {
@@ -59,14 +65,37 @@ export function Today() {
       })
     : [];
 
-  const nutritionStats: NutritionStat[] = today.nutrition.map((n) => ({
-    label: n.label,
-    value: n.value,
-    target: n.target,
-    display: n.value.toLocaleString("en-GB"),
-    targetDisplay: `${n.target.toLocaleString("en-GB")}${n.unit}`,
-    behind: n.behind,
-  }));
+  const macroStat = (
+    label: string,
+    actualG: number,
+    t: MacroTargetDto,
+  ): NutritionStat => ({
+    label,
+    value: actualG,
+    target: t.targetG ?? 0,
+    display: Math.round(actualG).toLocaleString("en-GB"),
+    targetDisplay: `${(t.targetG ?? 0).toLocaleString("en-GB")} g`,
+    behind: macroWarn(t.direction, actualG, t.targetG ?? 0) || undefined,
+  });
+
+  const nutritionStats: NutritionStat[] = [
+    {
+      label: "Calories",
+      value: agg.caloriesActualSoFar,
+      target: targets.calories.dailyTarget,
+      display: agg.caloriesActualSoFar.toLocaleString("en-GB"),
+      targetDisplay: targets.calories.dailyTarget.toLocaleString("en-GB"),
+      behind:
+        macroWarn(
+          targets.calories.direction,
+          agg.caloriesActualSoFar,
+          targets.calories.dailyTarget,
+        ) || undefined,
+    },
+    macroStat("Protein", agg.protein.actualSoFarG, targets.protein),
+    macroStat("Carbs", agg.carbs.actualSoFarG, targets.carbs),
+    macroStat("Fat", agg.fat.actualSoFarG, targets.fat),
+  ];
 
   const budgetPct = budget.spent / budget.total;
 
@@ -112,16 +141,16 @@ export function Today() {
           </div>
           {snackOpen ? (
             <div className="snack-chips">
-              {SNACKS.map((snack) => (
+              {QUICK_SNACKS.map((snack) => (
                 <button
-                  key={snack.name}
+                  key={snack.label}
                   className="filter-chip"
                   onClick={() => {
-                    logSnack(snack.name, snack.kcal);
+                    addSnack(MOCK_TODAY_ISO, snack.req);
                     setSnackOpen(false);
                   }}
                 >
-                  {snack.name} · {snack.kcal} kcal
+                  {snack.label}
                 </button>
               ))}
               <button
