@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MealPrep — design directions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@400;500;600;700&family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Schibsted+Grotesk:wght@400;500;600;700&family=Bricolage+Grotesque:wght@400;500;600;700;800&family=Karla:wght@400;500;600;700&family=Young+Serif&family=Albert+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; }
+  #root { min-height: 100vh; }
+  .switcher { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px; background: #1a1a1a; }
+  .switcher a { color: #bbb; font: 12px/1.4 sans-serif; text-decoration: none; padding: 4px 10px; border: 1px solid #444; border-radius: 999px; }
+  .switcher a.on { color: #fff; border-color: #fff; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<script src="directions/data.js"></script>
+<script src="directions/data-d6.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react" src="directions/d1-carte.jsx"></script>
+<script type="text/babel" data-presets="react" src="directions/d2-ledger.jsx"></script>
+<script type="text/babel" data-presets="react" src="directions/d3-gallery.jsx"></script>
+<script type="text/babel" data-presets="react" src="directions/d4-harvest.jsx"></script>
+<script type="text/babel" data-presets="react" src="directions/d5-nocturne.jsx"></script>
+<script type="text/babel" data-presets="react" src="directions/d6-hybrid.jsx"></script>
+<script type="text/babel" data-presets="react" src="directions/d6-more.jsx"></script>
+<script type="text/babel" data-presets="react">
+const ROUTES = [];
+["d1","d2","d3","d4","d5","d6"].forEach(d => ["week","day"].forEach(s => ROUTES.push(`${d}-${s}`)));
+ROUTES.push("d6-gen", "d6-feedback", "d6-grocery", "d6-recipe");
+
+function App() {
+  const [route, setRoute] = React.useState(window.location.hash.slice(1) || "d1-week");
+  React.useEffect(() => {
+    const onHash = () => setRoute(window.location.hash.slice(1) || "d1-week");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  const [d, screen] = route.split("-");
+  const name = d.toUpperCase() + screen.charAt(0).toUpperCase() + screen.slice(1);
+  const Comp = window[name];
+  return (
+    <div>
+      <div style={{ minHeight: "100vh" }}>{Comp ? <Comp/> : <p style={{padding: 40, fontFamily: "sans-serif"}}>Unknown route: {route}</p>}</div>
+      <div className="switcher">
+        {ROUTES.map(r => <a key={r} href={"#" + r} className={r === route ? "on" : ""}>{r}</a>)}
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
