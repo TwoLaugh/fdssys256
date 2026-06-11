@@ -1,6 +1,5 @@
 import {
   Activity,
-  Bell,
   BookOpen,
   CalendarDays,
   Compass,
@@ -13,6 +12,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { NavLink } from "react-router-dom";
+import { BellMenu } from "./BellMenu";
 
 interface RailItem {
   to: string;
@@ -32,7 +32,7 @@ const MAIN_ITEMS: RailItem[] = [
   { to: "/activity", label: "Activity", icon: History },
 ];
 
-function RailLink({ item, badge }: { item: RailItem; badge?: number }) {
+function RailLink({ item }: { item: RailItem }) {
   const Icon = item.icon;
   return (
     <NavLink
@@ -43,9 +43,6 @@ function RailLink({ item, badge }: { item: RailItem; badge?: number }) {
       aria-label={item.label}
     >
       <Icon size={19} strokeWidth={1.8} />
-      {badge !== undefined && badge > 0 && (
-        <span className="rail-badge">{badge > 9 ? "9+" : badge}</span>
-      )}
     </NavLink>
   );
 }
@@ -57,10 +54,7 @@ export function Rail({ unreadCount }: { unreadCount: number }) {
         <RailLink key={item.to} item={item} />
       ))}
       <div className="rail-spacer" />
-      <RailLink
-        item={{ to: "/notifications", label: "Notifications", icon: Bell }}
-        badge={unreadCount}
-      />
+      <BellMenu badge={unreadCount} />
       <RailLink item={{ to: "/settings", label: "Settings", icon: Settings }} />
     </nav>
   );

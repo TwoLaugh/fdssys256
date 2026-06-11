@@ -26,8 +26,11 @@
   /* Tints + supporting */
   --mp-terra-tint: #f6e3d9; /* active rail pill */
   --mp-olive-tint: #eef0e2; /* batch / on-track note pill */
+  --mp-olive-deep: #41502a; /* text on olive tint (AA) */
+  --mp-olive-line: #d4d8b8; /* border on olive tint */
   --mp-mark-planned: #9c9077; /* planned status mark */
   --mp-on-terra: #fff7ef; /* text on filled terra */
+  --mp-photo-fallback: #e8dcc8; /* warm swatch behind food photos */
 
   /* Type */
   --mp-font-body: "Instrument Sans", sans-serif;
