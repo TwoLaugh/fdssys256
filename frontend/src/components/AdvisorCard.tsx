@@ -1,40 +1,48 @@
-import type { AdvisorSuggestion } from "../api/today";
+import type { ReactNode } from "react";
 
 export interface AdvisorCardProps {
-  suggestion: AdvisorSuggestion;
-  onReview?: () => void;
-  onAccept?: () => void;
+  /** Kicker label, e.g. "Suggestion · from your feedback". */
+  label: string;
+  /** Advisor-voice (serif italic) title. */
+  title: string;
+  titleSize?: number;
+  /** Supporting line. */
+  sub?: string;
+  /** Optional detail rows (e.g. a SwapLine). */
+  children?: ReactNode;
+  /** Action buttons, rendered to the right of the content. */
+  actions: ReactNode;
 }
 
 /**
- * AI advisor suggestion card: terra dot + kicker label, advisor-voice
- * (serif italic) title, ghost Review + primary Accept actions.
+ * AI advisor card with side-aligned actions: terra dot + kicker label,
+ * advisor-voice (serif italic) title, optional sub line and detail rows.
+ * The full-width footer-action variant lives in AdvisorPanel.
  */
 export function AdvisorCard({
-  suggestion,
-  onReview,
-  onAccept,
+  label,
+  title,
+  titleSize = 21,
+  sub,
+  children,
+  actions,
 }: AdvisorCardProps) {
   return (
     <div className="advisor-card mp-card">
-      <div>
+      <div style={{ minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span className="advisor-dot" />
           <span className="mp-label" style={{ color: "var(--mp-terra-dark)" }}>
-            {suggestion.label}
+            {label}
           </span>
         </div>
-        <span className="mp-serif advisor-title">{suggestion.title}</span>
-        <div className="advisor-sub">{suggestion.sub}</div>
+        <span className="mp-serif advisor-title" style={{ fontSize: titleSize }}>
+          {title}
+        </span>
+        {sub && <div className="advisor-sub">{sub}</div>}
+        {children}
       </div>
-      <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
-        <button className="btn" onClick={onReview}>
-          Review
-        </button>
-        <button className="btn btn-primary" onClick={onAccept}>
-          Accept
-        </button>
-      </div>
+      <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>{actions}</div>
     </div>
   );
 }

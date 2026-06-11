@@ -1,15 +1,34 @@
-import type { TodayMeal } from "../api/today";
+import type { SlotState } from "../mock/types";
 import { StatusMark } from "./StatusMark";
 
-const STATUS_COLOR: Record<TodayMeal["status"], string> = {
+const STATUS_COLOR: Record<SlotState, string> = {
   eaten: "var(--mp-olive)",
   cooked: "var(--mp-amber)",
+  cooking: "var(--mp-amber)",
   planned: "var(--mp-muted)",
+  affected: "var(--mp-red)",
 };
 
+export interface MealRowMeal {
+  /** Wall-clock slot time, e.g. "08:00". */
+  time: string;
+  /** Slot name, e.g. "breakfast". */
+  slot: string;
+  name: string;
+  /** Secondary line, e.g. "Just you · 380 kcal". */
+  meta: string;
+  status: SlotState;
+  /** Linked to a batch-cook. */
+  batch?: boolean;
+  /** Action button label; none when eaten. */
+  action?: string;
+  /** Time-sensitive alert, e.g. "Defrost tofu by 15:00". */
+  alert?: string;
+}
+
 export interface MealRowProps {
-  meal: TodayMeal;
-  onAction?: (meal: TodayMeal) => void;
+  meal: MealRowMeal;
+  onAction?: (meal: MealRowMeal) => void;
 }
 
 export function MealRow({ meal, onAction }: MealRowProps) {
