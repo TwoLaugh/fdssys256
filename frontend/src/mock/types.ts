@@ -3,7 +3,13 @@
  * without a backend. Shapes are ported from the D6 mockup fixtures
  * (design/frontend/mockups/directions/data.js + data-d6.js) and expanded
  * where pages need more.
+ *
+ * The nutrition slices are the exception: they mirror the real backend DTOs
+ * (re-exported from the generated OpenAPI types below) so the mock validates
+ * the production contract — see design/frontend/pages/nutrition.md.
  */
+
+import type { components } from "../api/types.gen";
 
 /* ---- plan ---------------------------------------------------------------- */
 
@@ -262,15 +268,6 @@ export interface TodaySlotMeta {
   alert?: string;
 }
 
-export interface NutritionEntry {
-  label: string;
-  value: number;
-  target: number;
-  /** Unit suffix for the target display, e.g. " g". Empty for kcal. */
-  unit: string;
-  behind?: boolean;
-}
-
 export interface TodaySuggestion {
   label: string;
   title: string;
@@ -286,57 +283,77 @@ export interface TodayState {
   slotMeta: Record<MealSlotKey, TodaySlotMeta>;
   attention: AttentionItem[];
   suggestion: TodaySuggestion | null;
-  nutrition: NutritionEntry[];
 }
 
-/* ---- nutrition -------------------------------------------------------------- */
+/* ---- nutrition: backend DTO mirrors ------------------------------------------
+ * Re-exported from the generated OpenAPI types so the mock store carries the
+ * exact production field names (spec: design/frontend/pages/nutrition.md §2).
+ */
 
-export type IntakeStatus = "pending" | "confirmed" | "skipped";
+type Schemas = components["schemas"];
 
-/** Per-slot intake record for today: planned kcal vs what was actually eaten. */
-export interface IntakeSlot {
-  slot: MealSlotKey;
-  plannedKcal: number;
-  /** Set when confirmed; null while pending or skipped. */
-  actualKcal: number | null;
-  status: IntakeStatus;
-}
+export type MealSlot = Schemas["MealSlot"];
+export type ActivityLevel = Schemas["ActivityLevel"];
+export type Goal = Schemas["Goal"];
+export type EnforcementDirection = Schemas["EnforcementDirection"];
+export type IntakeSlotStatus = Schemas["IntakeSlotStatus"];
+export type IntakeSource = Schemas["IntakeSource"];
 
-export interface SnackEntry {
-  name: string;
-  kcal: number;
-}
+export type PlannedIntakeDto = Schemas["PlannedIntakeDto"];
+export type ActualIntakeDto = Schemas["ActualIntakeDto"];
+export type IntakeSlotDto = Schemas["IntakeSlotDto"];
+export type IntakeSnackDto = Schemas["IntakeSnackDto"];
+export type IntakeDayDto = Schemas["IntakeDayDto"];
+export type IntakeEntryDto = Schemas["IntakeEntryDto"];
+export type LogSnackRequest = Schemas["LogSnackRequest"];
 
-/** Mutable macro targets — canonical; today's stat bars mirror these. */
-export interface NutritionTargets {
-  calories: number;
-  protein: number;
-  carbs: number;
-  fat: number;
-}
+export type DailyAggregateDto = Schemas["DailyAggregateDto"];
+export type MacroAggregateDto = Schemas["MacroAggregateDto"];
+export type WeeklyAggregateDto = Schemas["WeeklyAggregateDto"];
 
-export type MacroKey = keyof NutritionTargets;
+export type CalorieTargetDto = Schemas["CalorieTargetDto"];
+export type MacroTargetDto = Schemas["MacroTargetDto"];
+export type MicroTargetDto = Schemas["MicroTargetDto"];
+export type PerMealDistributionDto = Schemas["PerMealDistributionDto"];
+export type ActivityAdjustmentDto = Schemas["ActivityAdjustmentDto"];
+export type TargetsDto = Schemas["TargetsDto"];
+export type UpdateTargetsRequest = Schemas["UpdateTargetsRequest"];
+export type DailyActivityDto = Schemas["DailyActivityDto"];
 
-export interface JournalEntry {
-  when: string;
-  text: string;
-  /** Free-form mood note, e.g. "energised". */
-  mood?: string;
-}
+export type FoodMoodEntryDto = Schemas["FoodMoodEntryDto"];
 
-export interface WeekDayIntake {
-  day: string;
-  /** kcal logged that day; 0 = nothing logged yet. */
-  kcal: number;
-  today?: boolean;
-}
+export type HealthDirectiveDto = Schemas["HealthDirectiveDto"];
+export type DirectiveStatus = Schemas["DirectiveStatus"];
+export type DirectiveType = Schemas["DirectiveType"];
+export type DirectiveInstructionDocument = Schemas["DirectiveInstructionDocument"];
+export type DirectivePhaseDto = Schemas["DirectivePhaseDto"];
+export type SafetyFindingDto = Schemas["SafetyFindingDto"];
+export type SafetyGateVerdict = Schemas["SafetyGateVerdict"];
+/** Shape sent on accept-with-modification (AcceptDirectiveRequest.userModification). */
+export type DirectiveUserModification = NonNullable<
+  Schemas["AcceptDirectiveRequest"]["userModification"]
+>;
+
+export type IngredientNutritionDto = Schemas["IngredientNutritionDto"];
+export type IngredientNutritionDocument = Schemas["IngredientNutritionDocument"];
+export type IngredientMappingSource = Schemas["IngredientMappingSource"];
 
 export interface NutritionState {
-  intake: IntakeSlot[];
-  snacks: SnackEntry[];
-  /** Mon → Sun; today's kcal is read live from the calories entry. */
-  week: WeekDayIntake[];
-  journal: JournalEntry[];
+  /** ISO date → intake day. The seed covers the plan week (Mon–Sun). */
+  intakeDays: Record<string, IntakeDayDto>;
+  /**
+   * Slot ids currently inside the fake AI-parse window after an override
+   * (transient UI state — not part of any DTO).
+   */
+  parsingSlotIds: string[];
+  /** ISO date → daily activity entry (PUT targets/activity/{date}). */
+  dailyActivity: Record<string, DailyActivityDto>;
+  /** Food & mood journal, newest first (all dates). */
+  journal: FoodMoodEntryDto[];
+  /** Health directives inbox, newest first. */
+  directives: HealthDirectiveDto[];
+  /** Ingredient nutrition cache rows (lookup assist + data-quality queue). */
+  ingredientCache: IngredientNutritionDto[];
 }
 
 /* ---- preferences ------------------------------------------------------------- */
@@ -507,7 +524,7 @@ export interface StoreState {
   notifications: AppNotification[];
   today: TodayState;
   nutrition: NutritionState;
-  targets: NutritionTargets;
+  targets: TargetsDto;
   preferences: PreferencesState;
   activity: ActivityState;
   notificationPrefs: NotificationPrefs;

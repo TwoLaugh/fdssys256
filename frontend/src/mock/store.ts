@@ -9,25 +9,38 @@
  */
 
 import { useSyncExternalStore } from "react";
+import { MOCK_USER_ID, WEEK_DATES } from "./nutritionSeed";
 import {
   BASE_CANDIDATES,
   createSeed,
   DISCOVERY_IMGS,
   DISCOVERY_RESULTS,
   DISCOVERY_SOURCES,
+  MOCK_TODAY_ISO,
 } from "./seed";
 import type {
+  ActivityLevel,
   AppNotification,
   ConfidenceTier,
   ConstraintKind,
+  DailyAggregateDto,
+  DirectiveUserModification,
   DiscoveryResult,
   DiscoveryStep,
+  EnforcementDirection,
   FeedbackEntry,
   FeedbackRoute,
-  MacroKey,
+  IngredientNutritionDocument,
+  IngredientNutritionDto,
+  IntakeDayDto,
+  IntakeEntryDto,
+  IntakeSlotDto,
+  IntakeSnackDto,
+  LogSnackRequest,
+  MealSlot,
   MealSlotKey,
   NotificationKind,
-  NutritionEntry,
+  NutritionState,
   PlanCandidate,
   PlanDay,
   PlanStat,
@@ -36,6 +49,9 @@ import type {
   ReoptFix,
   SlotState,
   StoreState,
+  TargetsDto,
+  UpdateTargetsRequest,
+  WeeklyAggregateDto,
 } from "./types";
 
 /* ---- core ------------------------------------------------------------------ */
@@ -141,7 +157,7 @@ export function setSlotState(
     // Marking one of today's slots eaten confirms its intake (idempotent —
     // no double-credit when already confirmed from the Nutrition page).
     if (next === "eaten" && d.today) {
-      out = confirmIntakeIn(out, slot);
+      out = confirmSlotIn(out, MOCK_TODAY_ISO, MEAL_SLOT_BY_KEY[slot]);
     }
     return out;
   });
@@ -593,149 +609,850 @@ export function markSpoiled(id: string): void {
   });
 }
 
-/* ---- nutrition ------------------------------------------------------------------------------ */
-
-/** Behind threshold: a macro is "behind" when under 55% of its target. */
-function recomputeBehind(entries: NutritionEntry[]): NutritionEntry[] {
-  return entries.map((n) => ({
-    ...n,
-    behind: n.target > 0 && n.value / n.target < 0.55 ? true : undefined,
-  }));
-}
-
-/** Add kcal to today's calories entry and refresh the behind flags. */
-function creditCalories(s: StoreState, kcal: number): StoreState {
-  return {
-    ...s,
-    today: {
-      ...s.today,
-      nutrition: recomputeBehind(
-        s.today.nutrition.map((n) =>
-          n.label === "Calories" ? { ...n, value: n.value + kcal } : n,
-        ),
-      ),
-    },
-  };
-}
-
-/**
- * Confirm a slot's intake (idempotent — only a pending slot credits).
- * `actualKcal` overrides the planned figure when the user edits.
+/* ---- nutrition: intake ------------------------------------------------------------------------
+ * Production DTO shapes throughout (design/frontend/pages/nutrition.md).
+ * Slot transitions are one-way: PENDING → CONFIRMED | OVERRIDDEN | EDITED |
+ * SKIPPED, never backwards. The single mock-only exception is repairing an
+ * OVERRIDDEN slot whose AI parse failed — see editSlot.
  */
-function confirmIntakeIn(
+
+const MEAL_SLOT_BY_KEY: Record<MealSlotKey, MealSlot> = {
+  breakfast: "BREAKFAST",
+  lunch: "LUNCH",
+  dinner: "DINNER",
+};
+
+/** Mock clock: every write stamps the fixed "today" evening. */
+function nowIso(): string {
+  return `${MOCK_TODAY_ISO}T18:05:00Z`;
+}
+
+function findIntakeSlot(
   s: StoreState,
-  slot: MealSlotKey,
-  actualKcal?: number,
+  date: string,
+  mealSlot: MealSlot,
+): IntakeSlotDto | undefined {
+  return s.nutrition.intakeDays[date]?.slots.find(
+    (sl) => sl.mealSlot === mealSlot,
+  );
+}
+
+/** Replace one slot of one intake day; bumps the day's version. */
+function withIntakeSlot(
+  s: StoreState,
+  date: string,
+  mealSlot: MealSlot,
+  fn: (sl: IntakeSlotDto) => IntakeSlotDto,
 ): StoreState {
-  const entry = s.nutrition.intake.find((it) => it.slot === slot);
-  if (!entry || entry.status !== "pending") return s;
-  const kcal = actualKcal ?? entry.plannedKcal;
-  const out: StoreState = {
+  const dayRec = s.nutrition.intakeDays[date];
+  if (!dayRec) return s;
+  return {
     ...s,
     nutrition: {
       ...s.nutrition,
-      intake: s.nutrition.intake.map((it) =>
-        it.slot === slot
-          ? { ...it, status: "confirmed", actualKcal: kcal }
-          : it,
-      ),
+      intakeDays: {
+        ...s.nutrition.intakeDays,
+        [date]: {
+          ...dayRec,
+          slots: dayRec.slots.map((sl) =>
+            sl.mealSlot === mealSlot ? fn(sl) : sl,
+          ),
+          version: dayRec.version + 1,
+        },
+      },
     },
   };
-  return creditCalories(out, kcal);
 }
 
-export function confirmIntake(slot: MealSlotKey, actualKcal?: number): void {
-  mutate((s) => confirmIntakeIn(s, slot, actualKcal));
+/** Confirm credits the planned values one-to-one (only from PENDING). */
+function confirmSlotIn(
+  s: StoreState,
+  date: string,
+  mealSlot: MealSlot,
+): StoreState {
+  const slot = findIntakeSlot(s, date, mealSlot);
+  if (!slot || slot.actual.status !== "PENDING") return s; // one-way
+  return withIntakeSlot(s, date, mealSlot, (sl) => ({
+    ...sl,
+    actual: {
+      status: "CONFIRMED",
+      calories: sl.planned.calories ?? 0,
+      proteinG: sl.planned.proteinG ?? 0,
+      carbsG: sl.planned.carbsG ?? 0,
+      fatG: sl.planned.fatG ?? 0,
+      fibreG: sl.planned.fibreG ?? 0,
+      micros: sl.planned.micros ?? {},
+      needsAiParse: false,
+    },
+  }));
 }
 
-export function skipIntake(slot: MealSlotKey): void {
+export function confirmSlot(date: string, mealSlot: MealSlot): void {
+  mutate((s) => confirmSlotIn(s, date, mealSlot));
+}
+
+function hashText(text: string): number {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+/** Deterministic fake AI parse: plausible values derived from the text hash. */
+function fakeParse(text: string): IntakeEntryDto {
+  const h = hashText(text);
+  return {
+    calories: 350 + (h % 401),
+    proteinG: 12 + ((h >> 3) % 34),
+    carbsG: 25 + ((h >> 5) % 61),
+    fatG: 8 + ((h >> 7) % 28),
+    fibreG: 2 + ((h >> 9) % 9),
+    micros: {},
+  };
+}
+
+/** Mock parse-failure trigger: "??" anywhere, or fewer than 6 characters. */
+function parseWouldFail(text: string): boolean {
+  return text.includes("??") || text.trim().length < 6;
+}
+
+function finishOverrideParse(
+  date: string,
+  mealSlot: MealSlot,
+  slotId: string,
+  text: string,
+): void {
   mutate((s) => {
-    const entry = s.nutrition.intake.find((it) => it.slot === slot);
-    if (!entry || entry.status !== "pending") return s;
+    const slot = findIntakeSlot(s, date, mealSlot);
+    if (!slot || slot.id !== slotId || slot.actual.status !== "OVERRIDDEN") {
+      return s;
+    }
+    const failed = parseWouldFail(text);
+    let out = withIntakeSlot(s, date, mealSlot, (sl) => ({
+      ...sl,
+      actual: failed
+        ? {
+            ...sl.actual,
+            calories: 0,
+            proteinG: 0,
+            carbsG: 0,
+            fatG: 0,
+            fibreG: 0,
+            needsAiParse: true,
+          }
+        : { ...sl.actual, ...fakeParse(text), needsAiParse: false },
+    }));
+    out = {
+      ...out,
+      nutrition: {
+        ...out.nutrition,
+        parsingSlotIds: out.nutrition.parsingSlotIds.filter(
+          (id) => id !== slotId,
+        ),
+      },
+    };
+    return failed
+      ? pushNotification(
+          out,
+          "ai",
+          `Couldn't read your ${mealSlot.toLowerCase()} note — enter values manually`,
+        )
+      : out;
+  });
+}
+
+/**
+ * "Log what I ate": free-text override (POST …/override). The slot flips to
+ * OVERRIDDEN immediately; ~0.8 s later the fake AI parse either fills
+ * structured actuals or sets needsAiParse (zero values + repair banner).
+ */
+export function overrideSlot(
+  date: string,
+  mealSlot: MealSlot,
+  freeText: string,
+): void {
+  const text = freeText.trim().slice(0, 512);
+  if (!text) return;
+  let slotId: string | undefined;
+  mutate((s) => {
+    const slot = findIntakeSlot(s, date, mealSlot);
+    if (!slot || slot.actual.status !== "PENDING") return s; // one-way
+    slotId = slot.id;
+    const out = withIntakeSlot(s, date, mealSlot, (sl) => ({
+      ...sl,
+      actual: {
+        status: "OVERRIDDEN",
+        overrideFreeText: text,
+        overriddenAt: nowIso(),
+        micros: {},
+        needsAiParse: false,
+      },
+    }));
+    return {
+      ...out,
+      nutrition: {
+        ...out.nutrition,
+        parsingSlotIds: [...out.nutrition.parsingSlotIds, slot.id],
+      },
+    };
+  });
+  if (slotId !== undefined) {
+    const id = slotId;
+    setTimeout(() => finishOverrideParse(date, mealSlot, id, text), 800);
+  }
+}
+
+/**
+ * Structured edit (POST …/edit). Legal from PENDING. Also allowed — MOCK
+ * ONLY — from OVERRIDDEN with needsAiParse: the backend has no repair
+ * transition for a failed parse (spec §8 open question 1), but the design
+ * review needs the flow; the page footnotes the gap.
+ */
+export function editSlot(
+  date: string,
+  mealSlot: MealSlot,
+  values: IntakeEntryDto,
+): void {
+  mutate((s) => {
+    const slot = findIntakeSlot(s, date, mealSlot);
+    if (!slot) return s;
+    const repairable =
+      slot.actual.status === "OVERRIDDEN" && slot.actual.needsAiParse;
+    if (slot.actual.status !== "PENDING" && !repairable) return s; // one-way
+    return withIntakeSlot(s, date, mealSlot, (sl) => ({
+      ...sl,
+      actual: {
+        ...sl.actual,
+        status: "EDITED",
+        calories: values.calories,
+        proteinG: values.proteinG,
+        carbsG: values.carbsG,
+        fatG: values.fatG,
+        fibreG: values.fibreG ?? 0,
+        micros: values.micros ?? {},
+        needsAiParse: false,
+      },
+    }));
+  });
+}
+
+export function skipSlot(date: string, mealSlot: MealSlot): void {
+  mutate((s) => {
+    const slot = findIntakeSlot(s, date, mealSlot);
+    if (!slot || slot.actual.status !== "PENDING") return s; // one-way
+    return withIntakeSlot(s, date, mealSlot, (sl) => ({
+      ...sl,
+      actual: {
+        status: "SKIPPED",
+        calories: 0,
+        proteinG: 0,
+        carbsG: 0,
+        fatG: 0,
+        fibreG: 0,
+        micros: {},
+        needsAiParse: false,
+      },
+    }));
+  });
+}
+
+/* ---- nutrition: snacks --------------------------------------------------------------------- */
+
+let snackSeq = 100;
+
+/** Log a snack (POST …/snacks) — full LogSnackRequest shape. */
+export function addSnack(date: string, req: LogSnackRequest): void {
+  const text = req.freeText.trim().slice(0, 255);
+  if (!text || req.quantityG <= 0) return;
+  mutate((s) => {
+    const dayRec = s.nutrition.intakeDays[date];
+    if (!dayRec) return s;
+    const dto: IntakeSnackDto = {
+      id: `snack-${++snackSeq}`,
+      ingredientMappingKey: req.ingredientMappingKey ?? null,
+      freeText: text,
+      quantityG: req.quantityG,
+      calories: req.calories,
+      proteinG: req.proteinG,
+      carbsG: req.carbsG,
+      fatG: req.fatG,
+      fibreG: req.fibreG ?? null,
+      micros: req.micros ?? null,
+      source: req.source,
+      loggedAt: nowIso(),
+    };
+    const out: StoreState = {
+      ...s,
+      nutrition: {
+        ...s.nutrition,
+        intakeDays: {
+          ...s.nutrition.intakeDays,
+          [date]: {
+            ...dayRec,
+            snacks: [...dayRec.snacks, dto],
+            version: dayRec.version + 1,
+          },
+        },
+      },
+    };
+    return pushNotification(
+      out,
+      "ai",
+      `Snack logged — ${text.toLowerCase()}, ${req.calories} kcal`,
+    );
+  });
+}
+
+export function removeSnack(date: string, snackId: string): void {
+  mutate((s) => {
+    const dayRec = s.nutrition.intakeDays[date];
+    if (!dayRec || !dayRec.snacks.some((sn) => sn.id === snackId)) return s;
     return {
       ...s,
       nutrition: {
         ...s.nutrition,
-        intake: s.nutrition.intake.map((it) =>
-          it.slot === slot ? { ...it, status: "skipped" } : it,
-        ),
+        intakeDays: {
+          ...s.nutrition.intakeDays,
+          [date]: {
+            ...dayRec,
+            snacks: dayRec.snacks.filter((sn) => sn.id !== snackId),
+            version: dayRec.version + 1,
+          },
+        },
       },
     };
   });
 }
 
-/** Stepper bounds + step per macro target. */
-const TARGET_RULES: Record<MacroKey, { step: number; min: number; max: number }> =
-  {
-    calories: { step: 50, min: 1200, max: 4000 },
-    protein: { step: 5, min: 40, max: 250 },
-    carbs: { step: 10, min: 80, max: 400 },
-    fat: { step: 5, min: 30, max: 150 },
-  };
+/* ---- nutrition: daily activity --------------------------------------------------------------- */
 
-const TARGET_LABEL: Record<MacroKey, string> = {
-  calories: "Calories",
-  protein: "Protein",
-  carbs: "Carbs",
-  fat: "Fat",
-};
+/** PUT targets/activity/{date} — upsert the day's activity level + notes. */
+export function upsertActivity(
+  date: string,
+  activityLevel: ActivityLevel,
+  notes?: string | null,
+): void {
+  mutate((s) => ({
+    ...s,
+    nutrition: {
+      ...s.nutrition,
+      dailyActivity: {
+        ...s.nutrition.dailyActivity,
+        [date]: {
+          id: `act-${date}`,
+          userId: MOCK_USER_ID,
+          onDate: date,
+          activityLevel,
+          notes: notes?.trim() ? notes.trim().slice(0, 255) : null,
+          createdAt: s.nutrition.dailyActivity[date]?.createdAt ?? nowIso(),
+        },
+      },
+    },
+  }));
+}
 
-/** Nudge a macro target one step; bars everywhere read the same entries. */
-export function adjustTarget(key: MacroKey, direction: 1 | -1): void {
+/* ---- nutrition: targets ------------------------------------------------------------------------ */
+
+/**
+ * Full-replacement PUT /nutrition/targets. Bumps the version and records any
+ * direction changes in userOverriddenDirections ("custom" badges).
+ *
+ * Mock note: no 409 simulation — the real endpoint rejects the save when
+ * req.expectedVersion != current version (spec §4 conflict card); here
+ * expectedVersion is accepted as-is.
+ */
+export function saveTargets(req: UpdateTargetsRequest): void {
   mutate((s) => {
-    const rule = TARGET_RULES[key];
-    const next = Math.max(
-      rule.min,
-      Math.min(rule.max, s.targets[key] + direction * rule.step),
-    );
-    if (next === s.targets[key]) return s;
-    return {
-      ...s,
-      targets: { ...s.targets, [key]: next },
-      today: {
-        ...s.today,
-        nutrition: recomputeBehind(
-          s.today.nutrition.map((n) =>
-            n.label === TARGET_LABEL[key] ? { ...n, target: next } : n,
-          ),
-        ),
-      },
+    const macroKeys = ["protein", "carbs", "fat", "fibre", "satFat"] as const;
+    const overridden = new Set(s.targets.userOverriddenDirections);
+    for (const k of macroKeys) {
+      if (req[k].direction !== s.targets[k].direction) overridden.add(k);
+    }
+    const version = s.targets.version + 1;
+    const next: TargetsDto = {
+      ...s.targets,
+      goal: req.goal,
+      calories: req.calories,
+      protein: req.protein,
+      carbs: req.carbs,
+      fat: req.fat,
+      fibre: req.fibre,
+      satFat: req.satFat,
+      notes: req.notes ?? null,
+      perMealDistribution: req.perMealDistribution,
+      microTargets: req.microTargets,
+      eatingWindow: req.eatingWindow ?? null,
+      activityAdjustments: req.activityAdjustments,
+      userOverriddenDirections: [...overridden],
+      version,
     };
+    return pushNotification(
+      { ...s, targets: next },
+      "ai",
+      `Nutrition targets saved — v${version}`,
+    );
   });
 }
 
-export function addJournalEntry(text: string): void {
-  const trimmed = text.trim();
+/* ---- nutrition: journal -------------------------------------------------------------------------- */
+
+let journalSeq = 10;
+
+export function addJournalEntry(
+  onDate: string,
+  mealSlot: MealSlot | null,
+  text: string,
+): void {
+  const trimmed = text.trim().slice(0, 4000);
   if (!trimmed) return;
   mutate((s) => ({
     ...s,
     nutrition: {
       ...s.nutrition,
-      journal: [{ when: "Today", text: trimmed }, ...s.nutrition.journal],
+      journal: [
+        {
+          id: `jm-${++journalSeq}`,
+          userId: MOCK_USER_ID,
+          onDate,
+          mealSlot,
+          journalEntry: trimmed,
+          loggedAt: nowIso(),
+          optimisticVersion: 0,
+        },
+        ...s.nutrition.journal,
+      ],
     },
   }));
 }
 
-/* ---- today --------------------------------------------------------------------------------- */
-
-export function logSnack(name: string, kcal: number): void {
-  mutate((s) =>
-    pushNotification(
-      creditCalories(
-        {
-          ...s,
-          nutrition: {
-            ...s.nutrition,
-            snacks: [...s.nutrition.snacks, { name, kcal }],
-          },
-        },
-        kcal,
+/** PUT …/entries/{id} — bumps optimisticVersion (no 409 simulation). */
+export function updateJournalEntry(
+  id: string,
+  text: string,
+  mealSlot: MealSlot | null,
+): void {
+  const trimmed = text.trim().slice(0, 4000);
+  if (!trimmed) return;
+  mutate((s) => ({
+    ...s,
+    nutrition: {
+      ...s.nutrition,
+      journal: s.nutrition.journal.map((e) =>
+        e.id === id
+          ? {
+              ...e,
+              journalEntry: trimmed,
+              mealSlot,
+              optimisticVersion: e.optimisticVersion + 1,
+            }
+          : e,
       ),
-      "ai",
-      `Snack logged — ${name.toLowerCase()}, ${kcal} kcal`,
-    ),
-  );
+    },
+  }));
 }
+
+export function deleteJournalEntry(id: string): void {
+  mutate((s) => ({
+    ...s,
+    nutrition: {
+      ...s.nutrition,
+      journal: s.nutrition.journal.filter((e) => e.id !== id),
+    },
+  }));
+}
+
+/* ---- nutrition: health directives ------------------------------------------------------------------ */
+
+function directiveTypeLabel(t: string): string {
+  return t.toLowerCase().replace(/_/g, " ");
+}
+
+/**
+ * Accept a directive (never auto-applied — explicit user decision). Blocked
+ * verdicts cannot be accepted. An accepted TARGET_ADJUSTMENT also edits the
+ * targets server-side (actorKind HEALTH_DIRECTIVE) — mirrored here for the
+ * seeded whoop directive: training-day surplus +200 → +150.
+ */
+export function acceptDirective(
+  id: string,
+  userModification?: DirectiveUserModification,
+): void {
+  mutate((s) => {
+    const d = s.nutrition.directives.find((x) => x.id === id);
+    if (
+      !d ||
+      d.status !== "PENDING_REVIEW" ||
+      d.safetyGateVerdict === "BLOCKED"
+    ) {
+      return s;
+    }
+    let out: StoreState = {
+      ...s,
+      nutrition: {
+        ...s.nutrition,
+        directives: s.nutrition.directives.map((x) =>
+          x.id === id
+            ? {
+                ...x,
+                status: "ACCEPTED" as const,
+                decidedAt: nowIso(),
+                decidedByUserId: MOCK_USER_ID,
+                userModification: userModification ?? null,
+                optimisticVersion: x.optimisticVersion + 1,
+              }
+            : x,
+        ),
+      },
+    };
+    if (d.directiveType === "TARGET_ADJUSTMENT") {
+      out = {
+        ...out,
+        targets: {
+          ...out.targets,
+          activityAdjustments: out.targets.activityAdjustments.map((a) =>
+            a.activityLevel === "TRAINING_DAY"
+              ? { ...a, calorieModifier: 150 }
+              : a,
+          ),
+          version: out.targets.version + 1,
+        },
+      };
+    }
+    return pushNotification(
+      out,
+      "ai",
+      `Health directive accepted — ${d.sourcePlatform} ${directiveTypeLabel(
+        d.directiveType,
+      )}${userModification ? " (with your modification)" : ""}`,
+    );
+  });
+}
+
+export function rejectDirective(id: string, reason?: string): void {
+  mutate((s) => {
+    const d = s.nutrition.directives.find((x) => x.id === id);
+    if (!d || d.status !== "PENDING_REVIEW") return s;
+    const out: StoreState = {
+      ...s,
+      nutrition: {
+        ...s.nutrition,
+        directives: s.nutrition.directives.map((x) =>
+          x.id === id
+            ? {
+                ...x,
+                status: "REJECTED" as const,
+                decidedAt: nowIso(),
+                decidedByUserId: MOCK_USER_ID,
+                rejectionReason: reason?.trim()
+                  ? reason.trim().slice(0, 255)
+                  : null,
+                optimisticVersion: x.optimisticVersion + 1,
+              }
+            : x,
+        ),
+      },
+    };
+    return pushNotification(
+      out,
+      "ai",
+      `Health directive rejected — ${d.sourcePlatform} ${directiveTypeLabel(
+        d.directiveType,
+      )}`,
+    );
+  });
+}
+
+/* ---- nutrition: ingredient data quality ----------------------------------------------------------------- */
+
+/**
+ * PUT /nutrition/ingredients/{searchTerm}/correction — the row flips to
+ * MANUAL / confidence 1.0 and leaves the needs-review queue.
+ */
+export function correctIngredient(
+  searchTerm: string,
+  override: IngredientNutritionDocument,
+): void {
+  mutate((s) => {
+    const row = s.nutrition.ingredientCache.find(
+      (r) => r.searchTerm === searchTerm,
+    );
+    if (!row) return s;
+    const out: StoreState = {
+      ...s,
+      nutrition: {
+        ...s.nutrition,
+        ingredientCache: s.nutrition.ingredientCache.map((r) =>
+          r.searchTerm === searchTerm
+            ? {
+                ...r,
+                nutritionPer100g: override,
+                source: "MANUAL" as const,
+                confidence: 1.0,
+                needsReview: false,
+                lastVerifiedAt: nowIso(),
+                version: r.version + 1,
+              }
+            : r,
+        ),
+      },
+    };
+    return pushNotification(
+      out,
+      "ai",
+      `Ingredient corrected — ${searchTerm} verified manually`,
+    );
+  });
+}
+
+/** Cache-only search (POST /ingredients/search with cacheOnly=true in v1). */
+export function searchIngredients(
+  cache: IngredientNutritionDto[],
+  query: string,
+  maxResults = 8,
+): IngredientNutritionDto[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  return cache
+    .filter((r) => r.searchTerm.toLowerCase().includes(q))
+    .slice(0, maxResults);
+}
+
+/* ---- nutrition: computed aggregates -----------------------------------------------------------------------
+ * Pure functions, not useStore selectors (they build fresh objects). Pages
+ * call them during render from stored slices.
+ */
+
+function addMicros(
+  into: Record<string, number>,
+  m?: Record<string, number> | null,
+): void {
+  if (!m) return;
+  for (const [k, v] of Object.entries(m)) {
+    into[k] = Math.round(((into[k] ?? 0) + v) * 100) / 100;
+  }
+}
+
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+/**
+ * GET intake/{date}/aggregate equivalent. "Remaining" is target-based
+ * (vs TargetsDto), matching the backend's daily-aggregate endpoint.
+ *
+ * Backend gap (flagged in the spec PR): DailyAggregateDto has no satFat
+ * aggregate although TargetsDto carries a satFat target — the stat band's
+ * sixth cell reads microsActualSoFar["saturated_fat_g"] instead.
+ */
+export function computeDailyAggregate(
+  day: IntakeDayDto | undefined,
+  targets: TargetsDto,
+): DailyAggregateDto {
+  let caloriesPlanned = 0;
+  let caloriesActual = 0;
+  const planned = { protein: 0, carbs: 0, fat: 0, fibre: 0 };
+  const actual = { protein: 0, carbs: 0, fat: 0, fibre: 0 };
+  const microsActual: Record<string, number> = {};
+  if (day) {
+    for (const sl of day.slots) {
+      caloriesPlanned += sl.planned.calories ?? 0;
+      planned.protein += sl.planned.proteinG ?? 0;
+      planned.carbs += sl.planned.carbsG ?? 0;
+      planned.fat += sl.planned.fatG ?? 0;
+      planned.fibre += sl.planned.fibreG ?? 0;
+      if (sl.actual.status !== "PENDING") {
+        caloriesActual += sl.actual.calories ?? 0;
+        actual.protein += sl.actual.proteinG ?? 0;
+        actual.carbs += sl.actual.carbsG ?? 0;
+        actual.fat += sl.actual.fatG ?? 0;
+        actual.fibre += sl.actual.fibreG ?? 0;
+        addMicros(microsActual, sl.actual.micros);
+      }
+    }
+    for (const sn of day.snacks) {
+      caloriesActual += sn.calories;
+      actual.protein += sn.proteinG;
+      actual.carbs += sn.carbsG;
+      actual.fat += sn.fatG;
+      actual.fibre += sn.fibreG ?? 0;
+      addMicros(microsActual, sn.micros);
+    }
+  }
+  const remaining = (target: number, got: number): number =>
+    Math.max(0, round1(target - got));
+  const macro = (key: keyof typeof planned, targetG: number | null | undefined) => ({
+    plannedG: round1(planned[key]),
+    actualSoFarG: round1(actual[key]),
+    remainingG: remaining(targetG ?? 0, actual[key]),
+  });
+  return {
+    caloriesPlanned,
+    caloriesActualSoFar: caloriesActual,
+    caloriesRemaining: remaining(targets.calories.dailyTarget, caloriesActual),
+    protein: macro("protein", targets.protein.targetG),
+    carbs: macro("carbs", targets.carbs.targetG),
+    fat: macro("fat", targets.fat.targetG),
+    fibre: macro("fibre", targets.fibre.targetG),
+    microsActualSoFar: microsActual,
+  };
+}
+
+type FloorMacroKey = "protein" | "carbs" | "fat" | "fibre";
+const FLOOR_MACROS: FloorMacroKey[] = ["protein", "carbs", "fat", "fibre"];
+
+/**
+ * Day indices (0 = Mon) on which `key`'s hard floor was missed — past days
+ * only (today is still in flight). The mock checks per-day hard floors
+ * (isHardFloor + floorG + a lower bound); the contract's floorViolations is
+ * key-only, so the page derives the day annotation from this helper.
+ */
+export function floorViolationDayIndices(
+  n: NutritionState,
+  targets: TargetsDto,
+  key: string,
+): number[] {
+  const macroKey = FLOOR_MACROS.find((k) => k === key);
+  if (!macroKey) return [];
+  const t = targets[macroKey];
+  if (!t.isHardFloor || t.floorG == null || t.direction === "UPPER_LIMIT") {
+    return [];
+  }
+  const out: number[] = [];
+  WEEK_DATES.forEach((date, i) => {
+    if (date >= MOCK_TODAY_ISO) return;
+    const agg = computeDailyAggregate(n.intakeDays[date], targets);
+    if (agg[macroKey].actualSoFarG < (t.floorG ?? 0)) out.push(i);
+  });
+  return out;
+}
+
+/**
+ * GET intake/week/{weekStart}/aggregate equivalent — Mon-anchored. Past days
+ * are settled, today is live, future days aggregate to zero actuals.
+ */
+export function computeWeeklyAggregate(
+  n: NutritionState,
+  targets: TargetsDto,
+): WeeklyAggregateDto {
+  const perDay = WEEK_DATES.map((date) =>
+    computeDailyAggregate(n.intakeDays[date], targets),
+  );
+  const sum = (pick: (d: DailyAggregateDto) => number): number =>
+    round1(perDay.reduce((acc, d) => acc + pick(d), 0));
+  const totalMicros: Record<string, number> = {};
+  for (const d of perDay) addMicros(totalMicros, d.microsActualSoFar);
+  const weeklyTotal: DailyAggregateDto = {
+    caloriesPlanned: sum((d) => d.caloriesPlanned),
+    caloriesActualSoFar: sum((d) => d.caloriesActualSoFar),
+    caloriesRemaining: Math.max(
+      0,
+      targets.calories.dailyTarget * 7 - sum((d) => d.caloriesActualSoFar),
+    ),
+    protein: {
+      plannedG: sum((d) => d.protein.plannedG),
+      actualSoFarG: sum((d) => d.protein.actualSoFarG),
+      remainingG: 0,
+    },
+    carbs: {
+      plannedG: sum((d) => d.carbs.plannedG),
+      actualSoFarG: sum((d) => d.carbs.actualSoFarG),
+      remainingG: 0,
+    },
+    fat: {
+      plannedG: sum((d) => d.fat.plannedG),
+      actualSoFarG: sum((d) => d.fat.actualSoFarG),
+      remainingG: 0,
+    },
+    fibre: {
+      plannedG: sum((d) => d.fibre.plannedG),
+      actualSoFarG: sum((d) => d.fibre.actualSoFarG),
+      remainingG: 0,
+    },
+    microsActualSoFar: totalMicros,
+  };
+  // Key-only list per the contract (the page derives day chips via
+  // floorViolationDayIndices). Hard-floor macros only — the planner's
+  // multiplicative gate; micro hard floors are possible in the contract but
+  // not simulated here.
+  const floorViolations = FLOOR_MACROS.filter(
+    (k) => floorViolationDayIndices(n, targets, k).length > 0,
+  );
+  return {
+    weekStart: WEEK_DATES[0],
+    weekEnd: WEEK_DATES[WEEK_DATES.length - 1],
+    perDay,
+    weeklyTotal,
+    floorViolations,
+  };
+}
+
+/**
+ * Direction-aware attention tone for a stat cell (spec §3b): LOWER_FLOOR
+ * warns when behind pace (<55% of target), UPPER_LIMIT warns when over,
+ * BOTH_BOUNDED warns on either side.
+ */
+export function macroWarn(
+  direction: EnforcementDirection,
+  actual: number,
+  target: number,
+): boolean {
+  if (target <= 0) return false;
+  const behind = actual / target < 0.55;
+  const over = actual > target;
+  if (direction === "LOWER_FLOOR") return behind;
+  if (direction === "UPPER_LIMIT") return over;
+  return behind || over;
+}
+
+export interface DivergenceSignal {
+  /** Macro key with the largest |variance| ≥ 15%. */
+  key: string;
+  /** Signed percent variance of actual vs planned-so-far. */
+  pct: number;
+}
+
+/**
+ * Divergence advisor condition (spec §3a): any macro |variance| ≥ 15%
+ * between planned-so-far (decided slots) and actual-so-far (decided slots +
+ * snacks) while at least one slot is still PENDING.
+ */
+export function computeDivergence(
+  day: IntakeDayDto | undefined,
+): DivergenceSignal | null {
+  if (!day || !day.slots.some((sl) => sl.actual.status === "PENDING")) {
+    return null;
+  }
+  const planned = { calories: 0, protein: 0, carbs: 0, fat: 0, fibre: 0 };
+  const actual = { calories: 0, protein: 0, carbs: 0, fat: 0, fibre: 0 };
+  for (const sl of day.slots) {
+    if (sl.actual.status === "PENDING") continue;
+    planned.calories += sl.planned.calories ?? 0;
+    planned.protein += sl.planned.proteinG ?? 0;
+    planned.carbs += sl.planned.carbsG ?? 0;
+    planned.fat += sl.planned.fatG ?? 0;
+    planned.fibre += sl.planned.fibreG ?? 0;
+    actual.calories += sl.actual.calories ?? 0;
+    actual.protein += sl.actual.proteinG ?? 0;
+    actual.carbs += sl.actual.carbsG ?? 0;
+    actual.fat += sl.actual.fatG ?? 0;
+    actual.fibre += sl.actual.fibreG ?? 0;
+  }
+  for (const sn of day.snacks) {
+    actual.calories += sn.calories;
+    actual.protein += sn.proteinG;
+    actual.carbs += sn.carbsG;
+    actual.fat += sn.fatG;
+    actual.fibre += sn.fibreG ?? 0;
+  }
+  let worst: DivergenceSignal | null = null;
+  for (const key of Object.keys(planned) as Array<keyof typeof planned>) {
+    if (planned[key] <= 0) continue;
+    const pct = ((actual[key] - planned[key]) / planned[key]) * 100;
+    if (Math.abs(pct) >= 15 && (!worst || Math.abs(pct) > Math.abs(worst.pct))) {
+      worst = { key, pct };
+    }
+  }
+  return worst;
+}
+
+/* ---- today --------------------------------------------------------------------------------- */
 
 /** Accept the Today suggestion: applies the linked recipe's pending change. */
 export function acceptTodaySuggestion(): void {

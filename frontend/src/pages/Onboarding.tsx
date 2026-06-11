@@ -229,10 +229,16 @@ export function Onboarding() {
                 <StatStrip
                   numeralSize={20}
                   cells={[
-                    { label: "Calories", value: String(targets.calories) },
-                    { label: "Protein", value: `${targets.protein} g` },
-                    { label: "Carbs", value: `${targets.carbs} g` },
-                    { label: "Fat", value: `${targets.fat} g` },
+                    {
+                      label: "Calories",
+                      value: String(targets.calories.dailyTarget),
+                    },
+                    {
+                      label: "Protein",
+                      value: `${targets.protein.targetG ?? 0} g`,
+                    },
+                    { label: "Carbs", value: `${targets.carbs.targetG ?? 0} g` },
+                    { label: "Fat", value: `${targets.fat.targetG ?? 0} g` },
                   ]}
                 />
               </div>
