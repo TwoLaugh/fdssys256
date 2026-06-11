@@ -15,15 +15,17 @@ export interface StatStripCell {
 export function StatStrip({
   cells,
   numeralSize = 24,
+  compact = false,
 }: {
   cells: StatStripCell[];
   numeralSize?: number;
+  /** Lower per-cell width floor for strips inside narrow containers. */
+  compact?: boolean;
 }) {
+  // Column layout lives in CSS (.stat-strip auto-fit) so cells reflow on
+  // narrow windows instead of crushing.
   return (
-    <div
-      className="stat-strip mp-card"
-      style={{ gridTemplateColumns: `repeat(${cells.length}, 1fr)` }}
-    >
+    <div className={`stat-strip${compact ? " compact" : ""} mp-card`}>
       {cells.map((cell) => (
         <div key={cell.label} className="stat-strip-cell">
           <span

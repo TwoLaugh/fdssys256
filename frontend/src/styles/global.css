@@ -108,12 +108,18 @@ body {
 .app {
   display: flex;
   min-height: 100vh;
+  /* No overflow rule here: the rail's position:sticky needs the viewport to
+     stay the scroll container. Below the app-main min-width floor the ROOT
+     scroller takes over horizontally — worst case is page scrolling, never
+     overlap/clipping. */
 }
 
 .app-main {
   flex: 1;
-  min-width: 0;
-  padding: 44px 56px 56px;
+  /* Floor for graceful degradation on very narrow windows. */
+  min-width: 360px;
+  /* Bottom padding clears the floating feedback button (~36px + 24px inset). */
+  padding: 44px 56px 96px;
   max-width: 1180px;
 }
 
@@ -187,6 +193,7 @@ body {
 .segbar {
   display: flex;
   gap: 2px;
+  max-width: 100%;
 }
 
 .segbar span {
@@ -240,6 +247,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px 16px;
   border-bottom: 2px solid var(--mp-ink);
   padding-bottom: 22px;
 }
@@ -296,7 +305,8 @@ body {
 
 .stat-band {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* Cells reflow onto extra rows instead of crushing on narrow windows. */
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 22px;
   margin-top: 28px;
   padding: 20px 26px;
@@ -307,11 +317,14 @@ body {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  /* Never wrap inside a numeral+unit pair ("1,410 / 2,000", "120 g"). */
+  white-space: nowrap;
 }
 
 .stat-cell .stat-target {
   font-size: 13px;
   color: var(--mp-muted);
+  white-space: nowrap;
 }
 
 .today-lower {
@@ -366,7 +379,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 24px;
+  gap: 16px 24px;
+  flex-wrap: wrap;
 }
 
 .advisor-dot {
@@ -414,6 +428,12 @@ body {
   z-index: 20;
 }
 
+.feedback-fab .fab-icon {
+  display: none;
+  font-size: 16px;
+  line-height: 1;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -434,6 +454,7 @@ body {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 20px;
+  flex-wrap: wrap;
 }
 
 /* ---- Page header ---------------------------------------------------------- */
@@ -442,7 +463,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 24px;
+  gap: 14px 24px;
+  flex-wrap: wrap;
 }
 
 .page-title {
@@ -464,15 +486,33 @@ body {
 
 .stat-strip {
   display: grid;
+  /* Equal cells at full width; reflow onto extra rows when narrow rather
+     than crushing (was an inline repeat(N, 1fr) per cell count). */
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   overflow: hidden;
+}
+
+/* Strips living inside narrow containers (Discover job card, onboarding):
+   a lower floor so the desktop cell count is preserved there. */
+.stat-strip.compact {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
 }
 
 .stat-strip-cell {
   padding: 16px 22px;
 }
 
-.stat-strip-cell + .stat-strip-cell {
-  border-left: 1px solid var(--mp-line);
+.stat-strip-cell .mp-num {
+  white-space: nowrap;
+}
+
+/* Hairlines between cells as shadows so they also separate wrapped rows;
+   outer edges are clipped by the strip's overflow:hidden, so a single row
+   renders exactly like the old border-left rule. */
+.stat-strip-cell {
+  box-shadow:
+    -1px 0 0 var(--mp-line),
+    0 -1px 0 var(--mp-line);
 }
 
 .stat-strip-sub {
@@ -497,7 +537,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: 16px;
+  gap: 8px 16px;
+  flex-wrap: wrap;
 }
 
 .advisor-panel-note {
@@ -509,7 +550,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
+  gap: 10px 16px;
+  flex-wrap: wrap;
   margin-top: 16px;
   border-top: 1px solid var(--mp-line);
   padding-top: 14px;
@@ -575,6 +617,20 @@ body {
 }
 
 /* ---- Plan page ------------------------------------------------------------------ */
+
+/* Horizontal-scroll wrapper for the week grid: rows keep a sensible
+   min-width and the wrapper scrolls instead of crushing cells. The negative
+   margin + padding keeps the today row's -13px inset bar unclipped. */
+.plan-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-left: -13px;
+  padding-left: 13px;
+}
+
+.plan-scroll .plan-grid {
+  min-width: 860px;
+}
 
 .plan-grid {
   display: grid;
@@ -679,7 +735,8 @@ body {
 
 .candidate-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  /* Cards reflow onto extra rows on narrow windows instead of crushing. */
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 12px;
   margin-top: 22px;
 }
@@ -959,6 +1016,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px 16px;
+  flex-wrap: wrap;
   margin-bottom: 18px;
 }
 
@@ -1012,7 +1071,7 @@ body {
 
 .detail-ratings {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 14px;
   margin-top: 22px;
 }
@@ -1087,7 +1146,8 @@ body {
 .versions-strip {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px 10px;
+  flex-wrap: wrap;
   margin-top: 22px;
   font-size: 12.5px;
 }
@@ -1513,7 +1573,7 @@ button.rail-item.active {
   position: absolute;
   left: 52px;
   bottom: 0;
-  width: 360px;
+  width: min(360px, calc(100vw - 76px));
   z-index: 25;
   padding: 14px 0 10px;
   box-shadow: 0 18px 44px rgba(38, 32, 25, 0.18);
@@ -1585,7 +1645,13 @@ button.rail-item.active {
 
 .week-strip {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  /* One equal column per day cell (any count — was an inline repeat(8, 1fr)
+     on the nutrition overview). Below the 72px/cell floor the strip scrolls
+     horizontally instead of crushing the cells. */
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(72px, 1fr);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   gap: 16px;
   margin-top: 18px;
   padding: 16px 22px;
@@ -1726,7 +1792,7 @@ button.rail-item.active {
 }
 
 .stat-band.cells-6 {
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 16px;
   padding: 18px 22px;
 }
@@ -1773,10 +1839,29 @@ button.rail-item.active {
   margin-top: 10px;
 }
 
+/* Horizontal-scroll wrapper for the slots table: rows keep a min-width and
+   the wrapper scrolls instead of crushing the four columns. 540px sits just
+   under the table's two-column desktop slot (~626px), so full width never
+   scrolls. */
+.slots-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.slots-scroll .slot-grid-head,
+.slots-scroll .slot-row2 {
+  min-width: 540px;
+}
+
 .slot-grid-head,
 .slot-row2 {
   display: grid;
-  grid-template-columns: 86px 1.1fr 1.3fr minmax(150px, auto);
+  /* Last column capped at 1fr (not auto): with four action buttons in a
+     PENDING row, auto blew out to the buttons' single-line max-content and
+     starved the name columns into one-word-per-line soup. At 1fr the column
+     resolves to its 150px floor on typical rows (same as before) and the
+     action buttons wrap instead. */
+  grid-template-columns: 86px 1.1fr 1.3fr minmax(150px, 1fr);
   gap: 18px;
   align-items: start;
 }
@@ -1849,7 +1934,7 @@ button.rail-item.active {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  width: 300px;
+  width: min(300px, calc(100vw - 120px));
   z-index: 25;
   padding: 16px 18px;
   box-shadow: 0 18px 44px rgba(38, 32, 25, 0.18);
@@ -2022,6 +2107,11 @@ button.rail-item.active {
   padding: 7px 22px;
   border-bottom: 1px solid var(--mp-line);
   font-size: 13px;
+}
+
+/* Value column ("120 g / 200") never wraps mid-pair. */
+.micro-row > :nth-child(2) {
+  white-space: nowrap;
 }
 
 .micro-row:last-child {
@@ -2288,7 +2378,8 @@ button.rail-item.active {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
+  gap: 10px 16px;
+  flex-wrap: wrap;
   margin-top: 20px;
 }
 
@@ -2596,4 +2687,69 @@ button.rail-item.active {
 
 .admin-status-row:last-child {
   border-bottom: none;
+}
+
+/* ---- Graceful degradation (narrow desktop windows) ------------------------ */
+
+/* Wide editing tables (targets macros/micros) scroll instead of crushing. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-scroll > .nv-table {
+  min-width: 560px;
+}
+
+@media (max-width: 1100px) {
+  /* Two-column page layouts collapse to a single column; rail content
+     flows after the main content. */
+  .today-lower,
+  .nutrition-layout,
+  .grocery-layout,
+  .pantry-layout,
+  .activity-layout,
+  .notif-layout,
+  .discover-layout,
+  .settings-grid,
+  .pref-grid,
+  .pref-bottom,
+  .detail-hero,
+  .detail-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .app-main {
+    padding: 28px 20px 96px;
+  }
+
+  .meal-row {
+    grid-template-columns: 76px 1fr auto;
+    gap: 12px;
+  }
+
+  .result-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Floating feedback button shrinks to icon-only so it covers less. */
+  .feedback-fab {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .feedback-fab .fab-label {
+    display: none;
+  }
+
+  .feedback-fab .fab-icon {
+    display: inline;
+  }
 }

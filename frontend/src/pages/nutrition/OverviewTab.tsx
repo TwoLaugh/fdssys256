@@ -1324,11 +1324,7 @@ export function OverviewTab() {
       </div>
 
       {/* Week strip (spec §3c) */}
-      <div
-        className="week-strip mp-card"
-        style={{ gridTemplateColumns: "repeat(8, 1fr)" }}
-        aria-label="This week"
-      >
+      <div className="week-strip mp-card" aria-label="This week">
         {week.perDay.map((d, i) => {
           const isToday = i === TODAY_INDEX;
           const isSelected = i === dayIdx;
@@ -1420,33 +1416,35 @@ export function OverviewTab() {
 
       <div className="nutrition-layout">
         <div>
-          {/* Slots (spec §3d) */}
-          <div className="slot-grid-head">
-            <span className="mp-label" style={{ color: "var(--mp-ink)" }}>
-              Slots
-            </span>
-            <span className="mp-label">Planned</span>
-            <span className="mp-label">Actual</span>
-            <span className="mp-label" style={{ textAlign: "right" }}>
-              State
-            </span>
-          </div>
-          {day ? (
-            day.slots.map((slot) => (
-              <SlotRow
-                key={slot.id}
-                date={date}
-                slot={slot}
-                name={plannedName(slot)}
-                time={slotTime(slot)}
-                parsing={nutrition.parsingSlotIds.includes(slot.id)}
-              />
-            ))
-          ) : (
-            <div className="intake-meta" style={{ padding: "12px 0" }}>
-              No plan covered this day — generate a plan to start logging.
+          {/* Slots (spec §3d) — scrolls horizontally on narrow windows */}
+          <div className="slots-scroll">
+            <div className="slot-grid-head">
+              <span className="mp-label" style={{ color: "var(--mp-ink)" }}>
+                Slots
+              </span>
+              <span className="mp-label">Planned</span>
+              <span className="mp-label">Actual</span>
+              <span className="mp-label" style={{ textAlign: "right" }}>
+                State
+              </span>
             </div>
-          )}
+            {day ? (
+              day.slots.map((slot) => (
+                <SlotRow
+                  key={slot.id}
+                  date={date}
+                  slot={slot}
+                  name={plannedName(slot)}
+                  time={slotTime(slot)}
+                  parsing={nutrition.parsingSlotIds.includes(slot.id)}
+                />
+              ))
+            ) : (
+              <div className="intake-meta" style={{ padding: "12px 0" }}>
+                No plan covered this day — generate a plan to start logging.
+              </div>
+            )}
+          </div>
 
           <SnacksSection date={date} />
         </div>

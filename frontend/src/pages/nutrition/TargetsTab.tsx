@@ -271,7 +271,9 @@ function TargetsEditor({
       {/* Macro rows */}
       <div className="mp-card section-card">
         <span className="mp-label">Macros — absolute grams, not ratios</span>
-        <table className="nv-table" style={{ marginTop: 10 }}>
+        {/* Wide table scrolls horizontally on narrow windows. */}
+        <div className="table-scroll">
+          <table className="nv-table" style={{ marginTop: 10 }}>
           <thead>
             <tr>
               <th>Macro</th>
@@ -343,7 +345,8 @@ function TargetsEditor({
               );
             })}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
 
       {/* Per-meal distribution */}
@@ -492,7 +495,9 @@ function TargetsEditor({
       {/* Micro targets */}
       <div className="mp-card section-card">
         <span className="mp-label">Micronutrient targets</span>
-        <table className="nv-table" style={{ marginTop: 10 }}>
+        {/* Wide table scrolls horizontally on narrow windows. */}
+        <div className="table-scroll">
+          <table className="nv-table" style={{ marginTop: 10 }}>
           <thead>
             <tr>
               <th>Nutrient</th>
@@ -573,7 +578,8 @@ function TargetsEditor({
               </tr>
             ))}
           </tbody>
-        </table>
+          </table>
+        </div>
         <div className="inline-note" style={{ marginTop: 8 }}>
           {microTargets.length} of ≤30 rows · add/remove arrives with the real
           editor

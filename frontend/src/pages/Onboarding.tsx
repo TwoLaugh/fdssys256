@@ -228,6 +228,7 @@ export function Onboarding() {
               <div style={{ marginTop: 16 }}>
                 <StatStrip
                   numeralSize={20}
+                  compact
                   cells={[
                     {
                       label: "Calories",
