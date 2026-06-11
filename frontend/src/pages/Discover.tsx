@@ -166,6 +166,7 @@ export function Discover() {
                     <div style={{ marginTop: 10 }}>
                       <StatStrip
                         numeralSize={20}
+                        compact
                         cells={job.sources.map((src) => ({
                           label: src.domain,
                           value: String(src.hits),

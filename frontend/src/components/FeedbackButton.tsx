@@ -129,8 +129,16 @@ export function FeedbackButton() {
 
   return (
     <>
-      <button className="btn feedback-fab" onClick={() => setOpen(true)}>
-        Give feedback
+      {/* Below ~700px the label hides and the icon shows (CSS .feedback-fab). */}
+      <button
+        className="btn feedback-fab"
+        aria-label="Give feedback"
+        onClick={() => setOpen(true)}
+      >
+        <span className="fab-icon" aria-hidden="true">
+          ✎
+        </span>
+        <span className="fab-label">Give feedback</span>
       </button>
       {open && (
         <Modal label="Give feedback" onClose={close} wide={phase === "routed"}>
