@@ -1,0 +1,422 @@
+/* Global rules for the D6 Hybrid design language. */
+@import "./tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100vh;
+}
+
+body {
+  background: var(--mp-bg);
+  color: var(--mp-ink);
+  font-family: var(--mp-font-body);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Type primitives ---------------------------------------------------- */
+
+.mp-label {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--mp-muted);
+}
+
+.mp-serif {
+  font-family: var(--mp-font-advisor);
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1.15;
+}
+
+.mp-num {
+  font-family: var(--mp-font-display);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Buttons ------------------------------------------------------------ */
+
+.btn {
+  font-family: var(--mp-font-body);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 18px;
+  cursor: pointer;
+  border-radius: var(--mp-radius);
+  background: transparent;
+  color: var(--mp-ink);
+  border: 1px solid var(--mp-line-hi);
+}
+
+.btn:hover {
+  border-color: var(--mp-muted);
+}
+
+.btn-primary {
+  background: var(--mp-terra);
+  color: var(--mp-on-terra);
+  border-color: var(--mp-terra);
+}
+
+.btn-primary:hover {
+  background: var(--mp-terra-dark);
+  border-color: var(--mp-terra-dark);
+}
+
+/* ---- Chip --------------------------------------------------------------- */
+
+.mp-chip {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--mp-olive);
+  border: 1px solid var(--mp-olive);
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+/* ---- App shell ---------------------------------------------------------- */
+
+.app {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  padding: 44px 56px 56px;
+  max-width: 1180px;
+}
+
+/* ---- Icon rail ---------------------------------------------------------- */
+
+.rail {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 18px 10px;
+  border-right: 1px solid var(--mp-line);
+  flex-shrink: 0;
+}
+
+.rail-item {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mp-muted);
+}
+
+.rail-item:hover {
+  color: var(--mp-ink);
+  background: var(--mp-card);
+}
+
+.rail-item.active {
+  background: var(--mp-terra-tint);
+  color: var(--mp-terra-dark);
+}
+
+.rail-spacer {
+  flex: 1;
+}
+
+.rail-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--mp-terra);
+  color: var(--mp-on-terra);
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---- Cards -------------------------------------------------------------- */
+
+.mp-card {
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line);
+  border-radius: var(--mp-radius-card);
+}
+
+/* ---- Segment bar -------------------------------------------------------- */
+
+.segbar {
+  display: flex;
+  gap: 2px;
+}
+
+.segbar span {
+  flex: 1;
+  height: 8px;
+  border-radius: 1px;
+  background: var(--mp-line);
+}
+
+.segbar span.filled {
+  background: var(--mp-olive);
+}
+
+.segbar.amber span.filled {
+  background: var(--mp-amber);
+}
+
+/* ---- Status mark -------------------------------------------------------- */
+
+.status-mark {
+  font-size: 12px;
+  width: 16px;
+  flex-shrink: 0;
+  text-align: center;
+  font-weight: 700;
+}
+
+.status-mark.eaten {
+  color: var(--mp-olive);
+}
+
+.status-mark.cooked {
+  color: var(--mp-amber);
+}
+
+.status-mark.planned {
+  color: var(--mp-mark-planned);
+}
+
+/* ---- Today page --------------------------------------------------------- */
+
+.today-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  border-bottom: 2px solid var(--mp-ink);
+  padding-bottom: 22px;
+}
+
+.today-greeting {
+  font-size: 42px;
+  margin-top: 10px;
+}
+
+.meal-row {
+  display: grid;
+  grid-template-columns: 104px 1fr auto;
+  gap: 22px;
+  align-items: center;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.meal-row .meal-time {
+  font-size: 21px;
+}
+
+.meal-row .meal-name {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.meal-row .meal-meta {
+  font-size: 13.5px;
+  color: var(--mp-muted);
+  margin-top: 4px;
+}
+
+.meal-row .meal-alert {
+  font-size: 13px;
+  color: var(--mp-amber);
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+.meal-row .meal-status {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.batch-tag {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--mp-olive);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.stat-band {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 22px;
+  margin-top: 28px;
+  padding: 20px 26px;
+}
+
+.stat-cell .stat-value {
+  margin: 8px 0 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.stat-cell .stat-target {
+  font-size: 13px;
+  color: var(--mp-muted);
+}
+
+.today-lower {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 40px;
+  margin-top: 28px;
+}
+
+.attention-list {
+  margin-top: 12px;
+  display: grid;
+  gap: 11px;
+}
+
+.attention-item {
+  display: flex;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  align-items: baseline;
+}
+
+.attention-item .mp-num {
+  font-size: 13px;
+}
+
+.attention-item.expiry .mp-num {
+  color: var(--mp-red);
+}
+
+.attention-item.defrost .mp-num {
+  color: var(--mp-amber);
+}
+
+.attention-item.ai .mp-num {
+  color: var(--mp-terra);
+}
+
+.budget-note {
+  font-size: 12.5px;
+  color: var(--mp-olive);
+  margin-top: 7px;
+  font-weight: 600;
+}
+
+/* ---- Advisor card ------------------------------------------------------- */
+
+.advisor-card {
+  margin-top: 28px;
+  padding: 18px 26px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+}
+
+.advisor-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mp-terra);
+  flex-shrink: 0;
+}
+
+.advisor-title {
+  font-size: 21px;
+  margin-top: 7px;
+  display: block;
+}
+
+.advisor-sub {
+  font-size: 13px;
+  color: var(--mp-muted);
+  margin-top: 4px;
+}
+
+/* ---- Stub pages --------------------------------------------------------- */
+
+.stub-page .stub-title {
+  font-family: var(--mp-font-display);
+  font-weight: 700;
+  font-size: 32px;
+  letter-spacing: -0.015em;
+  margin: 8px 0 0;
+}
+
+.stub-page .stub-body {
+  color: var(--mp-muted);
+  margin-top: 14px;
+}
+
+/* ---- Feedback button + modal -------------------------------------------- */
+
+.feedback-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  background: var(--mp-card);
+  z-index: 20;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(38, 32, 25, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+}
+
+.modal-card {
+  width: min(440px, calc(100vw - 48px));
+  padding: 24px 28px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+/* ---- Misc --------------------------------------------------------------- */
+
+.page-loading {
+  color: var(--mp-muted);
+  padding: 44px 0;
+}
