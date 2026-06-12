@@ -405,6 +405,51 @@ planSlotState:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 
+reoptSuggestionById:
+  get:
+    tags: [Plans]
+    operationId: getReoptSuggestion
+    summary: 'Single re-opt suggestion with its proposed slot assignments (pre-accept diff preview).'
+    description: >-
+      Side-effect-free read of the STORED proposal as persisted when the suggestion was raised —
+      not a recomputation — so the UI can render the before/after diff
+      (proposedAssignments.changes[]) before the user accepts. The proposal may be stale against
+      later slot-state drift (e.g. a slot eaten after the suggestion was raised); accept-time
+      validation stays authoritative. Any status is readable (PENDING for the preview;
+      ACCEPTED/REJECTED/EXPIRED for history/back navigation).
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: planId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: path
+        name: suggestionId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'The suggestion, including its proposed slot assignments.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/planner.yaml#/PlanReoptSuggestionDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Forbidden.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Plan not found, unknown suggestion, or not a suggestion of this plan.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
 reoptSuggestionAccept:
   post:
     tags: [Plans]

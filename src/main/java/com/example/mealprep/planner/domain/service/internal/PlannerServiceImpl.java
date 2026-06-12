@@ -9,6 +9,7 @@ import com.example.mealprep.planner.api.dto.FeasibilityCheckResultDto;
 import com.example.mealprep.planner.api.dto.GeneratePlanRequest;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.PlanDto;
+import com.example.mealprep.planner.api.dto.PlanReoptSuggestionDto;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
 import com.example.mealprep.planner.api.dto.UpcomingSlotView;
 import com.example.mealprep.planner.api.mapper.PlanMapper;
@@ -17,6 +18,7 @@ import com.example.mealprep.planner.domain.entity.MealSlot;
 import com.example.mealprep.planner.domain.entity.Plan;
 import com.example.mealprep.planner.domain.entity.PlanStatus;
 import com.example.mealprep.planner.domain.entity.ReoptStatus;
+import com.example.mealprep.planner.domain.repository.MealPrepPlanReoptSuggestionRepository;
 import com.example.mealprep.planner.domain.repository.PlanRepository;
 import com.example.mealprep.planner.domain.repository.ReoptSuggestionRepository;
 import com.example.mealprep.planner.domain.service.PlanQueryService;
@@ -69,6 +71,7 @@ public class PlannerServiceImpl implements PlanQueryService {
 
   private final PlanRepository planRepository;
   private final ReoptSuggestionRepository reoptSuggestionRepository;
+  private final MealPrepPlanReoptSuggestionRepository planReoptSuggestionRepository;
   private final PlanMapper planMapper;
   private final ReoptSuggestionMapper reoptSuggestionMapper;
   private final HouseholdQueryService householdQueryService;
@@ -79,6 +82,7 @@ public class PlannerServiceImpl implements PlanQueryService {
   public PlannerServiceImpl(
       PlanRepository planRepository,
       ReoptSuggestionRepository reoptSuggestionRepository,
+      MealPrepPlanReoptSuggestionRepository planReoptSuggestionRepository,
       PlanMapper planMapper,
       ReoptSuggestionMapper reoptSuggestionMapper,
       HouseholdQueryService householdQueryService,
@@ -87,6 +91,7 @@ public class PlannerServiceImpl implements PlanQueryService {
       ConstraintFeasibilityCheck feasibilityCheck) {
     this.planRepository = planRepository;
     this.reoptSuggestionRepository = reoptSuggestionRepository;
+    this.planReoptSuggestionRepository = planReoptSuggestionRepository;
     this.planMapper = planMapper;
     this.reoptSuggestionMapper = reoptSuggestionMapper;
     this.householdQueryService = householdQueryService;
@@ -174,6 +179,15 @@ public class PlannerServiceImpl implements PlanQueryService {
   @Transactional(readOnly = true)
   public Optional<ReoptSuggestionDto> getSuggestion(UUID suggestionId) {
     return reoptSuggestionRepository.findById(suggestionId).map(reoptSuggestionMapper::toDto);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<PlanReoptSuggestionDto> getPlanReoptSuggestion(UUID planId, UUID suggestionId) {
+    return planReoptSuggestionRepository
+        .findById(suggestionId)
+        .filter(suggestion -> suggestion.getPlanId().equals(planId))
+        .map(reoptSuggestionMapper::toPlanReoptDto);
   }
 
   @Override

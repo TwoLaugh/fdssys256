@@ -1037,8 +1037,14 @@ All endpoints under `/api/v1/plans/...` and `/api/v1/meal-slots/...`. `userId` r
 | POST   | `/{planId}/abandon` | `AbandonPlanRequest` | `PlanDto` | 200 / 404 / 409 |
 | POST   | `/revert` | `RevertToPlanRequest` | `PlanDto` | 201 / 404 / 409 / 422 |
 | PATCH  | `/{planId}/slots/{slotId}/state` | `SlotStateChangeRequest` | `PlanDto` | 200 / 400 / 404 / 409 |
+| GET    | `/{planId}/reopt-suggestions/{suggestionId}` | — | `PlanReoptSuggestionDto` | 200 / 404 |
 | POST   | `/{planId}/reopt-suggestions/{suggestionId}/accept` | — | `PlanReoptSuggestionDto` | 200 / 404 |
 | POST   | `/{planId}/reopt-suggestions/{suggestionId}/reject` | — | `PlanReoptSuggestionDto` | 200 / 404 |
+
+> The single-suggestion GET (frontend-gaps/planner-reopt-suggestion-detail) is the pre-accept diff
+> preview: it returns the **stored** `proposedAssignments` as persisted when the suggestion was
+> raised (no recomputation, no side effects — no decision-log write). Any status is readable;
+> staleness against later slot-state drift is resolved by accept-time validation, not the read.
 | GET    | `/feasibility?householdId=&weekStartDate=` | — | `FeasibilityCheckResultDto` | 200 / 401 / 403 |
 | GET    | `/suggestions?householdId=&page=&size=` | — | `Page<ReoptSuggestionDto>` | 200 |
 

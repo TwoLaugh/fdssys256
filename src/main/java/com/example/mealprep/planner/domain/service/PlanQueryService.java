@@ -2,6 +2,7 @@ package com.example.mealprep.planner.domain.service;
 
 import com.example.mealprep.planner.api.dto.FeasibilityCheckResultDto;
 import com.example.mealprep.planner.api.dto.PlanDto;
+import com.example.mealprep.planner.api.dto.PlanReoptSuggestionDto;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
 import com.example.mealprep.planner.api.dto.UpcomingSlotView;
 import java.time.LocalDate;
@@ -82,6 +83,25 @@ public interface PlanQueryService {
    * suggestion does not exist.
    */
   Optional<ReoptSuggestionDto> getSuggestion(UUID suggestionId);
+
+  /**
+   * Fetch a single materialised mid-week re-opt suggestion (the planner-01i {@code
+   * MealPrepPlanReoptSuggestion} aggregate) scoped to its plan — the read behind {@code GET
+   * /api/v1/plans/{planId}/reopt-suggestions/{suggestionId}} so the UI can render the
+   * before&rarr;after diff preview ({@code proposedAssignments.changes[]}) <em>before</em> the user
+   * accepts.
+   *
+   * <p>Side-effect-free: returns the <strong>stored</strong> proposal as persisted when the
+   * suggestion was raised — no recomputation, no status transition, no decision-log write. The
+   * proposal may therefore be stale against later slot-state drift (e.g. a slot pinned EATEN after
+   * the suggestion was raised); the accept path's validation stays authoritative. Any status is
+   * readable (PENDING for the preview; ACCEPTED / REJECTED / EXPIRED for history).
+   *
+   * <p>Returns {@link Optional#empty()} when the suggestion does not exist <em>or</em> does not
+   * belong to {@code planId} (same path-scoping rule as accept/reject — the caller maps both to
+   * 404).
+   */
+  Optional<PlanReoptSuggestionDto> getPlanReoptSuggestion(UUID planId, UUID suggestionId);
 
   /**
    * Flat list of upcoming meal slots for a household whose day date falls in {@code [fromDate,

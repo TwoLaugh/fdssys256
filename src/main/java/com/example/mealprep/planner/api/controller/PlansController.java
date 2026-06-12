@@ -16,6 +16,7 @@ import com.example.mealprep.planner.domain.service.PlanWriteService;
 import com.example.mealprep.planner.domain.service.internal.composer.PlanComposer;
 import com.example.mealprep.planner.domain.service.internal.lifecycle.RevertToPlanCoordinator;
 import com.example.mealprep.planner.exception.PlanNotFoundException;
+import com.example.mealprep.planner.exception.ReoptSuggestionNotFoundException;
 import com.example.mealprep.planner.security.PlannerAuth;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -209,6 +210,29 @@ public class PlansController {
       @PathVariable UUID planId, @PathVariable UUID suggestionId) {
     authPlan(planId);
     return ResponseEntity.ok(planWriteService.rejectReoptSuggestion(planId, suggestionId));
+  }
+
+  @GetMapping(
+      path = "/{planId}/reopt-suggestions/{suggestionId}",
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Single re-opt suggestion with its proposed slot assignments (pre-accept diff preview).",
+      description =
+          "Side-effect-free read of the STORED proposal as persisted when the suggestion was"
+              + " raised — not a recomputation — so the UI can render the before/after diff"
+              + " (proposedAssignments.changes[]) before the user accepts. The proposal may be"
+              + " stale against later slot-state drift (e.g. a slot eaten after the suggestion was"
+              + " raised); accept-time validation stays authoritative. Any status is readable"
+              + " (PENDING for the preview; ACCEPTED/REJECTED/EXPIRED for history). 404 when the"
+              + " suggestion is unknown or is not a suggestion of this plan.")
+  public ResponseEntity<PlanReoptSuggestionDto> getReoptSuggestion(
+      @PathVariable UUID planId, @PathVariable UUID suggestionId) {
+    authPlan(planId);
+    return ResponseEntity.ok(
+        planQueryService
+            .getPlanReoptSuggestion(planId, suggestionId)
+            .orElseThrow(() -> new ReoptSuggestionNotFoundException(suggestionId)));
   }
 
   // ---- auth helpers --------------------------------------------------------------------------
