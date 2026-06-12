@@ -838,7 +838,11 @@ FloorViolationDto:
   type: object
   required: [date, macroOrMicro, floor, actual]
   properties:
-    date: { type: string, format: date }
+    date:
+      type: string
+      format: date
+      nullable: true
+      description: 'Violating day for daily-enforcement floors; null for weekly-average floors (floor-gate results always set it).'
     macroOrMicro: { type: string, maxLength: 64 }
     floor:  { type: number, format: double, minimum: 0 }
     actual: { type: number, format: double, minimum: 0 }
@@ -856,11 +860,11 @@ WeeklyAggregateDto:
     weeklyTotal: { $ref: '#/DailyAggregateDto' }
     floorViolations:
       type: array
-      description: 'List of macro/micro keys whose weekly total fell below 7-day-summed floor.'
-      items: { type: string, maxLength: 64 }
+      description: 'Floor violations for the week. date set for daily-enforcement floors; null for weekly-average floors (floor = 7-day-summed floor, actual = weekly total).'
+      items: { $ref: '#/FloorViolationDto' }
 DailyAggregateDto:
   type: object
-  required: [caloriesPlanned, caloriesActualSoFar, caloriesRemaining, protein, carbs, fat, fibre, microsActualSoFar]
+  required: [caloriesPlanned, caloriesActualSoFar, caloriesRemaining, protein, carbs, fat, fibre, satFat, microsActualSoFar]
   properties:
     caloriesPlanned:     { type: integer, minimum: 0 }
     caloriesActualSoFar: { type: integer, minimum: 0 }
@@ -869,6 +873,7 @@ DailyAggregateDto:
     carbs:   { $ref: '#/MacroAggregateDto' }
     fat:     { $ref: '#/MacroAggregateDto' }
     fibre:   { $ref: '#/MacroAggregateDto' }
+    satFat:  { $ref: '#/MacroAggregateDto' }
     microsActualSoFar:
       type: object
       additionalProperties: { type: number, format: double, minimum: 0 }

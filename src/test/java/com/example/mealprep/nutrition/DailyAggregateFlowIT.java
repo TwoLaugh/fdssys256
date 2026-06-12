@@ -16,6 +16,7 @@ import com.example.mealprep.nutrition.testdata.NutritionTestData;
 import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.Cookie;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -93,6 +94,46 @@ class DailyAggregateFlowIT {
         .andExpect(jsonPath("$.caloriesActualSoFar").value(0))
         // No targets → remaining falls back to max(0, planned-actual) = 0.
         .andExpect(jsonPath("$.caloriesRemaining").value(0))
+        // satFat is a required field — empty days emit a zero-valued aggregate.
+        .andExpect(jsonPath("$.satFat.plannedG").value(0.0))
+        .andExpect(jsonPath("$.satFat.actualSoFarG").value(0.0))
+        .andExpect(jsonPath("$.satFat.remainingG").value(0.0))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void getDailyAggregate_satFatAggregate_fromSnackMicros_remainingTargetBased() throws Exception {
+    AuthedUser user = registerUser();
+    // Initialise targets — the default request carries satFat.targetG = 20.0.
+    mvc.perform(
+            post("/api/v1/nutrition/targets/initialise")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(NutritionTestData.defaultUpdateRequest(0L))))
+        .andExpect(status().isCreated());
+
+    // Log a snack carrying saturated fat in its micros document.
+    ObjectNode micros = objectMapper.createObjectNode();
+    micros.put("saturated_fat_g", 1.5);
+    mvc.perform(
+            post("/api/v1/nutrition/intake/2026-05-13/snacks")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        NutritionTestData.snackRequestWithMicros(micros))))
+        .andExpect(status().isCreated());
+
+    mvc.perform(get("/api/v1/nutrition/intake/2026-05-13/aggregate").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        // Snacks have no planned counterpart; actual comes from the snack micros.
+        .andExpect(jsonPath("$.satFat.plannedG").value(0.0))
+        .andExpect(jsonPath("$.satFat.actualSoFarG").value(1.5))
+        // remaining = max(0, satFat target 20 - actual 1.5) — mirrors the other macros.
+        .andExpect(jsonPath("$.satFat.remainingG").value(18.5))
+        // Map-convention entry retained alongside the first-class aggregate.
+        .andExpect(jsonPath("$.microsActualSoFar.saturated_fat_g").value(1.5))
         .andExpect(openApi().isValid(openApiValidator));
   }
 

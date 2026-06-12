@@ -452,15 +452,20 @@ public record IntakeSnackDto(UUID id, String ingredientMappingKey, String freeTe
                              IntakeSource source, Instant loggedAt) {}
 
 // Per macro: planned, actualSoFar, remaining triple. Plus micros actual-so-far map.
+// satFat is summed from the slot/snack micros documents' "saturated_fat_g" entries
+// (no dedicated slot columns); the map entry is retained alongside it.
 public record DailyAggregateDto(
     int caloriesPlanned, int caloriesActualSoFar, int caloriesRemaining,
     MacroAggregateDto protein, MacroAggregateDto carbs, MacroAggregateDto fat, MacroAggregateDto fibre,
+    MacroAggregateDto satFat,
     Map<String, BigDecimal> microsActualSoFar
 ) {}
 public record MacroAggregateDto(BigDecimal plannedG, BigDecimal actualSoFarG, BigDecimal remainingG) {}
 
+// floorViolations: daily-enforcement floors emit one dated entry per violating tracked day;
+// weekly-average floors emit a single date=null entry (floor = 7-day-summed floor).
 public record WeeklyAggregateDto(LocalDate weekStart, LocalDate weekEnd, DailyAggregateDto[] perDay,
-                                 DailyAggregateDto weeklyTotal, List<String> floorViolations) {}
+                                 DailyAggregateDto weeklyTotal, List<FloorViolationDto> floorViolations) {}
 
 public record IntakeEntryDto(MealSlot mealSlot, IntakeSlotStatus targetStatus,
                              String overrideFreeText,

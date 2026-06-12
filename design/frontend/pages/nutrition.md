@@ -281,7 +281,9 @@ section; the original text above is left as written.
   and the value rides the micros map by key convention). Backend ticket
   pending: add a `satFat` aggregate to `DailyAggregateDto`. Until then the cell
   renders actual-vs-target only (target from `TargetsDto.satFat`), with no
-  remaining sub-line.
+  remaining sub-line. *Resolved 2026-06-12:* `DailyAggregateDto.satFat`
+  (`plannedG`/`actualSoFarG`/`remainingG`) shipped — the cell reads it directly;
+  `microsActualSoFar["saturated_fat_g"]` is retained for one release.
 - **(b) §3c — `floorViolations` is key-only.** `WeeklyAggregateDto.floorViolations`
   is `string[]` of macro/micro keys ("weekly total fell below 7-day-summed
   floor") with **no day attribution**; the "protein floor missed · Tue" day
@@ -290,7 +292,10 @@ section; the original text above is left as written.
   (`{date, macroOrMicro, floor, actual}`) — backend ticket pending: have
   `floorViolations` adopt it. Until then chips may name the macro without a
   reliable day ("protein floor missed this week") when per-day derivation is
-  ambiguous.
+  ambiguous. *Resolved 2026-06-12:* `floorViolations` now carries
+  `FloorViolationDto[]` — daily-enforcement floors arrive dated (one entry per
+  violating tracked day), weekly-average floors arrive with `date: null`
+  ("missed this week"); no client-side `perDay` scanning needed.
 - **(c) §3d — `planned.recipeId` is nullable.** `PlannedIntakeDto.recipeId` is
   null for slots whose plan slot has no scheduled recipe (eating-out, stripped
   or unfilled slots). Display fallback: the active plan-day slot's `label`
