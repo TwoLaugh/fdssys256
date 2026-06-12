@@ -1436,22 +1436,117 @@ const HISTORY_TIME: PendingChangeDto = {
   resolvedAt: null,
 };
 
-export function createAdaptationSeed(): AdaptationState {
-  return {
-    pendingChanges: [
+/** #2 in the impact×confidence ranking — TEXTURE on the gnocchi, expiring <48h. */
+const PENDING_TEXTURE: PendingChangeDto = {
+  ...PENDING_DETAIL,
+  id: "pc-2",
+  recipeId: "gnocchi-al-forno",
+  jobId: "adapt-job-81",
+  traceId: "trace-adapt-81",
+  changeDimension: "TEXTURE",
+  proposedClassification: "VERSION",
+  baseVersionId: "gnocchi-al-forno-v1",
+  baseBranchId: mainBranchId("gnocchi-al-forno"),
+  proposedDiff: {
+    ingredientChanges: [],
+    methodChanges: [
       {
-        id: PENDING_DETAIL.id,
-        recipeId: PENDING_DETAIL.recipeId,
-        changeDimension: PENDING_DETAIL.changeDimension,
-        reasoningPreview:
-          "Reduce soy sauce in chicken stir-fry by a third — from your feedback on Tuesday, “too salty”",
-        confidence: PENDING_DETAIL.confidence,
-        impactScore: PENDING_DETAIL.impactScore,
-        createdAt: PENDING_DETAIL.createdAt,
-        expiresAt: PENDING_DETAIL.expiresAt,
+        action: "MODIFIED",
+        step: 4,
+        from: "Bake for 25 minutes until bubbling.",
+        to: "Bake for 20 minutes, then finish 5 minutes under a hot grill until the top crisps.",
       },
     ],
-    detailById: { [PENDING_DETAIL.id]: PENDING_DETAIL },
+    metadataChanges: [],
+    tagChanges: [],
+  },
+  reasoning:
+    "Your texture likes lean hard toward crispy edges and charred finishes, and the gnocchi bake came back twice as “a bit soft all the way through”. Splitting the final bake into 20 minutes covered plus 5 under a hot grill keeps the middle creamy while giving the top the contrast you keep responding to.",
+  nutritionalNotes: null,
+  confidence: 0.81,
+  impactScore: 0.62,
+  status: "PENDING",
+  createdAt: "2026-06-08T07:30:00Z",
+  expiresAt: "2026-06-11T08:00:00Z",
+  resolvedAt: null,
+  optimisticVersion: 1,
+};
+
+/** #3 in the ranking — ACID_BALANCE proposed as a BRANCH on the veggie chilli. */
+const PENDING_ACID: PendingChangeDto = {
+  ...PENDING_DETAIL,
+  id: "pc-3",
+  recipeId: "veggie-chilli",
+  jobId: "adapt-job-83",
+  traceId: "trace-adapt-83",
+  changeDimension: "ACID_BALANCE",
+  proposedClassification: "BRANCH",
+  baseVersionId: "veggie-chilli-v1",
+  baseBranchId: mainBranchId("veggie-chilli"),
+  proposedDiff: {
+    ingredientChanges: [
+      {
+        action: "ADDED",
+        from: null,
+        to: { ingredientMappingKey: "lime", displayName: "Lime, juiced", quantity: 1, unit: null },
+        fieldChanged: null,
+      },
+    ],
+    methodChanges: [
+      {
+        action: "ADDED",
+        step: 6,
+        from: null,
+        to: "Stir the lime juice through off the heat, just before serving.",
+      },
+    ],
+    metadataChanges: [],
+    tagChanges: [],
+  },
+  reasoning:
+    "Acid reads consistently low in your chilli feedback — “flat” twice in three weeks. A squeeze of lime stirred through off the heat lifts it without changing the spice level the kids tolerate. Proposed as a variant so the original stays untouched for batch-cook weeks.",
+  nutritionalNotes: "Negligible — ~4 kcal per serving.",
+  confidence: 0.74,
+  impactScore: 0.55,
+  status: "PENDING",
+  createdAt: "2026-06-07T06:45:00Z",
+  expiresAt: "2026-06-21T06:45:00Z",
+  resolvedAt: null,
+  optimisticVersion: 1,
+};
+
+export function createAdaptationSeed(): AdaptationState {
+  const listRow = (d: PendingChangeDto, preview: string) => ({
+    id: d.id,
+    recipeId: d.recipeId,
+    changeDimension: d.changeDimension,
+    reasoningPreview: preview,
+    confidence: d.confidence,
+    impactScore: d.impactScore,
+    createdAt: d.createdAt,
+    expiresAt: d.expiresAt,
+  });
+  return {
+    // Server-ranked best-first by impact × confidence (activity.md §3a).
+    pendingChanges: [
+      listRow(
+        PENDING_DETAIL,
+        "Reduce soy sauce in chicken stir-fry by a third — from your feedback on Tuesday, “too salty”",
+      ),
+      listRow(
+        PENDING_TEXTURE,
+        "Finish the gnocchi bake under the grill — your texture likes say crispy edges",
+      ),
+      listRow(
+        PENDING_ACID,
+        "Brighten the veggie chilli with lime stirred through at the end — acid reads low",
+      ),
+    ],
+    detailById: {
+      [PENDING_DETAIL.id]: PENDING_DETAIL,
+      [PENDING_TEXTURE.id]: PENDING_TEXTURE,
+      [PENDING_ACID.id]: PENDING_ACID,
+    },
     historyByRecipe: {
       "chicken-stir-fry": [HISTORY_PORTION, HISTORY_TIME],
     },

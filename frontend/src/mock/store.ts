@@ -39,9 +39,10 @@ import {
 import { createSeed, MOCK_TODAY_ISO } from "./seed";
 import type {
   ActivityLevel,
+  AnswerClarificationRequest,
   AppNotification,
+  ClarificationQueryDto,
   ConfidenceTier,
-  ConstraintKind,
   CreateBranchRequest,
   CreateInventoryItemRequest,
   CreateRatingRequest,
@@ -49,15 +50,16 @@ import type {
   CreateSubstitutionRequest,
   DailyAggregateDto,
   DayDto,
+  Destination,
   DirectiveUserModification,
   DiscoveryJobDto,
   EnforcementDirection,
   ExportFormat,
-  FeedbackEntry,
-  FeedbackRoute,
+  FeedbackEntryDto,
   GroceryOrderDto,
   GroceryOrderStatus,
   GrocerySubstitutionProposalDto,
+  HardConstraintsAuditEntryDto,
   IngredientNutritionDocument,
   IngredientNutritionDto,
   IntakeDayDto,
@@ -66,12 +68,14 @@ import type {
   IntakeSnackDto,
   InventoryAuditEntryDto,
   InventoryItemDto,
+  LifestyleConfigAuditEntryDto,
   LogSnackRequest,
   LogWasteRequest,
   MarkBoughtRequest,
   MealSlot,
   MealSlotDto,
   MealSlotKey,
+  MisclassificationCorrectionDto,
   NotificationKind,
   NutritionState,
   PendingChangeDto,
@@ -88,8 +92,11 @@ import type {
   RecipeSubstitutionDto,
   RecipeVersionDto,
   RecordManualPriceRequest,
+  RemovedTier1Constraint,
   ReoptSuggestionDto,
   RevertToVersionRequest,
+  RoutingDecision,
+  RoutingDecisionDto,
   ShoppingListDto,
   ShoppingListLineDto,
   SlotState,
@@ -97,9 +104,16 @@ import type {
   StartDiscoveryJobRequest,
   StoreState,
   TargetsDto,
+  TasteProfileAuditEntryDto,
+  TasteProfileDocument,
+  TasteProfileVersionDto,
+  Tier1RemovalConfirmationProblem,
   ToastItem,
+  UiContextDto,
   UpdateBudgetRequest,
+  UpdateHardConstraintsRequest,
   UpdateInventoryItemRequest,
+  UpdateLifestyleConfigRequest,
   UpdateRecipeManualEditRequest,
   UpdateTargetsRequest,
   UpsertEquipmentRequest,
@@ -3782,8 +3796,8 @@ export function removeEquipment(name: string): void {
 
 /**
  * PUT /provisions/budget (#18) — upsert; insert and update both 200. Currency
- * cannot change on an existing budget (422). Keeps the lifestyle weeklyBudget
- * mirror in sync (Today's stat band reads it).
+ * cannot change on an existing budget (422). The pantry BudgetDto is the
+ * single record — budget is a provisions concern (preferences.md §7).
  */
 export function saveBudget(req: UpdateBudgetRequest): boolean {
   const existing = state.pantry.budget;
@@ -3810,10 +3824,6 @@ export function saveBudget(req: UpdateBudgetRequest): boolean {
         spendTracking: null, // always null in v1
         version: (s.pantry.budget?.version ?? 0) + 1,
       },
-    },
-    preferences: {
-      ...s.preferences,
-      lifestyle: { ...s.preferences.lifestyle, weeklyBudget: req.weeklyTarget },
     },
   }));
   pushToast("Budget saved — the planner optimises cost against it");
@@ -4818,90 +4828,545 @@ export function setQuietHours(start: string, end: string): void {
   }));
 }
 
-/* ---- preferences ---------------------------------------------------------------------------------- */
+/* ---- preferences (preferences.md) -----------------------------------------------------------------
+ * Contract shapes throughout. Taste profile is versioned with monotonic
+ * rollback-as-replay; hard constraints carry the GAP-04 Tier-1 removal gate
+ * (409 + Tier1RemovalConfirmationProblem → interstitial → re-submit with
+ * confirmTier1Removals=true); lifestyle is a full-replacement PUT.
+ */
 
-/** Fake async taste-profile refresh: ~1s, then version bump + notification. */
+let prefAuditSeq = 100;
+let prefVersionRowSeq = 100;
+
+const prefNorm = (v: string): string => v.trim().toLowerCase();
+
+/** True after the one pending mock delta has been served (three-event rule —
+ *  a manual refresh can legitimately change nothing thereafter, spec §3e). */
+let refreshDeltaServed = false;
+
+function tasteAuditRow(
+  args: Omit<TasteProfileAuditEntryDto, "id" | "actorUserId" | "traceId" | "occurredAt">,
+): TasteProfileAuditEntryDto {
+  return {
+    id: `tpa-r${++prefAuditSeq}`,
+    actorUserId: MOCK_USER_ID,
+    traceId: null,
+    occurredAt: nowIso(),
+    ...args,
+  };
+}
+
+/**
+ * POST /preferences/taste-profile/refresh-now (no body) — 202, async. The
+ * UI polls #1 until the documentVersion bumps; there is no completion signal
+ * and "no change" is a legitimate outcome (three-event rule, spec §8 Q2).
+ */
 export function refreshTasteProfile(): void {
-  if (state.preferences.refreshing) return;
-  mutate((s) => ({
-    ...s,
-    preferences: { ...s.preferences, refreshing: true },
-  }));
+  if (state.preferences.refreshing || !state.preferences.tasteProfile) return;
+  mutate((s) => {
+    const tp = s.preferences.tasteProfile;
+    if (!tp) return s;
+    return {
+      ...s,
+      preferences: {
+        ...s.preferences,
+        refreshing: true,
+        tasteAudit: [
+          tasteAuditRow({
+            actorType: "USER",
+            changeType: "REFRESH_TRIGGERED",
+            previousDocumentVersion: tp.documentVersion,
+            newDocumentVersion: tp.documentVersion,
+            summary: "Manual refresh requested",
+          }),
+          ...s.preferences.tasteAudit,
+        ],
+      },
+    };
+  });
   setTimeout(() => {
     mutate((s) => {
-      if (!s.preferences.refreshing) return s;
-      const version = s.preferences.profileVersion + 1;
+      const tp = s.preferences.tasteProfile;
+      if (!tp || !s.preferences.refreshing) return s;
+      if (refreshDeltaServed) {
+        // Nothing new agreed 2–3 times — the poll times out with no bump.
+        return {
+          ...s,
+          preferences: { ...s.preferences, refreshing: false },
+        };
+      }
+      refreshDeltaServed = true;
+      const nextVersion = tp.documentVersion + 1;
+      const ingredients = tp.document.ingredientPreferences ?? {};
+      const nextDocument: TasteProfileDocument = {
+        ...tp.document,
+        version: nextVersion,
+        lastUpdated: MOCK_TODAY_ISO,
+        basedOnFeedbackCount: tp.basedOnFeedbackCount + 3,
+        ingredientPreferences: {
+          ...ingredients,
+          favourites: [
+            ...(ingredients.favourites ?? []),
+            { item: "kimchi", evidenceCount: 3, lastSignal: MOCK_TODAY_ISO, source: "FEEDBACK" },
+          ],
+          trendingPositive: (ingredients.trendingPositive ?? []).filter(
+            (t) => t.item !== "kimchi",
+          ),
+        },
+      };
+      const versionRow: TasteProfileVersionDto = {
+        id: `tpv-r${++prefVersionRowSeq}`,
+        tasteProfileId: tp.id,
+        documentVersion: nextVersion,
+        documentSnapshot: nextDocument,
+        feedbackRangeStart: tp.feedbackCursor ?? null,
+        feedbackRangeEnd: `fb-${feedbackSeq}`,
+        trigger: "MANUAL",
+        deltasApplied: [
+          { op: "promote", path: "ingredientPreferences.favourites", item: "kimchi" },
+        ],
+        modelTierUsed: "MID",
+        generatedAt: nowIso(),
+      };
       return pushNotification(
         {
           ...s,
           preferences: {
             ...s.preferences,
             refreshing: false,
-            profileVersion: version,
+            tasteProfile: {
+              ...tp,
+              document: nextDocument,
+              documentVersion: nextVersion,
+              basedOnFeedbackCount: tp.basedOnFeedbackCount + 3,
+              lastDeltaAppliedAt: nowIso(),
+              optimisticVersion: tp.optimisticVersion + 1,
+              updatedAt: nowIso(),
+            },
+            versions: [versionRow, ...s.preferences.versions],
+            tasteAudit: [
+              tasteAuditRow({
+                actorType: "AI",
+                changeType: "AI_DELTA_APPLIED",
+                previousDocumentVersion: tp.documentVersion,
+                newDocumentVersion: nextVersion,
+                summary: "Promoted kimchi to favourites — 3 repeated signals",
+              }),
+              ...s.preferences.tasteAudit,
+            ],
           },
         },
         "ai",
-        `Taste profile refreshed — v${version} built from 3 new feedback signals`,
+        `Taste profile refreshed — v${nextVersion} built from 3 new feedback signals`,
       );
     });
-  }, 1000);
+  }, 1500);
 }
 
-export function rollbackTasteProfile(): void {
+/** PUT /preferences/taste-profile — manual override (full replacement). */
+export function saveTasteProfile(
+  document: TasteProfileDocument,
+  expectedVersion: number,
+): "ok" | "conflict" {
+  const tp = state.preferences.tasteProfile;
+  if (!tp) return "conflict";
+  if (expectedVersion !== tp.optimisticVersion) {
+    pushToast("409 — profile changed since you opened the editor", "warn");
+    return "conflict";
+  }
   mutate((s) => {
-    if (s.preferences.refreshing || s.preferences.profileVersion <= 3) return s;
-    const version = s.preferences.profileVersion - 1;
-    return pushNotification(
-      { ...s, preferences: { ...s.preferences, profileVersion: version } },
-      "ai",
-      `Taste profile rolled back to v${version}`,
-    );
+    const cur = s.preferences.tasteProfile;
+    if (!cur) return s;
+    const nextVersion = cur.documentVersion + 1;
+    // Server-managed scalars are re-stamped, never trusted (spec §8 Q1).
+    const nextDocument: TasteProfileDocument = {
+      ...document,
+      version: nextVersion,
+      lastUpdated: MOCK_TODAY_ISO,
+      basedOnFeedbackCount: cur.basedOnFeedbackCount,
+      feedbackCursor: cur.feedbackCursor ?? null,
+    };
+    const versionRow: TasteProfileVersionDto = {
+      id: `tpv-r${++prefVersionRowSeq}`,
+      tasteProfileId: cur.id,
+      documentVersion: nextVersion,
+      documentSnapshot: nextDocument,
+      feedbackRangeStart: null,
+      feedbackRangeEnd: null,
+      trigger: "MANUAL",
+      deltasApplied: [{ op: "manual_override" }],
+      modelTierUsed: "NONE",
+      generatedAt: nowIso(),
+    };
+    return {
+      ...s,
+      preferences: {
+        ...s.preferences,
+        tasteProfile: {
+          ...cur,
+          document: nextDocument,
+          documentVersion: nextVersion,
+          optimisticVersion: cur.optimisticVersion + 1,
+          updatedAt: nowIso(),
+        },
+        versions: [versionRow, ...s.preferences.versions],
+        tasteAudit: [
+          tasteAuditRow({
+            actorType: "USER",
+            changeType: "MANUAL_OVERRIDE",
+            previousDocumentVersion: cur.documentVersion,
+            newDocumentVersion: nextVersion,
+            summary: "Manual override — flagged so the advisor won't re-learn it",
+          }),
+          ...s.preferences.tasteAudit,
+        ],
+      },
+    };
   });
+  pushToast("Saved. The advisor won't re-learn this from old feedback.");
+  return "ok";
 }
 
 /**
- * Remove a hard constraint. The GAP-04 interstitial (type-to-confirm) lives
- * in the Preferences page — this action runs only after that confirmation.
+ * POST /preferences/taste-profile/rollback — restores the target snapshot as
+ * a NEW monotonic version and replays later feedback (never a decrement).
  */
-export function removeConstraint(kind: ConstraintKind, name: string): void {
+export function rollbackTasteProfile(
+  targetDocumentVersion: number,
+  expectedVersion: number,
+): "ok" | "conflict" | "missing" {
+  const tp = state.preferences.tasteProfile;
+  if (!tp) return "missing";
+  const target = state.preferences.versions.find(
+    (v) => v.documentVersion === targetDocumentVersion,
+  );
+  if (!target) {
+    pushToast("404 — that snapshot is no longer available", "warn");
+    return "missing";
+  }
+  if (expectedVersion !== tp.optimisticVersion) {
+    pushToast("409 — profile changed since you opened the drawer", "warn");
+    return "conflict";
+  }
   mutate((s) => {
-    const list =
-      kind === "allergy" ? s.preferences.allergies : s.preferences.dietary;
-    if (!list.includes(name)) return s;
-    const next = list.filter((c) => c !== name);
+    const cur = s.preferences.tasteProfile;
+    if (!cur) return s;
+    const nextVersion = cur.documentVersion + 1;
+    const nextDocument: TasteProfileDocument = {
+      ...target.documentSnapshot,
+      version: nextVersion,
+      lastUpdated: MOCK_TODAY_ISO,
+    };
+    const versionRow: TasteProfileVersionDto = {
+      id: `tpv-r${++prefVersionRowSeq}`,
+      tasteProfileId: cur.id,
+      documentVersion: nextVersion,
+      documentSnapshot: nextDocument,
+      feedbackRangeStart: target.feedbackRangeEnd ?? null,
+      feedbackRangeEnd: cur.feedbackCursor ?? null,
+      trigger: "MANUAL",
+      deltasApplied: [
+        { op: "rollback_replay", replayedFromVersion: targetDocumentVersion },
+      ],
+      modelTierUsed: "MID",
+      generatedAt: nowIso(),
+    };
     return pushNotification(
       {
         ...s,
         preferences: {
           ...s.preferences,
-          allergies: kind === "allergy" ? next : s.preferences.allergies,
-          dietary: kind === "dietary" ? next : s.preferences.dietary,
+          tasteProfile: {
+            ...cur,
+            document: nextDocument,
+            documentVersion: nextVersion,
+            optimisticVersion: cur.optimisticVersion + 1,
+            updatedAt: nowIso(),
+          },
+          versions: [versionRow, ...s.preferences.versions],
+          tasteAudit: [
+            tasteAuditRow({
+              actorType: "USER",
+              changeType: "ROLLED_BACK",
+              previousDocumentVersion: cur.documentVersion,
+              newDocumentVersion: nextVersion,
+              summary: `Restored v${targetDocumentVersion} as v${nextVersion}; feedback given since then re-applied`,
+            }),
+            ...s.preferences.tasteAudit,
+          ],
         },
       },
       "ai",
-      `Safety filter updated — ${name.toLowerCase()} removed from ${
-        kind === "allergy" ? "allergies" : "dietary identities"
-      }`,
+      `Taste profile restored — v${targetDocumentVersion} replayed forward as v${nextVersion}`,
     );
   });
+  return "ok";
 }
 
+/* ---- hard constraints + the GAP-04 Tier-1 removal gate ---- */
+
+/** Excluded-food sets for comparable bases; keto/paleo/other are incomparable. */
+const BASE_EXCLUSIONS: Record<string, readonly string[]> = {
+  omnivore: [],
+  pescatarian: ["meat"],
+  vegetarian: ["meat", "fish"],
+  vegan: ["meat", "fish", "dairy", "eggs"],
+};
+
+/** Base RELAXATION only — the new excluded set is a strict subset (§4b). */
+function isBaseRelaxation(oldBase: string, newBase: string): boolean {
+  const prev = BASE_EXCLUSIONS[prefNorm(oldBase)];
+  const next = BASE_EXCLUSIONS[prefNorm(newBase)];
+  if (!prev || !next) return false;
+  return next.length < prev.length && next.every((x) => prev.includes(x));
+}
+
+/** Pure stored-vs-request diff (case-insensitive + trimmed) — the detector. */
+function detectTier1Removals(
+  stored: NonNullable<StoreState["preferences"]["hardConstraints"]>,
+  req: UpdateHardConstraintsRequest,
+): RemovedTier1Constraint[] {
+  const out: RemovedTier1Constraint[] = [];
+  const reqAllergies = req.allergies.map(prefNorm);
+  for (const a of stored.allergies) {
+    if (!reqAllergies.includes(prefNorm(a))) out.push({ category: "ALLERGY", value: a });
+  }
+  const reqDiets = req.medicalDiets.map(prefNorm);
+  for (const d of stored.medicalDiets) {
+    if (!reqDiets.includes(prefNorm(d))) out.push({ category: "MEDICAL_DIET", value: d });
+  }
+  // Substance removal only — editing a kept substance's severity/notes is fine.
+  const reqSubstances = req.intolerances.map((i) => prefNorm(i.substance));
+  for (const i of stored.intolerances) {
+    if (!reqSubstances.includes(prefNorm(i.substance))) {
+      out.push({ category: "SEVERE_INTOLERANCE", value: i.substance });
+    }
+  }
+  if (
+    prefNorm(req.dietaryIdentity.base) !== prefNorm(stored.dietaryIdentity.base) &&
+    isBaseRelaxation(stored.dietaryIdentity.base, req.dietaryIdentity.base)
+  ) {
+    out.push({ category: "DIETARY_IDENTITY_BASE", value: stored.dietaryIdentity.base });
+  }
+  return out;
+}
+
+export type SaveHardConstraintsResult =
+  | { kind: "ok" }
+  | { kind: "conflict" }
+  | { kind: "tier1"; problem: Tier1RemovalConfirmationProblem };
+
+/**
+ * PUT /preferences/hard-constraints. Two distinct 409s on this route:
+ * optimistic-lock vs the GAP-04 Tier1RemovalConfirmationProblem — the page
+ * matches `reason === "TIER1_REMOVAL_REQUIRES_CONFIRMATION"` (spec §4b).
+ */
+export function saveHardConstraints(
+  req: UpdateHardConstraintsRequest,
+): SaveHardConstraintsResult {
+  const stored = state.preferences.hardConstraints;
+  if (!stored) return { kind: "conflict" };
+  if (req.expectedVersion !== stored.version) {
+    pushToast("409 — constraints changed since you opened this", "warn");
+    return { kind: "conflict" };
+  }
+  const removed = detectTier1Removals(stored, req);
+  if (removed.length > 0 && req.confirmTier1Removals !== true) {
+    // Rejected wholesale: no mutation, no audit row, no version bump.
+    return {
+      kind: "tier1",
+      problem: {
+        type: "https://mealprep.example.com/problems/tier1-removal-requires-confirmation",
+        title: "Tier-1 hard-constraint removal requires confirmation",
+        status: 409,
+        detail:
+          "The request removes safety-critical constraints; re-submit with confirmTier1Removals=true to proceed.",
+        reason: "TIER1_REMOVAL_REQUIRES_CONFIRMATION",
+        removedConstraints: removed,
+      },
+    };
+  }
+  mutate((s) => {
+    const cur = s.preferences.hardConstraints;
+    if (!cur) return s;
+    const fields = [
+      ["allergies", cur.allergies, req.allergies],
+      ["medicalDiets", cur.medicalDiets, req.medicalDiets],
+      ["dietaryIdentity", cur.dietaryIdentity, req.dietaryIdentity],
+      ["intolerances", cur.intolerances, req.intolerances],
+    ] as const;
+    const auditRows: HardConstraintsAuditEntryDto[] = fields
+      .filter(([, prev, next]) => JSON.stringify(prev) !== JSON.stringify(next))
+      .map(([field, prev, next]) => ({
+        id: `hca-r${++prefAuditSeq}`,
+        hardConstraintsId: cur.id,
+        actorUserId: MOCK_USER_ID,
+        fieldChanged: field,
+        previousValueJson: prev,
+        newValueJson: next,
+        occurredAt: nowIso(),
+      }));
+    const out: StoreState = {
+      ...s,
+      preferences: {
+        ...s.preferences,
+        hardConstraints: {
+          ...cur,
+          allergies: req.allergies,
+          medicalDiets: req.medicalDiets,
+          dietaryIdentity: req.dietaryIdentity,
+          intolerances: req.intolerances,
+          // ageRestrictions are echoed back unchanged — auto-managed (§4a).
+          version: cur.version + 1,
+        },
+        hardAudit: [...auditRows, ...s.preferences.hardAudit],
+      },
+    };
+    return removed.length > 0
+      ? pushNotification(
+          out,
+          "ai",
+          `Safety filter updated — ${removed
+            .map((r) => r.value.toLowerCase())
+            .join(", ")} removed after confirmation`,
+        )
+      : out;
+  });
+  pushToast("Hard constraints saved — the safety filter applies immediately.");
+  return { kind: "ok" };
+}
+
+/* ---- lifestyle config ---- */
+
+/** POST /preferences/lifestyle-config/mark-reviewed (§5a review nudge). */
+export function markLifestyleReviewed(): void {
+  mutate((s) =>
+    s.preferences.lifestyle
+      ? {
+          ...s,
+          preferences: {
+            ...s.preferences,
+            lifestyle: { ...s.preferences.lifestyle, lastReviewPromptAt: null },
+          },
+        }
+      : s,
+  );
+  pushToast("Marked as still accurate — next nudge in 2–3 months.");
+}
+
+/** PUT /preferences/lifestyle-config — full document replacement. */
+export function saveLifestyleConfig(
+  req: UpdateLifestyleConfigRequest,
+): "ok" | "conflict" {
+  const cur = state.preferences.lifestyle;
+  if (!cur) return "conflict";
+  if (req.expectedVersion !== cur.optimisticVersion) {
+    pushToast("409 — lifestyle config changed since you opened this", "warn");
+    return "conflict";
+  }
+  mutate((s) => {
+    const stored = s.preferences.lifestyle;
+    if (!stored) return s;
+    const keys = new Set([
+      ...Object.keys(stored.document),
+      ...Object.keys(req.document),
+    ]) as Set<keyof typeof stored.document>;
+    const auditRows: LifestyleConfigAuditEntryDto[] = [...keys]
+      .filter(
+        (k) =>
+          JSON.stringify(stored.document[k] ?? null) !==
+          JSON.stringify(req.document[k] ?? null),
+      )
+      .map((k) => ({
+        id: `lca-r${++prefAuditSeq}`,
+        actorUserId: MOCK_USER_ID,
+        fieldPath: k,
+        previousValueJson: stored.document[k] ?? null,
+        newValueJson: req.document[k] ?? null,
+        occurredAt: nowIso(),
+      }));
+    return {
+      ...s,
+      preferences: {
+        ...s.preferences,
+        lifestyle: {
+          ...stored,
+          document: req.document,
+          optimisticVersion: stored.optimisticVersion + 1,
+          updatedAt: nowIso(),
+        },
+        lifestyleAudit: [...auditRows, ...s.preferences.lifestyleAudit],
+      },
+    };
+  });
+  pushToast("Lifestyle config saved.");
+  return "ok";
+}
+
+/* ---- cross-page compatibility helpers ---- */
+
+/** Archive panel badge — GET /preferences/archive/active-count (#16). */
+export function selectArchiveActiveCount(s: StoreState): number {
+  return s.preferences.archive.filter((a) => a.rePromotedAt == null).length;
+}
+
+/** Start-of-window slot times from mealTiming.preferredSchedule ("08:00-08:30").
+ *  Memoised per lifestyle reference — useStore selectors must return stable
+ *  references (useSyncExternalStore re-render contract). */
+let slotTimesCache: {
+  source: StoreState["preferences"]["lifestyle"];
+  value: Record<MealSlotKey, string>;
+} | null = null;
+
+export function selectSlotTimes(s: StoreState): Record<MealSlotKey, string> {
+  const source = s.preferences.lifestyle;
+  if (!slotTimesCache || slotTimesCache.source !== source) {
+    const times = source?.document.mealTiming?.preferredSchedule?.times ?? {};
+    const startOf = (slot: MealSlotKey, fallback: string): string =>
+      (times[slot] ?? fallback).split("-")[0];
+    slotTimesCache = {
+      source,
+      value: {
+        breakfast: startOf("breakfast", "08:00"),
+        lunch: startOf("lunch", "13:00"),
+        dinner: startOf("dinner", "19:00"),
+      },
+    };
+  }
+  return slotTimesCache.value;
+}
+
+/** Onboarding write — adds straight to hard-constraint allergies (no gate:
+ *  GAP-04 gates removals only; additions stay one-step). */
 export function addAllergy(name: string): void {
   const trimmed = name.trim();
   if (!trimmed) return;
   mutate((s) => {
-    if (
-      s.preferences.allergies.some(
-        (a) => a.toLowerCase() === trimmed.toLowerCase(),
-      )
-    ) {
+    const cur = s.preferences.hardConstraints;
+    if (!cur || cur.allergies.some((a) => prefNorm(a) === prefNorm(trimmed))) {
       return s;
     }
     return {
       ...s,
       preferences: {
         ...s.preferences,
-        allergies: [...s.preferences.allergies, trimmed],
+        hardConstraints: {
+          ...cur,
+          allergies: [...cur.allergies, trimmed],
+          version: cur.version + 1,
+        },
+        hardAudit: [
+          {
+            id: `hca-r${++prefAuditSeq}`,
+            hardConstraintsId: cur.id,
+            actorUserId: MOCK_USER_ID,
+            fieldChanged: "allergies",
+            previousValueJson: cur.allergies,
+            newValueJson: [...cur.allergies, trimmed],
+            occurredAt: nowIso(),
+          },
+          ...s.preferences.hardAudit,
+        ],
       },
     };
   });
@@ -4914,235 +5379,455 @@ function formatTime(minutes: number): string {
 }
 
 /**
- * Nudge a lifestyle slot time ±15 min. Today's timeline does NOT mirror it:
- * per the serve-time contract, MealSlotDto.mealTime is the raw nullable
- * override and the lifestyle-config fallback resolution is server-internal
- * with no HTTP exposure (plan.md §8 Q3).
+ * Nudge a lifestyle slot window ±15 min (onboarding stepper). Today's
+ * timeline does NOT mirror it: per the serve-time contract the lifestyle
+ * fallback resolution is server-internal (plan.md §8 Q3).
  */
 export function adjustSlotTime(slot: MealSlotKey, direction: 1 | -1): void {
   mutate((s) => {
-    const [h, m] = s.preferences.lifestyle.slotTimes[slot]
-      .split(":")
-      .map(Number);
-    const next = Math.max(
-      5 * 60,
-      Math.min(23 * 60, h * 60 + m + direction * 15),
-    );
-    const time = formatTime(next);
+    const cfg = s.preferences.lifestyle;
+    if (!cfg) return s;
+    const times = cfg.document.mealTiming?.preferredSchedule?.times ?? {};
+    const range = times[slot] ?? "12:00-12:30";
+    const shifted = range.split("-").map((t) => {
+      const [h, m] = t.split(":").map(Number);
+      return formatTime(
+        Math.max(5 * 60, Math.min(23 * 60, h * 60 + m + direction * 15)),
+      );
+    });
     return {
       ...s,
       preferences: {
         ...s.preferences,
         lifestyle: {
-          ...s.preferences.lifestyle,
-          slotTimes: { ...s.preferences.lifestyle.slotTimes, [slot]: time },
+          ...cfg,
+          document: {
+            ...cfg.document,
+            mealTiming: {
+              ...cfg.document.mealTiming,
+              preferredSchedule: {
+                ...cfg.document.mealTiming?.preferredSchedule,
+                times: { ...times, [slot]: shifted.join("-") },
+              },
+            },
+          },
+          optimisticVersion: cfg.optimisticVersion + 1,
+          updatedAt: nowIso(),
         },
       },
     };
   });
 }
 
-export function adjustPortionScale(direction: 1 | -1): void {
-  mutate((s) => {
-    const next =
-      Math.round(
-        Math.max(
-          0.5,
-          Math.min(2, s.preferences.lifestyle.portionScale + direction * 0.1),
-        ) * 10,
-      ) / 10;
-    return {
-      ...s,
-      preferences: {
-        ...s.preferences,
-        lifestyle: { ...s.preferences.lifestyle, portionScale: next },
-      },
-    };
-  });
-}
-
-/** Projected basket total used for the grocery headroom maths (mock-fixed). */
-/** Nudge the weekly budget ±£5 — the pantry BudgetDto follows (upsert mirror). */
+/** Nudge the weekly budget ±£5 — budget is a provisions concern (the pantry
+ *  BudgetDto is the system of record; preferences.md §7). */
 export function adjustWeeklyBudget(direction: 1 | -1): void {
   mutate((s) => {
+    if (!s.pantry.budget) return s;
     const budget = Math.max(
       25,
-      Math.min(120, s.preferences.lifestyle.weeklyBudget + direction * 5),
+      Math.min(120, s.pantry.budget.weeklyTarget + direction * 5),
     );
-    if (budget === s.preferences.lifestyle.weeklyBudget) return s;
+    if (budget === s.pantry.budget.weeklyTarget) return s;
     return {
       ...s,
-      preferences: {
-        ...s.preferences,
-        lifestyle: { ...s.preferences.lifestyle, weeklyBudget: budget },
-      },
       pantry: {
         ...s.pantry,
-        budget: s.pantry.budget
-          ? {
-              ...s.pantry.budget,
-              weeklyTarget: budget,
-              version: s.pantry.budget.version + 1,
-            }
-          : s.pantry.budget,
+        budget: {
+          ...s.pantry.budget,
+          weeklyTarget: budget,
+          version: s.pantry.budget.version + 1,
+        },
       },
     };
   });
 }
 
-/* ---- activity / feedback ----------------------------------------------------------------------------- */
+/* ---- activity / feedback (activity.md) ----------------------------------------------------------
+ * Contract shapes throughout. Tier marks render from the SERVER decision
+ * (AUTO_ROUTED / ROUTED_WITH_FLAG); <0.5 produces no route row at all — the
+ * whole entry pauses as CLARIFICATION_PENDING with an inbox query (§4b).
+ */
 
-/** Confidence tiers: ≥0.8 routed · 0.5–0.8 check me · <0.5 needs you. */
+/** Confidence tiers: ≥0.8 routed · 0.5–0.8 check me · <0.5 needs you.
+ *  FALLBACK ONLY — prefer tierForDecision (the tier is server-decided). */
 export function tierFor(conf: number): ConfidenceTier {
   if (conf >= 0.8) return "high";
   if (conf >= 0.5) return "mid";
   return "low";
 }
 
-let feedbackSeq = 10;
+/** The contract signal → display tier (activity.md §4b). */
+export function tierForDecision(decision: RoutingDecision): ConfidenceTier {
+  if (decision === "AUTO_ROUTED") return "high";
+  if (decision === "ROUTED_WITH_FLAG") return "mid";
+  return "low";
+}
 
-/** The canned 3-route fixture from the D6 mockup ("salty"/"portion" texts). */
-function cannedRoutes(): FeedbackRoute[] {
-  return [
-    {
-      dest: "Recipe",
-      conf: 0.92,
-      action:
-        "The recipe optimiser will propose a lower-salt version of chicken stir-fry.",
+export const DESTINATION_LABEL: Record<Destination, string> = {
+  RECIPE: "Recipe",
+  PREFERENCE: "Preference",
+  NUTRITION: "Nutrition",
+  PROVISIONS: "Provisions",
+};
+
+let feedbackSeq = 310;
+let routeSeq = 600;
+let clarificationSeq = 410;
+let correctionSeq = 510;
+
+function findFeedback(s: StoreState, id: string): FeedbackEntryDto | undefined {
+  return s.activity.feedback.find((f) => f.id === id);
+}
+
+function replaceFeedback(s: StoreState, next: FeedbackEntryDto): StoreState {
+  return {
+    ...s,
+    activity: {
+      ...s.activity,
+      feedback: s.activity.feedback.map((f) => (f.id === next.id ? next : f)),
     },
-    {
-      dest: "Nutrition",
-      conf: 0.71,
-      action:
-        "Increase per-meal portion targets for dinners — I think this is what you meant.",
-    },
-    {
-      dest: "Preference",
-      conf: 0.44,
-      question:
-        "Is “too salty” about this one dish, or do you generally prefer less salt?",
-      options: ["Just this dish", "Generally less salt", "Skip"],
-    },
-  ];
+  };
+}
+
+export function findClarification(
+  s: StoreState,
+  queryId: string,
+): ClarificationQueryDto | undefined {
+  return s.activity.clarifications.find((c) => c.id === queryId);
+}
+
+const AMBIGUOUS_FEEDBACK = /salty|salt|portion|more veg/i;
+
+/** Mock classifier outcome for an unambiguous text: one confident route. */
+function autoRoute(text: string): RoutingDecisionDto {
+  return {
+    id: `rt-${++routeSeq}`,
+    destination: "PREFERENCE",
+    confidence: 0.85,
+    decision: "AUTO_ROUTED",
+    status: "APPLIED",
+    extractedFeedback: text.slice(0, 80),
+    actionTaken:
+      "Noted as a general preference — your taste profile weighs this from the next plan",
+    destinationResult: null,
+    failureMessage: null,
+  };
 }
 
 /**
- * Classify a feedback text (mock): "salty"/"portion" hits the canned
- * 3-route fixture; anything else routes to Preference at 0.85. Returns the
- * new entry id so the modal can track it. Low-confidence routes also land
- * a clarification (id `c-<entryId>`) in the Activity inbox.
+ * POST /api/v1/feedback (202 + Location) — the global modal's submit. The
+ * entry lands non-terminal and the pages poll until classification settles:
+ * either routes appear, or the whole entry pauses on a clarification.
  */
-export function submitFeedback(text: string): string {
-  const id = `f${++feedbackSeq}`;
-  const routes: FeedbackRoute[] = /salty|salt|portion/i.test(text)
-    ? cannedRoutes()
-    : [
-        {
-          dest: "Preference",
-          conf: 0.85,
-          action:
-            "Noted as a general preference — your taste profile weighs this from the next plan.",
-        },
-      ];
+export function submitFeedback(text: string, context?: UiContextDto): string {
+  const id = `fb-${++feedbackSeq}`;
+  const entry: FeedbackEntryDto = {
+    id,
+    userId: MOCK_USER_ID,
+    text,
+    context: context ?? { screen: "GENERAL" },
+    submissionStatus: "CLASSIFYING",
+    classificationAttempts: 0,
+    lastClassifiedAt: null,
+    traceId: `trace-${id}`,
+    routes: [],
+    pendingClarificationQueryId: null,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+  mutate((s) => ({
+    ...s,
+    activity: { ...s.activity, feedback: [entry, ...s.activity.feedback] },
+  }));
+  setTimeout(() => {
+    mutate((s) => {
+      const cur = findFeedback(s, id);
+      if (!cur || cur.submissionStatus !== "CLASSIFYING") return s;
+      if (AMBIGUOUS_FEEDBACK.test(cur.text)) {
+        // A fragment dipped below 0.5 — no partial routing, the entry pauses.
+        const saltY = /salty|salt/i.test(cur.text);
+        const queryId = `cq-${++clarificationSeq}`;
+        const query: ClarificationQueryDto = {
+          id: queryId,
+          feedbackEntryId: id,
+          questionText: saltY
+            ? "Is “too salty” about this one dish, or do you generally prefer less salt?"
+            : "Is that about the plan's portions, or a daily nutrition target?",
+          options: saltY
+            ? [
+                {
+                  destination: "RECIPE",
+                  snippet: "too salty",
+                  classifierJustification:
+                    "One-dish fix — propose a lower-salt version of that recipe",
+                },
+                {
+                  destination: "PREFERENCE",
+                  snippet: "too salty",
+                  classifierJustification: "General lean — less salt everywhere",
+                },
+              ]
+            : [
+                {
+                  destination: "NUTRITION",
+                  snippet: "portions",
+                  classifierJustification: "Could be a per-meal target change",
+                },
+                {
+                  destination: "PREFERENCE",
+                  snippet: "portions",
+                  classifierJustification: "Could be a portion-style lean",
+                },
+              ],
+          status: "PENDING",
+          expiresAt: addDaysIso(MOCK_TODAY_ISO, 3) + "T12:00:00Z",
+          createdAt: nowIso(),
+        };
+        const paused = replaceFeedback(s, {
+          ...cur,
+          submissionStatus: "CLARIFICATION_PENDING",
+          classificationAttempts: 1,
+          lastClassifiedAt: nowIso(),
+          pendingClarificationQueryId: queryId,
+          updatedAt: nowIso(),
+        });
+        return pushNotification(
+          {
+            ...paused,
+            activity: {
+              ...paused.activity,
+              clarifications: [query, ...paused.activity.clarifications],
+            },
+          },
+          "ai",
+          "Your feedback needs one answer before it routes — check Activity",
+        );
+      }
+      return pushNotification(
+        replaceFeedback(s, {
+          ...cur,
+          submissionStatus: "ROUTED",
+          classificationAttempts: 1,
+          lastClassifiedAt: nowIso(),
+          routes: [autoRoute(cur.text)],
+          updatedAt: nowIso(),
+        }),
+        "ai",
+        "Feedback routed to 1 destination",
+      );
+    });
+  }, 1200);
+  return id;
+}
+
+/**
+ * POST /feedback/{feedbackId}/routes/{routingId}/correct — re-route a
+ * misclassified fragment. One correction per route; the replay runs
+ * synchronously (original row flips CORRECTED_AWAY, a replay row appears).
+ */
+export function correctRoute(
+  feedbackId: string,
+  routingId: string,
+  newDestination: Destination,
+  note?: string,
+): void {
+  const entry = state.activity.feedback.find((f) => f.id === feedbackId);
+  const route = entry?.routes.find((r) => r.id === routingId);
+  if (!entry || !route) {
+    pushToast("404 — that route is gone; refreshed", "warn");
+    return;
+  }
+  if (route.status === "CORRECTED_AWAY") {
+    pushToast("422 — already corrected; submit fresh feedback instead", "warn");
+    return;
+  }
+  if (newDestination === route.destination) {
+    pushToast("422 — that's where it already went", "warn");
+    return;
+  }
+  if (newDestination === "RECIPE" && !entry.context.recipeId) {
+    pushToast("422 — no recipe attached to this feedback", "warn");
+    return;
+  }
+  // Undo of the original write is best-effort (HLD correction limitations).
+  const originalApplied = route.status === "APPLIED";
   mutate((s) => {
-    const entry: FeedbackEntry = { id, when: "Just now", text, routes };
-    const lowRoute = routes.find((r) => tierFor(r.conf) === "low");
+    const cur = findFeedback(s, feedbackId);
+    if (!cur) return s;
+    const replay: RoutingDecisionDto = {
+      id: `rt-${++routeSeq}`,
+      destination: newDestination,
+      confidence: 0.99,
+      decision: "AUTO_ROUTED",
+      status: "APPLIED",
+      extractedFeedback: route.extractedFeedback,
+      actionTaken: `Re-routed by your correction — applied to ${DESTINATION_LABEL[newDestination].toLowerCase()}`,
+      destinationResult: null,
+      failureMessage: null,
+    };
+    const correction: MisclassificationCorrectionDto = {
+      id: `corr-${++correctionSeq}`,
+      feedbackEntryId: feedbackId,
+      originalRoutingId: routingId,
+      correctedDestination: newDestination,
+      originalDestination: route.destination,
+      originalConfidence: route.confidence,
+      userCorrectionNote: note?.trim() ? note.trim().slice(0, 512) : null,
+      actorUserId: MOCK_USER_ID,
+      replayRoutingId: replay.id,
+      replayStatus: "APPLIED",
+      occurredAt: nowIso(),
+      createdAt: nowIso(),
+    };
+    const next = replaceFeedback(s, {
+      ...cur,
+      submissionStatus: "CORRECTED",
+      routes: [
+        ...cur.routes.map((r) =>
+          r.id === routingId ? { ...r, status: "CORRECTED_AWAY" as const } : r,
+        ),
+        replay,
+      ],
+      updatedAt: nowIso(),
+    });
+    return pushNotification(
+      {
+        ...next,
+        activity: {
+          ...next.activity,
+          corrections: [correction, ...s.activity.corrections],
+        },
+      },
+      "ai",
+      "Routing correction recorded — logged as ground truth for the classifier",
+    );
+  });
+  if (originalApplied) {
+    pushToast("Previous action kept (undo is best-effort); routing corrected.");
+  }
+}
+
+export type AnswerClarificationOutcome = "ok" | "gone" | "invalid" | "missing";
+
+/**
+ * POST /feedback/clarifications/{queryId}/answer — ≥1 of selectedDestination
+ * / userClarificationText required (400). 200 is a RECEIVED receipt with no
+ * routes: re-classification is queued, the entry re-enters the poll loop.
+ */
+export function answerClarification(
+  queryId: string,
+  req: AnswerClarificationRequest,
+): AnswerClarificationOutcome {
+  const query = state.activity.clarifications.find((c) => c.id === queryId);
+  if (!query) return "missing";
+  if (query.status === "EXPIRED") return "gone";
+  if (query.status === "ANSWERED") {
+    pushToast("422 — already answered; refreshed", "warn");
+    return "invalid";
+  }
+  const dest = req.selectedDestination ?? null;
+  const freeText = req.userClarificationText?.trim() || null;
+  if (!dest && !freeText) return "invalid";
+  mutate((s) => {
+    const entry = findFeedback(s, query.feedbackEntryId);
     let out: StoreState = {
       ...s,
       activity: {
         ...s.activity,
-        feedback: [entry, ...s.activity.feedback],
-        clarifications: lowRoute?.question
-          ? [
-              {
-                id: `c-${id}`,
-                question: lowRoute.question,
-                options: lowRoute.options ?? [],
-                context: text,
-              },
-              ...s.activity.clarifications,
-            ]
-          : s.activity.clarifications,
+        clarifications: s.activity.clarifications.map((c) =>
+          c.id === queryId ? { ...c, status: "ANSWERED" as const } : c,
+        ),
       },
     };
-    out = pushNotification(
-      out,
-      "ai",
-      `Feedback routed to ${routes.length} destination${
-        routes.length === 1 ? "" : "s"
-      }${lowRoute ? " — one question needs you" : ""}`,
-    );
+    if (entry) {
+      out = replaceFeedback(out, {
+        ...entry,
+        submissionStatus: "RECEIVED",
+        pendingClarificationQueryId: null,
+        updatedAt: nowIso(),
+      });
+    }
     return out;
   });
-  return id;
+  setTimeout(() => {
+    mutate((s) => {
+      const entry = findFeedback(s, query.feedbackEntryId);
+      if (!entry || entry.submissionStatus !== "RECEIVED") return s;
+      const salty = /salty|salt/i.test(entry.text);
+      const answeredDest = dest ?? "PREFERENCE";
+      const answered: RoutingDecisionDto = {
+        id: `rt-${++routeSeq}`,
+        destination: answeredDest,
+        confidence: 0.97,
+        decision: "AUTO_ROUTED",
+        status: "APPLIED",
+        extractedFeedback: query.options.find((o) => o.destination === dest)?.snippet ?? entry.text.slice(0, 80),
+        actionTaken: freeText
+          ? `Clarified in your words — “${freeText.slice(0, 120)}” applied to ${DESTINATION_LABEL[answeredDest].toLowerCase()}`
+          : `Clarification answered — applied to ${DESTINATION_LABEL[answeredDest].toLowerCase()}`,
+        destinationResult: null,
+        failureMessage: null,
+      };
+      const routes: RoutingDecisionDto[] = salty
+        ? [
+            {
+              id: `rt-${++routeSeq}`,
+              destination: "RECIPE",
+              confidence: 0.92,
+              decision: "AUTO_ROUTED",
+              status: "AWAITING_USER_APPROVAL",
+              extractedFeedback: "way too salty",
+              actionTaken:
+                "Proposed adaptation — reduce the dominant salt source (awaiting your approval)",
+              destinationResult: null,
+              failureMessage: null,
+            },
+            {
+              id: `rt-${++routeSeq}`,
+              destination: "NUTRITION",
+              confidence: 0.71,
+              decision: "ROUTED_WITH_FLAG",
+              status: "APPLIED",
+              extractedFeedback: "portions have been small",
+              actionTaken: "Increased per-meal dinner targets",
+              destinationResult: null,
+              failureMessage: null,
+            },
+            answered,
+          ]
+        : [answered];
+      return pushNotification(
+        replaceFeedback(s, {
+          ...entry,
+          submissionStatus: "ROUTED",
+          classificationAttempts: entry.classificationAttempts + 1,
+          lastClassifiedAt: nowIso(),
+          routes,
+          updatedAt: nowIso(),
+        }),
+        "ai",
+        `Re-classified after your answer — routed to ${routes.length} destination${routes.length === 1 ? "" : "s"}`,
+      );
+    });
+  }, 1500);
+  return "ok";
 }
 
-/** "This isn't right" — flags the routing as corrected, teaches the mock. */
-export function markFeedbackCorrected(entryId: string): void {
-  mutate((s) => {
-    const entry = s.activity.feedback.find((f) => f.id === entryId);
-    if (!entry || entry.corrected) return s;
-    return pushNotification(
-      {
-        ...s,
-        activity: {
-          ...s.activity,
-          feedback: s.activity.feedback.map((f) =>
-            f.id === entryId ? { ...f, corrected: true } : f,
-          ),
-        },
-      },
-      "ai",
-      "Routing correction recorded — the classifier learns from this",
-    );
-  });
+/** 410-expired re-submit CTA → pre-fill the global feedback modal (§5b). */
+export function requestComposePrefill(text: string): void {
+  mutate((s) => ({
+    ...s,
+    activity: { ...s.activity, composePrefill: text },
+  }));
 }
 
-/**
- * Answer a clarification: resolves the inbox card, marks the originating
- * route answered, and (unless skipped) adds a routed history entry.
- */
-export function answerClarification(id: string, option: string): void {
-  mutate((s) => {
-    const clar = s.activity.clarifications.find((c) => c.id === id);
-    if (!clar) return s;
-    const skipped = option === "Skip";
-    const feedback = s.activity.feedback.map((f) => ({
-      ...f,
-      routes: f.routes.map((r) =>
-        r.question === clar.question && !r.answered
-          ? { ...r, answered: option }
-          : r,
-      ),
-    }));
-    const answeredEntry: FeedbackEntry = {
-      id: `f${++feedbackSeq}`,
-      when: "Just now",
-      text: option,
-      routes: [
-        {
-          dest: "Preference",
-          conf: 0.97,
-          action: "Clarification answered — applied to your taste profile.",
-        },
-      ],
-    };
-    const out: StoreState = {
-      ...s,
-      activity: {
-        ...s.activity,
-        clarifications: s.activity.clarifications.filter((c) => c.id !== id),
-        feedback: skipped ? feedback : [answeredEntry, ...feedback],
-      },
-    };
-    return skipped
-      ? out
-      : pushNotification(
-          out,
-          "ai",
-          `Clarification answered — “${option.toLowerCase()}” routed to Preference`,
-        );
-  });
+export function clearComposePrefill(): void {
+  mutate((s) =>
+    s.activity.composePrefill === null
+      ? s
+      : { ...s, activity: { ...s.activity, composePrefill: null } },
+  );
 }
 
 /* ---- household ------------------------------------------------------------------------------------------ */

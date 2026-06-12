@@ -1,115 +1,55 @@
-import { useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
-  answerClarification,
-  markFeedbackCorrected,
+  clearComposePrefill,
+  findClarification,
   submitFeedback,
-  tierFor,
   useStore,
 } from "../mock/store";
-import type { FeedbackRoute } from "../mock/types";
+import { ClarificationAnswer, RouteLine } from "./FeedbackBits";
 import { Modal } from "./Modal";
-import { TierMark, TIER_INFO } from "./TierMark";
 
-type Phase = "compose" | "classifying" | "routed";
+type Phase = "compose" | "routed";
 
 const COUNT_WORD = ["zero", "one", "two", "three", "four"] as const;
 
-function RouteRow({
-  route,
-  entryId,
-  corrected,
-}: {
-  route: FeedbackRoute;
-  entryId: string;
-  corrected: boolean;
-}) {
-  const tier = tierFor(route.conf);
-  const info = TIER_INFO[tier];
-  return (
-    <div className="route-row mp-card">
-      <TierMark tier={tier} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="route-head">
-          <span className="route-dest">{route.dest}</span>
-          <span className="route-conf">confidence {route.conf.toFixed(2)}</span>
-          <span className="route-tier" style={{ color: info.color }}>
-            {info.label}
-          </span>
-        </div>
-        {route.action && <div className="route-action">{route.action}</div>}
-        {route.question && (
-          <div style={{ marginTop: 6 }}>
-            <span className="mp-serif" style={{ fontSize: 17.5 }}>
-              {route.question}
-            </span>
-            {route.answered ? (
-              <div className="route-answered">
-                ✓ answered — {route.answered.toLowerCase()}
-              </div>
-            ) : (
-              <div
-                style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}
-              >
-                {(route.options ?? []).map((option) => (
-                  /* Equal-weight ghost options — never pre-select an answer. */
-                  <button
-                    key={option}
-                    className="btn btn-small"
-                    onClick={() => answerClarification(`c-${entryId}`, option)}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-      {tier !== "low" &&
-        (corrected ? (
-          <span className="route-corrected">correction recorded</span>
-        ) : (
-          <button
-            className="btn btn-small"
-            style={
-              tier === "mid"
-                ? { color: "var(--mp-amber)", borderColor: "var(--mp-amber)" }
-                : undefined
-            }
-            onClick={() => markFeedbackCorrected(entryId)}
-          >
-            {tier === "mid" ? "Correct this" : "This isn't right"}
-          </button>
-        ))}
-    </div>
-  );
-}
-
 /**
- * Global "Give feedback" button + the real feedback modal: free text →
- * fake 0.8s classification → routing confirmation with confidence tiers
- * (mockup d6-feedback). Submissions land in Activity's feedback history,
- * raise a notification, and low-confidence routes file a clarification.
+ * Global "Give feedback" button + modal: POST /api/v1/feedback (202 +
+ * Location), then poll the entry until classification settles — routes with
+ * server-decided tier marks, or a clarification that pauses the whole entry
+ * (activity.md §4b/§7). The 410-expired re-submit CTA opens this modal
+ * pre-filled via the store's composePrefill.
  */
 export function FeedbackButton() {
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>("compose");
   const [text, setText] = useState("");
   const [entryId, setEntryId] = useState<string | null>(null);
-  const timerRef = useRef<number | null>(null);
 
   const entry = useStore((s) =>
     entryId === null
       ? undefined
       : s.activity.feedback.find((f) => f.id === entryId),
   );
+  const pendingQuery = useStore((s) =>
+    entry?.pendingClarificationQueryId
+      ? findClarification(s, entry.pendingClarificationQueryId)
+      : undefined,
+  );
+  const prefill = useStore((s) => s.activity.composePrefill);
+
+  // 410-expired clarification → "re-submit your feedback" pre-fill (§5b).
+  useEffect(() => {
+    if (prefill !== null) {
+      setText(prefill);
+      setPhase("compose");
+      setEntryId(null);
+      setOpen(true);
+      clearComposePrefill();
+    }
+  }, [prefill]);
 
   const close = () => {
-    if (timerRef.current !== null) {
-      // Closing mid-classification cancels the submission entirely.
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
     setOpen(false);
     setPhase("compose");
     setText("");
@@ -119,13 +59,16 @@ export function FeedbackButton() {
   const submit = () => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    setPhase("classifying");
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null;
-      setEntryId(submitFeedback(trimmed));
-      setPhase("routed");
-    }, 800);
+    // 202 + Location — the receipt is polled, not awaited.
+    setEntryId(submitFeedback(trimmed));
+    setPhase("routed");
   };
+
+  const classifying =
+    entry !== undefined &&
+    (entry.submissionStatus === "RECEIVED" ||
+      entry.submissionStatus === "CLASSIFYING" ||
+      entry.submissionStatus === "CLASSIFIED");
 
   return (
     <>
@@ -177,7 +120,7 @@ export function FeedbackButton() {
             </>
           )}
 
-          {phase === "classifying" && (
+          {phase === "routed" && entry && classifying && (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span className="advisor-dot" />
@@ -197,7 +140,7 @@ export function FeedbackButton() {
             </>
           )}
 
-          {phase === "routed" && entry && (
+          {phase === "routed" && entry && !classifying && (
             <>
               <span
                 className="mp-label"
@@ -206,27 +149,51 @@ export function FeedbackButton() {
                 Feedback received
               </span>
               <div className="feedback-echo mp-card">“{entry.text}”</div>
-              <div style={{ marginTop: 20 }}>
-                <span className="mp-label">
-                  I heard{" "}
-                  {COUNT_WORD[entry.routes.length] ?? entry.routes.length}{" "}
-                  thing{entry.routes.length === 1 ? "" : "s"}
-                </span>
-                <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
-                  {entry.routes.map((route, i) => (
-                    <RouteRow
-                      key={`${route.dest}-${i}`}
-                      route={route}
-                      entryId={entry.id}
-                      corrected={entry.corrected === true}
-                    />
-                  ))}
+
+              {entry.submissionStatus === "CLARIFICATION_PENDING" &&
+              pendingQuery ? (
+                <div style={{ marginTop: 18 }}>
+                  <span className="mp-label">One thing needs you first</span>
+                  <div style={{ marginTop: 8 }}>
+                    {/* Advisor voice — a service call back to you, not a chat. */}
+                    <span className="mp-serif" style={{ fontSize: 19 }}>
+                      {pendingQuery.questionText}
+                    </span>
+                  </div>
+                  <ClarificationAnswer query={pendingQuery} />
+                  <div className="grocery-footnote" style={{ marginTop: 12 }}>
+                    Nothing routes until you answer — also waiting in{" "}
+                    <Link to="/activity" onClick={close}>
+                      Activity
+                    </Link>
+                    .
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div style={{ marginTop: 20 }}>
+                  <span className="mp-label">
+                    I heard{" "}
+                    {COUNT_WORD[entry.routes.length] ?? entry.routes.length}{" "}
+                    thing{entry.routes.length === 1 ? "" : "s"}
+                  </span>
+                  <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+                    {entry.routes.map((route) => (
+                      <RouteLine
+                        key={route.id}
+                        entryId={entry.id}
+                        route={route}
+                        recipeAttached={entry.context.recipeId != null}
+                        framed
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="feedback-foot">
                 <span className="grocery-footnote">
                   Correcting a route teaches the classifier — corrections are
-                  tracked.
+                  logged as ground truth.
                 </span>
                 <button className="btn btn-primary" onClick={close}>
                   Done
