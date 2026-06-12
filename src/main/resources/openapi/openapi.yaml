@@ -115,6 +115,8 @@ paths:
     $ref: 'paths/provisions.yaml#/inventoryItem'
   /api/v1/provisions/inventory/{itemId}/quantity:
     $ref: 'paths/provisions.yaml#/inventoryItemQuantity'
+  /api/v1/provisions/inventory/{itemId}/status:
+    $ref: 'paths/provisions.yaml#/inventoryItemStatus'
   /api/v1/provisions/inventory/{itemId}/mark-spoiled:
     $ref: 'paths/provisions.yaml#/inventoryItemMarkSpoiled'
   /api/v1/provisions/inventory/{itemId}/mark-exhausted:

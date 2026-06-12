@@ -2,7 +2,10 @@ inventory:
   get:
     tags: [Provisions]
     operationId: listInventory
-    summary: List the calling user's active pantry items.
+    summary: >-
+      List the calling user's pantry items. itemStatus defaults to ACTIVE (the pre-P2 view);
+      expiringWithinDays narrows to items whose non-null expiryDate is on or before today + N
+      (null-expiry items never match; 0 = expiring today).
     security:
       - cookieAuth: []
     parameters:
@@ -13,6 +16,17 @@ inventory:
       - in: query
         name: isStaple
         schema: { type: boolean }
+        required: false
+      - in: query
+        name: itemStatus
+        schema:
+          type: string
+          enum: [ACTIVE, EXHAUSTED, SPOILED, WASTED]
+          default: ACTIVE
+        required: false
+      - in: query
+        name: expiringWithinDays
+        schema: { type: integer, minimum: 0 }
         required: false
       - in: query
         name: page
@@ -180,6 +194,52 @@ inventoryItemQuantity:
             schema: { $ref: '../schemas/provisions.yaml#/InventoryItemDto' }
       '400':
         description: Validation error (e.g. status-tracked item, negative quantity).
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: Not found or not owned.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: Stale expectedVersion.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+inventoryItemStatus:
+  patch:
+    tags: [Provisions]
+    operationId: adjustInventoryStatus
+    summary: >-
+      Adjust a pantry item's staple status (focused edit; expectedVersion required;
+      status-tracked items only). A staple transitioning to OUT publishes ItemRanOutEvent
+      exactly as the full PUT path does.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: itemId
+        required: true
+        schema: { type: string, format: uuid }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '../schemas/provisions.yaml#/AdjustInventoryStatusRequest' }
+    responses:
+      '200':
+        description: Updated.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/provisions.yaml#/InventoryItemDto' }
+      '400':
+        description: Validation error (e.g. QUANTITY-mode item, missing newStatus).
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

@@ -6,8 +6,9 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Published {@code AFTER_COMMIT} when {@code createInventoryItem} or {@code updateInventoryItem}
- * succeeds. 01a has no listeners — downstream modules attach in their own tickets.
+ * Published {@code AFTER_COMMIT} when {@code createInventoryItem}, {@code updateInventoryItem} or
+ * the focused {@code adjustStatus} PATCH succeeds. 01a has no listeners — downstream modules attach
+ * in their own tickets.
  *
  * <p>{@code scopeKind = "inventory-item"}, {@code scopeId = itemId}.
  *

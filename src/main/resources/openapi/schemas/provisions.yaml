@@ -165,6 +165,12 @@ AdjustInventoryQuantityRequest:
   properties:
     newQuantity: { type: number, minimum: 0 }
     expectedVersion: { type: integer, format: int64 }
+AdjustInventoryStatusRequest:
+  type: object
+  required: [newStatus, expectedVersion]
+  properties:
+    newStatus: { $ref: '#/StapleStatus' }
+    expectedVersion: { type: integer, format: int64 }
 EquipmentDto:
   type: object
   required: [id, userId, name, available, version]

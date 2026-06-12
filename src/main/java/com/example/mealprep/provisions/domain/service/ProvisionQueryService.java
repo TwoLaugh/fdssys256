@@ -31,8 +31,12 @@ public interface ProvisionQueryService {
   Optional<InventoryItemDto> getInventoryItem(UUID itemId, UUID requestingUserId);
 
   /**
-   * Page of {@code ACTIVE} inventory items belonging to {@code userId}, optionally narrowed by
-   * {@link InventorySearchCriteria}. Soft-deleted (exhausted/spoiled/wasted) rows are not returned.
+   * Page of inventory items belonging to {@code userId}, optionally narrowed by {@link
+   * InventorySearchCriteria}. {@code criteria.itemStatus} selects the lifecycle view; {@code null}
+   * defaults to {@code ACTIVE} (the pre-P2 behaviour — soft-deleted exhausted/spoiled/wasted rows
+   * are not returned). {@code criteria.expiringWithinDays} (≥ 0) narrows to rows whose non-null
+   * {@code expiryDate} is on or before {@code today + N} ({@code today} from the service clock,
+   * consistent with the notification-module expiry scanner); null-expiry rows never match.
    */
   Page<InventoryItemDto> listActiveInventory(
       UUID userId, InventorySearchCriteria criteria, Pageable pageable);

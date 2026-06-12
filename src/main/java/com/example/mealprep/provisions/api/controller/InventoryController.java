@@ -2,11 +2,13 @@ package com.example.mealprep.provisions.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
 import com.example.mealprep.provisions.api.dto.AdjustInventoryQuantityRequest;
+import com.example.mealprep.provisions.api.dto.AdjustInventoryStatusRequest;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
 import com.example.mealprep.provisions.api.dto.InventorySearchCriteria;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
+import com.example.mealprep.provisions.domain.entity.ItemLifecycleStatus;
 import com.example.mealprep.provisions.domain.entity.StorageLocation;
 import com.example.mealprep.provisions.domain.service.ProvisionQueryService;
 import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
@@ -14,6 +16,7 @@ import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
 import java.net.URI;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -22,6 +25,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -43,6 +47,7 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 @RequestMapping("/api/v1/provisions/inventory")
 @Tag(name = "Provisions")
+@Validated
 public class InventoryController {
 
   private static final int DEFAULT_PAGE_SIZE = 20;
@@ -62,17 +67,23 @@ public class InventoryController {
   }
 
   @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-  @Operation(summary = "List the calling user's active pantry items.")
+  @Operation(
+      summary =
+          "List the calling user's pantry items (itemStatus defaults to ACTIVE; expiringWithinDays"
+              + " narrows to items with expiryDate <= today + N).")
   public Page<InventoryItemDto> list(
       @RequestParam(required = false) StorageLocation storageLocation,
       @RequestParam(required = false) Boolean isStaple,
+      @RequestParam(required = false) ItemLifecycleStatus itemStatus,
+      @RequestParam(required = false) @Min(0) Integer expiringWithinDays,
       @RequestParam(required = false, defaultValue = "0") int page,
       @RequestParam(required = false, defaultValue = "20") int size) {
     UUID userId = requireCurrentUserId();
     int safePage = Math.max(0, page);
     int safeSize = clampPageSize(size);
     Pageable pageable = PageRequest.of(safePage, safeSize);
-    InventorySearchCriteria criteria = new InventorySearchCriteria(storageLocation, isStaple);
+    InventorySearchCriteria criteria =
+        new InventorySearchCriteria(storageLocation, isStaple, itemStatus, expiringWithinDays);
     return queryService.listActiveInventory(userId, criteria, pageable);
   }
 
@@ -121,6 +132,20 @@ public class InventoryController {
       @PathVariable UUID itemId, @Valid @RequestBody AdjustInventoryQuantityRequest request) {
     UUID userId = requireCurrentUserId();
     return updateService.adjustQuantity(itemId, userId, request);
+  }
+
+  @PatchMapping(
+      path = "/{itemId}/status",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Adjust a pantry item's staple status (focused edit; expectedVersion required;"
+              + " status-tracked items only).")
+  public InventoryItemDto adjustStatus(
+      @PathVariable UUID itemId, @Valid @RequestBody AdjustInventoryStatusRequest request) {
+    UUID userId = requireCurrentUserId();
+    return updateService.adjustStatus(itemId, userId, request);
   }
 
   @DeleteMapping(path = "/{itemId}")

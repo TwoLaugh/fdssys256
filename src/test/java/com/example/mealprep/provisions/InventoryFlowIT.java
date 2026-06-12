@@ -26,6 +26,7 @@ import com.example.mealprep.provisions.domain.entity.TrackingMode;
 import com.example.mealprep.provisions.domain.service.ProvisionQueryService;
 import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
 import com.example.mealprep.provisions.event.InventoryItemUpsertedEvent;
+import com.example.mealprep.provisions.event.ItemRanOutEvent;
 import com.example.mealprep.provisions.testdata.ProvisionsTestData;
 import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
@@ -544,6 +545,275 @@ class InventoryFlowIT {
         .andExpect(status().isBadRequest());
   }
 
+  // ---------------- PATCH /inventory/{itemId}/status (P2 provisions trio) ----------------
+
+  @Test
+  void patchStatus_returns401_whenAnonymous() throws Exception {
+    mvc.perform(
+            patch("/api/v1/provisions/inventory/" + UUID.randomUUID() + "/status")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"newStatus\": \"LOW\", \"expectedVersion\": 0 }"))
+        .andExpect(status().isUnauthorized());
+  }
+
+  @Test
+  void patchStatus_returns200_bumpsVersion_writesStatusAuditRow_andValidatesContract()
+      throws Exception {
+    AuthedUser user = registerUser();
+    InventoryItemDto created =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), ProvisionsTestData.createStatusTrackedRequest(), AuditActor.USER);
+
+    mvc.perform(
+            patch("/api/v1/provisions/inventory/" + created.id() + "/status")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"newStatus\": \"LOW\", \"expectedVersion\": 0 }"))
+        .andExpect(status().isOk())
+        .andExpect(openApi().isValid(openApiValidator))
+        .andExpect(jsonPath("$.status").value("LOW"))
+        .andExpect(jsonPath("$.version").value(1));
+
+    Long statusAuditRows =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM provision_inventory_audit WHERE inventory_item_id = ?"
+                + " AND field_changed = 'status'",
+            Long.class,
+            created.id());
+    assertThat(statusAuditRows).isEqualTo(1L);
+  }
+
+  @Test
+  void patchStatus_returns400_onQuantityTrackedItem() throws Exception {
+    AuthedUser user = registerUser();
+    InventoryItemDto created =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), ProvisionsTestData.createQuantityTrackedRequest(), AuditActor.USER);
+
+    mvc.perform(
+            patch("/api/v1/provisions/inventory/" + created.id() + "/status")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"newStatus\": \"LOW\", \"expectedVersion\": 0 }"))
+        .andExpect(status().isBadRequest())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/invalid-inventory-quantity"));
+  }
+
+  @Test
+  void patchStatus_returns409_whenStale_thenRefetchAndRetrySucceeds() throws Exception {
+    AuthedUser user = registerUser();
+    InventoryItemDto created =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), ProvisionsTestData.createStatusTrackedRequest(), AuditActor.USER);
+
+    mvc.perform(
+            patch("/api/v1/provisions/inventory/" + created.id() + "/status")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"newStatus\": \"LOW\", \"expectedVersion\": 99 }"))
+        .andExpect(status().isConflict())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+
+    // Chip-tap UX: re-fetch the row, retry with the fresh version — succeeds.
+    MvcResult refetch =
+        mvc.perform(get("/api/v1/provisions/inventory/" + created.id()).cookie(user.cookie()))
+            .andExpect(status().isOk())
+            .andReturn();
+    long freshVersion =
+        objectMapper.readTree(refetch.getResponse().getContentAsString()).get("version").asLong();
+
+    mvc.perform(
+            patch("/api/v1/provisions/inventory/" + created.id() + "/status")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"newStatus\": \"LOW\", \"expectedVersion\": " + freshVersion + " }"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("LOW"));
+  }
+
+  @Test
+  void patchStatus_returns404_whenOwnedByOtherUser() throws Exception {
+    AuthedUser owner = registerUser();
+    AuthedUser intruder = registerUser();
+    InventoryItemDto created =
+        provisionUpdateService.createInventoryItem(
+            owner.userId(), ProvisionsTestData.createStatusTrackedRequest(), AuditActor.USER);
+
+    mvc.perform(
+            patch("/api/v1/provisions/inventory/" + created.id() + "/status")
+                .cookie(intruder.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"newStatus\": \"LOW\", \"expectedVersion\": 0 }"))
+        .andExpect(status().isNotFound())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+  }
+
+  @Test
+  void patchStatus_stapleToOut_firesItemRanOutEventOnce_parityWithPutPath() throws Exception {
+    AuthedUser user = registerUser();
+    // createStatusTrackedRequest = staple salt, STOCKED.
+    InventoryItemDto viaPatch =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), ProvisionsTestData.createStatusTrackedRequest(), AuditActor.USER);
+    InventoryItemDto viaPut =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), ProvisionsTestData.createStatusTrackedRequest(), AuditActor.USER);
+    eventCapture.clear();
+
+    mvc.perform(
+            patch("/api/v1/provisions/inventory/" + viaPatch.id() + "/status")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"newStatus\": \"OUT\", \"expectedVersion\": 0 }"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("OUT"));
+
+    assertThat(eventCapture.ranOutEvents()).hasSize(1);
+    ItemRanOutEvent patchEvent = eventCapture.ranOutEvents().get(0);
+    assertThat(patchEvent.userId()).isEqualTo(user.userId());
+    assertThat(patchEvent.affectedItemIds()).containsExactly(viaPatch.id());
+    assertThat(patchEvent.wasStaple()).isTrue();
+
+    // Parity: the full PUT transitioning the second staple to OUT fires the same event once.
+    String putJson =
+        """
+        {
+          "name": "Salt",
+          "category": "seasoning",
+          "storageLocation": "SPICE_RACK",
+          "trackingMode": "STATUS",
+          "status": "OUT",
+          "isStaple": true,
+          "source": "MANUAL_ADD",
+          "itemStatus": "ACTIVE",
+          "expectedVersion": 0
+        }
+        """;
+    mvc.perform(
+            put("/api/v1/provisions/inventory/" + viaPut.id())
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(putJson))
+        .andExpect(status().isOk());
+
+    assertThat(eventCapture.ranOutEvents()).hasSize(2);
+    ItemRanOutEvent putEvent = eventCapture.ranOutEvents().get(1);
+    assertThat(putEvent.affectedItemIds()).containsExactly(viaPut.id());
+    assertThat(putEvent.wasStaple()).isTrue();
+  }
+
+  // ---------------- GET /inventory itemStatus + expiringWithinDays filters (P2) ----------------
+
+  @Test
+  void list_itemStatusSpoiled_findsSpoiledRow_andDefaultViewUnchanged() throws Exception {
+    AuthedUser user = registerUser();
+    InventoryItemDto active =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), ProvisionsTestData.createQuantityTrackedRequest(), AuditActor.USER);
+    InventoryItemDto spoiled =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), ProvisionsTestData.createStatusTrackedRequest(), AuditActor.USER);
+    provisionUpdateService.markSpoiled(spoiled.id(), user.userId());
+
+    // The mis-tap recovery view: spoiled rows are findable again.
+    mvc.perform(get("/api/v1/provisions/inventory?itemStatus=SPOILED").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(openApi().isValid(openApiValidator))
+        .andExpect(jsonPath("$.totalElements").value(1))
+        .andExpect(jsonPath("$.content[0].id").value(spoiled.id().toString()))
+        .andExpect(jsonPath("$.content[0].itemStatus").value("SPOILED"));
+
+    // Default view unchanged: ACTIVE only, the spoiled row stays invisible.
+    mvc.perform(get("/api/v1/provisions/inventory").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.totalElements").value(1))
+        .andExpect(jsonPath("$.content[0].id").value(active.id().toString()));
+  }
+
+  @Test
+  void list_expiringWithinDays_filtersServerSide_zeroMeansToday_nullExpiryExcluded()
+      throws Exception {
+    AuthedUser user = registerUser();
+    LocalDate today = LocalDate.now(java.time.ZoneOffset.UTC); // app clock is systemUTC()
+    InventoryItemDto expiresToday =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), soySauceRequest(today), AuditActor.USER);
+    provisionUpdateService.createInventoryItem(
+        user.userId(), soySauceRequest(today.plusDays(10)), AuditActor.USER);
+    // Status-tracked salt has no expiry date — must never match an expiring filter.
+    provisionUpdateService.createInventoryItem(
+        user.userId(), ProvisionsTestData.createStatusTrackedRequest(), AuditActor.USER);
+
+    mvc.perform(get("/api/v1/provisions/inventory?expiringWithinDays=0").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(openApi().isValid(openApiValidator))
+        .andExpect(jsonPath("$.totalElements").value(1))
+        .andExpect(jsonPath("$.content[0].id").value(expiresToday.id().toString()));
+
+    mvc.perform(get("/api/v1/provisions/inventory?expiringWithinDays=10").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.totalElements").value(2));
+
+    // No filter: all three rows (null-expiry row included again).
+    mvc.perform(get("/api/v1/provisions/inventory").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.totalElements").value(3));
+  }
+
+  @Test
+  void list_filtersCompose_andPaginationCountsFilteredSet() throws Exception {
+    AuthedUser user = registerUser();
+    LocalDate today = LocalDate.now(java.time.ZoneOffset.UTC);
+    // Three ACTIVE rows expiring within 7 days — the stat-cell query set.
+    for (int i = 1; i <= 3; i++) {
+      provisionUpdateService.createInventoryItem(
+          user.userId(), soySauceRequest(today.plusDays(i)), AuditActor.USER);
+    }
+    // Outside the window.
+    provisionUpdateService.createInventoryItem(
+        user.userId(), soySauceRequest(today.plusDays(30)), AuditActor.USER);
+    // Inside the window but SPOILED — excluded from the ACTIVE view, found via itemStatus.
+    InventoryItemDto spoiled =
+        provisionUpdateService.createInventoryItem(
+            user.userId(), soySauceRequest(today.plusDays(1)), AuditActor.USER);
+    provisionUpdateService.markSpoiled(spoiled.id(), user.userId());
+
+    // Stat cell: expiringWithinDays=7 + itemStatus=ACTIVE; count from totalElements.
+    mvc.perform(
+            get("/api/v1/provisions/inventory?expiringWithinDays=7&itemStatus=ACTIVE&size=2")
+                .cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(openApi().isValid(openApiValidator))
+        .andExpect(jsonPath("$.totalElements").value(3))
+        .andExpect(jsonPath("$.totalPages").value(2))
+        .andExpect(jsonPath("$.content.length()").value(2));
+
+    // Pagination is correct on the filtered set.
+    mvc.perform(
+            get("/api/v1/provisions/inventory?expiringWithinDays=7&itemStatus=ACTIVE&size=2&page=1")
+                .cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.content.length()").value(1));
+
+    // Filters compose with itemStatus too: the spoiled row inside the window.
+    mvc.perform(
+            get("/api/v1/provisions/inventory?expiringWithinDays=7&itemStatus=SPOILED")
+                .cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.totalElements").value(1))
+        .andExpect(jsonPath("$.content[0].id").value(spoiled.id().toString()));
+  }
+
+  @Test
+  void list_expiringWithinDaysNegative_returns400() throws Exception {
+    AuthedUser user = registerUser();
+    mvc.perform(get("/api/v1/provisions/inventory?expiringWithinDays=-1").cookie(user.cookie()))
+        .andExpect(status().isBadRequest());
+  }
+
   @Test
   void put_writesOneAuditRowPerChangedField_andDoesNotWriteForNoOp() throws Exception {
     AuthedUser user = registerUser();
@@ -693,6 +963,7 @@ class InventoryFlowIT {
 
   static class InventoryEventCapture {
     private final List<InventoryItemUpsertedEvent> events = new CopyOnWriteArrayList<>();
+    private final List<ItemRanOutEvent> ranOutEvents = new CopyOnWriteArrayList<>();
 
     @TransactionalEventListener(
         phase = org.springframework.transaction.event.TransactionPhase.AFTER_COMMIT)
@@ -700,12 +971,23 @@ class InventoryFlowIT {
       events.add(event);
     }
 
+    @TransactionalEventListener(
+        phase = org.springframework.transaction.event.TransactionPhase.AFTER_COMMIT)
+    public void onRanOut(ItemRanOutEvent event) {
+      ranOutEvents.add(event);
+    }
+
     public List<InventoryItemUpsertedEvent> events() {
       return events;
     }
 
+    public List<ItemRanOutEvent> ranOutEvents() {
+      return ranOutEvents;
+    }
+
     public void clear() {
       events.clear();
+      ranOutEvents.clear();
     }
   }
 }
