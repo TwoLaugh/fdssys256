@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.mealprep.recipe.api.dto.CreateIngredientRequest;
 import com.example.mealprep.recipe.api.dto.CreateMethodStepRequest;
+import com.example.mealprep.recipe.api.dto.NutritionPerServingDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.api.mapper.IngredientMapper;
 import com.example.mealprep.recipe.api.mapper.MethodStepMapper;
@@ -13,6 +14,8 @@ import com.example.mealprep.recipe.api.mapper.RecipeVersionMapper;
 import com.example.mealprep.recipe.domain.entity.RecipeBranch;
 import com.example.mealprep.recipe.domain.entity.RecipeVersion;
 import com.example.mealprep.recipe.domain.entity.VersionTrigger;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
@@ -181,6 +184,113 @@ class RecipeVersionMapperTest {
     base.setBranch(null);
 
     assertThat(mapper.toOverlayDto(base, List.of(), List.of(), List.of()).branchId()).isNull();
+  }
+
+  // ---------------- nutritionPerServing (recipe-version-nutrition-per-serving) ----------------
+
+  @Test
+  void toDto_noPersistedNutrition_yieldsNull() {
+    RecipeVersion v = bareVersion(UUID.randomUUID());
+    v.setNutritionPerServing(null);
+
+    assertThat(mapper.toDto(v).nutritionPerServing()).isNull();
+  }
+
+  @Test
+  void toDto_calculatedNutrition_mapsAllFigures() {
+    RecipeVersion v = bareVersion(UUID.randomUUID());
+    v.setNutritionPerServing(storedResult("calculated"));
+
+    NutritionPerServingDto dto = mapper.toDto(v).nutritionPerServing();
+
+    assertThat(dto).isNotNull();
+    assertThat(dto.calories()).isEqualTo(520);
+    assertThat(dto.proteinG()).isEqualByComparingTo("38.5");
+    assertThat(dto.carbsG()).isEqualByComparingTo("61.2");
+    assertThat(dto.fatG()).isEqualByComparingTo("14.8");
+    assertThat(dto.fibreG()).isEqualByComparingTo("6.1");
+    assertThat(dto.micros()).hasSize(2);
+    assertThat(dto.micros().get("iron_mg")).isEqualByComparingTo("2.5");
+    assertThat(dto.micros().get("vitamin_c_mg")).isEqualByComparingTo("12.0");
+  }
+
+  @Test
+  void toDto_partialNutrition_stillSurfacesFigures() {
+    RecipeVersion v = bareVersion(UUID.randomUUID());
+    v.setNutritionPerServing(storedResult("partial"));
+
+    NutritionPerServingDto dto = mapper.toDto(v).nutritionPerServing();
+
+    assertThat(dto).isNotNull();
+    assertThat(dto.calories()).isEqualTo(520);
+  }
+
+  @Test
+  void toDto_pendingStoredResult_yieldsNull() {
+    // A stored result whose own status is still pending (no ingredient resolved) carries no
+    // meaningful figures — the contract field stays null per the ticket.
+    RecipeVersion v = bareVersion(UUID.randomUUID());
+    v.setNutritionPerServing(storedResult("pending"));
+
+    assertThat(mapper.toDto(v).nutritionPerServing()).isNull();
+  }
+
+  @Test
+  void toDto_missingNumericFields_defaultToZero_andMicrosEmpty() {
+    ObjectNode sparse = JsonNodeFactory.instance.objectNode();
+    sparse.put("nutritionStatus", "calculated");
+    sparse.put("caloriesPerServing", 100);
+    RecipeVersion v = bareVersion(UUID.randomUUID());
+    v.setNutritionPerServing(sparse);
+
+    NutritionPerServingDto dto = mapper.toDto(v).nutritionPerServing();
+
+    assertThat(dto).isNotNull();
+    assertThat(dto.calories()).isEqualTo(100);
+    assertThat(dto.proteinG()).isEqualByComparingTo("0");
+    assertThat(dto.carbsG()).isEqualByComparingTo("0");
+    assertThat(dto.fatG()).isEqualByComparingTo("0");
+    assertThat(dto.fibreG()).isEqualByComparingTo("0");
+    assertThat(dto.micros()).isEmpty();
+  }
+
+  @Test
+  void toDto_nonObjectStoredJson_yieldsNull() {
+    RecipeVersion v = bareVersion(UUID.randomUUID());
+    v.setNutritionPerServing(JsonNodeFactory.instance.textNode("garbage"));
+
+    assertThat(mapper.toDto(v).nutritionPerServing()).isNull();
+  }
+
+  @Test
+  void toOverlayDto_carriesBaseVersionNutrition() {
+    RecipeVersion base = bareVersion(UUID.randomUUID());
+    base.setNutritionPerServing(storedResult("calculated"));
+
+    RecipeVersionDto dto = mapper.toOverlayDto(base, List.of(), List.of(), List.of());
+
+    assertThat(dto.nutritionPerServing()).isNotNull();
+    assertThat(dto.nutritionPerServing().calories()).isEqualTo(520);
+  }
+
+  /**
+   * The persisted shape is the nutrition module's {@code RecipeNutritionResultDto} written verbatim
+   * by the recipe-01g writer bridge (see {@code RecipeServiceImpl#updateNutritionStatus}).
+   */
+  private static ObjectNode storedResult(String status) {
+    ObjectNode node = JsonNodeFactory.instance.objectNode();
+    node.put("recipeId", UUID.randomUUID().toString());
+    node.put("caloriesPerServing", 520);
+    node.put("proteinPerServingG", new BigDecimal("38.5"));
+    node.put("carbsPerServingG", new BigDecimal("61.2"));
+    node.put("fatPerServingG", new BigDecimal("14.8"));
+    node.put("fibrePerServingG", new BigDecimal("6.1"));
+    ObjectNode micros = node.putObject("microsPerServing");
+    micros.put("iron_mg", new BigDecimal("2.5"));
+    micros.put("vitamin_c_mg", new BigDecimal("12.0"));
+    node.put("nutritionStatus", status);
+    node.putArray("unmapped");
+    return node;
   }
 
   // ---------------- helpers ----------------

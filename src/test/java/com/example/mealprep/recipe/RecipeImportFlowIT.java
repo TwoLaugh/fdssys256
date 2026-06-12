@@ -222,6 +222,131 @@ class RecipeImportFlowIT {
         .andExpect(openApi().isValid(responseOnlyOpenApiValidator));
   }
 
+  // ------- one-shot dedup gate + override (recipe-import-dedup-consistency) -------
+
+  @Test
+  void importFromUrl_duplicateOfLibraryRecipe_returns422_likePreviewConfirm() throws Exception {
+    AuthedUser user = registerUser();
+    Mockito.when(urlFetcher.fetch("https://example.com/jsonld")).thenReturn(jsonLdHtml());
+
+    // First one-shot import lands normally.
+    MvcResult first =
+        mvc.perform(
+                post("/api/v1/recipes/imports/url")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        objectMapper.writeValueAsString(
+                            new ImportRecipeFromUrlRequest("https://example.com/jsonld", null))))
+            .andExpect(status().isCreated())
+            .andReturn();
+    UUID firstId =
+        UUID.fromString(
+            objectMapper.readTree(first.getResponse().getContentAsString()).get("id").asText());
+
+    // Re-importing the same URL now hits the SAME dedup gate as preview->confirm: 422
+    // recipe-import-duplicate (the one-shot bypass is closed).
+    mvc.perform(
+            post("/api/v1/recipes/imports/url")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        new ImportRecipeFromUrlRequest("https://example.com/jsonld", null))))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/recipe-import-duplicate"))
+        .andExpect(jsonPath("$.candidateRecipeId").value(firstId.toString()))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    Long count = jdbcTemplate.queryForObject("SELECT count(*) FROM recipe_recipes", Long.class);
+    assertThat(count).isEqualTo(1L);
+  }
+
+  @Test
+  void importFromUrl_overrideNamingCandidate_returns201_andRecordsDuplicate() throws Exception {
+    AuthedUser user = registerUser();
+    Mockito.when(urlFetcher.fetch("https://example.com/jsonld")).thenReturn(jsonLdHtml());
+
+    MvcResult first =
+        mvc.perform(
+                post("/api/v1/recipes/imports/url")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        objectMapper.writeValueAsString(
+                            new ImportRecipeFromUrlRequest("https://example.com/jsonld", null))))
+            .andExpect(status().isCreated())
+            .andReturn();
+    UUID firstId =
+        UUID.fromString(
+            objectMapper.readTree(first.getResponse().getContentAsString()).get("id").asText());
+
+    // "Import anyway": the one-shot honours the same named override as confirm.
+    MvcResult second =
+        mvc.perform(
+                post("/api/v1/recipes/imports/url")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        objectMapper.writeValueAsString(
+                            new ImportRecipeFromUrlRequest(
+                                "https://example.com/jsonld", null, firstId))))
+            .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
+            .andReturn();
+    UUID secondId =
+        UUID.fromString(
+            objectMapper.readTree(second.getResponse().getContentAsString()).get("id").asText());
+
+    String duplicateOf =
+        jdbcTemplate.queryForObject(
+            "SELECT duplicate_of_recipe_id::text FROM recipe_imports WHERE recipe_id = ?",
+            String.class,
+            secondId);
+    assertThat(duplicateOf).isEqualTo(firstId.toString());
+    Long count = jdbcTemplate.queryForObject("SELECT count(*) FROM recipe_recipes", Long.class);
+    assertThat(count).isEqualTo(2L);
+  }
+
+  @Test
+  void importFromUrl_overrideNamingDifferentRecipe_still422() throws Exception {
+    AuthedUser user = registerUser();
+    Mockito.when(urlFetcher.fetch("https://example.com/jsonld")).thenReturn(jsonLdHtml());
+
+    MvcResult first =
+        mvc.perform(
+                post("/api/v1/recipes/imports/url")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        objectMapper.writeValueAsString(
+                            new ImportRecipeFromUrlRequest("https://example.com/jsonld", null))))
+            .andExpect(status().isCreated())
+            .andReturn();
+    UUID firstId =
+        UUID.fromString(
+            objectMapper.readTree(first.getResponse().getContentAsString()).get("id").asText());
+
+    // Naming a different id than the actual collision candidate is NOT a blind force - still 422.
+    mvc.perform(
+            post("/api/v1/recipes/imports/url")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        new ImportRecipeFromUrlRequest(
+                            "https://example.com/jsonld", null, UUID.randomUUID()))))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(jsonPath("$.candidateRecipeId").value(firstId.toString()))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    Long count = jdbcTemplate.queryForObject("SELECT count(*) FROM recipe_recipes", Long.class);
+    assertThat(count).isEqualTo(1L);
+  }
+
   // ---------------- GET /import-provenance ----------------
 
   @Test

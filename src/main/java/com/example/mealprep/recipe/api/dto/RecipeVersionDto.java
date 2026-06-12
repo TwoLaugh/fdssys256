@@ -28,6 +28,11 @@ import java.util.UUID;
  * directly), and is deliberately kept off the REST contract — a 1536-dim vector has no place in the
  * public API response, and the strict OpenAPI response validator ({@code
  * additionalProperties:false}) would reject it. It therefore never appears in serialised JSON.
+ *
+ * <p>{@code nutritionPerServing} (ticket recipe-version-nutrition-per-serving) surfaces the
+ * per-serving figures the nutrition module persisted onto this version row. {@code null} until the
+ * nutrition module has computed; populated on calculated and partial results — see {@link
+ * NutritionPerServingDto}. Trailing position keeps the pre-existing constructors source-compatible.
  */
 public record RecipeVersionDto(
     UUID id,
@@ -45,12 +50,14 @@ public record RecipeVersionDto(
     RecipeMetadataDto metadata,
     RecipeTagsDto tags,
     List<UUID> appliedSubstitutionIds,
-    @JsonIgnore float[] embedding) {
+    @JsonIgnore float[] embedding,
+    NutritionPerServingDto nutritionPerServing) {
 
   /**
-   * Legacy 15-arg constructor (no embedding) — defaults {@code embedding} to {@code null}. Retained
-   * so the many existing call sites that predate recipe-01i compile unchanged; only the recipe
-   * mappers (which read the persisted vector) use the canonical constructor with the embedding.
+   * Legacy 15-arg constructor (no embedding, no nutrition) — defaults both trailing fields to
+   * {@code null}. Retained so the many existing call sites that predate recipe-01i compile
+   * unchanged; only the recipe mappers (which read the persisted vector + nutrition JSON) use the
+   * canonical constructor.
    */
   public RecipeVersionDto(
       UUID id,
@@ -84,6 +91,49 @@ public record RecipeVersionDto(
         metadata,
         tags,
         appliedSubstitutionIds,
+        null,
+        null);
+  }
+
+  /**
+   * Pre-nutrition 16-arg constructor (embedding, no nutrition) — defaults {@code
+   * nutritionPerServing} to {@code null} for call sites that carry an embedding but predate the
+   * nutritionPerServing exposure (additive-DTO convention).
+   */
+  public RecipeVersionDto(
+      UUID id,
+      UUID branchId,
+      int versionNumber,
+      UUID parentVersionId,
+      VersionTrigger trigger,
+      String changeReason,
+      String embeddingStatus,
+      Instant createdAt,
+      String createdByActor,
+      UUID adapterTraceId,
+      List<IngredientDto> ingredients,
+      List<MethodStepDto> methodSteps,
+      RecipeMetadataDto metadata,
+      RecipeTagsDto tags,
+      List<UUID> appliedSubstitutionIds,
+      float[] embedding) {
+    this(
+        id,
+        branchId,
+        versionNumber,
+        parentVersionId,
+        trigger,
+        changeReason,
+        embeddingStatus,
+        createdAt,
+        createdByActor,
+        adapterTraceId,
+        ingredients,
+        methodSteps,
+        metadata,
+        tags,
+        appliedSubstitutionIds,
+        embedding,
         null);
   }
 }

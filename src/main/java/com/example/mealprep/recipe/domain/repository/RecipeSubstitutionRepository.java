@@ -22,8 +22,16 @@ public interface RecipeSubstitutionRepository extends JpaRepository<RecipeSubsti
   /**
    * All substitutions on a single version in the given state, sorted {@code last_applied_at DESC
    * NULLS LAST}. The {@code getSubstitutionsForVersion} and {@code SubstitutionOverlayApplier}
-   * flows call with {@code state = ACCEPTED}.
+   * flows call with {@code state = ACCEPTED}; the recipe-substitution-state-filter ticket's {@code
+   * state} query param routes the other explicit states here too.
    */
   List<RecipeSubstitution> findAllByVersionIdAndStateOrderByLastAppliedAtDesc(
       UUID versionId, SubstitutionState state);
+
+  /**
+   * All substitutions on a single version regardless of state, sorted {@code last_applied_at DESC
+   * NULLS LAST}. Backs {@code state=ALL} on the substitutions list
+   * (recipe-substitution-state-filter ticket).
+   */
+  List<RecipeSubstitution> findAllByVersionIdOrderByLastAppliedAtDesc(UUID versionId);
 }

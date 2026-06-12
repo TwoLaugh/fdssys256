@@ -4,10 +4,15 @@ import com.example.mealprep.recipe.api.dto.CreateIngredientRequest;
 import com.example.mealprep.recipe.api.dto.CreateMethodStepRequest;
 import com.example.mealprep.recipe.api.dto.IngredientDto;
 import com.example.mealprep.recipe.api.dto.MethodStepDto;
+import com.example.mealprep.recipe.api.dto.NutritionPerServingDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.domain.entity.RecipeVersion;
+import com.fasterxml.jackson.databind.JsonNode;
+import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
 
@@ -63,7 +68,8 @@ public class RecipeVersionMapper {
         metadataMapper.toDto(entity.getMetadata()),
         tagsMapper.toDto(entity.getTags()),
         appliedSubs,
-        entity.getEmbedding());
+        entity.getEmbedding(),
+        toNutritionPerServing(entity.getNutritionPerServing()));
   }
 
   /**
@@ -120,6 +126,47 @@ public class RecipeVersionMapper {
         metadataMapper.toDto(baseVersion.getMetadata()),
         tagsMapper.toDto(baseVersion.getTags()),
         appliedSubs,
-        baseVersion.getEmbedding());
+        baseVersion.getEmbedding(),
+        toNutritionPerServing(baseVersion.getNutritionPerServing()));
+  }
+
+  /**
+   * Re-shape the persisted {@code nutrition_per_serving} JSONB (the nutrition module's {@code
+   * RecipeNutritionResultDto} written verbatim by the recipe-01g writer bridge) into the contract's
+   * {@link NutritionPerServingDto}. Returns {@code null} when nothing has been persisted yet or the
+   * stored result's own status is still {@code pending} (no ingredient resolved → no meaningful
+   * figures); calculated and partial results both surface figures per the ticket.
+   */
+  static NutritionPerServingDto toNutritionPerServing(JsonNode persisted) {
+    if (persisted == null || persisted.isNull() || !persisted.isObject()) {
+      return null;
+    }
+    String status = persisted.path("nutritionStatus").asText("");
+    if ("pending".equalsIgnoreCase(status)) {
+      return null;
+    }
+    Map<String, BigDecimal> micros = new LinkedHashMap<>();
+    JsonNode microsNode = persisted.path("microsPerServing");
+    if (microsNode.isObject()) {
+      microsNode
+          .fields()
+          .forEachRemaining(
+              entry -> {
+                if (entry.getValue().isNumber()) {
+                  micros.put(entry.getKey(), entry.getValue().decimalValue());
+                }
+              });
+    }
+    return new NutritionPerServingDto(
+        persisted.path("caloriesPerServing").asInt(0),
+        decimalOrZero(persisted.path("proteinPerServingG")),
+        decimalOrZero(persisted.path("carbsPerServingG")),
+        decimalOrZero(persisted.path("fatPerServingG")),
+        decimalOrZero(persisted.path("fibrePerServingG")),
+        micros);
+  }
+
+  private static BigDecimal decimalOrZero(JsonNode node) {
+    return node.isNumber() ? node.decimalValue() : BigDecimal.ZERO;
   }
 }

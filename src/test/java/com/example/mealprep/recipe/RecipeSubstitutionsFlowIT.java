@@ -208,6 +208,123 @@ class RecipeSubstitutionsFlowIT {
     org.assertj.core.api.Assertions.assertThat(UUID.fromString(promotedTo)).isEqualTo(newVersionId);
   }
 
+  // ---------------- state filter (recipe-substitution-state-filter) ----------------
+
+  @Test
+  void listForVersion_stateFilterMatrix_proposedListableAfterReload() throws Exception {
+    AuthedUser user = registerUser();
+    CreatedRecipe r = createRecipe(user.cookie());
+
+    // Propose two substitutions; accept the first, leave the second PROPOSED.
+    MvcResult firstProposed =
+        mvc.perform(
+                post("/api/v1/recipes/" + r.recipeId() + "/substitutions")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        objectMapper.writeValueAsString(
+                            RecipeTestData.defaultSubstitutionRequest(r.versionId()))))
+            .andExpect(status().isCreated())
+            .andReturn();
+    JsonNode firstJson = objectMapper.readTree(firstProposed.getResponse().getContentAsString());
+    UUID acceptedId = UUID.fromString(firstJson.get("id").asText());
+    mvc.perform(
+            post("/api/v1/recipes/" + r.recipeId() + "/substitutions/" + acceptedId + "/accept")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        RecipeTestData.acceptRequest(firstJson.get("version").asLong()))))
+        .andExpect(status().isOk());
+
+    MvcResult secondProposed =
+        mvc.perform(
+                post("/api/v1/recipes/" + r.recipeId() + "/substitutions")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        objectMapper.writeValueAsString(
+                            RecipeTestData.substitutionRequestWithMethodOverlay(r.versionId()))))
+            .andExpect(status().isCreated())
+            .andReturn();
+    UUID proposedId =
+        UUID.fromString(
+            objectMapper
+                .readTree(secondProposed.getResponse().getContentAsString())
+                .get("id")
+                .asText());
+
+    // Default (no param) returns exactly what it returned before the filter landed: ACCEPTED.
+    mvc.perform(
+            get("/api/v1/recipes/" + r.recipeId() + "/substitutions")
+                .param("versionId", r.versionId().toString())
+                .cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(1))
+        .andExpect(jsonPath("$[0].id").value(acceptedId.toString()))
+        .andExpect(jsonPath("$[0].state").value("ACCEPTED"))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // state=PROPOSED lists the pending proposal "after a reload" - with the version field the
+    // lifecycle calls need for expectedVersion.
+    mvc.perform(
+            get("/api/v1/recipes/" + r.recipeId() + "/substitutions")
+                .param("versionId", r.versionId().toString())
+                .param("state", "PROPOSED")
+                .cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(1))
+        .andExpect(jsonPath("$[0].id").value(proposedId.toString()))
+        .andExpect(jsonPath("$[0].state").value("PROPOSED"))
+        .andExpect(jsonPath("$[0].version").isNumber())
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // state=ALL returns every state; the versionId filter composes with state.
+    mvc.perform(
+            get("/api/v1/recipes/" + r.recipeId() + "/substitutions")
+                .param("versionId", r.versionId().toString())
+                .param("state", "ALL")
+                .cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(2))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // Composition with a different versionId: nothing on an unrelated version.
+    mvc.perform(
+            get("/api/v1/recipes/" + r.recipeId() + "/substitutions")
+                .param("versionId", UUID.randomUUID().toString())
+                .param("state", "ALL")
+                .cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(0))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // state=REJECTED finds nothing here (no rejected rows yet).
+    mvc.perform(
+            get("/api/v1/recipes/" + r.recipeId() + "/substitutions")
+                .param("versionId", r.versionId().toString())
+                .param("state", "REJECTED")
+                .cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(0))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void listForVersion_unknownStateValue_returns400() throws Exception {
+    AuthedUser user = registerUser();
+    CreatedRecipe r = createRecipe(user.cookie());
+
+    // state=BOGUS is contract-invalid on the request side (enum violation), so only the response
+    // status is asserted - same convention as other intentionally-invalid-request tests.
+    mvc.perform(
+            get("/api/v1/recipes/" + r.recipeId() + "/substitutions")
+                .param("versionId", r.versionId().toString())
+                .param("state", "BOGUS")
+                .cookie(user.cookie()))
+        .andExpect(status().isBadRequest());
+  }
+
   @Test
   void create_thenReject_setsState_REJECTED() throws Exception {
     AuthedUser user = registerUser();

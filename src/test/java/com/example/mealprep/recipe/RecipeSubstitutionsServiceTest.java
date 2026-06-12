@@ -234,6 +234,53 @@ class RecipeSubstitutionsServiceTest {
         .isInstanceOf(SubstitutionPromotionPreconditionException.class);
   }
 
+  // ------- state filter on the version listing (recipe-substitution-state-filter) -------
+
+  @Test
+  void getSubstitutionsForVersion_singleArg_keepsAcceptedDefault() {
+    UUID versionId = UUID.randomUUID();
+    when(substitutionRepository.findAllByVersionIdAndStateOrderByLastAppliedAtDesc(
+            versionId, SubstitutionState.ACCEPTED))
+        .thenReturn(java.util.List.of());
+
+    service().getSubstitutionsForVersion(versionId);
+
+    verify(substitutionRepository)
+        .findAllByVersionIdAndStateOrderByLastAppliedAtDesc(versionId, SubstitutionState.ACCEPTED);
+    verify(substitutionRepository, never()).findAllByVersionIdOrderByLastAppliedAtDesc(any());
+  }
+
+  @Test
+  void getSubstitutionsForVersion_explicitState_routesStatePredicate() {
+    UUID versionId = UUID.randomUUID();
+    RecipeSubstitution proposed = proposedSub(UUID.randomUUID());
+    when(substitutionRepository.findAllByVersionIdAndStateOrderByLastAppliedAtDesc(
+            versionId, SubstitutionState.PROPOSED))
+        .thenReturn(java.util.List.of(proposed));
+
+    var result = service().getSubstitutionsForVersion(versionId, SubstitutionState.PROPOSED);
+
+    assertThat(result).hasSize(1);
+    assertThat(result.get(0).state()).isEqualTo(SubstitutionState.PROPOSED);
+    verify(substitutionRepository, never()).findAllByVersionIdOrderByLastAppliedAtDesc(any());
+  }
+
+  @Test
+  void getSubstitutionsForVersion_nullState_meansAll() {
+    UUID versionId = UUID.randomUUID();
+    RecipeSubstitution proposed = proposedSub(UUID.randomUUID());
+    RecipeSubstitution accepted = proposedSub(UUID.randomUUID());
+    accepted.setState(SubstitutionState.ACCEPTED);
+    when(substitutionRepository.findAllByVersionIdOrderByLastAppliedAtDesc(versionId))
+        .thenReturn(java.util.List.of(proposed, accepted));
+
+    var result = service().getSubstitutionsForVersion(versionId, null);
+
+    assertThat(result).hasSize(2);
+    verify(substitutionRepository, never())
+        .findAllByVersionIdAndStateOrderByLastAppliedAtDesc(any(), any());
+  }
+
   @Test
   void recordSubstitution_missing_throws404() {
     UUID id = UUID.randomUUID();

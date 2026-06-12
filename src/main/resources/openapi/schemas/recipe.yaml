@@ -151,6 +151,20 @@ RecipeVersionDto:
       nullable: true
       description: 'Populated only by GET /versions/{versionId}/with-substitutions; null on every other read.'
       items: { type: string, format: uuid }
+    nutritionPerServing:
+      type: object
+      nullable: true
+      description: 'Computed by the nutrition module; null until nutritionStatus leaves PENDING.'
+      required: [calories, proteinG, carbsG, fatG, fibreG, micros]
+      properties:
+        calories: { type: integer, minimum: 0 }
+        proteinG: { type: number, format: double, minimum: 0 }
+        carbsG: { type: number, format: double, minimum: 0 }
+        fatG: { type: number, format: double, minimum: 0 }
+        fibreG: { type: number, format: double, minimum: 0 }
+        micros:
+          type: object
+          additionalProperties: { type: number, format: double, minimum: 0 }
 RecipeDto:
   type: object
   required:
@@ -249,6 +263,20 @@ RecipeDto:
           nullable: true
           description: 'Populated only by GET /versions/{versionId}/with-substitutions; null on every other read.'
           items: { type: string, format: uuid }
+        nutritionPerServing:
+          type: object
+          nullable: true
+          description: 'Computed by the nutrition module; null until nutritionStatus leaves PENDING.'
+          required: [calories, proteinG, carbsG, fatG, fibreG, micros]
+          properties:
+            calories: { type: integer, minimum: 0 }
+            proteinG: { type: number, format: double, minimum: 0 }
+            carbsG: { type: number, format: double, minimum: 0 }
+            fatG: { type: number, format: double, minimum: 0 }
+            fibreG: { type: number, format: double, minimum: 0 }
+            micros:
+              type: object
+              additionalProperties: { type: number, format: double, minimum: 0 }
     branches:
       type: array
       items: { $ref: '#/RecipeBranchDto' }
@@ -348,6 +376,13 @@ CreateRecipeRequest:
         dietaryFlags:
           type: array
           items: { type: string, maxLength: 32 }
+    ignoreDuplicateOfRecipeId:
+      type: string
+      format: uuid
+      nullable: true
+      description: >
+        Dedup override: persist despite an ingredient-overlap collision with exactly this recipe.
+        A collision with any other recipe still returns 422 recipe-import-duplicate.
 ImportSource:
   type: string
   enum: [MANUAL, URL, AI_GENERATED, WEB_DISCOVERED]
@@ -364,6 +399,14 @@ ImportRecipeFromUrlRequest:
         Optional. May be omitted or sent as null. Imported recipes are always
         created in the caller's USER catalogue regardless of this value
         (server-assigned); the field is retained for forward compatibility.
+    ignoreDuplicateOfRecipeId:
+      type: string
+      format: uuid
+      nullable: true
+      description: >
+        Dedup override: persist despite an ingredient-overlap collision with exactly this recipe.
+        A collision with any other recipe still returns 422 recipe-import-duplicate. The one-shot
+        path runs the same dedup gate as preview-confirm (recipe-import-dedup-consistency).
 ImportRecipeFromHtmlRequest:
   type: object
   required: [url, html]
@@ -437,6 +480,15 @@ ConfirmImportRequest:
     sourceUrl: { type: string, format: uri, minLength: 1, maxLength: 2048 }
     extractionMethod: { type: string, maxLength: 64, nullable: true }
     recipe: { $ref: '#/CreateRecipeRequest' }
+    ignoreDuplicateOfRecipeId:
+      type: string
+      format: uuid
+      nullable: true
+      description: >
+        Dedup override: persist despite an ingredient-overlap collision with exactly this recipe
+        (the candidateRecipeId from the 422). A collision with any other recipe still returns 422
+        recipe-import-duplicate. The honoured override is recorded as duplicateOfRecipeId on the
+        import-provenance row.
 RecipeImportDto:
   type: object
   required: [id, recipeId, sourceType, importedAt, importedByUserId]

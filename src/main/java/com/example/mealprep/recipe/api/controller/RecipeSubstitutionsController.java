@@ -8,6 +8,7 @@ import com.example.mealprep.recipe.api.dto.PromoteSubstitutionRequest;
 import com.example.mealprep.recipe.api.dto.RecipeSubstitutionDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.api.dto.RejectSubstitutionRequest;
+import com.example.mealprep.recipe.api.dto.SubstitutionState;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import com.example.mealprep.recipe.domain.service.RecipeUpdateService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -17,6 +18,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -47,6 +49,7 @@ public class RecipeSubstitutionsController {
   private static final String ACTION_ACCEPT = "accept";
   private static final String ACTION_REJECT = "reject";
   private static final String ACTION_PROMOTE = "promote-to-version";
+  private static final String STATE_ALL = "ALL";
 
   private final RecipeQueryService queryService;
   private final RecipeUpdateService updateService;
@@ -73,12 +76,38 @@ public class RecipeSubstitutionsController {
   }
 
   @GetMapping(path = "/substitutions", produces = MediaType.APPLICATION_JSON_VALUE)
-  @Operation(summary = "List substitutions for a specific version (state filter: ACCEPTED).")
+  @Operation(
+      summary =
+          "List substitutions for a specific version, filtered by state (default ACCEPTED;"
+              + " PROPOSED | ACCEPTED | REJECTED | SUPERSEDED | ALL).")
   @BoundedCollection("bounded by version; substitutions per version are typically < 20")
   public List<RecipeSubstitutionDto> listForVersion(
-      @PathVariable UUID recipeId, @RequestParam("versionId") UUID versionId) {
+      @PathVariable UUID recipeId,
+      @RequestParam("versionId") UUID versionId,
+      @RequestParam(name = "state", required = false, defaultValue = "ACCEPTED") String state) {
     requireCurrentUserId();
-    return queryService.getSubstitutionsForVersion(versionId);
+    return queryService.getSubstitutionsForVersion(versionId, parseStateFilter(state));
+  }
+
+  /**
+   * Parse the recipe-substitution-state-filter ticket's {@code state} query param: an explicit
+   * {@link SubstitutionState}, the pseudo-value {@code ALL} (→ {@code null}, meaning no state
+   * predicate), or 400 on anything else. Default {@code ACCEPTED} preserves today's behaviour for
+   * callers that send no param.
+   */
+  private static SubstitutionState parseStateFilter(String state) {
+    if (STATE_ALL.equalsIgnoreCase(state)) {
+      return null;
+    }
+    try {
+      return SubstitutionState.valueOf(state.toUpperCase(Locale.ROOT));
+    } catch (IllegalArgumentException ex) {
+      throw new ResponseStatusException(
+          HttpStatus.BAD_REQUEST,
+          "Unknown substitution state: "
+              + state
+              + " (expected PROPOSED | ACCEPTED | REJECTED | SUPERSEDED | ALL)");
+    }
   }
 
   @PostMapping(
