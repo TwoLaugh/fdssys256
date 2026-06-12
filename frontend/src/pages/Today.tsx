@@ -97,7 +97,8 @@ export function Today() {
   const intakeDay = useStore((s) => s.nutrition.intakeDays[MOCK_TODAY_ISO]);
   const targets = useStore((s) => s.targets);
   const notifications = useStore((s) => s.notifications);
-  const weeklyBudget = useStore((s) => s.preferences.lifestyle.weeklyBudget);
+  // Budget is a provisions concern — the pantry BudgetDto is the record.
+  const weeklyBudget = useStore((s) => s.pantry.budget?.weeklyTarget ?? 55);
   const pendingChange = useStore((s) => s.adaptation.pendingChanges[0]);
   const userName = useStore(
     (s) => s.household.members.find((m) => m.role === "owner")?.name ?? "there",

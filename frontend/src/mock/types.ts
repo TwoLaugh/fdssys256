@@ -421,72 +421,108 @@ export interface NutritionState {
   ingredientCache: IngredientNutritionDto[];
 }
 
-/* ---- preferences ------------------------------------------------------------- */
+/* ---- preferences: backend DTO mirrors ---------------------------------------------
+ * Contract shapes throughout (design/frontend/pages/preferences.md §2) —
+ * re-exported from the generated OpenAPI types so the mock validates the
+ * production field names, exactly like the nutrition/planner/recipe slices.
+ */
 
-export interface TasteGroup {
-  name: string;
-  likes: string[];
-  dislikes: string[];
-}
+export type TasteVectorStatus = Schemas["TasteVectorStatus"];
+export type TasteProfileTrigger = Schemas["TasteProfileTrigger"];
+export type TasteProfileChangeType = Schemas["TasteProfileChangeType"];
+export type IngredientPreferenceSource = Schemas["IngredientPreferenceSource"];
+export type TasteProfileDocument = Schemas["TasteProfileDocument"];
+export type TasteProfileDto = Schemas["TasteProfileDto"];
+export type TasteProfileVersionDto = Schemas["TasteProfileVersionDto"];
+export type TasteProfileAuditEntryDto = Schemas["TasteProfileAuditEntryDto"];
+export type UpdateTasteProfileRequest = Schemas["UpdateTasteProfileRequest"];
+export type RollbackTasteProfileRequest = Schemas["RollbackTasteProfileRequest"];
+export type IngredientPreference = Schemas["IngredientPreference"];
+export type TrendingIngredient = Schemas["TrendingIngredient"];
+export type RecipeRecommendation = Schemas["RecipeRecommendation"];
+export type ActiveExperiment = Schemas["ActiveExperiment"];
+export type SoftIntolerance = Schemas["SoftIntolerance"];
 
-export type ConstraintKind = "allergy" | "dietary";
+export type HardConstraintsDto = Schemas["HardConstraintsDto"];
+export type UpdateHardConstraintsRequest = Schemas["UpdateHardConstraintsRequest"];
+export type HardConstraintsAuditEntryDto = Schemas["HardConstraintsAuditEntryDto"];
+export type DietaryIdentityDto = Schemas["DietaryIdentityDto"];
+export type DietaryIdentityExceptionDto = Schemas["DietaryIdentityExceptionDto"];
+export type HardIntoleranceDto = Schemas["HardIntoleranceDto"];
+export type AgeRestrictionDto = Schemas["AgeRestrictionDto"];
+/** The GAP-04 409 problem body — drives the removal interstitial (§4b). */
+export type Tier1RemovalConfirmationProblem =
+  Schemas["Tier1RemovalConfirmationProblem"];
+export type RemovedTier1Constraint = Schemas["RemovedTier1Constraint"];
+export type Tier1Category = Schemas["Tier1Category"];
 
-export interface LifestyleConfig {
-  slotTimes: Record<MealSlotKey, string>;
-  /** Portion multiplier, e.g. 1.0. */
-  portionScale: number;
-  /** Weekly grocery budget in £ — mirrored to pantry budget + grocery headroom. */
-  weeklyBudget: number;
-}
+export type LifestyleConfigDto = Schemas["LifestyleConfigDto"];
+export type PreferenceLifestyleConfigDocument =
+  Schemas["PreferenceLifestyleConfigDocument"];
+export type UpdateLifestyleConfigRequest = Schemas["UpdateLifestyleConfigRequest"];
+export type LifestyleConfigAuditEntryDto = Schemas["LifestyleConfigAuditEntryDto"];
+
+export type PreferenceArchiveEntryDto = Schemas["PreferenceArchiveEntryDto"];
+export type ArchivedReason = PreferenceArchiveEntryDto["archivedReason"];
 
 export interface PreferencesState {
-  profileVersion: number;
+  /** GET /preferences/taste-profile (#1); null plays the 404 onboarding empty state. */
+  tasteProfile: TasteProfileDto | null;
+  /** Version snapshots newest first (#5/#6 drawer). */
+  versions: TasteProfileVersionDto[];
+  /** Taste-profile audit log newest first (#7). */
+  tasteAudit: TasteProfileAuditEntryDto[];
+  /** Refresh-now poll state — 202 then poll #1; no completion signal (spec §8 Q2). */
   refreshing: boolean;
-  groups: TasteGroup[];
-  /** Hard constraints — removal requires the GAP-04 interstitial. */
-  allergies: string[];
-  dietary: string[];
-  lifestyle: LifestyleConfig;
+  /** GET /preferences/hard-constraints (#8); null plays the 404 empty state. */
+  hardConstraints: HardConstraintsDto | null;
+  hardAudit: HardConstraintsAuditEntryDto[];
+  /** GET /preferences/lifestyle-config (#11); null plays the 404 empty state. */
+  lifestyle: LifestyleConfigDto | null;
+  lifestyleAudit: LifestyleConfigAuditEntryDto[];
+  /** Archive rows newest first (#15); active-count (#16) = rePromotedAt == null. */
+  archive: PreferenceArchiveEntryDto[];
 }
 
-/* ---- activity / feedback -------------------------------------------------------- */
+/* ---- activity / feedback: backend DTO mirrors ---------------------------------------
+ * Contract shapes throughout (design/frontend/pages/activity.md §2). Routing
+ * tiers are SERVER-decided — render from RoutingDecisionDto.decision, never
+ * re-derive from confidence except as a fallback (spec §4b).
+ */
 
 /** ✓ olive ≥0.8 routed · ? amber 0.5–0.8 check me · … terra <0.5 needs you. */
 export type ConfidenceTier = "high" | "mid" | "low";
 
-export interface FeedbackRoute {
-  dest: string;
-  conf: number;
-  /** Routed/check-me description of what the destination will do. */
-  action?: string;
-  /** Low-confidence clarification question (advisor voice). */
-  question?: string;
-  options?: string[];
-  /** The chosen clarification option once answered. */
-  answered?: string;
-}
-
-export interface FeedbackEntry {
-  id: string;
-  when: string;
-  /** The user's words, shown plain and quoted — never serif. */
-  text: string;
-  routes: FeedbackRoute[];
-  /** "This isn't right" pressed — correction recorded. */
-  corrected?: boolean;
-}
-
-export interface Clarification {
-  id: string;
-  question: string;
-  options: string[];
-  /** The feedback text that raised the question. */
-  context?: string;
-}
+export type Destination = Schemas["Destination"];
+export type RoutingDecision = Schemas["RoutingDecision"];
+export type RoutingStatus = Schemas["RoutingStatus"];
+export type SubmissionStatus = Schemas["SubmissionStatus"];
+export type FeedbackScreen = Schemas["Screen"];
+export type UiContextDto = Schemas["UiContextDto"];
+export type FeedbackEntryDto = Schemas["FeedbackEntryDto"];
+export type RoutingDecisionDto = Schemas["RoutingDecisionDto"];
+export type SubmitFeedbackRequest = Schemas["SubmitFeedbackRequest"];
+export type SubmitFeedbackResponse = Schemas["SubmitFeedbackResponse"];
+export type ClarificationQueryDto = Schemas["ClarificationQueryDto"];
+export type ClarificationOptionDto = Schemas["ClarificationOptionDto"];
+export type ClarificationStatus = Schemas["ClarificationStatus"];
+export type AnswerClarificationRequest = Schemas["AnswerClarificationRequest"];
+export type MisclassificationCorrectionDto =
+  Schemas["MisclassificationCorrectionDto"];
+export type CorrectionReplayStatus = Schemas["CorrectionReplayStatus"];
 
 export interface ActivityState {
-  feedback: FeedbackEntry[];
-  clarifications: Clarification[];
+  /** GET /feedback page rows, newest first (#6). */
+  feedback: FeedbackEntryDto[];
+  /** Clarification queries, ALL statuses; the inbox filters (#10). */
+  clarifications: ClarificationQueryDto[];
+  /** Corrections log rows, newest first (#9). */
+  corrections: MisclassificationCorrectionDto[];
+  /**
+   * Transient UI state (not a DTO): pre-filled text for the global feedback
+   * modal — the 410-expired-clarification "re-submit" CTA (spec §5b).
+   */
+  composePrefill: string | null;
 }
 
 /* ---- notification preferences ----------------------------------------------------- */

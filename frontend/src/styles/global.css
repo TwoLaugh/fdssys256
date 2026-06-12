@@ -3699,3 +3699,124 @@ button.rail-item.active {
 .pantry-row-sub {
   margin-top: 3px;
 }
+
+/* ---- Preferences (contract rebuild) ----------------------------------------------- */
+
+/* Red accent strip — danger semantics: safety-critical, never decoration. */
+.constraints-card {
+  border-left: 3px solid var(--mp-red);
+}
+
+.exception-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.exception-row .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.constraint-chip.tinted {
+  background: var(--mp-olive-tint);
+  border-color: transparent;
+  color: var(--mp-olive-deep);
+}
+
+.ingredient-pref-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 7px;
+  flex-wrap: wrap;
+}
+
+.evidence-count {
+  font-family: var(--mp-font-display, inherit);
+  font-weight: 700;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--mp-ink);
+}
+
+.source-badge {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mp-muted);
+  border: 1px solid var(--mp-line-hi);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.tier1-removal-line {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--mp-red);
+}
+
+.drawer-snapshot {
+  margin-top: 10px;
+}
+
+.drawer-snapshot .pref-grid {
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-top: 0;
+}
+
+.raw-json {
+  font-size: 11.5px;
+  line-height: 1.5;
+  background: var(--mp-bg);
+  border: 1px solid var(--mp-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 6px 0 0;
+  overflow-x: auto;
+  max-height: 220px;
+}
+
+/* ---- Activity (contract rebuild) --------------------------------------------------- */
+
+.impact-meter {
+  display: inline-block;
+  width: 52px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--mp-line);
+  vertical-align: middle;
+  overflow: hidden;
+}
+
+.impact-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--mp-terra);
+}
+
+.route-fragment {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  margin-top: 3px;
+}
+
+.route-flag-caption {
+  font-family: var(--mp-font-advisor);
+  font-style: italic;
+  font-size: 14.5px;
+  color: var(--mp-amber);
+  margin-top: 4px;
+}
+
+.route-failure {
+  font-size: 13px;
+  color: var(--mp-red);
+  margin-top: 4px;
+}
+
+.clar-option-snippet {
+  font-weight: 400;
+  color: var(--mp-muted);
+}

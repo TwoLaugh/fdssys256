@@ -34,6 +34,7 @@ import {
   recipeName,
   removeSnack,
   searchIngredients,
+  selectSlotTimes,
   skipSlot,
   updateJournalEntry,
   upsertActivity,
@@ -1239,7 +1240,7 @@ export function OverviewTab() {
   const targets = useStore((s) => s.targets);
   const recipes = useStore((s) => s.recipes);
   const activePlan = useStore((s) => activePlanForWeek(s, CURRENT_WEEK_START));
-  const slotTimes = useStore((s) => s.preferences.lifestyle.slotTimes);
+  const slotTimes = useStore(selectSlotTimes);
   const navigate = useNavigate();
 
   const [dayIdx, setDayIdx] = useState(TODAY_INDEX);

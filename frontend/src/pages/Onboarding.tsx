@@ -9,6 +9,7 @@ import {
   adjustWeeklyBudget,
   inviteMember,
   renameHousehold,
+  selectSlotTimes,
   useStore,
 } from "../mock/store";
 import type { MealSlotKey } from "../mock/types";
@@ -23,7 +24,9 @@ const SLOT_KEYS: MealSlotKey[] = ["breakfast", "lunch", "dinner"];
 export function Onboarding() {
   const navigate = useNavigate();
   const household = useStore((s) => s.household);
-  const prefs = useStore((s) => s.preferences);
+  const constraints = useStore((s) => s.preferences.hardConstraints);
+  const slotTimes = useStore(selectSlotTimes);
+  const weeklyBudget = useStore((s) => s.pantry.budget?.weeklyTarget ?? 55);
   const targets = useStore((s) => s.targets);
 
   const [step, setStep] = useState(0);
@@ -125,12 +128,15 @@ export function Onboarding() {
                 Anything I must never plan?
               </span>
               <div className="pref-chips" style={{ marginTop: 14 }}>
-                {prefs.allergies.map((a) => (
+                {(constraints?.allergies ?? []).map((a) => (
                   <TintChip key={a}>{a}</TintChip>
                 ))}
-                {prefs.dietary.map((d) => (
-                  <TintChip key={d}>{d}</TintChip>
-                ))}
+                {constraints && (
+                  <TintChip>
+                    {constraints.dietaryIdentity.labelForDisplay ??
+                      constraints.dietaryIdentity.base}
+                  </TintChip>
+                )}
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
                 <input
@@ -179,7 +185,7 @@ export function Onboarding() {
                       </button>
                       <span className="target-value">
                         <span className="mp-num" style={{ fontSize: 16 }}>
-                          {prefs.lifestyle.slotTimes[slot]}
+                          {slotTimes[slot]}
                         </span>
                       </span>
                       <button
@@ -204,7 +210,7 @@ export function Onboarding() {
                     </button>
                     <span className="target-value">
                       <span className="mp-num" style={{ fontSize: 16 }}>
-                        £{prefs.lifestyle.weeklyBudget}
+                        £{weeklyBudget}
                       </span>
                     </span>
                     <button
