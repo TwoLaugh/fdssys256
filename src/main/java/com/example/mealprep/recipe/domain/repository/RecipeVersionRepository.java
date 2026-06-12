@@ -2,6 +2,8 @@ package com.example.mealprep.recipe.domain.repository;
 
 import com.example.mealprep.recipe.domain.entity.RecipeVersion;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -32,6 +34,45 @@ public interface RecipeVersionRepository extends JpaRepository<RecipeVersion, UU
    */
   Page<RecipeVersion> findByRecipeIdAndBranchIdOrderByVersionNumberDesc(
       UUID recipeId, UUID branchId, Pageable pageable);
+
+  /**
+   * Batched current-version load for the library list read ({@code GET /api/v1/recipes}): one query
+   * returns the current-pointer version row of every recipe on the page, with the two
+   * {@code @OneToOne} children ({@code metadata}, {@code tags}) fetch-joined in the same statement
+   * (no bag, so no {@code MultipleBagFetchException} risk). The two {@code List<>} bags are fetched
+   * by the companion {@link #findWithIngredientsByIdIn} / {@link #findWithMethodStepsByIdIn}
+   * queries into the same persistence context — constant queries per page instead of 4 lazy SELECTs
+   * per row.
+   */
+  @Query(
+      """
+      select v from RecipeVersion v
+        left join fetch v.metadata
+        left join fetch v.tags
+        join com.example.mealprep.recipe.domain.entity.Recipe r
+          on r.id = v.recipe.id
+         and v.branch.id = r.currentBranchId
+         and v.versionNumber = r.currentVersion
+       where r.id in :recipeIds
+      """)
+  List<RecipeVersion> findCurrentVersionsForRecipes(@Param("recipeIds") Collection<UUID> recipeIds);
+
+  /**
+   * Bag-initialising fetch for {@link #findCurrentVersionsForRecipes} — loads {@code ingredients}
+   * for the given version ids into the current persistence context (single-bag fetch join is safe).
+   * The caller may ignore the return value; the side effect is the initialised collections on the
+   * already-managed entities.
+   */
+  @Query(
+      "select distinct v from RecipeVersion v left join fetch v.ingredients where v.id in"
+          + " :versionIds")
+  List<RecipeVersion> findWithIngredientsByIdIn(@Param("versionIds") Collection<UUID> versionIds);
+
+  /** Companion to {@link #findWithIngredientsByIdIn} for the {@code methodSteps} bag. */
+  @Query(
+      "select distinct v from RecipeVersion v left join fetch v.methodSteps where v.id in"
+          + " :versionIds")
+  List<RecipeVersion> findWithMethodStepsByIdIn(@Param("versionIds") Collection<UUID> versionIds);
 
   /**
    * Resolve the id of the recipe's current-branch current-version row in a single query. Used by

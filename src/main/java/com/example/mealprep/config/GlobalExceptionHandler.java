@@ -26,6 +26,7 @@ import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -57,6 +58,25 @@ public class GlobalExceptionHandler {
     return ProblemDetailSupport.build(
         HttpStatus.BAD_REQUEST,
         ex.getMessage(),
+        "validation-error",
+        "Validation failed",
+        req.getRequestURI());
+  }
+
+  /**
+   * Query/path parameter binding failures — e.g. an invalid enum constant ({@code
+   * ?catalogue=BOGUS}), a malformed UUID, or a non-numeric int — are client errors, not server
+   * faults. Without this mapping they fall through to the {@link Exception} catch-all as a 500
+   * ({@code HandlerMethodValidationException} is already a {@link ResponseStatusException}, so
+   * constraint violations on params were 400 while type mismatches were not). Added with {@code GET
+   * /api/v1/recipes} (recipe-list-search), whose contract pins 400 for invalid enum values.
+   */
+  @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+  public ProblemDetail handleMethodArgumentTypeMismatch(
+      MethodArgumentTypeMismatchException ex, HttpServletRequest req) {
+    return ProblemDetailSupport.build(
+        HttpStatus.BAD_REQUEST,
+        "Parameter '" + ex.getName() + "' has an invalid value.",
         "validation-error",
         "Validation failed",
         req.getRequestURI());

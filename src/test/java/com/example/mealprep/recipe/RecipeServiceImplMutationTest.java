@@ -115,6 +115,7 @@ class RecipeServiceImplMutationTest {
         importRepository,
         ingredientRepository,
         substitutionRepository,
+        null,
         recipeMapper,
         versionMapper,
         branchMapper,

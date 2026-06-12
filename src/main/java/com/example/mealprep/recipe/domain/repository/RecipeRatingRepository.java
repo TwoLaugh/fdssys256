@@ -56,4 +56,21 @@ public interface RecipeRatingRepository extends JpaRepository<RecipeRating, UUID
       where r.recipeId = :recipeId
       """)
   RecipeRatingSummaryDto aggregateByRecipe(@Param("recipeId") UUID recipeId);
+
+  /**
+   * Batched recipe-level taste aggregate for the library list read ({@code GET /api/v1/recipes}) —
+   * one {@code GROUP BY} query per page instead of one {@code /ratings/summary} call per card (the
+   * recipes-page §8 Q4 N+1). Rows: {@code [recipeId, avg(taste) as Double, count as Long]}; unrated
+   * recipes simply have no row (the service defaults them to {@code avgTaste = null} / {@code
+   * ratingCount = 0}).
+   */
+  @Query(
+      """
+      select r.recipeId, avg(r.taste), count(r)
+      from RecipeRating r
+      where r.recipeId in :recipeIds
+      group by r.recipeId
+      """)
+  java.util.List<Object[]> aggregateTasteForRecipes(
+      @Param("recipeIds") java.util.Collection<UUID> recipeIds);
 }

@@ -19,6 +19,7 @@ import com.example.mealprep.recipe.api.dto.RecipeDiffDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeImportDto;
 import com.example.mealprep.recipe.api.dto.RecipeImportPreview;
+import com.example.mealprep.recipe.api.dto.RecipeSearchCriteriaDto;
 import com.example.mealprep.recipe.api.dto.RecipeSubstitutionDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.api.dto.SubstitutionState;
@@ -49,6 +50,7 @@ import com.example.mealprep.recipe.domain.entity.VersionTrigger;
 import com.example.mealprep.recipe.domain.repository.RecipeBranchRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeImportRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeIngredientRepository;
+import com.example.mealprep.recipe.domain.repository.RecipeRatingRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeSubstitutionRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeVersionRepository;
@@ -168,6 +170,7 @@ public class RecipeServiceImpl
   private final RecipeImportRepository importRepository;
   private final RecipeIngredientRepository ingredientRepository;
   private final RecipeSubstitutionRepository substitutionRepository;
+  private final RecipeRatingRepository ratingRepository;
   private final RecipeMapper recipeMapper;
   private final RecipeVersionMapper versionMapper;
   private final RecipeBranchMapper branchMapper;
@@ -194,6 +197,7 @@ public class RecipeServiceImpl
       RecipeImportRepository importRepository,
       RecipeIngredientRepository ingredientRepository,
       RecipeSubstitutionRepository substitutionRepository,
+      RecipeRatingRepository ratingRepository,
       RecipeMapper recipeMapper,
       RecipeVersionMapper versionMapper,
       RecipeBranchMapper branchMapper,
@@ -218,6 +222,7 @@ public class RecipeServiceImpl
     this.importRepository = importRepository;
     this.ingredientRepository = ingredientRepository;
     this.substitutionRepository = substitutionRepository;
+    this.ratingRepository = ratingRepository;
     this.recipeMapper = recipeMapper;
     this.versionMapper = versionMapper;
     this.branchMapper = branchMapper;
@@ -260,6 +265,95 @@ public class RecipeServiceImpl
       dtos.add(hydrate(recipe));
     }
     return dtos;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Page<RecipeDto> searchLibrary(
+      UUID userId, RecipeSearchCriteriaDto criteria, Pageable pageable) {
+    boolean includeUser = criteria.catalogue() == null || criteria.catalogue() == Catalogue.USER;
+    boolean includeSystem =
+        criteria.catalogue() == null || criteria.catalogue() == Catalogue.SYSTEM;
+    Page<Recipe> page =
+        recipeRepository.searchLibrary(
+            userId,
+            includeUser,
+            includeSystem,
+            criteria.includeArchived(),
+            toLikePattern(criteria.namePattern()),
+            criteria.cuisine(),
+            criteria.maxTotalTimeMins(),
+            DataQualityGate.atOrAbove(criteria.minDataQuality()),
+            pageable);
+    if (page.isEmpty()) {
+      // No rows on this page — map() never invokes the lambda but preserves the page envelope
+      // (totalElements may be non-zero when the caller paged past the end).
+      return page.map(recipe -> recipeMapper.toDto(recipe, null, List.of(), null, 0L));
+    }
+
+    // Batched hydration: constant query count per page (no per-row N+1). One query per concern —
+    // branches, current versions (+metadata/tags fetch-joined), the two version bags, and the
+    // rating aggregate (the recipes-page §8 Q4 fix).
+    List<UUID> recipeIds = page.getContent().stream().map(Recipe::getId).toList();
+    Map<UUID, List<RecipeBranch>> branchesByRecipe = new LinkedHashMap<>();
+    for (RecipeBranch branch : branchRepository.findAllByRecipeIdIn(recipeIds)) {
+      // getRecipe().getId() on the lazy proxy reads the FK without initialising the association.
+      branchesByRecipe
+          .computeIfAbsent(branch.getRecipe().getId(), k -> new ArrayList<>())
+          .add(branch);
+    }
+    List<RecipeVersion> currentVersions =
+        versionRepository.findCurrentVersionsForRecipes(recipeIds);
+    List<UUID> versionIds = currentVersions.stream().map(RecipeVersion::getId).toList();
+    if (!versionIds.isEmpty()) {
+      // Side-effect fetches: initialise the two List<> bags on the already-managed entities.
+      versionRepository.findWithIngredientsByIdIn(versionIds);
+      versionRepository.findWithMethodStepsByIdIn(versionIds);
+    }
+    Map<UUID, RecipeVersionDto> bodyByRecipe = new LinkedHashMap<>();
+    for (RecipeVersion version : currentVersions) {
+      bodyByRecipe.put(version.getRecipe().getId(), versionMapper.toDto(version));
+    }
+    Map<UUID, Object[]> ratingByRecipe = new LinkedHashMap<>();
+    for (Object[] row : ratingRepository.aggregateTasteForRecipes(recipeIds)) {
+      ratingByRecipe.put((UUID) row[0], row);
+    }
+
+    return page.map(
+        recipe -> {
+          Object[] rating = ratingByRecipe.get(recipe.getId());
+          Double avgTaste = rating != null ? (Double) rating[1] : null;
+          Long ratingCount = rating != null ? (Long) rating[2] : 0L;
+          return recipeMapper.toDto(
+              recipe,
+              bodyByRecipe.get(recipe.getId()),
+              branchMapper.toDtoList(branchesByRecipe.getOrDefault(recipe.getId(), List.of())),
+              avgTaste,
+              ratingCount);
+        });
+  }
+
+  /** LIKE escape character for {@code searchLibrary}'s namePattern (see {@link #toLikePattern}). */
+  private static final char LIKE_ESCAPE_CHAR = '!';
+
+  /**
+   * Lowercase + {@code %}-wrap the user-supplied name substring for a case-insensitive LIKE, with
+   * the LIKE metacharacters ({@code %}, {@code _}) and the escape character itself ({@code !})
+   * escaped so user input always matches literally. Null/blank input → null (no name predicate).
+   */
+  private static String toLikePattern(String namePattern) {
+    if (namePattern == null || namePattern.isBlank()) {
+      return null;
+    }
+    String lowered = namePattern.toLowerCase(java.util.Locale.ROOT);
+    StringBuilder escaped = new StringBuilder(lowered.length() + 8);
+    for (char c : lowered.toCharArray()) {
+      if (c == '%' || c == '_' || c == LIKE_ESCAPE_CHAR) {
+        escaped.append(LIKE_ESCAPE_CHAR);
+      }
+      escaped.append(c);
+    }
+    return "%" + escaped + "%";
   }
 
   /**

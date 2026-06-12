@@ -4,7 +4,10 @@ import com.example.mealprep.auth.domain.service.CurrentUserResolver;
 import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeImportDto;
+import com.example.mealprep.recipe.api.dto.RecipeSearchCriteriaDto;
 import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
+import com.example.mealprep.recipe.domain.entity.Catalogue;
+import com.example.mealprep.recipe.domain.entity.DataQuality;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import com.example.mealprep.recipe.domain.service.RecipeUpdateService;
 import com.example.mealprep.recipe.exception.RecipeImportNotFoundException;
@@ -12,8 +15,13 @@ import com.example.mealprep.recipe.exception.RecipeNotFoundException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import java.net.URI;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -23,6 +31,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -30,7 +39,9 @@ import org.springframework.web.server.ResponseStatusException;
  * REST seam for the recipe aggregate. Authentication is enforced by the auth module's
  * deny-by-default chain; the {@link CurrentUserResolver} resolves the caller's {@code userId}
  * server-side. Read-by-id is open to any authenticated caller (planner / nutrition / hard-
- * constraint filter all need it); user-private filtering belongs in search/list endpoints later.
+ * constraint filter all need it); user-private filtering is enforced by the list/search read:
+ * {@code GET /api/v1/recipes} returns only the caller's own {@code USER}-catalogue rows plus the
+ * shared {@code SYSTEM} catalogue (recipe-list-search ticket — the recipes-page library grid).
  *
  * <p>recipe-01c adds {@code PUT /api/v1/recipes/{recipeId}} (manual edit) — creates a new {@code
  * RecipeVersion} (v2+) on the recipe's current branch with {@code trigger = MANUAL_EDIT} and the
@@ -66,6 +77,33 @@ public class RecipesController {
     return ResponseEntity.status(HttpStatus.CREATED)
         .location(URI.create("/api/v1/recipes/" + created.id()))
         .body(created);
+  }
+
+  @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary = "Paginated library list/search: caller-private USER rows + shared SYSTEM rows.",
+      description =
+          "Returns the caller's own USER-catalogue recipes plus the shared SYSTEM catalogue"
+              + " (another user's USER rows never appear); soft-deleted rows are never returned"
+              + " and archived rows only with includeArchived=true. minDataQuality is an ordinal"
+              + " floor over USER_VERIFIED > IMPORTED ≈ AI_GENERATED > WEB_DISCOVERED"
+              + " (IMPORTED and AI_GENERATED are tied: a floor at either admits both)."
+              + " Sort is pinned updatedAt DESC. Rows carry the list-only avgTaste/ratingCount"
+              + " aggregate (batched; null/0 when unrated).")
+  public Page<RecipeDto> list(
+      @RequestParam(required = false) Catalogue catalogue,
+      @RequestParam(required = false) @Size(max = 160) String namePattern,
+      @RequestParam(required = false) @Size(max = 64) String cuisine,
+      @RequestParam(required = false) @Min(0) Integer maxTotalTimeMins,
+      @RequestParam(required = false) DataQuality minDataQuality,
+      @RequestParam(defaultValue = "false") boolean includeArchived,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    UUID userId = requireCurrentUserId();
+    RecipeSearchCriteriaDto criteria =
+        new RecipeSearchCriteriaDto(
+            catalogue, namePattern, cuisine, maxTotalTimeMins, minDataQuality, includeArchived);
+    return queryService.searchLibrary(userId, criteria, PageRequest.of(page, size));
   }
 
   @GetMapping(path = "/{recipeId}", produces = MediaType.APPLICATION_JSON_VALUE)

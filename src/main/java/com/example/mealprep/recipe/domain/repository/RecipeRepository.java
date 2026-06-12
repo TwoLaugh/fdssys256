@@ -100,6 +100,93 @@ public interface RecipeRepository extends JpaRepository<Recipe, UUID> {
   List<Recipe> findPlannableForUser(@Param("userId") UUID userId, Pageable page);
 
   /**
+   * Library list/search page ({@code GET /api/v1/recipes}). One query serves all three LLD views
+   * via the caller-computed catalogue booleans:
+   *
+   * <ul>
+   *   <li><b>Visibility</b>: {@code USER} rows only when owned by {@code :userId} (caller-private);
+   *       {@code SYSTEM} rows are shared with every authenticated caller. {@code includeUser} /
+   *       {@code includeSystem} encode the optional {@code catalogue} filter (absent → both true)
+   *       without binding a nullable enum parameter.
+   *   <li><b>State</b>: soft-deleted rows are excluded unconditionally; archived rows only when
+   *       {@code includeArchived}.
+   *   <li><b>Current-version join</b>: the version join pins {@code m} to the <i>current</i>
+   *       version's metadata (same {@code (recipe, currentBranchId, currentVersion)} triple the
+   *       affected-set queries use) so cuisine / total-time filter against what the card renders.
+   *       Metadata is left-joined — a metadata-less current version still lists when neither
+   *       metadata filter is set.
+   *   <li><b>Optional scalars</b>: {@code namePattern} (pre-lowercased, {@code %}-wrapped, {@code
+   *       '!'}-escaped by the service), {@code cuisine} and {@code maxTotalTimeMins} use the proven
+   *       {@code cast(:param ...) is null or ...} idiom (see {@code NotificationRepository}).
+   *   <li><b>Quality floor</b>: {@code :qualities} is the non-empty tier set {@code
+   *       DataQualityGate.atOrAbove} expands from {@code minDataQuality}.
+   * </ul>
+   *
+   * <p>Sort is pinned {@code updatedAt DESC} (id DESC tie-break for stable pages); callers pass an
+   * <b>unsorted</b> {@link Pageable}. The joins are 1:1 (unique {@code (recipe, branch,
+   * versionNumber)} + one metadata row per version) so {@code count(r)} needs no distinct.
+   */
+  @Query(
+      value =
+          """
+          select r from Recipe r
+            join com.example.mealprep.recipe.domain.entity.RecipeVersion v
+              on v.recipe.id = r.id
+             and v.branch.id = r.currentBranchId
+             and v.versionNumber = r.currentVersion
+            left join com.example.mealprep.recipe.domain.entity.RecipeMetadata m
+              on m.version.id = v.id
+           where r.deletedAt is null
+             and (:includeArchived = true or r.archivedAt is null)
+             and (
+               (:includeSystem = true
+                   and r.catalogue = com.example.mealprep.recipe.domain.entity.Catalogue.SYSTEM)
+               or (:includeUser = true
+                   and r.catalogue = com.example.mealprep.recipe.domain.entity.Catalogue.USER
+                   and r.userId = :userId)
+             )
+             and (cast(:namePattern as string) is null or lower(r.name) like :namePattern escape '!')
+             and (cast(:cuisine as string) is null or m.cuisine = :cuisine)
+             and (cast(:maxTotalTimeMins as integer) is null or m.totalTimeMins <= :maxTotalTimeMins)
+             and r.dataQuality in :qualities
+           order by r.updatedAt desc, r.id desc
+          """,
+      countQuery =
+          """
+          select count(r) from Recipe r
+            join com.example.mealprep.recipe.domain.entity.RecipeVersion v
+              on v.recipe.id = r.id
+             and v.branch.id = r.currentBranchId
+             and v.versionNumber = r.currentVersion
+            left join com.example.mealprep.recipe.domain.entity.RecipeMetadata m
+              on m.version.id = v.id
+           where r.deletedAt is null
+             and (:includeArchived = true or r.archivedAt is null)
+             and (
+               (:includeSystem = true
+                   and r.catalogue = com.example.mealprep.recipe.domain.entity.Catalogue.SYSTEM)
+               or (:includeUser = true
+                   and r.catalogue = com.example.mealprep.recipe.domain.entity.Catalogue.USER
+                   and r.userId = :userId)
+             )
+             and (cast(:namePattern as string) is null or lower(r.name) like :namePattern escape '!')
+             and (cast(:cuisine as string) is null or m.cuisine = :cuisine)
+             and (cast(:maxTotalTimeMins as integer) is null or m.totalTimeMins <= :maxTotalTimeMins)
+             and r.dataQuality in :qualities
+          """)
+  org.springframework.data.domain.Page<Recipe> searchLibrary(
+      @Param("userId") UUID userId,
+      @Param("includeUser") boolean includeUser,
+      @Param("includeSystem") boolean includeSystem,
+      @Param("includeArchived") boolean includeArchived,
+      @Param("namePattern") String namePattern,
+      @Param("cuisine") String cuisine,
+      @Param("maxTotalTimeMins") Integer maxTotalTimeMins,
+      @Param("qualities")
+          Collection<com.example.mealprep.recipe.domain.entity.DataQuality> qualities,
+      Pageable pageable);
+
+  /**
    * Count of SYSTEM-catalogue recipe rows (any state — archived/deleted included). E2E test-support
    * uses this to assert the global SYSTEM catalogue is empty between scenarios (see {@code
    * E2eRecipeCatalogueController}); it has no production caller. Accessible only within the recipe

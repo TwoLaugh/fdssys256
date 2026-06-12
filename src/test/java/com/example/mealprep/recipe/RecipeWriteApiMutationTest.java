@@ -105,6 +105,7 @@ class RecipeWriteApiMutationTest {
         importRepository,
         ingredientRepository,
         substitutionRepository,
+        null,
         recipeMapper,
         versionMapper,
         branchMapper,
