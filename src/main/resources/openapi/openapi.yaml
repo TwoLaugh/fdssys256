@@ -288,6 +288,8 @@ paths:
     $ref: 'paths/planner.yaml#/planRevert'
   /api/v1/plans/{planId}/slots/{slotId}/state:
     $ref: 'paths/planner.yaml#/planSlotState'
+  /api/v1/plans/{planId}/reopt-suggestions/{suggestionId}:
+    $ref: 'paths/planner.yaml#/reoptSuggestionById'
   /api/v1/plans/{planId}/reopt-suggestions/{suggestionId}/accept:
     $ref: 'paths/planner.yaml#/reoptSuggestionAccept'
   /api/v1/plans/{planId}/reopt-suggestions/{suggestionId}/reject:

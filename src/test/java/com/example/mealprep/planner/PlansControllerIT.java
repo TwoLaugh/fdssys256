@@ -71,10 +71,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Full HTTP cycle over planner-01j's 8 write endpoints (generate / accept / reject / abandon /
- * revert / slot-state / reopt-suggestion accept+reject) plus the auth surface (401 anon, 403
- * cross-household). Plans are seeded directly through {@link PlanRepository} for the lifecycle
- * paths (no composer, no async runner racing assertions); the generate path drives the real
- * controller with the deterministic composition stages {@code @MockBean}ed.
+ * revert / slot-state / reopt-suggestion accept+reject), the re-opt suggestion detail GET
+ * (frontend-gaps/planner-reopt-suggestion-detail: pre-accept diff preview, side-effect-free), plus
+ * the auth surface (401 anon, 403 cross-household). Plans are seeded directly through {@link
+ * PlanRepository} for the lifecycle paths (no composer, no async runner racing assertions); the
+ * generate path drives the real controller with the deterministic composition stages
+ * {@code @MockBean}ed.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -406,6 +408,11 @@ class PlansControllerIT {
   // ============================================================================================
 
   private MealPrepPlanReoptSuggestion seedSuggestion(UUID planId, UUID changedSlotId) {
+    return seedSuggestion(planId, changedSlotId, ReoptSuggestionStatus.PENDING);
+  }
+
+  private MealPrepPlanReoptSuggestion seedSuggestion(
+      UUID planId, UUID changedSlotId, ReoptSuggestionStatus status) {
     MealPrepPlanReoptSuggestion s =
         MealPrepPlanReoptSuggestion.builder()
             .id(UUID.randomUUID())
@@ -414,7 +421,7 @@ class PlansControllerIT {
             .triggerEventId(UUID.randomUUID())
             .traceId(UUID.randomUUID())
             .summary("1 change")
-            .status(ReoptSuggestionStatus.PENDING)
+            .status(status)
             .proposedAssignments(
                 ProposedReoptAssignmentsDocument.of(
                     List.of(
@@ -472,6 +479,162 @@ class PlansControllerIT {
 
     assertThat(planRepository.findById(plan.getId()).orElseThrow().getStatus())
         .isEqualTo(PlanStatus.ACTIVE);
+  }
+
+  // ============================================================================================
+  // Re-opt suggestion detail GET (frontend-gaps/planner-reopt-suggestion-detail)
+  // ============================================================================================
+
+  private long decisionLogCount() {
+    return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM decision_log", Long.class);
+  }
+
+  @Test
+  void reoptSuggestion_getDetail_returnsStoredDiff_sideEffectFree_andAcceptAppliesIt()
+      throws Exception {
+    AuthedUser user = registerUser();
+    UUID household = UUID.randomUUID();
+    grantMembership(household, user.userId());
+    Plan plan = seed(household, PlanStatus.ACTIVE);
+    var originalSlot = plan.getDays().get(0).getSlots().get(0);
+    MealPrepPlanReoptSuggestion s = seedSuggestion(plan.getId(), originalSlot.getId());
+    long decisionRowsBefore = decisionLogCount();
+    long versionBefore = suggestionRepository.findById(s.getId()).orElseThrow().getVersion();
+
+    // Pre-accept diff preview: the stored proposedAssignments are exposed on the GET.
+    MvcResult detail =
+        mvc.perform(
+                get("/api/v1/plans/{id}/reopt-suggestions/{sid}", plan.getId(), s.getId())
+                    .cookie(user.cookie()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value(s.getId().toString()))
+            .andExpect(jsonPath("$.planId").value(plan.getId().toString()))
+            .andExpect(jsonPath("$.status").value("PENDING"))
+            .andExpect(jsonPath("$.summary").value("1 change"))
+            .andExpect(jsonPath("$.proposedAssignments.schemaVersion").value(1))
+            .andExpect(jsonPath("$.proposedAssignments.changes.length()").value(1))
+            .andExpect(
+                jsonPath("$.proposedAssignments.changes[0].slotId")
+                    .value(originalSlot.getId().toString()))
+            .andExpect(jsonPath("$.proposedAssignments.changes[0].newRecipeId").isNotEmpty())
+            .andExpect(jsonPath("$.proposedAssignments.changes[0].newServings").value(2))
+            .andExpect(jsonPath("$.proposedAssignments.changes[0].reason").value("better score"))
+            .andExpect(openApi().isValid(openApiValidator))
+            .andReturn();
+
+    // Side-effect-free: no decision-log row, no status flip, no version bump.
+    assertThat(decisionLogCount()).isEqualTo(decisionRowsBefore);
+    MealPrepPlanReoptSuggestion afterGet = suggestionRepository.findById(s.getId()).orElseThrow();
+    assertThat(afterGet.getStatus()).isEqualTo(ReoptSuggestionStatus.PENDING);
+    assertThat(afterGet.getVersion()).isEqualTo(versionBefore);
+
+    // The previewed diff is exactly what accept then applies (no double-write of the proposal).
+    UUID previewedNewRecipeId =
+        UUID.fromString(
+            objectMapper
+                .readTree(detail.getResponse().getContentAsString())
+                .at("/proposedAssignments/changes/0/newRecipeId")
+                .asText());
+    mvc.perform(
+            post("/api/v1/plans/{id}/reopt-suggestions/{sid}/accept", plan.getId(), s.getId())
+                .cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("ACCEPTED"));
+
+    int changedSlotIndex = originalSlot.getSlotIndex();
+    UUID appliedRecipeId =
+        tx().execute(
+                t -> {
+                  Plan newGeneration =
+                      planRepository
+                          .findByHouseholdIdAndStatusIn(household, List.of(PlanStatus.GENERATED))
+                          .get(0);
+                  return newGeneration.getDays().get(0).getSlots().stream()
+                      .filter(slot -> slot.getSlotIndex() == changedSlotIndex)
+                      .findFirst()
+                      .orElseThrow()
+                      .getScheduledRecipe()
+                      .getRecipeId();
+                });
+    assertThat(appliedRecipeId).isEqualTo(previewedNewRecipeId);
+  }
+
+  @Test
+  void reoptSuggestion_getDetail_returns200_forDecidedSuggestion() throws Exception {
+    AuthedUser user = registerUser();
+    UUID household = UUID.randomUUID();
+    grantMembership(household, user.userId());
+    Plan plan = seed(household, PlanStatus.ACTIVE);
+    UUID slotId = plan.getDays().get(0).getSlots().get(0).getId();
+    MealPrepPlanReoptSuggestion s =
+        seedSuggestion(plan.getId(), slotId, ReoptSuggestionStatus.EXPIRED);
+
+    // Terminal statuses stay readable (history / back navigation), diff included.
+    mvc.perform(
+            get("/api/v1/plans/{id}/reopt-suggestions/{sid}", plan.getId(), s.getId())
+                .cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("EXPIRED"))
+        .andExpect(jsonPath("$.proposedAssignments.changes.length()").value(1))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void reoptSuggestion_getDetail_returns404_whenSuggestionBelongsToAnotherPlan() throws Exception {
+    AuthedUser user = registerUser();
+    UUID household = UUID.randomUUID();
+    grantMembership(household, user.userId());
+    Plan planA = seedGen(household, PlanStatus.ACTIVE, 1);
+    Plan planB = seedGen(household, PlanStatus.GENERATED, 2);
+    UUID slotId = planA.getDays().get(0).getSlots().get(0).getId();
+    MealPrepPlanReoptSuggestion s = seedSuggestion(planA.getId(), slotId);
+
+    mvc.perform(
+            get("/api/v1/plans/{id}/reopt-suggestions/{sid}", planB.getId(), s.getId())
+                .cookie(user.cookie()))
+        .andExpect(status().isNotFound())
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/reopt-suggestion-not-found"));
+  }
+
+  @Test
+  void reoptSuggestion_getDetail_returns404_whenSuggestionUnknown() throws Exception {
+    AuthedUser user = registerUser();
+    UUID household = UUID.randomUUID();
+    grantMembership(household, user.userId());
+    Plan plan = seed(household, PlanStatus.ACTIVE);
+
+    mvc.perform(
+            get("/api/v1/plans/{id}/reopt-suggestions/{sid}", plan.getId(), UUID.randomUUID())
+                .cookie(user.cookie()))
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void reoptSuggestion_getDetail_returns403_whenCrossHousehold() throws Exception {
+    AuthedUser user = registerUser();
+    UUID household = UUID.randomUUID();
+    Plan plan = seed(household, PlanStatus.ACTIVE);
+    UUID slotId = plan.getDays().get(0).getSlots().get(0).getId();
+    MealPrepPlanReoptSuggestion s = seedSuggestion(plan.getId(), slotId);
+    // Caller is NOT a member of the plan's household.
+    when(householdQueryService.getById(any()))
+        .thenReturn(
+            Optional.of(
+                new HouseholdDto(household, "h", UUID.randomUUID(), List.of(), Instant.now(), 0L)));
+
+    mvc.perform(
+            get("/api/v1/plans/{id}/reopt-suggestions/{sid}", plan.getId(), s.getId())
+                .cookie(user.cookie()))
+        .andExpect(status().isForbidden());
+  }
+
+  @Test
+  void reoptSuggestion_getDetail_returns401_whenAnonymous() throws Exception {
+    mvc.perform(
+            get("/api/v1/plans/{id}/reopt-suggestions/{sid}", UUID.randomUUID(), UUID.randomUUID()))
+        .andExpect(status().isUnauthorized());
   }
 
   // ============================================================================================
