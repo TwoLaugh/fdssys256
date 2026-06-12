@@ -10,9 +10,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.provisions.api.dto.AdjustInventoryStatusRequest;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
 import com.example.mealprep.provisions.api.dto.EquipmentDto;
 import com.example.mealprep.provisions.api.dto.InventoryItemDto;
+import com.example.mealprep.provisions.api.dto.InventorySearchCriteria;
 import com.example.mealprep.provisions.api.dto.UpdateInventoryItemRequest;
 import com.example.mealprep.provisions.api.mapper.BudgetMapper;
 import com.example.mealprep.provisions.api.mapper.EquipmentMapper;
@@ -40,13 +42,16 @@ import com.example.mealprep.provisions.event.InventoryItemUpsertedEvent;
 import com.example.mealprep.provisions.event.ItemRanOutEvent;
 import com.example.mealprep.provisions.event.ItemSpoiledEvent;
 import com.example.mealprep.provisions.exception.EquipmentNotFoundException;
+import com.example.mealprep.provisions.exception.InvalidInventoryQuantityException;
 import com.example.mealprep.provisions.exception.InventoryItemNotFoundException;
 import com.example.mealprep.provisions.testdata.ProvisionsTestData;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -55,6 +60,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 /**
@@ -348,6 +356,359 @@ class ProvisionServiceImplTest {
     verifyNoInteractions(auditLogRepository);
     verify(inventoryItemRepository, never()).saveAndFlush(any(InventoryItem.class));
     verifyNoInteractions(eventPublisher);
+  }
+
+  // ---------------- adjustStatus (PATCH /inventory/{itemId}/status) ----------------
+
+  @Test
+  void adjustStatus_whenItemMissing_throws404() {
+    UUID userId = UUID.randomUUID();
+    UUID itemId = UUID.randomUUID();
+    when(inventoryItemRepository.findByIdAndUserId(itemId, userId)).thenReturn(Optional.empty());
+
+    assertThatThrownBy(
+            () ->
+                service()
+                    .adjustStatus(
+                        itemId, userId, new AdjustInventoryStatusRequest(StapleStatus.LOW, 0L)))
+        .isInstanceOf(InventoryItemNotFoundException.class);
+
+    verify(inventoryItemRepository, never()).saveAndFlush(any(InventoryItem.class));
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  void adjustStatus_whenVersionMismatch_throws409_andWritesNothing() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item = ProvisionsTestData.statusTrackedItem(userId).build();
+    item.setVersion(7);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    assertThatThrownBy(
+            () ->
+                service()
+                    .adjustStatus(
+                        item.getId(),
+                        userId,
+                        new AdjustInventoryStatusRequest(StapleStatus.LOW, 2L)))
+        .isInstanceOf(ObjectOptimisticLockingFailureException.class);
+
+    verify(inventoryItemRepository, never()).saveAndFlush(any(InventoryItem.class));
+    verifyNoInteractions(auditLogRepository);
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  void adjustStatus_onQuantityTrackedItem_throws400_andWritesNothing() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item = ProvisionsTestData.quantityTrackedItem(userId).build();
+    item.setVersion(0);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    assertThatThrownBy(
+            () ->
+                service()
+                    .adjustStatus(
+                        item.getId(),
+                        userId,
+                        new AdjustInventoryStatusRequest(StapleStatus.OUT, 0L)))
+        .isInstanceOf(InvalidInventoryQuantityException.class);
+
+    verify(inventoryItemRepository, never()).saveAndFlush(any(InventoryItem.class));
+    verifyNoInteractions(auditLogRepository);
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  void adjustStatus_whenChanged_setsStatus_writesStatusAuditRow_publishesUpserted() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item = ProvisionsTestData.statusTrackedItem(userId).build(); // STOCKED, staple
+    item.setVersion(0);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    InventoryItemDto result =
+        service()
+            .adjustStatus(
+                item.getId(), userId, new AdjustInventoryStatusRequest(StapleStatus.LOW, 0L));
+
+    assertThat(result.status()).isEqualTo(StapleStatus.LOW);
+
+    ArgumentCaptor<InventoryItem> itemCaptor = ArgumentCaptor.forClass(InventoryItem.class);
+    verify(inventoryItemRepository).saveAndFlush(itemCaptor.capture());
+    assertThat(itemCaptor.getValue().getStatus()).isEqualTo(StapleStatus.LOW);
+
+    ArgumentCaptor<InventoryAuditLog> auditCaptor =
+        ArgumentCaptor.forClass(InventoryAuditLog.class);
+    verify(auditLogRepository).save(auditCaptor.capture());
+    InventoryAuditLog audit = auditCaptor.getValue();
+    assertThat(audit.getInventoryItemId()).isEqualTo(item.getId());
+    assertThat(audit.getActor()).isEqualTo(AuditActor.USER);
+    assertThat(audit.getActorUserId()).isEqualTo(userId);
+    assertThat(audit.getFieldChanged()).isEqualTo("status");
+    assertThat(audit.getPreviousValueJson().get("status").asText()).isEqualTo("STOCKED");
+    assertThat(audit.getNewValueJson().get("status").asText()).isEqualTo("LOW");
+
+    verify(eventPublisher).publishEvent(any(InventoryItemUpsertedEvent.class));
+    // LOW is not OUT — the replenishment event must not fire.
+    verify(eventPublisher, never()).publishEvent(any(ItemRanOutEvent.class));
+  }
+
+  @Test
+  void adjustStatus_whenNoOp_writesNothing_andDoesNotBumpVersion() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item = ProvisionsTestData.statusTrackedItem(userId).build(); // STOCKED
+    item.setVersion(3);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    InventoryItemDto result =
+        service()
+            .adjustStatus(
+                item.getId(), userId, new AdjustInventoryStatusRequest(StapleStatus.STOCKED, 3L));
+
+    assertThat(result.status()).isEqualTo(StapleStatus.STOCKED);
+    assertThat(result.version()).isEqualTo(3L);
+    verify(inventoryItemRepository, never()).saveAndFlush(any(InventoryItem.class));
+    verifyNoInteractions(auditLogRepository);
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  void adjustStatus_stapleTransitionToOut_publishesItemRanOutEvent_once() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.statusTrackedItem(userId)
+            .status(StapleStatus.LOW)
+            .ingredientMappingKey("salt")
+            .build();
+    item.setVersion(1);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    service()
+        .adjustStatus(item.getId(), userId, new AdjustInventoryStatusRequest(StapleStatus.OUT, 1L));
+
+    // Exactly two publishes: the generic upsert + exactly ONE ItemRanOutEvent.
+    ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+    verify(eventPublisher, times(2)).publishEvent(eventCaptor.capture());
+    List<ItemRanOutEvent> ranOut =
+        eventCaptor.getAllValues().stream()
+            .filter(ItemRanOutEvent.class::isInstance)
+            .map(ItemRanOutEvent.class::cast)
+            .toList();
+    assertThat(ranOut).hasSize(1);
+    ItemRanOutEvent event = ranOut.get(0);
+    assertThat(event.userId()).isEqualTo(userId);
+    assertThat(event.affectedItemIds()).containsExactly(item.getId());
+    assertThat(event.ingredientMappingKey()).isEqualTo("salt");
+    assertThat(event.wasStaple()).isTrue();
+  }
+
+  @Test
+  void adjustStatus_nonStapleTransitionToOut_doesNotPublishRanOut() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.statusTrackedItem(userId)
+            .isStaple(false)
+            .status(StapleStatus.LOW)
+            .build();
+    item.setVersion(0);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    service()
+        .adjustStatus(item.getId(), userId, new AdjustInventoryStatusRequest(StapleStatus.OUT, 0L));
+
+    verify(eventPublisher).publishEvent(any(InventoryItemUpsertedEvent.class));
+    verify(eventPublisher, never()).publishEvent(any(ItemRanOutEvent.class));
+  }
+
+  @Test
+  void updateInventoryItem_stapleStatusToOut_publishesItemRanOutEvent_once_parityWithPatch() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.statusTrackedItem(userId).ingredientMappingKey("salt").build();
+    item.setVersion(0);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    UpdateInventoryItemRequest request =
+        new UpdateInventoryItemRequest(
+            "Salt",
+            "seasoning",
+            StorageLocation.SPICE_RACK,
+            TrackingMode.STATUS,
+            null,
+            null,
+            null,
+            StapleStatus.OUT, // STOCKED -> OUT via full PUT
+            true,
+            null,
+            "salt",
+            null,
+            ItemSource.MANUAL_ADD,
+            null,
+            ItemLifecycleStatus.ACTIVE,
+            null,
+            0L);
+
+    service().updateInventoryItem(item.getId(), userId, request);
+
+    // Exactly two publishes: the generic upsert + exactly ONE ItemRanOutEvent (parity with PATCH).
+    ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+    verify(eventPublisher, times(2)).publishEvent(eventCaptor.capture());
+    List<ItemRanOutEvent> ranOut =
+        eventCaptor.getAllValues().stream()
+            .filter(ItemRanOutEvent.class::isInstance)
+            .map(ItemRanOutEvent.class::cast)
+            .toList();
+    assertThat(ranOut).hasSize(1);
+    ItemRanOutEvent event = ranOut.get(0);
+    assertThat(event.userId()).isEqualTo(userId);
+    assertThat(event.affectedItemIds()).containsExactly(item.getId());
+    assertThat(event.ingredientMappingKey()).isEqualTo("salt");
+    assertThat(event.wasStaple()).isTrue();
+    verify(eventPublisher).publishEvent(any(InventoryItemUpsertedEvent.class));
+  }
+
+  @Test
+  void updateInventoryItem_stapleAlreadyOut_doesNotRepublishRanOut() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.statusTrackedItem(userId).status(StapleStatus.OUT).build();
+    item.setVersion(0);
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    UpdateInventoryItemRequest request =
+        new UpdateInventoryItemRequest(
+            "Sea Salt", // name changed so the PUT is not a no-op
+            "seasoning",
+            StorageLocation.SPICE_RACK,
+            TrackingMode.STATUS,
+            null,
+            null,
+            null,
+            StapleStatus.OUT, // OUT -> OUT: no transition
+            true,
+            null,
+            null,
+            null,
+            ItemSource.MANUAL_ADD,
+            null,
+            ItemLifecycleStatus.ACTIVE,
+            null,
+            0L);
+
+    service().updateInventoryItem(item.getId(), userId, request);
+
+    verify(eventPublisher).publishEvent(any(InventoryItemUpsertedEvent.class));
+    verify(eventPublisher, never()).publishEvent(any(ItemRanOutEvent.class));
+  }
+
+  // ---------------- listActiveInventory filters ----------------
+
+  private static final Pageable PAGE = PageRequest.of(0, 20);
+
+  @Test
+  void listActiveInventory_nullItemStatus_defaultsToActive_withNoExpiryBound() {
+    UUID userId = UUID.randomUUID();
+    when(inventoryItemRepository.findForUser(
+            userId, ItemLifecycleStatus.ACTIVE, null, null, null, PAGE))
+        .thenReturn(new PageImpl<>(List.of()));
+
+    service().listActiveInventory(userId, InventorySearchCriteria.none(), PAGE);
+
+    verify(inventoryItemRepository)
+        .findForUser(userId, ItemLifecycleStatus.ACTIVE, null, null, null, PAGE);
+  }
+
+  @Test
+  void listActiveInventory_passesItemStatusThrough() {
+    UUID userId = UUID.randomUUID();
+    when(inventoryItemRepository.findForUser(
+            userId, ItemLifecycleStatus.SPOILED, null, null, null, PAGE))
+        .thenReturn(new PageImpl<>(List.of()));
+
+    service()
+        .listActiveInventory(
+            userId,
+            new InventorySearchCriteria(null, null, ItemLifecycleStatus.SPOILED, null),
+            PAGE);
+
+    verify(inventoryItemRepository)
+        .findForUser(userId, ItemLifecycleStatus.SPOILED, null, null, null, PAGE);
+  }
+
+  @Test
+  void listActiveInventory_computesExpiryBoundAsTodayPlusDays_fromClock() {
+    // fixedClock = 2026-05-09T10:00:00Z (UTC) -> today + 7 = 2026-05-16
+    UUID userId = UUID.randomUUID();
+    when(inventoryItemRepository.findForUser(
+            userId, ItemLifecycleStatus.ACTIVE, null, null, LocalDate.parse("2026-05-16"), PAGE))
+        .thenReturn(new PageImpl<>(List.of()));
+
+    service().listActiveInventory(userId, new InventorySearchCriteria(null, null, null, 7), PAGE);
+
+    verify(inventoryItemRepository)
+        .findForUser(
+            userId, ItemLifecycleStatus.ACTIVE, null, null, LocalDate.parse("2026-05-16"), PAGE);
+  }
+
+  @Test
+  void listActiveInventory_expiringWithinZeroDays_boundIsToday() {
+    UUID userId = UUID.randomUUID();
+    when(inventoryItemRepository.findForUser(
+            userId, ItemLifecycleStatus.ACTIVE, null, null, LocalDate.parse("2026-05-09"), PAGE))
+        .thenReturn(new PageImpl<>(List.of()));
+
+    service().listActiveInventory(userId, new InventorySearchCriteria(null, null, null, 0), PAGE);
+
+    verify(inventoryItemRepository)
+        .findForUser(
+            userId, ItemLifecycleStatus.ACTIVE, null, null, LocalDate.parse("2026-05-09"), PAGE);
+  }
+
+  @Test
+  void listActiveInventory_composesAllFourFilters() {
+    UUID userId = UUID.randomUUID();
+    when(inventoryItemRepository.findForUser(
+            userId,
+            ItemLifecycleStatus.EXHAUSTED,
+            StorageLocation.FRIDGE,
+            Boolean.TRUE,
+            LocalDate.parse("2026-05-12"),
+            PAGE))
+        .thenReturn(new PageImpl<>(List.of()));
+
+    service()
+        .listActiveInventory(
+            userId,
+            new InventorySearchCriteria(
+                StorageLocation.FRIDGE, true, ItemLifecycleStatus.EXHAUSTED, 3),
+            PAGE);
+
+    verify(inventoryItemRepository)
+        .findForUser(
+            userId,
+            ItemLifecycleStatus.EXHAUSTED,
+            StorageLocation.FRIDGE,
+            Boolean.TRUE,
+            LocalDate.parse("2026-05-12"),
+            PAGE);
   }
 
   // ---------------- upsertEquipment ----------------

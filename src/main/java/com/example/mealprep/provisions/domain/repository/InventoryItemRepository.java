@@ -25,19 +25,28 @@ public interface InventoryItemRepository extends JpaRepository<InventoryItem, UU
 
   /**
    * Page of items belonging to {@code userId} with {@code itemStatus} matching, optionally filtered
-   * by {@code storageLocation} (null → no filter) and {@code isStaple} (null → no filter).
+   * by {@code storageLocation} (null → no filter), {@code isStaple} (null → no filter) and {@code
+   * maxExpiryDate} (null → no filter; non-null → only rows with a non-null {@code expiryDate} on or
+   * before it — the {@code expiringWithinDays} surface, same null-expiry exclusion as {@link
+   * #findActiveExpiringForUser}).
    */
   @Query(
       "SELECT i FROM InventoryItem i"
           + " WHERE i.userId = :userId"
           + " AND i.itemStatus = :itemStatus"
           + " AND (:storageLocation IS NULL OR i.storageLocation = :storageLocation)"
-          + " AND (:isStaple IS NULL OR i.isStaple = :isStaple)")
-  Page<InventoryItem> findActiveForUser(
+          + " AND (:isStaple IS NULL OR i.isStaple = :isStaple)"
+          // cast(... as date) — Postgres cannot infer the type of a parameter that only appears
+          // in "? IS NULL" (SQLState 42P18); same idiom as NotificationRepository's nullable
+          // filters.
+          + " AND (CAST(:maxExpiryDate AS date) IS NULL"
+          + "      OR (i.expiryDate IS NOT NULL AND i.expiryDate <= :maxExpiryDate))")
+  Page<InventoryItem> findForUser(
       UUID userId,
       ItemLifecycleStatus itemStatus,
       StorageLocation storageLocation,
       Boolean isStaple,
+      java.time.LocalDate maxExpiryDate,
       Pageable pageable);
 
   /** Look up by id, scoped to the owning user — used to enforce the 404-on-other-owner rule. */

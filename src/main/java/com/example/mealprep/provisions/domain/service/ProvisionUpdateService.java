@@ -1,6 +1,7 @@
 package com.example.mealprep.provisions.domain.service;
 
 import com.example.mealprep.provisions.api.dto.AdjustInventoryQuantityRequest;
+import com.example.mealprep.provisions.api.dto.AdjustInventoryStatusRequest;
 import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.CookEventCommand;
 import com.example.mealprep.provisions.api.dto.CreateInventoryItemRequest;
@@ -59,6 +60,21 @@ public interface ProvisionUpdateService {
    */
   InventoryItemDto adjustQuantity(
       UUID itemId, UUID requestingUserId, AdjustInventoryQuantityRequest request);
+
+  /**
+   * Focused staple-status edit for a STATUS-tracked inventory item (pantry.md §9 Q1 — {@code PATCH
+   * /inventory/{itemId}/status}, the single-tap STOCKED → LOW → OUT chip). The caller must own the
+   * item (else 404) and supply the latest {@code expectedVersion} (else 409). Sets the row's {@code
+   * status} to {@code request.newStatus}, writing one {@code actor = USER} audit row ({@code
+   * fieldChanged: status}) and publishing {@code InventoryItemUpsertedEvent} at AFTER_COMMIT; a
+   * transition to {@code OUT} on a staple additionally publishes {@code ItemRanOutEvent} exactly
+   * once — the same single rule the full-PUT path applies (replenishment promise). A no-op (same
+   * status) writes nothing and does not bump {@code version}. Throws {@code
+   * InvalidInventoryQuantityException} (400) when the row is QUANTITY-tracked (mirror of {@link
+   * #adjustQuantity}'s 400 on STATUS rows).
+   */
+  InventoryItemDto adjustStatus(
+      UUID itemId, UUID requestingUserId, AdjustInventoryStatusRequest request);
 
   /**
    * Create or update an equipment row keyed by {@code (userId, name)}. {@code expectedVersion} is

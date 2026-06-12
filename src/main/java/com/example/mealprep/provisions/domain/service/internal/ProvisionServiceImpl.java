@@ -7,6 +7,7 @@ import com.example.mealprep.preference.api.dto.LifestyleConfigDto;
 import com.example.mealprep.preference.domain.document.LifestyleConfigDocument;
 import com.example.mealprep.preference.domain.service.LifestyleConfigQueryService;
 import com.example.mealprep.provisions.api.dto.AdjustInventoryQuantityRequest;
+import com.example.mealprep.provisions.api.dto.AdjustInventoryStatusRequest;
 import com.example.mealprep.provisions.api.dto.BudgetDto;
 import com.example.mealprep.provisions.api.dto.BundleStaleness;
 import com.example.mealprep.provisions.api.dto.CookEventCommand;
@@ -259,12 +260,22 @@ public class ProvisionServiceImpl
       UUID userId, InventorySearchCriteria criteria, Pageable pageable) {
     InventorySearchCriteria effective =
         criteria == null ? InventorySearchCriteria.none() : criteria;
+    // null itemStatus → ACTIVE: the default view is byte-identical to the pre-filter behaviour.
+    ItemLifecycleStatus itemStatus =
+        effective.itemStatus() == null ? ItemLifecycleStatus.ACTIVE : effective.itemStatus();
+    // expiringWithinDays=N → expiryDate <= today + N ("today" from the service clock — the same
+    // arithmetic the notification-module expiry scanner applies); null-expiry rows never match.
+    LocalDate maxExpiryDate =
+        effective.expiringWithinDays() == null
+            ? null
+            : LocalDate.now(clock).plusDays(effective.expiringWithinDays());
     return inventoryItemRepository
-        .findActiveForUser(
+        .findForUser(
             userId,
-            ItemLifecycleStatus.ACTIVE,
+            itemStatus,
             effective.storageLocation(),
             effective.isStaple(),
+            maxExpiryDate,
             pageable)
         .map(mapper::toDto);
   }
@@ -584,6 +595,7 @@ public class ProvisionServiceImpl
     }
 
     Snapshot before = Snapshot.of(item);
+    StapleStatus previousStatus = item.getStatus();
 
     item.setName(request.name());
     item.setCategory(request.category());
@@ -622,6 +634,7 @@ public class ProvisionServiceImpl
     eventPublisher.publishEvent(
         new InventoryItemUpsertedEvent(
             saved.getId(), requestingUserId, AuditActor.USER, currentTraceId(), now));
+    publishRanOutIfStapleWentOut(saved, previousStatus, requestingUserId, now);
     log.info(
         "inventory item updated itemId={} userId={} fieldsChanged={} version={}",
         saved.getId(),
@@ -629,6 +642,90 @@ public class ProvisionServiceImpl
         changedFields,
         saved.getVersion());
     return mapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public InventoryItemDto adjustStatus(
+      UUID itemId, UUID requestingUserId, AdjustInventoryStatusRequest request) {
+    InventoryItem item =
+        inventoryItemRepository
+            .findByIdAndUserId(itemId, requestingUserId)
+            .orElseThrow(() -> new InventoryItemNotFoundException(itemId));
+
+    // Optimistic-lock pre-check: surface 409 immediately rather than waiting for flush-time
+    // increment (which only fires when fields are actually dirtied).
+    if (item.getVersion() != request.expectedVersion()) {
+      throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
+          InventoryItem.class, itemId);
+    }
+    if (item.getTrackingMode() != TrackingMode.STATUS) {
+      throw new InvalidInventoryQuantityException(
+          "adjustStatus is only valid for STATUS-tracked items");
+    }
+
+    StapleStatus previous = item.getStatus();
+    StapleStatus next = request.newStatus();
+    if (previous == next) {
+      // No-op PATCH: no audit row, no event, no version bump.
+      log.info(
+          "inventory status PATCH was a no-op itemId={} userId={} status={}",
+          itemId,
+          requestingUserId,
+          next);
+      return mapper.toDto(item);
+    }
+
+    item.setStatus(next);
+    InventoryItem saved = inventoryItemRepository.saveAndFlush(item);
+
+    Instant now = Instant.now(clock);
+    auditLogRepository.save(
+        new InventoryAuditLog(
+            UUID.randomUUID(),
+            saved.getId(),
+            requestingUserId,
+            AuditActor.USER,
+            requestingUserId,
+            FIELD_STATUS,
+            objectMapper.valueToTree(Map.of(FIELD_STATUS, previous.name())),
+            objectMapper.valueToTree(Map.of(FIELD_STATUS, next.name())),
+            now));
+    eventPublisher.publishEvent(
+        new InventoryItemUpsertedEvent(
+            saved.getId(), requestingUserId, AuditActor.USER, currentTraceId(), now));
+    publishRanOutIfStapleWentOut(saved, previous, requestingUserId, now);
+    log.info(
+        "inventory status adjusted itemId={} userId={} from={} to={} version={}",
+        saved.getId(),
+        requestingUserId,
+        previous,
+        next,
+        saved.getVersion());
+    return mapper.toDto(saved);
+  }
+
+  /**
+   * Single source for the replenishment promise (pantry.md §9 Q1): a staple whose {@code status}
+   * transitions to {@code OUT} via a user write (focused status PATCH or full PUT) publishes
+   * exactly one {@link ItemRanOutEvent}. Already-OUT rows and non-staples publish nothing. The
+   * cook-event deduction path applies the same rule through {@code ProvisionEventBatcher}.
+   */
+  private void publishRanOutIfStapleWentOut(
+      InventoryItem saved, StapleStatus previousStatus, UUID userId, Instant now) {
+    if (!saved.isStaple()
+        || saved.getStatus() != StapleStatus.OUT
+        || previousStatus == StapleStatus.OUT) {
+      return;
+    }
+    eventPublisher.publishEvent(
+        new ItemRanOutEvent(
+            userId,
+            List.of(saved.getId()),
+            saved.getIngredientMappingKey(),
+            true,
+            currentTraceId(),
+            now));
   }
 
   @Override
