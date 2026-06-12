@@ -1,70 +1,191 @@
+/**
+ * Today page — rebuilt against the contract-complete page spec
+ * (design/frontend/pages/today.md). A cross-module composite: each card
+ * shows the glanceable subset and deep-links to the owning page. The meal
+ * timeline reflects BOTH machines per row — planner slot state + nutrition
+ * intake status — and the buttons perform the specified client-side
+ * dual-writes (planner first, intake second; spec §3b/§8 Q1).
+ */
+
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { NutritionStat } from "../api";
 import { AdvisorCard } from "../components/AdvisorCard";
 import { MealRow } from "../components/MealRow";
 import type { MealRowMeal } from "../components/MealRow";
-import { SegmentBar } from "../components/SegmentBar";
+import { NotificationGlyph } from "../components/NotificationGlyph";
 import { StatBand } from "../components/StatBand";
-import { MOCK_TODAY_ISO, QUICK_SNACKS } from "../mock/nutritionSeed";
+import { MOCK_TODAY_ISO, QUICK_SNACKS, WEEK_DATES } from "../mock/nutritionSeed";
+import { CURRENT_WEEK_START } from "../mock/plannerSeed";
 import {
-  acceptTodaySuggestion,
+  acceptPendingChange,
+  activePlanForWeek,
   addSnack,
+  changeSlotState,
   computeDailyAggregate,
+  confirmSlot,
   macroWarn,
-  setSlotState,
+  pushToast,
+  recipeName,
+  skipSlot,
   useStore,
 } from "../mock/store";
 import type {
   MacroTargetDto,
-  MealSlotKey,
+  MealSlot,
+  MealSlotDto,
+  NotificationKind,
   SlotState,
 } from "../mock/types";
+import { prettyDate } from "./nutrition/shared";
+import { leadTime } from "./plan/shared";
 
-const SLOT_KEYS: MealSlotKey[] = ["breakfast", "lunch", "dinner"];
+/* ---- §3b: the two machines, one row ------------------------------------------------ */
 
-/** Next lifecycle step + its button label; eaten slots are pinned. */
-const NEXT_ACTION: Partial<
-  Record<SlotState, { label: string; next: SlotState }>
+/** Planner kind ↔ nutrition mealSlot join (enum names differ for snacks;
+ *  CUSTOM has no intake row — spec §8 Q3). */
+function intakeSlotFor(kind: MealSlotDto["kind"]): MealSlot | null {
+  if (kind === "BREAKFAST" || kind === "LUNCH" || kind === "DINNER") return kind;
+  return null; // SNACK → day-level SNACKS bucket (not slot-shaped); CUSTOM → none
+}
+
+const ROW_ACTIONS: Partial<
+  Record<SlotState, Array<{ label: string; next: SlotState; primary?: boolean }>>
 > = {
-  planned: { label: "Start cooking", next: "cooking" },
-  cooking: { label: "Mark cooked", next: "cooked" },
-  cooked: { label: "Mark eaten", next: "eaten" },
+  PLANNED: [
+    { label: "Start cooking", next: "COOKING", primary: true },
+    { label: "Skip", next: "SKIPPED" },
+  ],
+  COOKING: [
+    { label: "Mark cooked", next: "COOKED", primary: true },
+    { label: "Skip", next: "SKIPPED" },
+  ],
+  COOKED: [{ label: "Mark eaten", next: "EATEN", primary: true }],
 };
 
+const KIND_ROUTE: Record<NotificationKind, string> = {
+  plan: "/plan",
+  recipe: "/recipes",
+  grocery: "/groceries",
+  order: "/groceries",
+  pantry: "/pantry",
+  expiry: "/pantry",
+  ai: "/activity",
+};
+
+const DIMENSION_LABEL: Record<string, string> = {
+  SALT_LEVEL: "salt level",
+  PROTEIN: "protein",
+  METHOD_SIMPLIFICATION: "method",
+  PORTION_SIZE: "portion size",
+  FLAVOUR_BALANCE: "flavour balance",
+  ACID_BALANCE: "acid balance",
+  TEXTURE: "texture",
+  COOKING_TIME: "cooking time",
+  SUBSTITUTION_PROMOTION: "substitution",
+  GENERAL: "general",
+};
+
+function greeting(): string {
+  const h = new Date().getHours();
+  return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+}
+
 export function Today() {
-  const today = useStore((s) => s.today);
-  const todayRow = useStore((s) => s.plan.days.find((d) => d.today));
-  const budget = useStore((s) => s.pantry.budget);
+  const activePlan = useStore((s) => activePlanForWeek(s, CURRENT_WEEK_START));
+  const recipes = useStore((s) => s.recipes);
   const intakeDay = useStore((s) => s.nutrition.intakeDays[MOCK_TODAY_ISO]);
   const targets = useStore((s) => s.targets);
+  const notifications = useStore((s) => s.notifications);
+  const weeklyBudget = useStore((s) => s.preferences.lifestyle.weeklyBudget);
+  const pendingChange = useStore((s) => s.adaptation.pendingChanges[0]);
+  const userName = useStore(
+    (s) => s.household.members.find((m) => m.role === "owner")?.name ?? "there",
+  );
   const navigate = useNavigate();
   const [snackOpen, setSnackOpen] = useState(false);
 
-  // Stat band reads the computed daily aggregate (same numbers as the
-  // Nutrition page); four cells here, six on /nutrition per the page spec.
+  const todayDay = activePlan?.days.find((d) => d.date === MOCK_TODAY_ISO);
+  const dayNumber = WEEK_DATES.indexOf(MOCK_TODAY_ISO) + 1;
+
+  // First upcoming slot with a serve time gets the lead-time hint (§3b).
+  const hintSlotId = todayDay?.slots.find(
+    (sl) => sl.state === "PLANNED" && sl.mealTime != null,
+  )?.id;
+
+  const onSlotAction = (slot: MealSlotDto, next: SlotState) => {
+    if (!activePlan) return;
+    // Dual-write order: planner first (authoritative lifecycle), intake
+    // second; intake calls are skipped when already decided (422 no-op).
+    const ok = changeSlotState(activePlan.id, slot.id, next);
+    if (!ok) return;
+    const mealSlot = intakeSlotFor(slot.kind);
+    if (!mealSlot) return;
+    if (next === "EATEN") confirmSlot(MOCK_TODAY_ISO, mealSlot);
+    if (next === "SKIPPED") skipSlot(MOCK_TODAY_ISO, mealSlot);
+  };
+
+  const rows = (todayDay?.slots ?? [])
+    .slice()
+    .sort((a, b) => a.slotIndex - b.slotIndex)
+    .map((slot) => {
+      const mealSlot = intakeSlotFor(slot.kind);
+      const intake = mealSlot
+        ? intakeDay?.slots.find((sl) => sl.mealSlot === mealSlot)
+        : undefined;
+      const metaParts = [
+        slot.shared ? `Shared · ${slot.eaters.length} eating` : "Just you",
+      ];
+      if (slot.scheduledRecipe) {
+        metaParts.push(`serves ${slot.scheduledRecipe.servings}`);
+      }
+      if (intake?.planned.calories != null) {
+        metaParts.push(`${intake.planned.calories} kcal planned`);
+      }
+      if (!mealSlot) {
+        metaParts.push("planner only — no intake row (spec Q3)");
+      }
+      const meal: MealRowMeal = {
+        time: slot.mealTime ?? null,
+        slot: slot.label,
+        name: slot.scheduledRecipe
+          ? recipeName(recipes, slot.scheduledRecipe.recipeId)
+          : `— ${slot.label.toLowerCase()}`,
+        meta: metaParts.join(" · "),
+        state: slot.state,
+        batch: Boolean(slot.scheduledRecipe?.batchCookSessionId),
+        logged: intake != null && intake.actual.status !== "PENDING",
+        hint:
+          slot.id === hintSlotId && slot.mealTime
+            ? `start cooking ${leadTime(slot.mealTime, slot.timeBudgetMin)}`
+            : undefined,
+      };
+      const actions = ROW_ACTIONS[slot.state];
+      return (
+        <MealRow
+          key={slot.id}
+          meal={meal}
+          actions={
+            actions && (
+              <span style={{ display: "flex", gap: 8 }}>
+                {actions.map((a) => (
+                  <button
+                    key={a.next}
+                    className={`btn${a.primary ? " btn-primary" : ""}`}
+                    onClick={() => onSlotAction(slot, a.next)}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+              </span>
+            )
+          }
+        />
+      );
+    });
+
+  /* ---- §3c stat band (4 cells; deep-links to /nutrition) ---- */
   const agg = computeDailyAggregate(intakeDay, targets);
-
-  const meals: Array<{ slot: MealSlotKey; meal: MealRowMeal }> = todayRow
-    ? SLOT_KEYS.map((slot) => {
-        const planSlot = todayRow.slots[slot];
-        const meta = today.slotMeta[slot];
-        return {
-          slot,
-          meal: {
-            time: meta.time,
-            slot,
-            name: planSlot.name,
-            meta: meta.meta,
-            status: planSlot.state,
-            batch: planSlot.batch,
-            action: NEXT_ACTION[planSlot.state]?.label,
-            alert: planSlot.state === "eaten" ? undefined : meta.alert,
-          },
-        };
-      })
-    : [];
-
   const macroStat = (
     label: string,
     actualG: number,
@@ -77,7 +198,6 @@ export function Today() {
     targetDisplay: `${(t.targetG ?? 0).toLocaleString("en-GB")} g`,
     behind: macroWarn(t.direction, actualG, t.targetG ?? 0) || undefined,
   });
-
   const nutritionStats: NutritionStat[] = [
     {
       label: "Calories",
@@ -97,46 +217,125 @@ export function Today() {
     macroStat("Fat", agg.fat.actualSoFarG, targets.fat),
   ];
 
-  const budgetPct = budget.spent / budget.total;
+  /* ---- §3d needs attention (top-3 unread; read-only here) ---- */
+  const unread = notifications.filter((n) => !n.read);
+  const urgentCount = unread.filter((n) => n.kind === "expiry").length;
+
+  /* ---- §3f teaser expiry ---- */
+  const expiresInDays = pendingChange
+    ? Math.max(
+        0,
+        Math.round(
+          (Date.parse(pendingChange.expiresAt) -
+            Date.parse(`${MOCK_TODAY_ISO}T18:00:00Z`)) /
+            86400000,
+        ),
+      )
+    : 0;
 
   return (
     <div>
       <header className="today-header">
         <div>
           <span className="mp-label" style={{ color: "var(--mp-terra-dark)" }}>
-            {today.dateLabel} · {today.progressLabel}
+            {prettyDate(MOCK_TODAY_ISO)}
+            {activePlan && ` · week plan day ${dayNumber} of 7`}
           </span>
           <div>
-            <span className="mp-serif today-greeting">{today.greeting}</span>
+            <span className="mp-serif today-greeting">
+              {greeting()}, {userName}
+            </span>
           </div>
         </div>
-        <span className="mp-chip">Plan active</span>
+        {activePlan ? (
+          <span className="mp-chip">Plan active</span>
+        ) : (
+          <span style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <span className="mp-chip muted">No plan this week</span>
+            <button
+              className="btn btn-primary"
+              onClick={() => navigate(`/plan/generate?week=${CURRENT_WEEK_START}`)}
+            >
+              Generate
+            </button>
+          </span>
+        )}
       </header>
 
       <section aria-label="Meal timeline">
-        {meals.map(({ slot, meal }) => (
-          <MealRow
-            key={slot}
-            meal={meal}
-            onAction={() => {
-              const next = NEXT_ACTION[meal.status]?.next;
-              if (next && todayRow) setSlotState(todayRow.day, slot, next);
-            }}
-          />
-        ))}
+        {activePlan && todayDay ? (
+          rows
+        ) : (
+          <div className="page-loading">
+            No plan this week — generate one to plan and log your meals.
+            <div style={{ marginTop: 14 }}>
+              <button
+                className="btn btn-primary"
+                onClick={() =>
+                  navigate(`/plan/generate?week=${CURRENT_WEEK_START}`)
+                }
+              >
+                Generate a plan
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
-      <StatBand stats={nutritionStats} />
+      {/* Whole band deep-links to /nutrition (remaining lines, micros, week
+          strip live there — §3c). */}
+      <div
+        role="link"
+        tabIndex={0}
+        style={{ cursor: "pointer" }}
+        title="Open nutrition"
+        onClick={() => navigate("/nutrition")}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") navigate("/nutrition");
+        }}
+      >
+        <StatBand stats={nutritionStats} />
+      </div>
 
       <div className="today-lower">
         <section aria-label="Needs attention">
-          <span className="mp-label">Needs attention</span>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "baseline",
+            }}
+          >
+            <span className="mp-label">
+              Needs attention{" "}
+              <span className="attention-count">
+                {unread.length}
+                {urgentCount > 0 && (
+                  <span style={{ color: "var(--mp-red)" }}> · {urgentCount} urgent</span>
+                )}
+              </span>
+            </span>
+            <button
+              className="btn btn-small"
+              onClick={() => navigate("/notifications")}
+            >
+              View all
+            </button>
+          </div>
           <div className="attention-list">
-            {today.attention.map((item, i) => (
-              <div key={item.text} className={`attention-item ${item.kind}`}>
-                <span className="mp-num">{String(i + 1).padStart(2, "0")}</span>
-                <span>{item.text}</span>
-              </div>
+            {unread.length === 0 && (
+              <div className="inline-note">Nothing needs you right now.</div>
+            )}
+            {unread.slice(0, 3).map((n) => (
+              <button
+                key={n.id}
+                type="button"
+                className="attention-item attention-link"
+                onClick={() => navigate(KIND_ROUTE[n.kind])}
+              >
+                <NotificationGlyph kind={n.kind} />
+                <span>{n.title}</span>
+              </button>
             ))}
           </div>
           {snackOpen ? (
@@ -147,16 +346,14 @@ export function Today() {
                   className="filter-chip"
                   onClick={() => {
                     addSnack(MOCK_TODAY_ISO, snack.req);
+                    pushToast(`Snack logged — ${snack.req.freeText.toLowerCase()}`);
                     setSnackOpen(false);
                   }}
                 >
                   {snack.label}
                 </button>
               ))}
-              <button
-                className="filter-chip"
-                onClick={() => setSnackOpen(false)}
-              >
+              <button className="filter-chip" onClick={() => setSnackOpen(false)}>
                 Cancel
               </button>
             </div>
@@ -180,42 +377,65 @@ export function Today() {
             }}
           >
             <span className="mp-label">Week budget</span>
-            <span>
-              <span className="mp-num" style={{ fontSize: 20 }}>
-                £{budget.spent.toFixed(2)}
-              </span>
-              <span style={{ fontSize: 13, color: "var(--mp-muted)" }}>
-                {" "}
-                of £{budget.total}
-              </span>
-            </span>
+            <button className="btn btn-small" onClick={() => navigate("/pantry")}>
+              Open pantry
+            </button>
           </div>
           <div style={{ marginTop: 10 }}>
-            <SegmentBar pct={budgetPct} width={250} />
+            <span className="mp-num" style={{ fontSize: 26 }}>
+              £{weeklyBudget}
+            </span>
+            <span style={{ fontSize: 13, color: "var(--mp-muted)" }}>
+              {" "}
+              weekly target
+            </span>
           </div>
-          <div className="budget-note">{budget.note}</div>
+          <div className="budget-note">soft ceiling +£5</div>
+          <div className="inline-note" style={{ marginTop: 8 }}>
+            Spend-so-far arrives with order history (spendTracking is null in
+            v1 — spec Q5); target only for now.
+          </div>
         </section>
       </div>
 
-      {today.suggestion && (
+      {pendingChange && (
         <AdvisorCard
-          label={today.suggestion.label}
-          title={today.suggestion.title}
-          sub={today.suggestion.sub}
+          label="Suggestion · from your feedback"
+          title={
+            pendingChange.reasoningPreview ??
+            `${DIMENSION_LABEL[pendingChange.changeDimension] ?? pendingChange.changeDimension} change suggested`
+          }
+          sub={`${recipeName(recipes, pendingChange.recipeId)} · confidence ${pendingChange.confidence.toFixed(
+            2,
+          )} · expires in ${expiresInDays} day${expiresInDays === 1 ? "" : "s"}`}
           actions={
             <>
               <button
                 className="btn"
-                onClick={() => navigate(`/recipes/${today.suggestion?.recipeId}`)}
+                onClick={() => navigate(`/recipes/${pendingChange.recipeId}`)}
               >
                 Review
               </button>
-              <button className="btn btn-primary" onClick={acceptTodaySuggestion}>
+              <button
+                className="btn btn-primary"
+                title="Accept fetches the latest detail first — the list item carries no expectedOptimisticVersion (spec Q6)"
+                onClick={() => {
+                  acceptPendingChange(pendingChange.id);
+                  pushToast("Suggestion accepted — new recipe version created");
+                }}
+              >
                 Accept
               </button>
             </>
           }
-        />
+        >
+          <div style={{ marginTop: 6 }}>
+            <span className="tint-chip terra">
+              {DIMENSION_LABEL[pendingChange.changeDimension] ??
+                pendingChange.changeDimension.toLowerCase()}
+            </span>
+          </div>
+        </AdvisorCard>
       )}
     </div>
   );

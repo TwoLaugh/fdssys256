@@ -2,6 +2,7 @@ import { Outlet } from "react-router-dom";
 import { selectUnreadCount, useStore } from "../mock/store";
 import { FeedbackButton } from "./FeedbackButton";
 import { Rail } from "./Rail";
+import { ToastHost } from "./ToastHost";
 
 /** App shell: left icon rail, routed page content, floating feedback button. */
 export function Shell() {
@@ -14,6 +15,7 @@ export function Shell() {
         <Outlet />
       </main>
       <FeedbackButton />
+      <ToastHost />
     </div>
   );
 }

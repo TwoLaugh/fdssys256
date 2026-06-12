@@ -6,8 +6,10 @@
  */
 
 import { createNutritionSeed, targetsSeed } from "./nutritionSeed";
+import { createPlannerSeed } from "./plannerSeed";
 import type {
   ActivityState,
+  AdaptationState,
   DiscoveryResult,
   DiscoverySource,
   DiscoveryState,
@@ -15,12 +17,9 @@ import type {
   HouseholdState,
   NotificationPrefs,
   PantryState,
-  PlanCandidate,
-  PlanState,
   PreferencesState,
   Recipe,
   StoreState,
-  TodayState,
 } from "./types";
 
 /** The mock's fixed "today" (Wednesday 10 June 2026) — keeps expiry colour
@@ -40,227 +39,6 @@ const IMG_SALMON =
   "https://images.unsplash.com/photo-1467003909585-2f8a72700288?w=900&q=60";
 const IMG_TACOS =
   "https://images.unsplash.com/photo-1565299585323-38d6b0865b47?w=900&q=60";
-
-/* ---- plan ------------------------------------------------------------------ */
-
-const planSeed: PlanState = {
-  title: "This week's plan",
-  range: "8–14 June",
-  meta: "generated Sunday · accepted from 5 candidates",
-  stats: [
-    { label: "Variety", value: "78%" },
-    { label: "Est. cost", value: "£52 ± £4", sub: "83% confidence" },
-    { label: "Protein on target", value: "5 of 7 days" },
-    { label: "Quality warnings", value: "2", warn: true },
-  ],
-  days: [
-    {
-      day: "Mon",
-      date: 8,
-      slots: {
-        breakfast: { name: "Overnight oats", state: "eaten" },
-        lunch: { name: "Stir-fry", state: "eaten", batch: true },
-        dinner: { name: "Salmon traybake", state: "eaten" },
-      },
-    },
-    {
-      day: "Tue",
-      date: 9,
-      slots: {
-        breakfast: { name: "Eggs on toast", state: "eaten" },
-        lunch: { name: "Stir-fry", state: "eaten", batch: true },
-        dinner: { name: "Pasta norma", state: "eaten" },
-      },
-    },
-    {
-      day: "Wed",
-      date: 10,
-      today: true,
-      slots: {
-        breakfast: { name: "Overnight oats", state: "eaten" },
-        lunch: { name: "Stir-fry", state: "cooked", batch: true },
-        dinner: { name: "Tofu bibimbap", state: "planned" },
-      },
-    },
-    {
-      day: "Thu",
-      date: 11,
-      slots: {
-        breakfast: { name: "Greek yoghurt bowl", state: "planned" },
-        lunch: { name: "Grain bowl", state: "planned" },
-        dinner: { name: "Chicken stir-fry", state: "affected" },
-      },
-    },
-    {
-      day: "Fri",
-      date: 12,
-      slots: {
-        breakfast: { name: "Eggs on toast", state: "planned" },
-        lunch: { name: "Chicken wrap", state: "affected" },
-        dinner: { name: "Fish tacos", state: "planned" },
-      },
-    },
-    {
-      day: "Sat",
-      date: 13,
-      slots: {
-        breakfast: { name: "Pancakes", state: "planned" },
-        lunch: { name: "Leftover curry", state: "planned" },
-        dinner: { name: "Pizza night", state: "planned" },
-      },
-    },
-    {
-      day: "Sun",
-      date: 14,
-      slots: {
-        breakfast: { name: "Shakshuka", state: "planned" },
-        lunch: { name: "Soup & bread", state: "planned" },
-        dinner: { name: "Batch cook", state: "planned", batch: true },
-      },
-    },
-  ],
-  fix: {
-    title: "Chicken breast marked spoiled",
-    sub: "2 future slots affected · eaten and cooked meals stay pinned",
-    swaps: [
-      {
-        day: "Thu",
-        slot: "dinner",
-        slotLabel: "Thu dinner",
-        from: "Chicken stir-fry",
-        to: "Chickpea & spinach curry",
-        note: "uses expiring spinach",
-      },
-      {
-        day: "Fri",
-        slot: "lunch",
-        slotLabel: "Fri lunch",
-        from: "Chicken wrap",
-        to: "Tuna melt",
-      },
-    ],
-    impact: "Cost −£1.10 · protein unchanged · variety +2%",
-    statsAfter: [
-      { label: "Variety", value: "80%" },
-      { label: "Est. cost", value: "£50.90 ± £4", sub: "83% confidence" },
-      { label: "Protein on target", value: "5 of 7 days" },
-      { label: "Quality warnings", value: "2", warn: true },
-    ],
-  },
-};
-
-/* ---- generation ------------------------------------------------------------ */
-
-/** Base candidate values; scores are varied deterministically per round. */
-export const BASE_CANDIDATES: ReadonlyArray<
-  Omit<PlanCandidate, "fit" | "recommended"> & { baseFit: number }
-> = [
-  {
-    id: 1,
-    baseFit: 84,
-    nutrition: "protein −6% Thu",
-    cost: "£49 ± £3",
-    conf: "87% confidence",
-    variety: "72%",
-    prep: "4h 10m",
-    warn: null,
-    reasoning:
-      "Candidate 1 keeps cost lowest of the near-target options, but repeats last week's salmon and leaves Thursday's protein six percent short.",
-    preview: [
-      "Salmon traybake",
-      "Veggie chilli",
-      "Chicken pilaf",
-      "Pasta norma",
-      "Fish tacos",
-      "Pizza night",
-      "Batch: curry base",
-    ],
-  },
-  {
-    id: 2,
-    baseFit: 91,
-    nutrition: "on target all days",
-    cost: "£53 ± £4",
-    conf: "83% confidence",
-    variety: "81%",
-    prep: "3h 40m",
-    warn: null,
-    reasoning:
-      "Candidate 2 closes last week's protein gap without repeating Monday's salmon, keeps three sub-25-minute dinners on school nights, and reuses Sunday's batch base across two lunches.",
-    preview: [
-      "Miso salmon traybake",
-      "Black bean tacos",
-      "Chicken pilaf",
-      "Gnocchi al forno",
-      "Prawn stir-fry",
-      "Pizza night",
-      "Batch: chilli base",
-    ],
-  },
-  {
-    id: 3,
-    baseFit: 88,
-    nutrition: "on target all days",
-    cost: "£58 ± £6",
-    conf: "71% confidence",
-    variety: "85%",
-    prep: "5h 05m",
-    warn: "over budget",
-    reasoning:
-      "Candidate 3 maximises novelty with two cuisines you haven't cooked this month, but the basket runs three pounds over budget at current prices.",
-    preview: [
-      "Miso cod traybake",
-      "Lamb kofta bowls",
-      "Mushroom risotto",
-      "Black bean tacos",
-      "Prawn linguine",
-      "Pizza night",
-      "Batch: ragu base",
-    ],
-  },
-  {
-    id: 4,
-    baseFit: 79,
-    nutrition: "protein −9% Tue, Fri",
-    cost: "£46 ± £3",
-    conf: "88% confidence",
-    variety: "64%",
-    prep: "3h 15m",
-    warn: "2 quality warnings",
-    reasoning:
-      "Candidate 4 is the cheapest and quickest week, at the cost of two quality warnings and the lowest variety of the five.",
-    preview: [
-      "Chicken traybake",
-      "Veggie stir-fry",
-      "Chicken pilaf",
-      "Quesadillas",
-      "Sausage bake",
-      "Pizza night",
-      "Batch: soup base",
-    ],
-  },
-  {
-    id: 5,
-    baseFit: 76,
-    nutrition: "fibre low 3 days",
-    cost: "£51 ± £5",
-    conf: "76% confidence",
-    variety: "88%",
-    prep: "4h 45m",
-    warn: "1 quality warning",
-    reasoning:
-      "Candidate 5 pushes variety to its highest with three recipes new to your catalogue, though fibre runs low on three days.",
-    preview: [
-      "Prawn stir-fry",
-      "Black bean tacos",
-      "Shakshuka",
-      "Gnocchi al forno",
-      "Miso salmon traybake",
-      "Pizza night",
-      "Batch: chilli base",
-    ],
-  },
-];
 
 /* ---- recipes ---------------------------------------------------------------- */
 
@@ -887,46 +665,6 @@ const pantrySeed: PantryState = {
   budget: { spent: 38.2, total: 55, note: "On track · 3 days left" },
 };
 
-/* ---- today ----------------------------------------------------------------------- */
-
-const todaySeed: TodayState = {
-  dateLabel: "Wednesday 10 June",
-  progressLabel: "week plan day 4 of 7",
-  greeting: "Good evening, Iren",
-  slotMeta: {
-    breakfast: {
-      time: "08:00",
-      meta: "Just you · 380 kcal",
-      kcal: 380,
-    },
-    lunch: {
-      time: "13:00",
-      meta: "Just you · cooked Sunday, portion 3 of 5",
-      kcal: 520,
-    },
-    dinner: {
-      time: "19:00",
-      meta: "Shared · 4 eating · start cooking 18:35",
-      kcal: 520,
-      alert: "Defrost tofu by 15:00",
-    },
-  },
-  attention: [
-    {
-      kind: "expiry",
-      text: "Spinach expires tomorrow — used in Thursday's curry",
-    },
-    { kind: "defrost", text: "Defrost tofu by 15:00 for tonight" },
-    { kind: "ai", text: "1 recipe suggestion waiting for review" },
-  ],
-  suggestion: {
-    label: "Suggestion · from your feedback",
-    title: "Reduce soy sauce in chicken stir-fry by 30%",
-    sub: "From your feedback on Tuesday — “too salty”",
-    recipeId: "chicken-stir-fry",
-  },
-};
-
 /* ---- preferences --------------------------------------------------------------------- */
 
 const preferencesSeed: PreferencesState = {
@@ -1158,19 +896,28 @@ const discoverySeed: DiscoveryState = {
 
 /* ---- root ------------------------------------------------------------------------- */
 
+/* ---- adaptation (Today's suggestion teaser, today.md §3f) --------------------------- */
+
+const adaptationSeed: AdaptationState = {
+  pendingChanges: [
+    {
+      id: "pc-1",
+      recipeId: "chicken-stir-fry",
+      changeDimension: "SALT_LEVEL",
+      reasoningPreview:
+        "Reduce soy sauce in chicken stir-fry by 30% — from your feedback on Tuesday, “too salty”",
+      confidence: 0.88,
+      impactScore: 0.72,
+      createdAt: "2026-06-09T20:15:00Z",
+      expiresAt: "2026-06-13T20:15:00Z",
+    },
+  ],
+};
+
 export function createSeed(): StoreState {
   return {
-    plan: planSeed,
-    generation: {
-      status: "idle",
-      round: 0,
-      title: "Generate next week's plan",
-      context:
-        "15–21 June · 2 adults, 2 children · budget £55 · 3 school-night dinners under 25 min",
-      feasibility:
-        "All hard constraints satisfiable — Maya's vegetarian meals and the shared dinner slots have no conflicts.",
-      candidates: [],
-    },
+    planner: createPlannerSeed(),
+    adaptation: adaptationSeed,
     recipes: recipesSeed,
     grocery: grocerySeed,
     pantry: pantrySeed,
@@ -1199,12 +946,11 @@ export function createSeed(): StoreState {
       {
         id: "n4",
         kind: "plan",
-        title: "This week's plan accepted from 5 candidates",
-        time: "Sun 7 June",
+        title: "Generation 3 accepted — this week's plan re-optimised Tuesday",
+        time: "Tue 9 June",
         read: true,
       },
     ],
-    today: todaySeed,
     nutrition: createNutritionSeed(),
     targets: targetsSeed,
     preferences: preferencesSeed,
@@ -1212,5 +958,6 @@ export function createSeed(): StoreState {
     notificationPrefs: notificationPrefsSeed,
     household: householdSeed,
     discovery: discoverySeed,
+    toasts: [],
   };
 }

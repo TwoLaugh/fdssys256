@@ -17,7 +17,9 @@ import {
   WEEK_DATES,
   WEEK_DAY_LABELS,
 } from "../../mock/nutritionSeed";
+import { CURRENT_WEEK_START } from "../../mock/plannerSeed";
 import {
+  activePlanForWeek,
   addJournalEntry,
   addSnack,
   computeDailyAggregate,
@@ -29,6 +31,7 @@ import {
   floorViolationDayIndices,
   macroWarn,
   overrideSlot,
+  recipeName,
   removeSnack,
   searchIngredients,
   skipSlot,
@@ -1235,7 +1238,7 @@ export function OverviewTab() {
   const nutrition = useStore((s) => s.nutrition);
   const targets = useStore((s) => s.targets);
   const recipes = useStore((s) => s.recipes);
-  const planDays = useStore((s) => s.plan.days);
+  const activePlan = useStore((s) => activePlanForWeek(s, CURRENT_WEEK_START));
   const slotTimes = useStore((s) => s.preferences.lifestyle.slotTimes);
   const navigate = useNavigate();
 
@@ -1250,16 +1253,18 @@ export function OverviewTab() {
   const pendingCount =
     day?.slots.filter((sl) => sl.actual.status === "PENDING").length ?? 0;
 
-  const dayOfMonth = Number(date.slice(8));
-  const planDay = planDays.find((d) => d.date === dayOfMonth);
+  const planDay = activePlan?.days.find((d) => d.date === date);
 
   const plannedName = (slot: IntakeSlotDto): string => {
     if (slot.planned.recipeId) {
       const r = recipes.find((x) => x.id === slot.planned.recipeId);
       if (r) return r.name;
     }
-    const key = slot.mealSlot.toLowerCase() as MealSlotKey;
-    return planDay?.slots[key]?.name ?? "—";
+    // Planner kind ↔ nutrition mealSlot join (SNACKS has no planner column).
+    const planSlot = planDay?.slots.find((sl) => sl.kind === slot.mealSlot);
+    return planSlot?.scheduledRecipe
+      ? recipeName(recipes, planSlot.scheduledRecipe.recipeId)
+      : "—";
   };
 
   const slotTime = (slot: IntakeSlotDto): string => {
