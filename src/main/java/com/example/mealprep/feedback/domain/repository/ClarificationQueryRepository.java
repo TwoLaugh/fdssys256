@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -16,11 +17,18 @@ import org.springframework.data.repository.query.Param;
 /**
  * Spring Data repository for {@link ClarificationQuery}. Package-private; cross-module callers go
  * through {@code FeedbackQueryService} / {@code FeedbackUpdateService}.
+ *
+ * <p>The user-facing read finders carry {@code @EntityGraph(attributePaths = "feedbackEntry")} so
+ * the mapper's {@code textExcerpt} denormalisation (frontend-gaps:
+ * feedback-clarification-text-excerpt) reads the parent entry from the same single joined query —
+ * no per-row lazy fetch.
  */
 public interface ClarificationQueryRepository extends JpaRepository<ClarificationQuery, UUID> {
 
+  @EntityGraph(attributePaths = "feedbackEntry")
   Optional<ClarificationQuery> findByIdAndFeedbackEntryUserId(UUID id, UUID userId);
 
+  @EntityGraph(attributePaths = "feedbackEntry")
   Page<ClarificationQuery> findByFeedbackEntryUserIdAndStatusOrderByCreatedAtAsc(
       UUID userId, ClarificationStatus status, Pageable pageable);
 
@@ -62,6 +70,7 @@ public interface ClarificationQueryRepository extends JpaRepository<Clarificatio
    * Used by {@code listClarificationQueries} when no {@code status} filter is supplied — the
    * user-facing inbox, oldest first (LLD line 188).
    */
+  @EntityGraph(attributePaths = "feedbackEntry")
   Page<ClarificationQuery> findByFeedbackEntryUserIdOrderByCreatedAtAsc(
       UUID userId, Pageable pageable);
 

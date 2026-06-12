@@ -190,6 +190,9 @@ class MisclassificationCorrectionIT {
         .andExpect(jsonPath("$.content.length()").value(1))
         .andExpect(jsonPath("$.content[0].correctedDestination").value("PROVISIONS"))
         .andExpect(jsonPath("$.content[0].replayStatus").value("APPLIED"))
+        // The corrections log's context quote rides on the list DTO — no per-row
+        // GET /feedback/{id} (frontend-gaps: feedback-clarification-text-excerpt).
+        .andExpect(jsonPath("$.content[0].textExcerpt").value("no more cream sauces"))
         .andExpect(openApi().isValid(openApiValidator));
   }
 

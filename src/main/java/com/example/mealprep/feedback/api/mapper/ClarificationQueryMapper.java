@@ -32,6 +32,7 @@ public abstract class ClarificationQueryMapper {
     return new ClarificationQueryDto(
         entity.getId(),
         entity.getFeedbackEntry() != null ? entity.getFeedbackEntry().getId() : null,
+        TextExcerpts.fromEntry(entity.getFeedbackEntry()),
         entity.getQuestionText(),
         readOptions(entity.getClassifierOptionsJson()),
         entity.getStatus(),

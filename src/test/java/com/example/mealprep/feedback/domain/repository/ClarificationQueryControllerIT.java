@@ -129,6 +129,10 @@ class ClarificationQueryControllerIT {
     mvc.perform(get("/api/v1/feedback/clarifications").cookie(alice.cookie()))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.content.length()").value(2))
+        // The inbox card's "from: …" context quote rides on the list DTO — no per-card
+        // GET /feedback/{id} (frontend-gaps: feedback-clarification-text-excerpt).
+        .andExpect(jsonPath("$.content[0].textExcerpt").value("did you mean the recipe?"))
+        .andExpect(jsonPath("$.content[1].textExcerpt").value("did you mean the recipe?"))
         .andExpect(openApi().isValid(openApiValidator));
 
     mvc.perform(
@@ -159,6 +163,7 @@ class ClarificationQueryControllerIT {
         .andExpect(jsonPath("$.id").value(q.getId().toString()))
         .andExpect(jsonPath("$.status").value("PENDING"))
         .andExpect(jsonPath("$.options").isArray())
+        .andExpect(jsonPath("$.textExcerpt").value("did you mean the recipe?"))
         .andExpect(openApi().isValid(openApiValidator));
 
     mvc.perform(get("/api/v1/feedback/clarifications/" + q.getId()).cookie(bob.cookie()))

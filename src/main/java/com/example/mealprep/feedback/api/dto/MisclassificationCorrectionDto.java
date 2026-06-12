@@ -9,11 +9,15 @@ import java.util.UUID;
 /**
  * Public-facing view of a {@code MisclassificationCorrection} row. The LLD doesn't fully spec this
  * shape (only the mapper signature, line 392); the record matches the entity's exposed fields, per
- * ticket 01a §17.
+ * ticket 01a §17 — plus {@code textExcerpt}, the leading 160 code points of the originating entry's
+ * {@code text} (plain truncation, no ellipsis marker) so the corrections log can render its context
+ * quote without a per-row {@code GET /feedback/{id}} (frontend-gaps:
+ * feedback-clarification-text-excerpt).
  */
 public record MisclassificationCorrectionDto(
     UUID id,
     UUID feedbackEntryId,
+    String textExcerpt,
     UUID originalRoutingId,
     Destination correctedDestination,
     Destination originalDestination,

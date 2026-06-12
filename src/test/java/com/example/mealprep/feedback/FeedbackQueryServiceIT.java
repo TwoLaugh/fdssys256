@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.mealprep.feedback.api.dto.ClarificationQueryDto;
 import com.example.mealprep.feedback.api.dto.FeedbackEntryDto;
+import com.example.mealprep.feedback.api.dto.MisclassificationCorrectionDto;
 import com.example.mealprep.feedback.api.dto.RoutingDecisionDto;
 import com.example.mealprep.feedback.domain.entity.ClarificationQuery;
 import com.example.mealprep.feedback.domain.entity.ClarificationStatus;
@@ -13,14 +14,18 @@ import com.example.mealprep.feedback.domain.entity.RoutingStatus;
 import com.example.mealprep.feedback.domain.entity.SubmissionStatus;
 import com.example.mealprep.feedback.domain.repository.ClarificationQueryRepository;
 import com.example.mealprep.feedback.domain.repository.FeedbackEntryRepository;
+import com.example.mealprep.feedback.domain.repository.MisclassificationCorrectionRepository;
 import com.example.mealprep.feedback.domain.repository.RoutingLogRepository;
 import com.example.mealprep.feedback.domain.service.FeedbackQueryService;
 import com.example.mealprep.feedback.spi.Destination;
 import com.example.mealprep.feedback.testdata.FeedbackTestData;
 import com.example.mealprep.testsupport.TestContainersConfig;
+import jakarta.persistence.EntityManagerFactory;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.hibernate.SessionFactory;
+import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,8 +55,10 @@ class FeedbackQueryServiceIT {
   @Autowired private FeedbackEntryRepository entryRepository;
   @Autowired private RoutingLogRepository routingLogRepository;
   @Autowired private ClarificationQueryRepository clarificationRepository;
+  @Autowired private MisclassificationCorrectionRepository correctionRepository;
   @Autowired private FeedbackQueryService queryService;
   @Autowired private JdbcTemplate jdbcTemplate;
+  @Autowired private EntityManagerFactory entityManagerFactory;
 
   @AfterEach
   void cleanup() {
@@ -176,6 +183,10 @@ class FeedbackQueryServiceIT {
     assertThat(all.getContent())
         .extracting(ClarificationQueryDto::status)
         .containsExactlyInAnyOrder(ClarificationStatus.PENDING, ClarificationStatus.ANSWERED);
+    // Each card carries its originating entry's text as the excerpt (frontend-gaps ticket).
+    assertThat(all.getContent())
+        .extracting(ClarificationQueryDto::textExcerpt)
+        .containsExactlyInAnyOrder("ambiguous one", "ambiguous two");
 
     // status-filtered branch still scoped to the caller.
     Page<ClarificationQueryDto> pendingOnly =
@@ -200,8 +211,76 @@ class FeedbackQueryServiceIT {
     assertThat(owned.get().id()).isEqualTo(q.getId());
     assertThat(owned.get().status()).isEqualTo(ClarificationStatus.PENDING);
     assertThat(owned.get().options()).isNotEmpty();
+    assertThat(owned.get().textExcerpt()).isEqualTo("which one?");
 
     assertThat(queryService.getClarificationQuery(bob, q.getId())).isEmpty();
     assertThat(queryService.getClarificationQuery(alice, UUID.randomUUID())).isEmpty();
+  }
+
+  /**
+   * frontend-gaps (feedback-clarification-text-excerpt): the {@code textExcerpt} denormalisation
+   * must ride the {@code @EntityGraph} join — the JDBC statement count for a 3-row page must equal
+   * the 1-row page's (a per-row parent-entry fetch would scale with the row count). Asserted for
+   * both the clarifications inbox and the corrections log via Hibernate statistics, mirroring
+   * {@code RecipeListSearchIT}'s no-N+1 pattern.
+   */
+  @Test
+  void listReads_carryTextExcerpt_withoutPerRowParentEntryFetches() {
+    UUID alice = UUID.randomUUID();
+    for (int i = 0; i < 3; i++) {
+      FeedbackEntry pending = FeedbackTestData.feedbackEntry(alice, "clarify me " + i);
+      pending.setSubmissionStatus(SubmissionStatus.CLARIFICATION_PENDING);
+      entryRepository.saveAndFlush(pending);
+      clarificationRepository.saveAndFlush(FeedbackTestData.clarificationQuery(pending));
+
+      UUID routedEntryId = seedEntryWithRecipeRoute(alice, "correct me " + i);
+      UUID routingId =
+          routingLogRepository
+              .findByFeedbackEntryIdOrderByRoutedAtAsc(routedEntryId)
+              .get(0)
+              .getId();
+      FeedbackEntry routed = entryRepository.findById(routedEntryId).orElseThrow();
+      correctionRepository.saveAndFlush(
+          FeedbackTestData.misclassificationCorrection(routed, routingId, alice));
+    }
+
+    Statistics stats = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+    stats.setStatisticsEnabled(true);
+
+    stats.clear();
+    Page<ClarificationQueryDto> oneClarification =
+        queryService.listClarificationQueries(alice, null, PageRequest.of(0, 1));
+    long clarificationOneRowStatements = stats.getPrepareStatementCount();
+    stats.clear();
+    Page<ClarificationQueryDto> threeClarifications =
+        queryService.listClarificationQueries(alice, null, PageRequest.of(0, 3));
+    long clarificationThreeRowStatements = stats.getPrepareStatementCount();
+
+    assertThat(oneClarification.getContent()).hasSize(1);
+    assertThat(threeClarifications.getContent()).hasSize(3);
+    assertThat(threeClarifications.getContent())
+        .extracting(ClarificationQueryDto::textExcerpt)
+        .containsExactlyInAnyOrder("clarify me 0", "clarify me 1", "clarify me 2");
+    assertThat(clarificationThreeRowStatements)
+        .as("JDBC statements for a 3-row clarification page vs 1-row (N+1 would scale per row)")
+        .isEqualTo(clarificationOneRowStatements);
+
+    stats.clear();
+    Page<MisclassificationCorrectionDto> oneCorrection =
+        queryService.listCorrections(alice, PageRequest.of(0, 1));
+    long correctionOneRowStatements = stats.getPrepareStatementCount();
+    stats.clear();
+    Page<MisclassificationCorrectionDto> threeCorrections =
+        queryService.listCorrections(alice, PageRequest.of(0, 3));
+    long correctionThreeRowStatements = stats.getPrepareStatementCount();
+
+    assertThat(oneCorrection.getContent()).hasSize(1);
+    assertThat(threeCorrections.getContent()).hasSize(3);
+    assertThat(threeCorrections.getContent())
+        .extracting(MisclassificationCorrectionDto::textExcerpt)
+        .containsExactlyInAnyOrder("correct me 0", "correct me 1", "correct me 2");
+    assertThat(correctionThreeRowStatements)
+        .as("JDBC statements for a 3-row corrections page vs 1-row (N+1 would scale per row)")
+        .isEqualTo(correctionOneRowStatements);
   }
 }
