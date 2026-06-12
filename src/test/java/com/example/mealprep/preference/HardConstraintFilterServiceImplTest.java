@@ -626,4 +626,127 @@ class HardConstraintFilterServiceImplTest {
     assertThat(result.passes()).isTrue();
     assertThat(result.violations()).isEmpty();
   }
+
+  // ---------------- exclusionKeySnapshot (discovery-server-side-exclusions) ----------------
+
+  @Test
+  void exclusionKeySnapshot_userWithNoAggregate_returnsEmptySet_neverThrows() {
+    UUID userId = UUID.randomUUID();
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId)).thenReturn(Optional.empty());
+
+    assertThat(service().exclusionKeySnapshot(userId, FilterContext.ANY)).isEmpty();
+    verify(allergenDerivativeRepository, never()).findAll();
+  }
+
+  @Test
+  void exclusionKeySnapshot_allergies_includeDirectAndDerivativeKeys() {
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints()
+            .withUserId(userId)
+            .withAllergies("peanut")
+            .build();
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+    when(allergenDerivativeRepository.findAll())
+        .thenReturn(
+            List.of(
+                new AllergenDerivative(UUID.randomUUID(), "peanut", "peanut_oil"),
+                new AllergenDerivative(UUID.randomUUID(), "peanut", "satay_sauce"),
+                // Another allergen's derivative must NOT leak into this user's snapshot.
+                new AllergenDerivative(UUID.randomUUID(), "dairy", "milk")));
+
+    var snapshot = service().exclusionKeySnapshot(userId, FilterContext.ANY);
+
+    assertThat(snapshot)
+        .contains("peanut", "peanut_oil", "satay_sauce")
+        .doesNotContain("milk", "dairy");
+  }
+
+  @Test
+  void exclusionKeySnapshot_includesIntolerances_medicalDietsWithExpansions_andBaseExclusions() {
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints()
+            .withUserId(userId)
+            .withDietaryIdentityBase("vegetarian")
+            .withMedicalDiets("low_sodium")
+            .build();
+    aggregate
+        .getIntolerances()
+        .add(
+            HardIntolerance.builder()
+                .id(UUID.randomUUID())
+                .hardConstraints(aggregate)
+                .substance("lactose")
+                .severity("moderate")
+                .build());
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+
+    var snapshot = service().exclusionKeySnapshot(userId, FilterContext.ANY);
+
+    assertThat(snapshot)
+        // intolerance substance
+        .contains("lactose")
+        // medical diet name + its static rejected-key expansion
+        .contains("low_sodium", "salt", "soy_sauce")
+        // dietary base exclusions (vegetarian = meat + fish)
+        .contains("chicken", "fish");
+  }
+
+  @Test
+  void exclusionKeySnapshot_plainExceptionMatchingContext_removesBaseExclusionKey() {
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints()
+            .withUserId(userId)
+            .withDietaryIdentityBase("vegetarian")
+            .build();
+    aggregate.getExceptions().add(exception("fish", "any"));
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+
+    var snapshot = service().exclusionKeySnapshot(userId, FilterContext.ANY);
+
+    // "any"-context exception widens the base diet — fish is allowed, chicken still excluded.
+    assertThat(snapshot).doesNotContain("fish").contains("chicken");
+  }
+
+  @Test
+  void exclusionKeySnapshot_contextConditionalException_doesNotWidenUnderAnyContext() {
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints()
+            .withUserId(userId)
+            .withDietaryIdentityBase("vegetarian")
+            .build();
+    aggregate.getExceptions().add(exception("fish", "weekend"));
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+
+    var snapshot = service().exclusionKeySnapshot(userId, FilterContext.ANY);
+
+    // ANY admits only "any"-context exceptions — the conservative default for a safety snapshot.
+    assertThat(snapshot).contains("fish");
+  }
+
+  @Test
+  void exclusionKeySnapshot_conditionallyRelaxedSubstance_staysInTheSnapshot() {
+    UUID userId = UUID.randomUUID();
+    HardConstraints aggregate =
+        HardConstraintsTestData.hardConstraints().withUserId(userId).withAllergies("dairy").build();
+    aggregate.getExceptions().add(exception("lactose_free", "any"));
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId))
+        .thenReturn(Optional.of(aggregate));
+    when(allergenDerivativeRepository.findAll())
+        .thenReturn(List.of(new AllergenDerivative(UUID.randomUUID(), "dairy", "lactose")));
+
+    var snapshot = service().exclusionKeySnapshot(userId, FilterContext.ANY);
+
+    // Exact set membership cannot express the free-of qualifier; the conservative snapshot keeps
+    // both the allergen and its derivative (matching anyViolationForKey's AMBIGUOUS-drops-it
+    // pool semantics for the bare keys).
+    assertThat(snapshot).contains("dairy", "lactose");
+  }
 }

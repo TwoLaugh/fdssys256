@@ -36,10 +36,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -636,6 +638,10 @@ public class DiscoveryJobRunner {
       bySourceKey.put(bean.key(), bean);
     }
 
+    // The frozen mustExclude union persisted at enqueue (server-derived hard-constraint snapshot
+    // ∪ client additions — ticket discovery-server-side-exclusions). Computed once per job.
+    Set<String> mustExcludeKeys = mustExcludeKeySet(constraints);
+
     int ingested = 0;
     for (DiscoveryCandidate candidate : candidates) {
       // Cancellation check (per-iteration) per ticket invariant 17.
@@ -768,6 +774,33 @@ public class DiscoveryJobRunner {
                   .map(ParsedRecipe.ParsedIngredient::ingredientMappingKey)
                   .filter(Objects::nonNull)
                   .toList();
+
+      // Pass 1 — frozen-snapshot match against the persisted mustExclude union (LLD line 528:
+      // "match against constraints.mustExcludeIngredientMappingKeys"). Deterministic set
+      // membership over normalised keys; this is what enforces client-added exclusions and the
+      // enqueue-time snapshot regardless of any constraint edits mid-job.
+      String snapshotHit = firstMustExcludeHit(mustExcludeKeys, ingredientKeys);
+      if (snapshotHit != null) {
+        writeScrapeRow(
+            scrapeRowBuilder(jobId, source.key(), candidate.candidateUrl())
+                .canonicalUrl(parsed.canonicalUrl())
+                .status(ScrapeOutcome.HARD_CONSTRAINT_VIOLATION)
+                .robotsTxtOutcome(robotsOutcome)
+                .skipReason(ScrapeSkipReason.HARD_CONSTRAINT)
+                .errorMessage(
+                    "ingredient '"
+                        + snapshotHit
+                        + "' matches the job's mustExcludeIngredientMappingKeys snapshot")
+                .extractionMethod(parsed.extractionMethod())
+                .extractionConfidence(parsed.extractionConfidence())
+                .latencyMs(latencyMs(fetchStart))
+                .occurredAt(Instant.now())
+                .build());
+        continue;
+      }
+
+      // Pass 2 — live aggregate check, defence in depth: covers the families a key set cannot
+      // express (prefix-style age rules, free-of ambiguity) and constraints ADDED mid-job.
       // Discovery has no meal-slot day context, so the conservative ANY context is used: only
       // universally-applicable ("any") dietary-identity exceptions widen the base diet here.
       FilterResult hardCheck =
@@ -991,6 +1024,46 @@ public class DiscoveryJobRunner {
         .findBySourceKey(sourceKey)
         .map(com.example.mealprep.discovery.domain.entity.DiscoverySource::isRespectRobotsTxt)
         .orElse(true);
+  }
+
+  // ----- Frozen mustExclude snapshot (ticket discovery-server-side-exclusions) -----
+
+  /**
+   * The persisted {@code mustExcludeIngredientMappingKeys} union as a normalised set. The starter
+   * persists pre-normalised keys, but the document is client-influenced JSONB — normalising again
+   * here (idempotent, core-03) keeps the membership check canonical no matter what was stored.
+   */
+  private static Set<String> mustExcludeKeySet(DiscoveryConstraints constraints) {
+    if (constraints == null || constraints.mustExcludeIngredientMappingKeys() == null) {
+      return Collections.emptySet();
+    }
+    Set<String> keys = new HashSet<>();
+    for (String key : constraints.mustExcludeIngredientMappingKeys()) {
+      String normalised = IngredientMappingKeys.normalise(key);
+      if (normalised != null && !normalised.isEmpty()) {
+        keys.add(normalised);
+      }
+    }
+    return keys;
+  }
+
+  /**
+   * First parsed ingredient key (normalised) that hits the mustExclude set, or {@code null} when
+   * the recipe is clean. Parsed keys come from the wild (extractors / sources), so they are
+   * normalised before membership.
+   */
+  private static String firstMustExcludeHit(
+      Set<String> mustExcludeKeys, List<String> ingredientKeys) {
+    if (mustExcludeKeys.isEmpty() || ingredientKeys.isEmpty()) {
+      return null;
+    }
+    for (String key : ingredientKeys) {
+      String normalised = IngredientMappingKeys.normalise(key);
+      if (normalised != null && mustExcludeKeys.contains(normalised)) {
+        return normalised;
+      }
+    }
+    return null;
   }
 
   // ----- Finalise -----

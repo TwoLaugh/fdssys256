@@ -1,5 +1,6 @@
 package com.example.mealprep.discovery.domain.service.internal;
 
+import com.example.mealprep.discovery.api.dto.DiscoveryConstraints;
 import com.example.mealprep.discovery.api.dto.DiscoveryJobDto;
 import com.example.mealprep.discovery.api.dto.StartDiscoveryJobRequest;
 import com.example.mealprep.discovery.api.mapper.DiscoveryJobMapper;
@@ -39,18 +40,21 @@ public class DiscoveryJobStarter {
   private final DiscoveryJobMapper jobMapper;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
+  private final HardConstraintSnapshotAssembler snapshotAssembler;
 
   public DiscoveryJobStarter(
       DiscoveryJobRepository jobRepository,
       DiscoverySourceRepository sourceRepository,
       DiscoveryJobMapper jobMapper,
       ApplicationEventPublisher eventPublisher,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      HardConstraintSnapshotAssembler snapshotAssembler) {
     this.jobRepository = jobRepository;
     this.sourceRepository = sourceRepository;
     this.jobMapper = jobMapper;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
+    this.snapshotAssembler = snapshotAssembler;
   }
 
   /**
@@ -72,13 +76,21 @@ public class DiscoveryJobStarter {
       sourceKeys.add(s.getSourceKey());
     }
 
+    // SAFETY (ticket discovery-server-side-exclusions): the server derives the caller's
+    // hard-constraint exclusion snapshot and unions it with the client-supplied keys before the
+    // constraints document is frozen onto the job. Applied uniformly across triggers — the union
+    // is a no-op for callers that already pass a server-computed snapshot (planner cold-start
+    // passes none) and closes the client-trust hole for USER_INITIATED jobs.
+    DiscoveryConstraints effectiveConstraints =
+        snapshotAssembler.withServerExclusions(userId, request.constraints());
+
     DiscoveryJob job =
         DiscoveryJob.builder()
             .id(jobId)
             .userId(userId)
             .trigger(request.trigger())
             .requestedCount(request.requestedCount())
-            .constraintsJson(objectMapper.valueToTree(request.constraints()))
+            .constraintsJson(objectMapper.valueToTree(effectiveConstraints))
             .sourcesRequested(sourceKeys)
             .status(DiscoveryJobStatus.QUEUED)
             .queuedAt(Instant.now())

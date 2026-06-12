@@ -61,13 +61,27 @@ class DiscoveryServiceImplTest {
   @Mock private ApplicationEventPublisher eventPublisher;
   @Mock private DiscoveryJobRunner runner;
 
+  @Mock
+  private com.example.mealprep.preference.domain.service.HardConstraintFilterService
+      hardConstraintFilter;
+
   private DiscoveryServiceImpl service;
 
   @BeforeEach
   void setUp() {
+    // No hard constraints by default — the server exclusion-snapshot union is a pass-through.
+    org.mockito.Mockito.lenient()
+        .when(hardConstraintFilter.exclusionKeySnapshot(any(), any()))
+        .thenReturn(java.util.Set.of());
     DiscoveryJobStarter jobStarter =
         new DiscoveryJobStarter(
-            jobRepository, sourceRepository, jobMapper, eventPublisher, new ObjectMapper());
+            jobRepository,
+            sourceRepository,
+            jobMapper,
+            eventPublisher,
+            new ObjectMapper(),
+            new com.example.mealprep.discovery.domain.service.internal
+                .HardConstraintSnapshotAssembler(hardConstraintFilter));
     service =
         new DiscoveryServiceImpl(
             jobRepository,

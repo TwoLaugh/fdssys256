@@ -14,6 +14,7 @@ import com.example.mealprep.preference.domain.repository.HardConstraintsReposito
 import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -135,6 +136,35 @@ public class HardConstraintFilterServiceImpl implements HardConstraintFilterServ
       all.addAll(collectViolations(index, ingredientMappingKeys, null));
     }
     return new FilterResult(all.isEmpty(), all);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Set<String> exclusionKeySnapshot(UUID userId, FilterContext context) {
+    Optional<HardConstraints> aggregate =
+        hardConstraintsRepository.findWithChildrenByUserId(userId);
+    if (aggregate.isEmpty()) {
+      return Set.of();
+    }
+    UserConstraintIndex index = buildIndex(aggregate.get(), context);
+    Set<String> keys = new HashSet<>();
+    // Mirrors anyViolationForKey for every family whose match is exact set membership. Substances
+    // a conditional free-of exception might relax stay IN the set: the exact substance key never
+    // declares the free-of qualifier, so the per-key check treats it as a violation (AMBIGUOUS in
+    // pool semantics) — the conservative choice for a safety snapshot.
+    keys.addAll(index.directAllergies);
+    keys.addAll(index.derivativeToAllergen.keySet());
+    keys.addAll(index.intolerances.keySet());
+    keys.addAll(index.medicalDiets);
+    keys.addAll(index.medicalDietExpansions.keySet());
+    for (String excluded : index.dietaryIdentityExclusions) {
+      if (!index.dietaryIdentityExceptionAllows.contains(excluded)) {
+        keys.add(excluded);
+      }
+    }
+    // Age-restriction rules are prefix patterns (no_whole_nuts → whole_nut_*) — not enumerable as
+    // exact keys; they remain covered by the check*/filterRecipes paths only.
+    return Collections.unmodifiableSet(keys);
   }
 
   // ---------------- internals ----------------
