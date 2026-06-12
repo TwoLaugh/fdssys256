@@ -12,6 +12,7 @@ import { useSyncExternalStore } from "react";
 import { MOCK_USER_ID, WEEK_DATES } from "./nutritionSeed";
 import {
   CURRENT_WEEK_START,
+  HOUSEHOLD_ID,
   RECIPE_NAME_FALLBACK,
   addDaysIso,
   buildPlan,
@@ -42,6 +43,7 @@ import type {
   ConfidenceTier,
   ConstraintKind,
   CreateBranchRequest,
+  CreateInventoryItemRequest,
   CreateRatingRequest,
   CreateRecipeRequest,
   CreateSubstitutionRequest,
@@ -50,15 +52,23 @@ import type {
   DirectiveUserModification,
   DiscoveryJobDto,
   EnforcementDirection,
+  ExportFormat,
   FeedbackEntry,
   FeedbackRoute,
+  GroceryOrderDto,
+  GroceryOrderStatus,
+  GrocerySubstitutionProposalDto,
   IngredientNutritionDocument,
   IngredientNutritionDto,
   IntakeDayDto,
   IntakeEntryDto,
   IntakeSlotDto,
   IntakeSnackDto,
+  InventoryAuditEntryDto,
+  InventoryItemDto,
   LogSnackRequest,
+  LogWasteRequest,
+  MarkBoughtRequest,
   MealSlot,
   MealSlotDto,
   MealSlotKey,
@@ -67,6 +77,8 @@ import type {
   PendingChangeDto,
   PinnedReason,
   PlanDto,
+  PriceAggregateDto,
+  PriceObservationDto,
   ProposedReoptAssignmentsDocument,
   RecipeDiffDto,
   RecipeDto,
@@ -75,15 +87,24 @@ import type {
   RecipeRatingDto,
   RecipeSubstitutionDto,
   RecipeVersionDto,
+  RecordManualPriceRequest,
   ReoptSuggestionDto,
   RevertToVersionRequest,
+  ShoppingListDto,
+  ShoppingListLineDto,
   SlotState,
+  StapleStatus,
   StartDiscoveryJobRequest,
   StoreState,
   TargetsDto,
   ToastItem,
+  UpdateBudgetRequest,
+  UpdateInventoryItemRequest,
   UpdateRecipeManualEditRequest,
   UpdateTargetsRequest,
+  UpsertEquipmentRequest,
+  WasteEntryDto,
+  WasteSummaryDto,
   WeeklyAggregateDto,
 } from "./types";
 
@@ -980,91 +1001,1053 @@ export function regenerateAll(): void {
   requestGeneration();
 }
 
-/* ---- grocery ----------------------------------------------------------------------- */
+/* ---- grocery: shopping list (groceries.md §3–§4) -----------------------------------------
+ * Contract shapes throughout. Mark-bought is the price-observation capture:
+ * one-tap deliberately omits the price (a real encounter must be typed in);
+ * the popover maps every MarkBoughtRequest field. Bulk distributes a total
+ * across estimated line costs as MANUAL_ESTIMATED observations.
+ */
 
-/** Toggle an item between open and bought (toggling back is the undo). */
-export function markBought(groupIdx: number, itemIdx: number): void {
-  mutate((s) => ({
+/** GET …/shopping-lists/current equivalent (#1). */
+export function currentShoppingList(s: StoreState): ShoppingListDto | undefined {
+  return s.grocery.lists.find((l) => l.supersededAt == null);
+}
+
+export function findShoppingList(
+  s: StoreState,
+  listId: string,
+): ShoppingListDto | undefined {
+  return s.grocery.lists.find((l) => l.id === listId);
+}
+
+function replaceList(s: StoreState, next: ShoppingListDto): StoreState {
+  return {
     ...s,
     grocery: {
       ...s.grocery,
-      groups: s.grocery.groups.map((g, gi) =>
-        gi !== groupIdx
-          ? g
-          : {
-              ...g,
-              items: g.items.map((it, ii) =>
-                ii !== itemIdx
-                  ? it
-                  : { ...it, state: it.state === "bought" ? "open" : "bought" },
-              ),
-            },
-      ),
+      lists: s.grocery.lists.map((l) => (l.id === next.id ? next : l)),
     },
-  }));
+  };
 }
 
-/** "Refresh status" — the mock provider reports the next lifecycle step. */
-export function advanceOrder(): void {
-  mutate((s) => {
-    const order = s.grocery.order;
-    if (!order || order.at >= order.steps.length - 1) return s;
-    const at = order.at + 1;
-    const out: StoreState = {
+function withLine(
+  list: ShoppingListDto,
+  lineId: string,
+  fn: (line: ShoppingListLineDto) => ShoppingListLineDto,
+): ShoppingListDto {
+  return {
+    ...list,
+    lines: list.lines.map((ln) => (ln.id === lineId ? fn(ln) : ln)),
+    version: list.version + 1,
+  };
+}
+
+let observationSeq = 950;
+
+/** Append a price observation + fold it into the aggregate cache rows. */
+function recordObservation(
+  s: StoreState,
+  partial: Omit<
+    PriceObservationDto,
+    "id" | "userId" | "householdId" | "currency" | "observedAt"
+  > & { observedAt?: string },
+): { state: StoreState; observationId: string } {
+  const id = `po-${++observationSeq}`;
+  const obs: PriceObservationDto = {
+    id,
+    userId: MOCK_USER_ID,
+    householdId: HOUSEHOLD_ID,
+    currency: "GBP",
+    observedAt: partial.observedAt ?? nowStamp(),
+    ...partial,
+  };
+  const key = obs.ingredientMappingKey;
+  const pence = obs.paidUnitPence ?? obs.paidTotalPence ?? null;
+  const existing = s.grocery.aggregates[key] ?? [];
+  const fold = (agg: PriceAggregateDto): PriceAggregateDto => ({
+    ...agg,
+    pointEstimatePence: pence ?? agg.pointEstimatePence,
+    confidence: Math.min(1, (agg.confidence ?? 0.4) + 0.06),
+    minPence:
+      pence != null && (agg.minPence == null || pence < agg.minPence)
+        ? pence
+        : agg.minPence,
+    maxPence:
+      pence != null && (agg.maxPence == null || pence > agg.maxPence)
+        ? pence
+        : agg.maxPence,
+    lastSeenAt: obs.observedAt,
+    sampleCount: agg.sampleCount + 1,
+    isStale: false,
+  });
+  const touched = new Set([null, obs.store]);
+  let rows = existing.map((agg) =>
+    touched.has(agg.store ?? null) ? fold(agg) : agg,
+  );
+  if (rows.length === 0) {
+    rows = [
+      fold({
+        ingredientMappingKey: key,
+        store: null,
+        pointEstimatePence: pence,
+        confidence: 0.3,
+        minPence: pence,
+        maxPence: pence,
+        minObservedAt: obs.observedAt,
+        maxObservedAt: obs.observedAt,
+        lastSeenAt: obs.observedAt,
+        sampleCount: 0,
+        isStale: false,
+      }),
+    ];
+  }
+  return {
+    state: {
       ...s,
       grocery: {
         ...s.grocery,
-        order: { ...order, at, state: order.steps[at] },
+        observations: [obs, ...s.grocery.observations],
+        aggregates: { ...s.grocery.aggregates, [key]: rows },
       },
-    };
-    return at === order.steps.length - 1
-      ? pushNotification(out, "order", `${order.provider} order delivered`)
-      : out;
-  });
+    },
+    observationId: id,
+  };
 }
 
-export function cancelOrder(): void {
+/** Pantry add from a fulfilled line (MarkBoughtResultDto.inventoryItemId). */
+function addPantryItemFromLine(
+  s: StoreState,
+  line: ShoppingListLineDto,
+  source: InventoryItemDto["source"],
+  sourceRef: string | null,
+  costPence: number | null,
+): { state: StoreState; itemId: string } {
+  const itemId = `inv-${line.id}-${line.boughtAt ?? "now"}`.replace(/[:TZ]/g, "");
+  const item: InventoryItemDto = {
+    id: itemId,
+    userId: MOCK_USER_ID,
+    name: line.displayName,
+    category: "groceries",
+    storageLocation: "CUPBOARD",
+    trackingMode: "QUANTITY",
+    quantity: line.boughtQuantity ?? line.requestedQuantity,
+    unit: line.boughtUnit ?? line.requestedUnit,
+    costPaid: costPence == null ? null : costPence / 100,
+    status: null,
+    isStaple: false,
+    expiryDate: null,
+    ingredientMappingKey: line.ingredientMappingKey,
+    notes: null,
+    source,
+    sourceRef,
+    itemStatus: "ACTIVE",
+    freezerExtension: null,
+    createdAt: nowStamp(),
+    updatedAt: nowStamp(),
+    version: 1,
+  };
+  return {
+    state: {
+      ...s,
+      pantry: { ...s.pantry, items: [item, ...s.pantry.items] },
+    },
+    itemId,
+  };
+}
+
+/**
+ * POST …/lines/{lineId}/mark-bought (#6) — the full popover path. The
+ * one-tap path calls this with the suggested values and NO price (display
+ * rule: pre-filling the estimate would feed it back into the learning loop).
+ */
+export function markBoughtLine(
+  listId: string,
+  lineId: string,
+  req: Omit<MarkBoughtRequest, "shoppingListLineId">,
+): void {
+  const list = findShoppingList(state, listId);
+  const line = list?.lines.find((ln) => ln.id === lineId);
+  if (!list || !line) {
+    pushToast("404 — line no longer exists; list re-fetched", "warn");
+    return;
+  }
+  if (line.fulfilmentStatus !== "UNFILLED") {
+    // 409 already bought → silent re-fetch (spec §8); the checkbox settles.
+    return;
+  }
   mutate((s) => {
-    const order = s.grocery.order;
-    if (!order) return s;
-    return pushNotification(
-      { ...s, grocery: { ...s.grocery, order: null } },
-      "order",
-      `${order.provider} order cancelled`,
+    const l = findShoppingList(s, listId);
+    if (!l) return s;
+    const boughtAt = req.boughtAt ?? nowStamp();
+    let out = replaceList(
+      s,
+      withLine(l, lineId, (ln) => ({
+        ...ln,
+        fulfilmentStatus: "BOUGHT",
+        boughtQuantity: req.boughtQuantity,
+        boughtUnit: req.boughtUnit,
+        boughtPricePence: req.boughtPricePence ?? null,
+        boughtAt,
+        boughtVia: "MANUAL",
+        groceryOrderId: null,
+      })),
     );
-  });
-}
-
-export function resolveSubstitution(accept: boolean): void {
-  mutate((s) => {
-    const sub = s.grocery.substitution;
-    if (!sub) return s;
-    if (!accept) {
-      return pushNotification(
-        { ...s, grocery: { ...s.grocery, substitution: null } },
-        "grocery",
-        `Substitution rejected — ${sub.targetItem.toLowerCase()} stays on the list`,
+    if (req.boughtPricePence != null) {
+      const rec = recordObservation(out, {
+        ingredientMappingKey: line.ingredientMappingKey,
+        store: req.store ?? "manual",
+        providerProductId: null,
+        packSizeG: line.suggestedPackSizeG ?? null,
+        packCount: line.suggestedPackCount ?? null,
+        quantity: req.boughtQuantity,
+        quantityUnit: req.boughtUnit,
+        paidUnitPence: null,
+        paidTotalPence: req.boughtPricePence,
+        source: "PAID",
+        confidenceWeight: 1,
+        groceryOrderId: null,
+        shoppingListLineId: lineId,
+        observedAt: boughtAt,
+        note: "mark-bought",
+      });
+      out = rec.state;
+      pushToast("Price recorded — feeds your price history");
+    }
+    if (l.pantryTrackingEnabled) {
+      out = addPantryItemFromLine(
+        out,
+        { ...line, boughtQuantity: req.boughtQuantity, boughtUnit: req.boughtUnit, boughtAt },
+        "OTHER_SHOP",
+        null,
+        req.boughtPricePence ?? null,
+      ).state;
+      pushToast("Added to your pantry");
+    }
+    if (
+      req.boughtUnit === line.requestedUnit &&
+      req.boughtQuantity > line.requestedQuantity
+    ) {
+      // MarkBoughtResultDto.note — over-mark warning (buying more is allowed).
+      pushToast(
+        `Bought more than the list asked (${req.boughtQuantity} vs ${line.requestedQuantity} ${line.requestedUnit}) — recorded anyway`,
+        "warn",
       );
     }
-    const groups = s.grocery.groups.map((g) => ({
-      ...g,
-      items: g.items.map((it) =>
-        it.n === sub.targetItem
-          ? {
-              ...it,
-              n: sub.replacement.n,
-              q: sub.replacement.q,
-              price: sub.replacement.price,
-              note: "substituted — out of stock",
-            }
-          : it,
-      ),
-    }));
-    return pushNotification(
-      { ...s, grocery: { ...s.grocery, groups, substitution: null } },
-      "grocery",
-      `Substitution accepted — ${sub.replacement.n.toLowerCase()} replaces ${sub.targetItem.toLowerCase()}`,
+    return out;
+  });
+}
+
+/** The one-tap checkbox: suggested pack values, price deliberately omitted. */
+export function markBoughtOneTap(listId: string, lineId: string): void {
+  const list = findShoppingList(state, listId);
+  const line = list?.lines.find((ln) => ln.id === lineId);
+  if (!line) return;
+  const packQty =
+    line.suggestedPackCount != null && line.suggestedPackSizeG != null
+      ? line.suggestedPackCount * line.suggestedPackSizeG
+      : null;
+  markBoughtLine(listId, lineId, {
+    boughtQuantity: packQty ?? line.requestedQuantity,
+    boughtUnit: (packQty != null
+      ? "g"
+      : asBoughtUnit(line.requestedUnit)) as MarkBoughtRequest["boughtUnit"],
+    boughtPricePence: null,
+    store: null,
+    boughtAt: null,
+  });
+}
+
+const BOUGHT_UNITS: ReadonlyArray<MarkBoughtRequest["boughtUnit"]> = [
+  "g", "kg", "ml", "l", "items", "pt", "tsp", "tbsp", "cup",
+];
+
+export function asBoughtUnit(unit: string): MarkBoughtRequest["boughtUnit"] {
+  return (
+    BOUGHT_UNITS.find((u) => u === unit) ?? "items"
+  );
+}
+
+/** POST …/bulk-mark-bought (#7) — total-spend proportional distribution. */
+export function bulkMarkBought(
+  listId: string,
+  lineIds: string[],
+  totalSpendPence: number | null,
+  store: string | null,
+): void {
+  const list = findShoppingList(state, listId);
+  if (!list || lineIds.length === 0) return;
+  const targets = list.lines.filter(
+    (ln) => lineIds.includes(ln.id) && ln.fulfilmentStatus === "UNFILLED",
+  );
+  if (targets.length === 0) return;
+
+  // Proportional to estimated line costs; uniform share for unpriced lines.
+  const priced = targets.filter((ln) => ln.estimatedLinePence != null);
+  const avg =
+    priced.length > 0
+      ? priced.reduce((acc, ln) => acc + (ln.estimatedLinePence ?? 0), 0) /
+        priced.length
+      : 1;
+  const weights = new Map(
+    targets.map((ln) => [ln.id, ln.estimatedLinePence ?? avg]),
+  );
+  const sumW = [...weights.values()].reduce((a, b) => a + b, 0);
+
+  mutate((s) => {
+    let l = findShoppingList(s, listId);
+    if (!l) return s;
+    const boughtAt = nowStamp();
+    let out = s;
+    for (const target of targets) {
+      const share =
+        totalSpendPence == null
+          ? null
+          : Math.round((totalSpendPence * (weights.get(target.id) ?? avg)) / sumW);
+      l = findShoppingList(out, listId);
+      if (!l) return out;
+      out = replaceList(
+        out,
+        withLine(l, target.id, (ln) => ({
+          ...ln,
+          fulfilmentStatus: "BOUGHT",
+          boughtQuantity: ln.requestedQuantity,
+          boughtUnit: ln.requestedUnit,
+          boughtPricePence: share,
+          boughtAt,
+          boughtVia: "BULK_TOTAL",
+          groceryOrderId: null,
+        })),
+      );
+      if (share != null) {
+        out = recordObservation(out, {
+          ingredientMappingKey: target.ingredientMappingKey,
+          store: store ?? "manual",
+          providerProductId: null,
+          packSizeG: target.suggestedPackSizeG ?? null,
+          packCount: target.suggestedPackCount ?? null,
+          quantity: target.requestedQuantity,
+          quantityUnit: target.requestedUnit,
+          paidUnitPence: null,
+          paidTotalPence: share,
+          source: "MANUAL_ESTIMATED",
+          confidenceWeight: 0.5,
+          groceryOrderId: null,
+          shoppingListLineId: target.id,
+          observedAt: boughtAt,
+          note: "distributed from bulk total",
+        }).state;
+      }
+      if (out.pantry && l.pantryTrackingEnabled) {
+        out = addPantryItemFromLine(
+          out,
+          { ...target, boughtQuantity: target.requestedQuantity, boughtUnit: target.requestedUnit, boughtAt },
+          "OTHER_SHOP",
+          null,
+          share,
+        ).state;
+      }
+    }
+    pushToast(
+      totalSpendPence == null
+        ? `${targets.length} marked bought`
+        : `${targets.length} marked bought · £${(totalSpendPence / 100).toFixed(2)} distributed across estimates (lower-confidence observations)`,
     );
+    return out;
+  });
+}
+
+/**
+ * POST …/undo-mark-bought (#8) — MANUAL/BULK_TOTAL rows only. The contract
+ * does NOT reverse the pantry add (groceries.md §8 Q4); the confirm copy says
+ * so before this is called.
+ */
+export function undoMarkBought(listId: string, lineId: string): void {
+  const list = findShoppingList(state, listId);
+  const line = list?.lines.find((ln) => ln.id === lineId);
+  if (!list || !line) {
+    pushToast("404 — line no longer exists; list re-fetched", "warn");
+    return;
+  }
+  if (
+    line.fulfilmentStatus !== "BOUGHT" ||
+    (line.boughtVia !== "MANUAL" && line.boughtVia !== "BULK_TOTAL")
+  ) {
+    pushToast("409 — not currently bought; list re-fetched", "warn");
+    return;
+  }
+  mutate((s) => {
+    const l = findShoppingList(s, listId);
+    if (!l) return s;
+    return replaceList(
+      s,
+      withLine(l, lineId, (ln) => ({
+        ...ln,
+        fulfilmentStatus: "UNFILLED",
+        boughtQuantity: null,
+        boughtUnit: null,
+        boughtPricePence: null,
+        boughtAt: null,
+        boughtVia: null,
+        groceryOrderId: null,
+      })),
+    );
+  });
+  pushToast(
+    "Mark removed — a compensating price note was written. The pantry item is NOT removed automatically; correct it in Pantry if needed.",
+    "warn",
+  );
+}
+
+/**
+ * POST …/shopping-lists/recalculate (#4) — idempotent per (planId,
+ * planGeneration): within one generation the server returns the existing
+ * list, so a re-tap is a no-op (groceries.md §8 Q2 — pantry drift cannot be
+ * picked up without a new plan generation).
+ */
+export function recalculateShoppingList(): void {
+  const s = state;
+  const active = activePlanForWeek(s, CURRENT_WEEK_START);
+  if (!active) {
+    pushToast("404 — no active plan generation; generate a plan first", "warn");
+    return;
+  }
+  const current = currentShoppingList(s);
+  if (
+    current &&
+    current.planId === active.id &&
+    current.planGeneration === active.generation
+  ) {
+    pushToast(
+      "Already up to date — recalculate is idempotent within a plan generation (200 returned the existing list)",
+    );
+    return;
+  }
+  // The plan advanced a generation — derive a fresh list and supersede.
+  mutate((st) => {
+    const cur = currentShoppingList(st);
+    const newList: ShoppingListDto = {
+      ...(cur ?? st.grocery.lists[0]),
+      id: `sl-${active.id}`,
+      planId: active.id,
+      planGeneration: active.generation,
+      generatedAt: nowStamp(),
+      supersededAt: null,
+      notes: "Re-derived from the latest plan generation",
+      lines: (cur?.lines ?? []).map((ln) => ({ ...ln })),
+      version: 1,
+    };
+    const out: StoreState = {
+      ...st,
+      grocery: {
+        ...st.grocery,
+        lists: [
+          newList,
+          ...st.grocery.lists.map((l) =>
+            l.supersededAt == null ? { ...l, supersededAt: nowStamp() } : l,
+          ),
+        ],
+      },
+    };
+    return pushNotification(
+      out,
+      "grocery",
+      `Shopping list re-derived for plan generation ${active.generation}`,
+    );
+  });
+  pushToast("List re-derived — bought marks on this generation are kept");
+}
+
+/** GET …/{id}/export (#5) — content built per ExportFormat (mock server). */
+export function buildListExport(
+  list: ShoppingListDto,
+  format: ExportFormat,
+): string {
+  const open = list.lines.filter((ln) => ln.fulfilmentStatus === "UNFILLED");
+  const lineTxt = (ln: ShoppingListLineDto): string =>
+    `${ln.displayName} — ${ln.requestedQuantity} ${ln.requestedUnit}`;
+  switch (format) {
+    case "PLAIN_TEXT":
+      return open.map(lineTxt).join("\n");
+    case "MARKDOWN":
+      return open.map((ln) => `- [ ] ${lineTxt(ln)}`).join("\n");
+    case "CSV":
+      return [
+        "name,quantity,unit,estimated_pence",
+        ...open.map(
+          (ln) =>
+            `"${ln.displayName}",${ln.requestedQuantity},${ln.requestedUnit},${ln.estimatedLinePence ?? ""}`,
+        ),
+      ].join("\n");
+    case "PRINTABLE_HTML":
+      return `<h1>Shopping list — generation ${list.planGeneration}</h1><ul>${open
+        .map((ln) => `<li>${lineTxt(ln)}</li>`)
+        .join("")}</ul>`;
+  }
+}
+
+/* ---- grocery: orders (groceries.md §5) ------------------------------------------------
+ * The 11-status contract machine. Legal edges only; everything else 409s.
+ * placeOrder PAUSES at PLACED (delivery_slot_required) — refresh-status is
+ * the only advance path. The provider never auto-confirms (HLD).
+ */
+
+export function findOrder(s: StoreState, orderId: string): GroceryOrderDto | undefined {
+  return s.grocery.orders.find((o) => o.id === orderId);
+}
+
+function replaceOrder(s: StoreState, next: GroceryOrderDto): StoreState {
+  return {
+    ...s,
+    grocery: {
+      ...s.grocery,
+      orders: s.grocery.orders.map((o) => (o.id === next.id ? next : o)),
+    },
+  };
+}
+
+const ORDER_TERMINAL: GroceryOrderStatus[] = ["RECONCILED", "CANCELLED", "ARCHIVED"];
+
+let orderSeq = 110;
+
+/** POST /grocery/orders (#10) — creates a DRAFT from the current list. */
+export function createGroceryOrder(): void {
+  const s = state;
+  if (!s.grocery.providerState?.enabled) {
+    pushToast("422 — no provider configured; connect one in Settings", "warn");
+    return;
+  }
+  const list = currentShoppingList(s);
+  if (!list) {
+    pushToast("404 — no current shopping list", "warn");
+    return;
+  }
+  const open = list.lines.filter((ln) => ln.fulfilmentStatus === "UNFILLED");
+  if (open.length === 0) {
+    pushToast("Nothing left to order — every line is decided");
+    return;
+  }
+  const id = `ord-${++orderSeq}`;
+  mutate((st) => ({
+    ...st,
+    grocery: {
+      ...st.grocery,
+      orders: [
+        {
+          id,
+          userId: MOCK_USER_ID,
+          householdId: HOUSEHOLD_ID,
+          shoppingListId: list.id,
+          providerKey: st.grocery.providerState?.providerKey ?? "tesco",
+          providerOrderId: null,
+          status: "DRAFT",
+          statusReason: null,
+          quotedTotalPence: null,
+          confirmedTotalPence: null,
+          paidTotalPence: null,
+          currency: "GBP",
+          deliverySlotStart: null,
+          deliverySlotEnd: null,
+          confirmLink: null,
+          placedAt: null,
+          confirmedAt: null,
+          deliveredAt: null,
+          reconciledAt: null,
+          cancelledAt: null,
+          cancelReason: null,
+          lastStatusCheckAt: null,
+          lines: open.map((ln) => ({
+            id: `ol-${id}-${ln.id}`,
+            shoppingListLineId: ln.id,
+            providerProductId: null,
+            ingredientMappingKey: ln.ingredientMappingKey,
+            displayName: ln.displayName,
+            quantityRequested: ln.requestedQuantity,
+            quantityUnit: ln.requestedUnit,
+            packSizeG: ln.suggestedPackSizeG ?? null,
+            packCountRequested: ln.suggestedPackCount ?? null,
+            packCountDelivered: null,
+            quotedUnitPence: null,
+            confirmedUnitPence: null,
+            paidUnitPence: null,
+            lineStatus: "QUEUED",
+            note: null,
+          })),
+          outstandingProposals: null,
+          version: 1,
+        },
+        ...st.grocery.orders,
+      ],
+    },
+  }));
+  pushToast(`Draft order created from ${open.length} open lines`);
+}
+
+function illegalTransition(action: string): void {
+  pushToast(
+    `409 — ${action} is not legal from this state; order re-fetched (it changed elsewhere)`,
+    "warn",
+  );
+}
+
+/** POST …/quote (#12) — DRAFT → QUOTED (also "Try quote again" from PROVIDER_UNAVAILABLE). */
+export function quoteOrder(orderId: string): void {
+  const order = findOrder(state, orderId);
+  if (!order) return;
+  if (order.status !== "DRAFT" && order.status !== "PROVIDER_UNAVAILABLE") {
+    illegalTransition("get-quote");
+    return;
+  }
+  mutate((s) => {
+    const o = findOrder(s, orderId);
+    if (!o) return s;
+    const lines = o.lines.map((ln) => ({
+      ...ln,
+      quotedUnitPence:
+        ln.quotedUnitPence ??
+        Math.max(60, Math.round((ln.packSizeG ?? 250) * 0.55)),
+      lineStatus: "QUEUED" as const,
+    }));
+    const total = lines.reduce(
+      (acc, ln) =>
+        acc + (ln.quotedUnitPence ?? 0) * (ln.packCountRequested ?? 1),
+      0,
+    );
+    return replaceOrder(s, {
+      ...o,
+      status: "QUOTED",
+      statusReason: null,
+      quotedTotalPence: total,
+      lastStatusCheckAt: nowStamp(),
+      lines,
+      version: o.version + 1,
+    });
+  });
+  pushToast("Quote received — prices fed into your price cache");
+}
+
+/** POST …/place (#13) — QUOTED → PLACED (slot-required pause). */
+export function placeOrder(orderId: string): void {
+  const order = findOrder(state, orderId);
+  if (!order) return;
+  if (order.status !== "QUOTED") {
+    illegalTransition("place");
+    return;
+  }
+  mutate((s) => {
+    const o = findOrder(s, orderId);
+    if (!o) return s;
+    return replaceOrder(s, {
+      ...o,
+      status: "PLACED",
+      statusReason: "delivery_slot_required",
+      confirmLink: "https://www.tesco.com/groceries/trolley",
+      placedAt: nowStamp(),
+      lastStatusCheckAt: nowStamp(),
+      lines: o.lines.map((ln) => ({ ...ln, lineStatus: "ADDED" as const })),
+      version: o.version + 1,
+    });
+  });
+  pushToast("Basket built — pick a delivery slot in the Tesco basket");
+}
+
+/** Reconcile (server-side, automatic): fulfil source lines + pantry import. */
+function reconcileOrder(s: StoreState, orderId: string): StoreState {
+  const o = findOrder(s, orderId);
+  if (!o) return s;
+  const paidTotal = o.confirmedTotalPence ?? o.quotedTotalPence ?? null;
+  let out = replaceOrder(s, {
+    ...o,
+    status: "RECONCILED",
+    reconciledAt: nowStamp(),
+    paidTotalPence: paidTotal,
+    lastStatusCheckAt: nowStamp(),
+    lines: o.lines.map((ln) =>
+      ln.lineStatus === "UNAVAILABLE" || ln.lineStatus === "REJECTED"
+        ? ln
+        : {
+            ...ln,
+            lineStatus:
+              ln.lineStatus === "SUBSTITUTED" ? ln.lineStatus : ("DELIVERED" as const),
+            paidUnitPence: ln.confirmedUnitPence ?? ln.quotedUnitPence,
+            packCountDelivered: ln.packCountDelivered ?? ln.packCountRequested,
+          },
+    ),
+    version: o.version + 1,
+  });
+  // Tier-2 effect: order fulfilment writes through to the source list lines.
+  const list = findShoppingList(out, o.shoppingListId);
+  if (list) {
+    let nextList = list;
+    for (const ln of o.lines) {
+      if (!ln.shoppingListLineId) continue;
+      if (ln.lineStatus === "UNAVAILABLE" || ln.lineStatus === "REJECTED") continue;
+      const pence =
+        (ln.confirmedUnitPence ?? ln.quotedUnitPence ?? 0) *
+        (ln.packCountDelivered ?? ln.packCountRequested ?? 1);
+      nextList = withLine(nextList, ln.shoppingListLineId, (sl) =>
+        sl.fulfilmentStatus === "UNFILLED" || sl.fulfilmentStatus === "PARTIAL"
+          ? {
+              ...sl,
+              fulfilmentStatus:
+                ln.lineStatus === "SUBSTITUTED" ? "SUBSTITUTED" : "BOUGHT",
+              boughtQuantity: sl.requestedQuantity,
+              boughtUnit: sl.requestedUnit,
+              boughtPricePence: pence || null,
+              boughtAt: nowStamp(),
+              boughtVia: "ORDER",
+              groceryOrderId: o.id,
+            }
+          : sl,
+      );
+    }
+    out = replaceList(out, nextList);
+  }
+  return pushNotification(
+    out,
+    "order",
+    `${o.providerKey} order reconciled — pantry updated, prices recorded`,
+  );
+}
+
+/** POST …/refresh-status (#15) — pulls provider status (the only PLACED advance). */
+export function refreshOrderStatus(orderId: string): void {
+  const order = findOrder(state, orderId);
+  if (!order) return;
+  if (ORDER_TERMINAL.includes(order.status)) {
+    illegalTransition("refresh-status");
+    return;
+  }
+  mutate((s) => {
+    const o = findOrder(s, orderId);
+    if (!o) return s;
+    const checked = { lastStatusCheckAt: nowStamp(), version: o.version + 1 };
+    switch (o.status) {
+      case "PLACED": {
+        // Mock provider: the user picked a slot since the last check.
+        const out = replaceOrder(s, {
+          ...o,
+          ...checked,
+          status: "AWAITING_USER_CONFIRMATION",
+          statusReason: null,
+          deliverySlotStart: "2026-06-12T18:00:00Z",
+          deliverySlotEnd: "2026-06-12T19:00:00Z",
+        });
+        pushToast(
+          "Delivery slot detected — confirm the order in Tesco (we never confirm for you)",
+        );
+        return out;
+      }
+      case "CONFIRMED": {
+        const delivered = replaceOrder(s, {
+          ...o,
+          ...checked,
+          status: "DELIVERED",
+          deliveredAt: nowStamp(),
+        });
+        // No proposals on this mock path → reconciliation runs immediately.
+        return reconcileOrder(delivered, orderId);
+      }
+      case "PLACED_PARTIAL":
+        pushToast(
+          "Status unchanged — finish adding the missing items in the Tesco basket",
+          "warn",
+        );
+        return replaceOrder(s, { ...o, ...checked });
+      default:
+        pushToast("Status checked — no change");
+        return replaceOrder(s, { ...o, ...checked });
+    }
+  });
+}
+
+/** POST …/mark-user-confirmed (#14) — AWAITING_USER_CONFIRMATION → CONFIRMED. */
+export function markUserConfirmed(orderId: string): void {
+  const order = findOrder(state, orderId);
+  if (!order) return;
+  if (order.status !== "AWAITING_USER_CONFIRMATION") {
+    illegalTransition("mark-user-confirmed");
+    return;
+  }
+  mutate((s) => {
+    const o = findOrder(s, orderId);
+    if (!o) return s;
+    const out = replaceOrder(s, {
+      ...o,
+      status: "CONFIRMED",
+      confirmedAt: nowStamp(),
+      confirmedTotalPence: o.quotedTotalPence,
+      providerOrderId: o.providerOrderId ?? `TESCO-${66100 + orderSeq}`,
+      lastStatusCheckAt: nowStamp(),
+      version: o.version + 1,
+    });
+    return pushNotification(
+      out,
+      "order",
+      `${o.providerKey} order confirmed — delivery ${o.deliverySlotStart ? "slot booked" : "pending slot"}`,
+    );
+  });
+}
+
+/** POST …/mark-delivered (#16) — CONFIRMED → DELIVERED ("It arrived"). */
+export function markOrderDelivered(orderId: string): void {
+  const order = findOrder(state, orderId);
+  if (!order) return;
+  if (order.status !== "CONFIRMED") {
+    illegalTransition("mark-delivered");
+    return;
+  }
+  mutate((s) => {
+    const o = findOrder(s, orderId);
+    if (!o) return s;
+    const delivered = replaceOrder(s, {
+      ...o,
+      status: "DELIVERED",
+      deliveredAt: nowStamp(),
+      lastStatusCheckAt: nowStamp(),
+      version: o.version + 1,
+    });
+    return reconcileOrder(delivered, orderId);
+  });
+}
+
+/** POST …/cancel (#17) — legal from every state until RECONCILED. */
+export function cancelGroceryOrder(orderId: string, reason: string): void {
+  const order = findOrder(state, orderId);
+  if (!order) return;
+  if (ORDER_TERMINAL.includes(order.status)) {
+    illegalTransition("cancel");
+    return;
+  }
+  mutate((s) => {
+    const o = findOrder(s, orderId);
+    if (!o) return s;
+    const out = replaceOrder(s, {
+      ...o,
+      status: "CANCELLED",
+      cancelledAt: nowStamp(),
+      cancelReason: reason.trim().slice(0, 64) || null,
+      outstandingProposals: null,
+      version: o.version + 1,
+    });
+    return pushNotification(out, "order", `${o.providerKey} order cancelled`);
+  });
+}
+
+/* ---- grocery: substitution review (groceries.md §5d) ---------------------------------- */
+
+/**
+ * POST …/substitutions/{proposalId}/resolve (#19). Accept → the substitute
+ * enters the pantry; reject → logged as wasted-on-arrival + planner notified
+ * the original is unmet. Resolving the LAST proposal triggers reconciliation
+ * server-side.
+ */
+export function resolveSubstitution(
+  orderId: string,
+  proposalId: string,
+  decision: "ACCEPTED" | "REJECTED",
+): void {
+  const proposals = state.grocery.proposalsByOrder[orderId] ?? [];
+  const proposal = proposals.find((p) => p.id === proposalId);
+  if (!proposal) {
+    pushToast("404 — proposal no longer exists; re-fetched", "warn");
+    return;
+  }
+  if (
+    proposal.proposalStatus !== "PENDING_USER_REVIEW" &&
+    proposal.proposalStatus !== "UNPARSED"
+  ) {
+    pushToast("409 — already resolved elsewhere; re-fetched", "warn");
+    return;
+  }
+  mutate((s) => {
+    const o = findOrder(s, orderId);
+    if (!o) return s;
+    const resolved: GrocerySubstitutionProposalDto = {
+      ...proposal,
+      proposalStatus: decision,
+      resolvedAt: nowStamp(),
+      resolvedByUserId: MOCK_USER_ID,
+    };
+    const remaining = (o.outstandingProposals ?? []).filter(
+      (p) => p.id !== proposalId,
+    );
+    let out: StoreState = replaceOrder(s, {
+      ...o,
+      outstandingProposals: remaining.length > 0 ? remaining : [],
+      lines: o.lines.map((ln) =>
+        ln.id === proposal.groceryOrderLineId && decision === "REJECTED"
+          ? { ...ln, lineStatus: "REJECTED" as const }
+          : ln,
+      ),
+      version: o.version + 1,
+    });
+    out = {
+      ...out,
+      grocery: {
+        ...out.grocery,
+        proposalsByOrder: {
+          ...out.grocery.proposalsByOrder,
+          [orderId]: proposals.map((p) => (p.id === proposalId ? resolved : p)),
+        },
+      },
+    };
+
+    if (decision === "ACCEPTED") {
+      const item: InventoryItemDto = {
+        id: `inv-sub-${proposalId}`,
+        userId: MOCK_USER_ID,
+        name: proposal.substituteDisplayName,
+        category: "groceries",
+        storageLocation: "FRIDGE",
+        trackingMode: "QUANTITY",
+        quantity: proposal.substituteQuantity ?? 1,
+        unit: proposal.substituteUnit ?? "items",
+        costPaid:
+          proposal.substituteUnitPence == null
+            ? null
+            : proposal.substituteUnitPence / 100,
+        status: null,
+        isStaple: false,
+        expiryDate: null,
+        ingredientMappingKey: proposal.substituteIngredientMappingKey ?? null,
+        notes: `substitute for ${proposal.originalDisplayName}`,
+        source: "TESCO_ORDER",
+        sourceRef: findOrder(out, orderId)?.providerOrderId ?? orderId,
+        itemStatus: "ACTIVE",
+        freezerExtension: null,
+        createdAt: nowStamp(),
+        updatedAt: nowStamp(),
+        version: 1,
+      };
+      out = { ...out, pantry: { ...out.pantry, items: [item, ...out.pantry.items] } };
+      pushToast(
+        `Substitution accepted — ${proposal.substituteDisplayName.toLowerCase()} goes into your pantry`,
+      );
+    } else {
+      // Wasted-on-arrival log + planner notified the original is unmet.
+      const wasteEntry: WasteEntryDto = {
+        id: `we-sub-${proposalId}`,
+        userId: MOCK_USER_ID,
+        inventoryItemId: null,
+        itemName: proposal.substituteDisplayName,
+        quantity: proposal.substituteQuantity ?? null,
+        unit: proposal.substituteUnit ?? null,
+        reason: "DIDNT_LIKE",
+        costEstimate:
+          proposal.substituteUnitPence == null
+            ? null
+            : proposal.substituteUnitPence / 100,
+        occurredOn: MOCK_TODAY_ISO,
+        notes: "rejected substitution — wasted on arrival",
+        createdAt: nowStamp(),
+      };
+      out = {
+        ...out,
+        pantry: { ...out.pantry, waste: [wasteEntry, ...out.pantry.waste] },
+      };
+      out = pushNotification(
+        out,
+        "grocery",
+        `Substitution rejected — planner notified ${proposal.originalDisplayName.toLowerCase()} is unmet`,
+      );
+      pushToast(
+        "Substitution rejected — logged as wasted-on-arrival; the planner may suggest re-optimising affected meals",
+        "warn",
+      );
+    }
+
+    if (remaining.length === 0) {
+      out = reconcileOrder(out, orderId);
+      pushToast("All substitutions resolved — order reconciled");
+    }
+    return out;
+  });
+}
+
+/* ---- grocery: price history (groceries.md §6) ------------------------------------------- */
+
+/** POST /grocery/price-history/observations/manual (#25). */
+export function recordManualPrice(req: RecordManualPriceRequest): void {
+  mutate((s) => {
+    const rec = recordObservation(s, {
+      ingredientMappingKey: req.ingredientMappingKey,
+      store: req.store,
+      providerProductId: null,
+      packSizeG: null,
+      packCount: null,
+      quantity: req.quantity ?? null,
+      quantityUnit: req.quantityUnit ?? null,
+      paidUnitPence: null,
+      paidTotalPence: req.paidTotalPence ?? null,
+      source: "MANUAL",
+      confidenceWeight: 0.7,
+      groceryOrderId: null,
+      shoppingListLineId: null,
+      observedAt: req.observedAt ?? undefined,
+      note: null,
+    });
+    return rec.state;
+  });
+  pushToast("201 — price recorded (source MANUAL, weight 0.7)");
+}
+
+/**
+ * POST /grocery/price-history/refresh (#26). useProviderQuote rides the
+ * provider gate; false = re-read aggregates only (no tokens spent).
+ */
+export function refreshPrices(): void {
+  const s = state;
+  const list = currentShoppingList(s);
+  const keys = (list?.lines ?? [])
+    .filter((ln) => ln.fulfilmentStatus === "UNFILLED")
+    .map((ln) => ln.ingredientMappingKey)
+    .slice(0, 200);
+  const useProviderQuote = s.grocery.providerState?.enabled === true;
+  if (!useProviderQuote) {
+    pushToast("Aggregates re-read — no provider quote requested (0 observations)");
+    return;
+  }
+  mutate((st) => {
+    let out = st;
+    let written = 0;
+    for (const key of keys) {
+      const staleAgg = (out.grocery.aggregates[key] ?? []).some((a) => a.isStale);
+      const line = currentShoppingList(out)?.lines.find(
+        (ln) => ln.ingredientMappingKey === key,
+      );
+      if (!staleAgg && !(line?.isStaleEstimate ?? false)) continue;
+      out = recordObservation(out, {
+        ingredientMappingKey: key,
+        store: "tesco",
+        providerProductId: null,
+        packSizeG: line?.suggestedPackSizeG ?? null,
+        packCount: line?.suggestedPackCount ?? null,
+        quantity: line?.requestedQuantity ?? null,
+        quantityUnit: line?.requestedUnit ?? null,
+        paidUnitPence: line?.estimatedUnitPence ?? null,
+        paidTotalPence: line?.estimatedLinePence ?? null,
+        source: "QUOTE",
+        confidenceWeight: 0.8,
+        groceryOrderId: null,
+        shoppingListLineId: line?.id ?? null,
+        note: "price refresh",
+      }).state;
+      written += 1;
+    }
+    // Line estimates may move → the current list re-fetches fresh (#1).
+    const cur = currentShoppingList(out);
+    if (cur) {
+      out = replaceList(out, {
+        ...cur,
+        staleIngredientCount: 0,
+        lines: cur.lines.map((ln) => ({ ...ln, isStaleEstimate: false })),
+        version: cur.version + 1,
+      });
+    }
+    pushToast(
+      `${keys.length} ingredients refreshed · ${written} new observations`,
+    );
+    return out;
   });
 }
 
@@ -2331,55 +3314,550 @@ export function rejectPendingChange(id: string, reasonNote?: string): void {
   );
 }
 
-/* ---- pantry ------------------------------------------------------------------------------ */
+/* ---- pantry: inventory (pantry.md §3) ------------------------------------------------------
+ * Contract shapes throughout. The list read (#1) returns ACTIVE rows only —
+ * spoiled/exhausted/wasted rows leave the list on mutation (no history view,
+ * spec §9 Q2). Every user write lands an audit entry (HLD: "overrides are
+ * logged with timestamps").
+ */
 
-export function adjustPantryQty(id: string, delta: number): void {
+export function findInventoryItem(
+  s: StoreState,
+  itemId: string,
+): InventoryItemDto | undefined {
+  return s.pantry.items.find((it) => it.id === itemId);
+}
+
+function replaceItem(s: StoreState, next: InventoryItemDto): StoreState {
+  return {
+    ...s,
+    pantry: {
+      ...s.pantry,
+      items: s.pantry.items.map((it) => (it.id === next.id ? next : it)),
+    },
+  };
+}
+
+let auditSeq = 50;
+
+function appendAudit(
+  s: StoreState,
+  itemId: string,
+  actor: InventoryAuditEntryDto["actor"],
+  fieldChanged: string,
+  previousValue: unknown,
+  newValue: unknown,
+): StoreState {
+  const entry: InventoryAuditEntryDto = {
+    id: `aud-${++auditSeq}`,
+    inventoryItemId: itemId,
+    actor,
+    actorUserId: actor === "USER" ? MOCK_USER_ID : null,
+    fieldChanged,
+    previousValue,
+    newValue,
+    occurredAt: nowStamp(),
+  };
+  return {
+    ...s,
+    pantry: {
+      ...s.pantry,
+      auditByItem: {
+        ...s.pantry.auditByItem,
+        [itemId]: [entry, ...(s.pantry.auditByItem[itemId] ?? [])],
+      },
+    },
+  };
+}
+
+/**
+ * PATCH …/inventory/{itemId}/quantity (#5) — ABSOLUTE newQuantity (not a
+ * delta) + expectedVersion; no unit field (unit changes ride the full PUT).
+ * The stepper computes current ± step → newQuantity before calling.
+ * 409 stale-version path: re-fetch + one silent retry (mock has no concurrent
+ * writer, so the retry always lands).
+ */
+export function adjustItemQuantity(itemId: string, newQuantity: number): void {
+  const item = findInventoryItem(state, itemId);
+  if (!item || item.itemStatus !== "ACTIVE") {
+    pushToast("404 — no longer in your pantry; re-fetched", "warn");
+    return;
+  }
+  if (item.trackingMode !== "QUANTITY") {
+    pushToast("400 — quantity adjust is not valid on a status-tracked item", "warn");
+    return;
+  }
+  const next = Math.max(0, newQuantity);
+  mutate((s) => {
+    const it = findInventoryItem(s, itemId);
+    if (!it) return s;
+    const out = replaceItem(s, {
+      ...it,
+      quantity: next,
+      updatedAt: nowStamp(),
+      version: it.version + 1,
+    });
+    return appendAudit(out, itemId, "USER", "quantity", it.quantity, next);
+  });
+}
+
+/**
+ * Staple status tap — there is NO focused status endpoint: the tap echoes the
+ * whole item back through PUT …/{itemId} with expectedVersion (pantry.md §9
+ * Q1). Legal taps cycle STOCKED → LOW → OUT; replenishment back to STOCKED
+ * happens via grocery import.
+ */
+export function cycleStapleStatus(itemId: string): void {
+  const item = findInventoryItem(state, itemId);
+  if (!item || item.trackingMode !== "STATUS") return;
+  if (item.status === "OUT") {
+    pushToast(
+      "Already out — it returns to stocked when a shop replenishes it",
+      "warn",
+    );
+    return;
+  }
+  const next: StapleStatus = item.status === "STOCKED" ? "LOW" : "OUT";
+  mutate((s) => {
+    const it = findInventoryItem(s, itemId);
+    if (!it) return s;
+    const out = replaceItem(s, {
+      ...it,
+      status: next,
+      updatedAt: nowStamp(),
+      version: it.version + 1, // full PUT with expectedVersion
+    });
+    return appendAudit(out, itemId, "USER", "status", it.status, next);
+  });
+  if (item.isStaple) {
+    pushToast(
+      `${item.name} marked ${next.toLowerCase()} — staples at low or out are auto-added to the next shopping list`,
+    );
+  }
+}
+
+let inventorySeqNo = 200;
+
+/** POST /provisions/inventory (#2) — add-item form save (201). */
+export function createInventoryItem(req: CreateInventoryItemRequest): boolean {
+  const statusMode = req.storageLocation === "SPICE_RACK";
+  if (statusMode && req.trackingMode !== "STATUS") {
+    pushToast("400 — spice-rack items must be status-tracked", "warn");
+    return false;
+  }
+  if (!statusMode && req.trackingMode !== "QUANTITY") {
+    pushToast("400 — fridge/freezer/cupboard items must be quantity-tracked", "warn");
+    return false;
+  }
+  if (req.freezerExtension && req.storageLocation !== "FREEZER") {
+    pushToast("400 — freezer details are only valid on freezer items", "warn");
+    return false;
+  }
+  const id = `inv-new-${++inventorySeqNo}`;
+  mutate((s) => {
+    const item: InventoryItemDto = {
+      id,
+      userId: MOCK_USER_ID,
+      name: req.name,
+      category: req.category,
+      storageLocation: req.storageLocation,
+      trackingMode: req.trackingMode,
+      quantity: req.quantity ?? null,
+      unit: req.unit ?? null,
+      costPaid: req.costPaid ?? null,
+      status: req.status ?? (statusMode ? "STOCKED" : null),
+      isStaple: req.isStaple,
+      expiryDate: req.expiryDate ?? null,
+      ingredientMappingKey: req.ingredientMappingKey ?? null,
+      notes: req.notes ?? null,
+      source: req.source,
+      sourceRef: req.sourceRef ?? null,
+      itemStatus: "ACTIVE",
+      freezerExtension: req.freezerExtension ?? null,
+      createdAt: nowStamp(),
+      updatedAt: nowStamp(),
+      version: 1,
+    };
+    const out: StoreState = {
+      ...s,
+      pantry: { ...s.pantry, items: [item, ...s.pantry.items] },
+    };
+    return appendAudit(out, id, "USER", "created", null, req.name);
+  });
+  pushToast(`${req.name} added to your pantry`);
+  return true;
+}
+
+/** PUT …/inventory/{itemId} (#4) — full replacement with expectedVersion. */
+export function updateInventoryItem(
+  itemId: string,
+  req: UpdateInventoryItemRequest,
+): boolean {
+  const item = findInventoryItem(state, itemId);
+  if (!item) {
+    pushToast("404 — no longer in your pantry; re-fetched", "warn");
+    return false;
+  }
+  if (req.expectedVersion !== item.version) {
+    pushToast("409 — changed elsewhere; review and re-save", "warn");
+    return false;
+  }
+  const statusMode = req.storageLocation === "SPICE_RACK";
+  if ((statusMode && req.trackingMode !== "STATUS") || (!statusMode && req.trackingMode !== "QUANTITY")) {
+    pushToast("400 — tracking mode does not match the storage location", "warn");
+    return false;
+  }
+  if (req.freezerExtension && req.storageLocation !== "FREEZER") {
+    pushToast("400 — freezer details are only valid on freezer items", "warn");
+    return false;
+  }
+  mutate((s) => {
+    const it = findInventoryItem(s, itemId);
+    if (!it) return s;
+    const out = replaceItem(s, {
+      ...it,
+      name: req.name,
+      category: req.category,
+      storageLocation: req.storageLocation,
+      trackingMode: req.trackingMode,
+      quantity: req.quantity ?? null,
+      unit: req.unit ?? null,
+      costPaid: req.costPaid ?? null,
+      status: req.status ?? null,
+      isStaple: req.isStaple,
+      expiryDate: req.expiryDate ?? null,
+      ingredientMappingKey: req.ingredientMappingKey ?? null,
+      notes: req.notes ?? null,
+      itemStatus: req.itemStatus,
+      freezerExtension: req.freezerExtension ?? null,
+      updatedAt: nowStamp(),
+      version: it.version + 1,
+    });
+    return appendAudit(out, itemId, "USER", "edited", it.name, req.name);
+  });
+  pushToast(`${req.name} saved`);
+  return true;
+}
+
+/** DELETE …/inventory/{itemId} (#6) — soft delete, NO waste entry (204). */
+export function removeInventoryItem(itemId: string): void {
+  const item = findInventoryItem(state, itemId);
+  if (!item) return;
+  mutate((s) => {
+    const it = findInventoryItem(s, itemId);
+    if (!it) return s;
+    const out = replaceItem(s, {
+      ...it,
+      itemStatus: "WASTED",
+      updatedAt: nowStamp(),
+      version: it.version + 1,
+    });
+    return appendAudit(out, itemId, "USER", "removed", "ACTIVE", "WASTED");
+  });
+  pushToast(`${item.name} removed — no waste logged (entry mistakes path)`);
+}
+
+/** POST …/mark-exhausted (#8) — idempotent. Staples fire ItemRanOutEvent. */
+export function markItemExhausted(itemId: string): void {
+  const item = findInventoryItem(state, itemId);
+  if (!item) return;
+  if (item.itemStatus === "EXHAUSTED") return; // idempotent 200
+  mutate((s) => {
+    const it = findInventoryItem(s, itemId);
+    if (!it) return s;
+    const out = replaceItem(s, {
+      ...it,
+      itemStatus: "EXHAUSTED",
+      updatedAt: nowStamp(),
+      version: it.version + 1,
+    });
+    return appendAudit(out, itemId, "USER", "itemStatus", "ACTIVE", "EXHAUSTED");
+  });
+  pushToast(
+    item.isStaple
+      ? `${item.name} finished — it'll be added to your next shopping list`
+      : `${item.name} marked finished`,
+  );
+}
+
+/**
+ * POST /provisions/meal-consumption (#10) — "Ate a portion" on BATCH_COOK
+ * rows. Underflows floor at zero (HLD guardrail); nutrition logging is a
+ * separate manual step on /nutrition (spec §9 Q5).
+ */
+export function consumePortions(itemId: string, portions: number): void {
+  const item = findInventoryItem(state, itemId);
+  if (!item || item.itemStatus !== "ACTIVE") {
+    pushToast("404 — row gone elsewhere; re-fetched", "warn");
+    return;
+  }
+  const available = item.quantity ?? 0;
+  const next = Math.max(0, available - portions);
+  mutate((s) => {
+    const it = findInventoryItem(s, itemId);
+    if (!it) return s;
+    const out = replaceItem(s, {
+      ...it,
+      quantity: next,
+      itemStatus: next === 0 ? "EXHAUSTED" : it.itemStatus,
+      updatedAt: nowStamp(),
+      version: it.version + 1,
+    });
+    return appendAudit(out, itemId, "USER", "quantity", available, next);
+  });
+  if (portions > available) {
+    pushToast(
+      `${portions} portions logged but only ${available} tracked — pantry floored at zero`,
+      "warn",
+    );
+  } else if (next === 0) {
+    pushToast("That was the last portion — log the meal on Nutrition if you ate it");
+  } else {
+    pushToast(`Portion deducted — ${next} left. Log the meal on Nutrition if you ate it`);
+  }
+}
+
+/* ---- pantry: waste (#11–#13) ------------------------------------------------------------- */
+
+let wasteSeq = 60;
+
+/**
+ * POST /provisions/waste (#11) — entries are IMMUTABLE (corrections append).
+ * Linked entries deduct from the row server-side (floors at zero, may flip
+ * WASTED). 422 when the quantity exceeds tracked remainder.
+ */
+export function logWaste(req: LogWasteRequest): boolean {
+  const linked = req.inventoryItemId
+    ? findInventoryItem(state, req.inventoryItemId)
+    : undefined;
+  if (
+    linked &&
+    linked.trackingMode === "QUANTITY" &&
+    req.quantity != null &&
+    req.unit === linked.unit &&
+    req.quantity > (linked.quantity ?? 0)
+  ) {
+    pushToast(
+      `422 — that's more than you have tracked (${linked.quantity ?? 0} ${linked.unit ?? ""} left)`,
+      "warn",
+    );
+    return false;
+  }
+  mutate((s) => {
+    const entry: WasteEntryDto = {
+      id: `we-${++wasteSeq}`,
+      userId: MOCK_USER_ID,
+      inventoryItemId: req.inventoryItemId ?? null,
+      itemName: req.itemName,
+      quantity: req.quantity ?? null,
+      unit: req.unit ?? null,
+      reason: req.reason,
+      costEstimate: req.costEstimate ?? null,
+      occurredOn: req.occurredOn,
+      notes: req.notes ?? null,
+      createdAt: nowStamp(),
+    };
+    let out: StoreState = {
+      ...s,
+      pantry: { ...s.pantry, waste: [entry, ...s.pantry.waste] },
+    };
+    if (req.inventoryItemId && req.quantity != null) {
+      const it = findInventoryItem(out, req.inventoryItemId);
+      if (it && it.trackingMode === "QUANTITY") {
+        const next = Math.max(0, (it.quantity ?? 0) - req.quantity);
+        out = replaceItem(out, {
+          ...it,
+          quantity: next,
+          itemStatus: next === 0 ? "WASTED" : it.itemStatus,
+          updatedAt: nowStamp(),
+          version: it.version + 1,
+        });
+        out = appendAudit(
+          out,
+          it.id,
+          "USER",
+          "quantity",
+          it.quantity,
+          next,
+        );
+      }
+    }
+    return out;
+  });
+  pushToast("Waste logged — entries can't be edited; log a correction if needed");
+  return true;
+}
+
+/** GET /provisions/waste/summary equivalent (#13) — computed per range. */
+export function wasteSummaryFor(
+  s: StoreState,
+  from: string,
+  to: string,
+): WasteSummaryDto {
+  const rows = s.pantry.waste.filter(
+    (w) => w.occurredOn >= from && w.occurredOn <= to,
+  );
+  const countByReason: Record<string, number> = {};
+  const byItem = new Map<string, { entryCount: number; totalCost: number }>();
+  let totalCost = 0;
+  for (const w of rows) {
+    countByReason[w.reason] = (countByReason[w.reason] ?? 0) + 1;
+    totalCost += w.costEstimate ?? 0;
+    const t = byItem.get(w.itemName) ?? { entryCount: 0, totalCost: 0 };
+    byItem.set(w.itemName, {
+      entryCount: t.entryCount + 1,
+      totalCost: Math.round((t.totalCost + (w.costEstimate ?? 0)) * 100) / 100,
+    });
+  }
+  const topItems = [...byItem.entries()]
+    .map(([itemName, v]) => ({ itemName, ...v }))
+    .sort((a, b) => b.totalCost - a.totalCost)
+    .slice(0, 3);
+  return {
+    from,
+    to,
+    totalCostEstimate: Math.round(totalCost * 100) / 100,
+    totalEntries: rows.length,
+    countByReason,
+    topItems,
+  };
+}
+
+/* ---- pantry: equipment (#14–#16) ----------------------------------------------------------- */
+
+let equipmentSeq = 20;
+
+/** PUT /provisions/equipment/{name} (#15) — upsert (200 update / 201 insert). */
+export function upsertEquipment(name: string, req: UpsertEquipmentRequest): boolean {
+  if (!/^[a-z0-9_]+$/.test(name)) {
+    pushToast("400 — equipment names are canonical snake_case (e.g. air_fryer)", "warn");
+    return false;
+  }
+  const existing = state.pantry.equipment.find((e) => e.name === name);
+  if (existing && req.expectedVersion != null && req.expectedVersion !== existing.version) {
+    pushToast("409 — equipment changed elsewhere; reloaded", "warn");
+    return false;
+  }
+  mutate((s) => {
+    const cur = s.pantry.equipment.find((e) => e.name === name);
+    const rows = cur
+      ? s.pantry.equipment.map((e) =>
+          e.name === name
+            ? {
+                ...e,
+                available: req.available,
+                details: req.details ?? null,
+                version: e.version + 1,
+              }
+            : e,
+        )
+      : [
+          ...s.pantry.equipment,
+          {
+            id: `eq-${++equipmentSeq}`,
+            userId: MOCK_USER_ID,
+            name,
+            available: req.available,
+            details: req.details ?? null,
+            version: 1,
+          },
+        ];
+    return { ...s, pantry: { ...s.pantry, equipment: rows } };
+  });
+  return true;
+}
+
+/** DELETE /provisions/equipment/{name} (#16) — 204; 404 = already gone. */
+export function removeEquipment(name: string): void {
   mutate((s) => ({
     ...s,
     pantry: {
       ...s.pantry,
-      items: s.pantry.items.map((it) =>
-        it.id === id && !it.spoiled
-          ? { ...it, qty: Math.max(0, it.qty + delta) }
-          : it,
-      ),
+      equipment: s.pantry.equipment.filter((e) => e.name !== name),
     },
   }));
 }
 
+/* ---- pantry: budget (#17/#18) --------------------------------------------------------------- */
+
 /**
- * Mark a pantry item spoiled: logs waste and — when nothing is already
- * pending — raises a contract-shaped re-opt suggestion against the active
- * plan (PROVISIONS listener, cross-page liveliness). The suggestion's diff
- * lives server-side until accept (spec §8 Q2).
+ * PUT /provisions/budget (#18) — upsert; insert and update both 200. Currency
+ * cannot change on an existing budget (422). Keeps the lifestyle weeklyBudget
+ * mirror in sync (Today's stat band reads it).
  */
-export function markSpoiled(id: string): void {
+export function saveBudget(req: UpdateBudgetRequest): boolean {
+  const existing = state.pantry.budget;
+  if (existing && req.currency !== existing.currency) {
+    pushToast("422 — currency can't change on an existing budget", "warn");
+    return false;
+  }
+  if (existing && req.expectedVersion !== existing.version) {
+    pushToast("409 — budget changed elsewhere; reloaded", "warn");
+    return false;
+  }
+  mutate((s) => ({
+    ...s,
+    pantry: {
+      ...s.pantry,
+      budget: {
+        id: s.pantry.budget?.id ?? "budget-0001",
+        userId: MOCK_USER_ID,
+        weeklyTarget: req.weeklyTarget,
+        currency: req.currency,
+        toleranceOver: req.toleranceOver,
+        priceSensitivity: req.priceSensitivity,
+        enabled: req.enabled ?? true,
+        spendTracking: null, // always null in v1
+        version: (s.pantry.budget?.version ?? 0) + 1,
+      },
+    },
+    preferences: {
+      ...s.preferences,
+      lifestyle: { ...s.preferences.lifestyle, weeklyBudget: req.weeklyTarget },
+    },
+  }));
+  pushToast("Budget saved — the planner optimises cost against it");
+  return true;
+}
+
+/**
+ * Mark a pantry item spoiled (#7, idempotent): the row leaves the ACTIVE
+ * list and — when nothing is already pending — the planner raises a
+ * contract-shaped re-opt suggestion (PROVISIONS listener, cross-page
+ * liveliness). Spoiling does NOT log waste (spec §9 Q4) — `alsoLogWaste`
+ * plays the confirm dialog's second, independent call.
+ */
+export function markSpoiled(id: string, alsoLogWaste = false): void {
   mutate((s) => {
     const item = s.pantry.items.find((it) => it.id === id);
-    if (!item || item.spoiled) return s;
+    if (!item || item.itemStatus !== "ACTIVE") return s;
 
-    const qtyLabel = item.unit ? `${item.qty} ${item.unit}` : `${item.qty}`;
-    let out: StoreState = {
-      ...s,
-      pantry: {
-        ...s.pantry,
-        items: s.pantry.items.map((it) =>
-          it.id === id ? { ...it, spoiled: true } : it,
-        ),
-        waste: {
-          monthTotal:
-            Math.round((s.pantry.waste.monthTotal + item.estCost) * 100) / 100,
-          entries: [
-            {
-              name: `${item.name} ${qtyLabel}`,
-              cost: `£${item.estCost.toFixed(2)}`,
-              when: "Wed 10 June",
-            },
-            ...s.pantry.waste.entries,
-          ],
-        },
-      },
-    };
+    let out: StoreState = replaceItem(s, {
+      ...item,
+      itemStatus: "SPOILED",
+      updatedAt: nowStamp(),
+      version: item.version + 1,
+    });
+    out = appendAudit(out, id, "USER", "itemStatus", "ACTIVE", "SPOILED");
+    if (alsoLogWaste) {
+      const entry: WasteEntryDto = {
+        id: `we-${++wasteSeq}`,
+        userId: MOCK_USER_ID,
+        inventoryItemId: id,
+        itemName: item.name,
+        quantity: item.quantity ?? null,
+        unit: item.unit ?? null,
+        reason: "SPOILED_EARLY",
+        costEstimate: item.costPaid ?? null,
+        occurredOn: MOCK_TODAY_ISO,
+        notes: "logged from mark-spoiled",
+        createdAt: nowStamp(),
+      };
+      out = {
+        ...out,
+        pantry: { ...out.pantry, waste: [entry, ...out.pantry.waste] },
+      };
+    }
 
     const active = activePlanForWeek(out, CURRENT_WEEK_START);
     if (out.planner.suggestions.length === 0 && active) {
@@ -3484,9 +4962,7 @@ export function adjustPortionScale(direction: 1 | -1): void {
 }
 
 /** Projected basket total used for the grocery headroom maths (mock-fixed). */
-const PROJECTED_BASKET = 47.3;
-
-/** Nudge the weekly budget ±£5 — pantry budget + grocery headroom follow. */
+/** Nudge the weekly budget ±£5 — the pantry BudgetDto follows (upsert mirror). */
 export function adjustWeeklyBudget(direction: 1 | -1): void {
   mutate((s) => {
     const budget = Math.max(
@@ -3494,7 +4970,6 @@ export function adjustWeeklyBudget(direction: 1 | -1): void {
       Math.min(120, s.preferences.lifestyle.weeklyBudget + direction * 5),
     );
     if (budget === s.preferences.lifestyle.weeklyBudget) return s;
-    const headroom = budget - PROJECTED_BASKET;
     return {
       ...s,
       preferences: {
@@ -3503,12 +4978,13 @@ export function adjustWeeklyBudget(direction: 1 | -1): void {
       },
       pantry: {
         ...s.pantry,
-        budget: { ...s.pantry.budget, total: budget },
-      },
-      grocery: {
-        ...s.grocery,
-        headroom: `${headroom < 0 ? "−" : ""}£${Math.abs(headroom).toFixed(2)}`,
-        headroomSub: `vs £${budget} weekly`,
+        budget: s.pantry.budget
+          ? {
+              ...s.pantry.budget,
+              weeklyTarget: budget,
+              version: s.pantry.budget.version + 1,
+            }
+          : s.pantry.budget,
       },
     };
   });
