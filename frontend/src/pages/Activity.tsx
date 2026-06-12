@@ -1,14 +1,14 @@
 import { AdvisorPanel } from "../components/AdvisorPanel";
 import { PageHeader } from "../components/PageHeader";
-import { SwapLine } from "../components/SwapLine";
 import { TierMark, TIER_INFO } from "../components/TierMark";
 import { TintChip } from "../components/TintChip";
 import {
-  acceptRecipeChange,
+  acceptPendingChange,
   acceptSuggestion,
   answerClarification,
   markFeedbackCorrected,
-  rejectRecipeChange,
+  recipeName,
+  rejectPendingChange,
   rejectSuggestion,
   tierFor,
   useStore,
@@ -78,8 +78,9 @@ export function Activity() {
   const recipes = useStore((s) => s.recipes);
   const activity = useStore((s) => s.activity);
 
-  const recipeChanges = recipes.filter((r) => r.pendingChange !== null);
-  // Top-3 pending changes: the plan suggestion first, then recipe changes.
+  const pendingChanges = useStore((s) => s.adaptation.pendingChanges);
+  // Top-3 pending changes: the plan suggestion first, then recipe changes
+  // (GET /adaptation/pending-changes — server-ranked best-first).
   const recipeSlots = suggestion ? 2 : 3;
 
   return (
@@ -90,7 +91,7 @@ export function Activity() {
       />
 
       <section aria-label="Pending changes">
-        {!suggestion && recipeChanges.length === 0 && (
+        {!suggestion && pendingChanges.length === 0 && (
           <div className="page-loading">
             No pending changes — the advisor will raise suggestions here.
           </div>
@@ -113,25 +114,25 @@ export function Activity() {
             </div>
           </AdvisorPanel>
         )}
-        {recipeChanges.slice(0, recipeSlots).map((recipe) => {
-          const change = recipe.pendingChange;
-          if (!change) return null;
-          return (
-            <AdvisorPanel
-              key={recipe.id}
-              label={`Suggested change · ${recipe.name}`}
-              headerRight={change.sub}
-              title={change.title}
-              acceptLabel="Accept"
-              onAccept={() => acceptRecipeChange(recipe.id)}
-              onDismiss={() => rejectRecipeChange(recipe.id)}
-            >
-              <div style={{ marginTop: 12 }}>
-                <SwapLine from={change.from} to={change.to} />
-              </div>
-            </AdvisorPanel>
-          );
-        })}
+        {pendingChanges.slice(0, recipeSlots).map((change) => (
+          <AdvisorPanel
+            key={change.id}
+            label={`Suggested change · ${recipeName(recipes, change.recipeId)}`}
+            headerRight={`confidence ${change.confidence.toFixed(2)} · impact ${change.impactScore.toFixed(2)}`}
+            title={
+              change.reasoningPreview ??
+              `${change.changeDimension.toLowerCase().replace(/_/g, " ")} change suggested`
+            }
+            acceptLabel="Accept"
+            onAccept={() => acceptPendingChange(change.id)}
+            onDismiss={() => rejectPendingChange(change.id)}
+          >
+            <div className="inline-note" style={{ marginTop: 10 }}>
+              The before/after diff lives on the recipe page (expand-then-accept
+              — the list row carries no diff or optimistic version).
+            </div>
+          </AdvisorPanel>
+        ))}
       </section>
 
       <div className="activity-layout">

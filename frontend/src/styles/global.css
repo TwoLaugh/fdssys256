@@ -3096,3 +3096,405 @@ button.rail-item.active {
   text-decoration: underline;
   text-decoration-color: var(--mp-line-hi);
 }
+
+/* ---- Recipes library rebuild (recipes.md) -------------------------------------- */
+
+.recipe-card-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.recipe-card.archived {
+  opacity: 0.62;
+}
+
+.recipe-card-captions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+  min-height: 0;
+}
+
+.pool-caption {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--mp-muted);
+  text-transform: uppercase;
+}
+
+.version-tag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mp-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.recipe-card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 14px 12px;
+}
+
+.nutri-note {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.nutri-note.pending {
+  color: var(--mp-muted);
+}
+
+.nutri-note.partial {
+  color: var(--mp-amber);
+}
+
+.import-source-line {
+  font-size: 13.5px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.import-warnings {
+  background: rgba(154, 106, 28, 0.08);
+  border: 1px solid rgba(154, 106, 28, 0.35);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--mp-amber);
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.dedup-prewarn {
+  background: var(--mp-terra-tint, #f6e3d9);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--mp-terra-dark);
+  margin-top: 10px;
+}
+
+.dedup-candidate {
+  padding: 14px 16px;
+  margin-top: 12px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--mp-terra-dark);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.rf-errors {
+  background: rgba(179, 38, 30, 0.07);
+  border: 1px solid rgba(179, 38, 30, 0.4);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mp-red);
+  display: grid;
+  gap: 4px;
+}
+
+/* ---- §4d recipe form ------------------------------------------------------------ */
+
+.recipe-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.rf-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.rf-section {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--mp-line);
+  padding-top: 12px;
+}
+
+.rf-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.rf-ing-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.4fr) 70px 76px minmax(90px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.rf-ing-row .rf-key {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.rf-opt {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.rf-step-row {
+  display: grid;
+  grid-template-columns: 26px 1fr 70px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.rf-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+/* ---- recipe detail rebuild (recipe-detail.md) ------------------------------------ */
+
+.catalogue-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--mp-terra-tint, #f6e3d9);
+  border-radius: 12px;
+  padding: 12px 18px;
+  margin-top: 16px;
+  font-size: 13.5px;
+  color: var(--mp-terra-dark);
+  font-weight: 500;
+}
+
+.catalogue-banner.archived {
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line-hi, #cfc4a9);
+  color: var(--mp-muted);
+}
+
+.photo-dropzone {
+  width: 100%;
+  border: 1.5px dashed var(--mp-line-hi, #cfc4a9);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--mp-muted);
+  font-family: var(--mp-font-body);
+  font-size: 12.5px;
+  padding: 14px 12px;
+  cursor: pointer;
+}
+
+.photo-dropzone:hover {
+  border-color: var(--mp-terra);
+  color: var(--mp-terra-dark);
+}
+
+.ingredient-prep {
+  color: var(--mp-muted);
+  font-style: italic;
+  font-size: 13px;
+}
+
+.needs-review-dot {
+  color: var(--mp-amber);
+  margin-left: 7px;
+  font-size: 11px;
+  cursor: help;
+}
+
+.version-row {
+  border-top: 1px solid var(--mp-line);
+  padding: 10px 0;
+}
+
+.version-row:first-of-type {
+  border-top: none;
+}
+
+.version-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.version-pill {
+  font-family: var(--mp-font-display);
+  font-weight: 700;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border: 1px solid var(--mp-line-hi, #cfc4a9);
+  border-radius: 999px;
+  padding: 3px 12px;
+  cursor: pointer;
+  color: var(--mp-ink);
+}
+
+.version-pill.current {
+  background: var(--mp-ink);
+  color: var(--mp-card);
+  border-color: var(--mp-ink);
+}
+
+.version-meta {
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.sub-row {
+  border-top: 1px solid var(--mp-line);
+  padding: 12px 0;
+}
+
+.sub-row:first-of-type {
+  border-top: none;
+}
+
+.sub-meta {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+}
+
+.sub-constraint {
+  font-variant-numeric: tabular-nums;
+}
+
+.sub-overlay {
+  font-size: 13px;
+  margin-top: 4px;
+  padding-left: 12px;
+  border-left: 2px solid var(--mp-line-hi, #cfc4a9);
+}
+
+.sub-notes {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--mp-muted);
+  margin-top: 4px;
+}
+
+.diff-view {
+  display: grid;
+  gap: 6px;
+  background: var(--mp-bg);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.diff-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.diff-mark {
+  font-weight: 700;
+  width: 14px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.diff-mark.added {
+  color: var(--mp-olive);
+}
+
+.diff-mark.removed {
+  color: var(--mp-red);
+}
+
+.diff-mark.modified {
+  color: var(--mp-amber);
+}
+
+.diff-from {
+  text-decoration: line-through;
+  color: var(--mp-muted);
+}
+
+/* ---- discover rebuild (discover.md) ----------------------------------------------- */
+
+.source-chip {
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--mp-line-hi, #cfc4a9);
+  border-radius: 999px;
+  padding: 3px 11px;
+  color: var(--mp-muted);
+}
+
+.source-chip.ok {
+  border-color: var(--mp-olive);
+  color: var(--mp-olive);
+}
+
+.source-chip.failed {
+  border-color: var(--mp-red);
+  color: var(--mp-red);
+}
+
+.scrape-url {
+  font-size: 12.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scrape-outcome {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.scrape-outcome.olive {
+  color: var(--mp-olive);
+}
+
+.scrape-outcome.red {
+  color: var(--mp-red);
+}
+
+.scrape-outcome.muted {
+  color: var(--mp-muted);
+}
+
+.history-btn {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--mp-line);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--mp-font-body);
+  color: var(--mp-ink);
+}
+
+.history-btn:hover {
+  background: var(--mp-bg);
+}
+
+.source-disabled {
+  opacity: 0.55;
+}
