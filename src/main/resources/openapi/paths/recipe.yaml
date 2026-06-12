@@ -254,10 +254,17 @@ recipeImports:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '422':
-        description: Import failed (fetch error or extraction failure).
+        description: >-
+          Import failed (fetch error or extraction failure → RecipeImportFailure), or the imported
+          recipe duplicates an existing library recipe (recipe-2 dedup → RecipeImportDuplicate;
+          one-shot now runs the same dedup gate as preview-confirm and honours the same
+          ignoreDuplicateOfRecipeId override).
         content:
           application/problem+json:
-            schema: { $ref: '../schemas/common.yaml#/RecipeImportFailure' }
+            schema:
+              oneOf:
+                - { $ref: '../schemas/common.yaml#/RecipeImportFailure' }
+                - { $ref: '../schemas/common.yaml#/RecipeImportDuplicate' }
 recipeImportsPreviewUrl:
   post:
     tags: [Recipes]
@@ -628,7 +635,7 @@ recipeSubstitutions:
   get:
     tags: [Recipes]
     operationId: getSubstitutionsForVersion
-    summary: 'List substitutions for a specific version (state filter: ACCEPTED).'
+    summary: 'List substitutions for a specific version, filtered by state (default ACCEPTED).'
     security: [{ cookieAuth: [] }]
     parameters:
       - in: path
@@ -639,16 +646,27 @@ recipeSubstitutions:
         name: versionId
         required: true
         schema: { type: string, format: uuid }
+      - in: query
+        name: state
+        required: false
+        description: >-
+          Substitution-state filter (recipe-substitution-state-filter). Default ACCEPTED preserves
+          the pre-filter behaviour; ALL returns every state. PROPOSED makes pending proposals
+          listable so the recipe-detail panel survives a reload.
+        schema:
+          type: string
+          enum: [PROPOSED, ACCEPTED, REJECTED, SUPERSEDED, ALL]
+          default: ACCEPTED
     responses:
       '200':
-        description: 'Active substitutions on the given version.'
+        description: 'Substitutions on the given version in the requested state(s).'
         content:
           application/json:
             schema:
               type: array
               items: { $ref: '../schemas/recipe.yaml#/RecipeSubstitutionDto' }
       '400':
-        description: 'versionId query param missing.'
+        description: 'versionId query param missing or unknown state value.'
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

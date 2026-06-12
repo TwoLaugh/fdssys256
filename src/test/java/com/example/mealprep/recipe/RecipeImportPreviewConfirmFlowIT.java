@@ -2,6 +2,7 @@ package com.example.mealprep.recipe;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -239,6 +240,175 @@ class RecipeImportPreviewConfirmFlowIT {
     assertThat(count).isEqualTo(1L);
   }
 
+  // ---------------- "import anyway" override (recipe-import-dedup-consistency) ----------------
+
+  @Test
+  void confirm_overrideNamingCandidate_returns201_andRecordsDuplicateOnProvenance()
+      throws Exception {
+    AuthedUser user = registerUser();
+    UUID seededId = seedLibraryRecipe(user);
+
+    ConfirmImportRequest overridden =
+        new ConfirmImportRequest(
+            null,
+            "https://example.com/dup",
+            "json_ld",
+            RecipeTestData.createRequestWithName("Imported Anyway"),
+            seededId);
+
+    MvcResult result =
+        mvc.perform(
+                post("/api/v1/recipes/imports/confirm")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(overridden)))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.name").value("Imported Anyway"))
+            .andExpect(openApi().isValid(openApiValidator))
+            .andReturn();
+
+    UUID importedId =
+        UUID.fromString(
+            objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText());
+    // The honoured override is recorded on the provenance row (recipe-detail's "imported as a
+    // duplicate of ..." link).
+    String duplicateOf =
+        jdbcTemplate.queryForObject(
+            "SELECT duplicate_of_recipe_id::text FROM recipe_imports WHERE recipe_id = ?",
+            String.class,
+            importedId);
+    assertThat(duplicateOf).isEqualTo(seededId.toString());
+    Long count = jdbcTemplate.queryForObject("SELECT count(*) FROM recipe_recipes", Long.class);
+    assertThat(count).isEqualTo(2L);
+
+    // The provenance read also surfaces it.
+    mvc.perform(get("/api/v1/recipes/" + importedId + "/import-provenance").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.duplicateOfRecipeId").value(seededId.toString()))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void confirm_overrideNamingDifferentRecipe_still422_noBlindForce() throws Exception {
+    AuthedUser user = registerUser();
+    UUID seededId = seedLibraryRecipe(user);
+
+    ConfirmImportRequest blindForce =
+        new ConfirmImportRequest(
+            null,
+            "https://example.com/dup",
+            "json_ld",
+            RecipeTestData.createRequestWithName("Blind Force Attempt"),
+            UUID.randomUUID());
+
+    mvc.perform(
+            post("/api/v1/recipes/imports/confirm")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(blindForce)))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/recipe-import-duplicate"))
+        .andExpect(jsonPath("$.candidateRecipeId").value(seededId.toString()))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    Long count = jdbcTemplate.queryForObject("SELECT count(*) FROM recipe_recipes", Long.class);
+    assertThat(count).isEqualTo(1L);
+  }
+
+  @Test
+  void confirm_overrideSet_butNoCollision_isIgnored_normal201() throws Exception {
+    AuthedUser user = registerUser();
+
+    ConfirmImportRequest noCollision =
+        new ConfirmImportRequest(
+            null,
+            "https://example.com/unique",
+            "json_ld",
+            RecipeTestData.uniqueCreateRequest("no-collision"),
+            UUID.randomUUID());
+
+    MvcResult result =
+        mvc.perform(
+                post("/api/v1/recipes/imports/confirm")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(noCollision)))
+            .andExpect(status().isCreated())
+            .andExpect(openApi().isValid(openApiValidator))
+            .andReturn();
+
+    UUID importedId =
+        UUID.fromString(
+            objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText());
+    // No collision occurred, so nothing is recorded as a duplicate.
+    String duplicateOf =
+        jdbcTemplate.queryForObject(
+            "SELECT duplicate_of_recipe_id::text FROM recipe_imports WHERE recipe_id = ?",
+            String.class,
+            importedId);
+    assertThat(duplicateOf).isNull();
+  }
+
+  @Test
+  void create_overrideNamingCandidate_returns201_manualCreatePathIdentical() throws Exception {
+    AuthedUser user = registerUser();
+    UUID seededId = seedLibraryRecipe(user);
+
+    CreateRecipeRequest base = RecipeTestData.createRequestWithName("Manual Dupe Anyway");
+    CreateRecipeRequest withOverride =
+        new CreateRecipeRequest(
+            base.name(),
+            base.description(),
+            base.ingredients(),
+            base.method(),
+            base.metadata(),
+            base.tags(),
+            seededId);
+
+    mvc.perform(
+            post("/api/v1/recipes")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(withOverride)))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.name").value("Manual Dupe Anyway"))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    Long count = jdbcTemplate.queryForObject("SELECT count(*) FROM recipe_recipes", Long.class);
+    assertThat(count).isEqualTo(2L);
+  }
+
+  @Test
+  void create_overrideNamingDifferentRecipe_still422() throws Exception {
+    AuthedUser user = registerUser();
+    UUID seededId = seedLibraryRecipe(user);
+
+    CreateRecipeRequest base = RecipeTestData.createRequestWithName("Manual Blind Force");
+    CreateRecipeRequest withWrongOverride =
+        new CreateRecipeRequest(
+            base.name(),
+            base.description(),
+            base.ingredients(),
+            base.method(),
+            base.metadata(),
+            base.tags(),
+            UUID.randomUUID());
+
+    mvc.perform(
+            post("/api/v1/recipes")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(withWrongOverride)))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(jsonPath("$.candidateRecipeId").value(seededId.toString()))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    Long count = jdbcTemplate.queryForObject("SELECT count(*) FROM recipe_recipes", Long.class);
+    assertThat(count).isEqualTo(1L);
+  }
+
   // ---------------- create dedup (recipe-2) ----------------
 
   @Test
@@ -270,6 +440,24 @@ class RecipeImportPreviewConfirmFlowIT {
   }
 
   // ---------------- helpers ----------------
+
+  /**
+   * Seed the caller's library with the default create request (3 ingredients + 3 method steps) so a
+   * subsequent same-set submission crosses the dedup threshold. Returns the seeded recipe id.
+   */
+  private UUID seedLibraryRecipe(AuthedUser user) throws Exception {
+    MvcResult created =
+        mvc.perform(
+                post("/api/v1/recipes")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        objectMapper.writeValueAsString(RecipeTestData.defaultCreateRequest())))
+            .andExpect(status().isCreated())
+            .andReturn();
+    return UUID.fromString(
+        objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText());
+  }
 
   private record AuthedUser(UUID userId, Cookie cookie) {}
 

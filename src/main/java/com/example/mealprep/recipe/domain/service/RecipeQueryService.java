@@ -8,6 +8,7 @@ import com.example.mealprep.recipe.api.dto.RecipeImportDto;
 import com.example.mealprep.recipe.api.dto.RecipeSearchCriteriaDto;
 import com.example.mealprep.recipe.api.dto.RecipeSubstitutionDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
+import com.example.mealprep.recipe.api.dto.SubstitutionState;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Map;
@@ -136,6 +137,14 @@ public interface RecipeQueryService {
    * NULLS LAST}. Verbatim from LLD line 532 ({@code getSubstitutionsForVersion}).
    */
   List<RecipeSubstitutionDto> getSubstitutionsForVersion(UUID versionId);
+
+  /**
+   * Substitutions on a specific version filtered by {@code state}, sorted {@code last_applied_at
+   * DESC NULLS LAST}. A {@code null} state means every state ({@code state=ALL} on the REST
+   * surface). Backs the recipe-substitution-state-filter ticket — PROPOSED rows become listable so
+   * the recipe-detail panel survives a reload.
+   */
+  List<RecipeSubstitutionDto> getSubstitutionsForVersion(UUID versionId, SubstitutionState state);
 
   /** Single-fetch helper used by the controller's GET-by-id read path. */
   Optional<RecipeSubstitutionDto> getSubstitution(UUID substitutionId);

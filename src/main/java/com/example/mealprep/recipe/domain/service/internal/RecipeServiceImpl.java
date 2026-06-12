@@ -507,8 +507,9 @@ public class RecipeServiceImpl
     // recipe-2 / LLD §Flow 1: dedup against the caller's library before persisting. A
     // near-duplicate
     // surfaces as 422 recipe-import-duplicate carrying the candidate id so the UI can prompt
-    // "merge / variant / import anyway".
-    guardAgainstDuplicate(userId, request);
+    // "merge / variant / import anyway". "Import anyway" re-submits with
+    // ignoreDuplicateOfRecipeId = that candidate id (recipe-import-dedup-consistency ticket).
+    guardAgainstDuplicate(userId, request, request.ignoreDuplicateOfRecipeId());
     return createRecipeInternal(
         userId, request, DataQuality.USER_VERIFIED, VersionTrigger.MANUAL_CREATE);
   }
@@ -517,12 +518,28 @@ public class RecipeServiceImpl
    * Run the recipe-2 ingredient-set-hash dedup probe (HLD §Recipe deduplication) and throw {@code
    * RecipeImportDuplicateException} (422) when the candidate duplicates a recipe already in {@code
    * userId}'s library. No-op when the candidate is distinct or has no usable ingredient keys.
+   *
+   * <p>Override semantics (recipe-import-dedup-consistency ticket): when {@code
+   * ignoreDuplicateOfRecipeId} names <b>exactly</b> the colliding candidate, the hit is waived and
+   * its id is returned so import callers can record {@code duplicateOfRecipeId} on the provenance
+   * row. A collision with any <i>other</i> recipe still throws — no blind force. The override is
+   * ignored (returns empty) when no collision occurs; the dedup threshold itself is untouched.
    */
-  private void guardAgainstDuplicate(UUID userId, CreateRecipeRequest request) {
-    deduplicationService
+  private Optional<UUID> guardAgainstDuplicate(
+      UUID userId, CreateRecipeRequest request, UUID ignoreDuplicateOfRecipeId) {
+    return deduplicationService
         .findDuplicate(userId, request)
-        .ifPresent(
+        .map(
             match -> {
+              if (match.candidateRecipeId().equals(ignoreDuplicateOfRecipeId)) {
+                log.info(
+                    "recipe dedup override honoured userId={} candidateRecipeId={}"
+                        + " ingredientOverlap={}",
+                    userId,
+                    match.candidateRecipeId(),
+                    String.format("%.2f", match.ingredientOverlap()));
+                return match.candidateRecipeId();
+              }
               throw new RecipeImportDuplicateException(
                   match.candidateRecipeId(), match.ingredientOverlap());
             });
@@ -534,13 +551,18 @@ public class RecipeServiceImpl
     String html = urlFetcher.fetch(request.url());
     HtmlImportParser.ParsedRecipe parsed = htmlImportParser.parse(html, request.url());
     CreateRecipeRequest mapped = parserToCreateRequestMapper.map(parsed);
-    // recipe-2: dedup is wired into the create path and the preview-then-confirm import path
-    // (confirmImport) per the ticket; the legacy one-shot /imports/url stays a direct persist so
-    // its 422 contract remains the extraction-failure shape (RecipeImportFailure). The
-    // Paprika-style
-    // flow is the dedup'd import surface.
+    // recipe-2 + recipe-import-dedup-consistency: the one-shot path runs the SAME dedup gate as
+    // preview→confirm, so the same URL gives the same answer on both surfaces (422
+    // recipe-import-duplicate with the candidate id) and honours the same named override.
+    UUID duplicateOfRecipeId =
+        guardAgainstDuplicate(userId, mapped, request.ignoreDuplicateOfRecipeId()).orElse(null);
     return persistImport(
-        userId, mapped, request.url(), parsed.extractionMethod(), parsed.rawPayload());
+        userId,
+        mapped,
+        request.url(),
+        parsed.extractionMethod(),
+        parsed.rawPayload(),
+        duplicateOfRecipeId);
   }
 
   // ---------------- recipe-3: preview-then-confirm import (Paprika-style, LLD §Flow 2) ----------
@@ -615,8 +637,14 @@ public class RecipeServiceImpl
     // The user reviewed / edited the preview; the request body is authoritative. v1 keeps the flow
     // stateless — previewToken is correlation/telemetry only (see RecipeImportPreview javadoc).
     CreateRecipeRequest edited = request.recipe();
-    // recipe-2: dedup the (possibly-edited) candidate before persisting.
-    guardAgainstDuplicate(userId, edited);
+    // recipe-2: dedup the (possibly-edited) candidate before persisting. The override is the
+    // top-level field; the nested recipe's field is honoured as a fallback so both spellings of
+    // the re-submit behave identically.
+    UUID override =
+        request.ignoreDuplicateOfRecipeId() != null
+            ? request.ignoreDuplicateOfRecipeId()
+            : edited.ignoreDuplicateOfRecipeId();
+    UUID duplicateOfRecipeId = guardAgainstDuplicate(userId, edited, override).orElse(null);
     String extractionMethod =
         request.extractionMethod() == null || request.extractionMethod().isBlank()
             ? "user_confirmed"
@@ -627,21 +655,25 @@ public class RecipeServiceImpl
         request.sourceUrl(),
         extractionMethod,
         request.previewToken());
-    return persistImport(userId, edited, request.sourceUrl(), extractionMethod, null);
+    return persistImport(
+        userId, edited, request.sourceUrl(), extractionMethod, null, duplicateOfRecipeId);
   }
 
   /**
    * Shared import-persistence path for {@link #importFromUrl} and {@link #confirmImport}: writes
    * the recipe ({@code dataQuality = IMPORTED}, {@code trigger = IMPORT}) + its {@code
    * recipe_imports} provenance row in one transaction, then re-hydrates so {@code branches[]}
-   * reflects the new main branch. Caller has already run dedup.
+   * reflects the new main branch. Caller has already run dedup; {@code duplicateOfRecipeId} is
+   * non-null only when the caller's {@code ignoreDuplicateOfRecipeId} override was honoured, and is
+   * recorded on the provenance row so recipe-detail's "imported as a duplicate of …" link renders.
    */
   private RecipeDto persistImport(
       UUID userId,
       CreateRecipeRequest body,
       String sourceUrl,
       String extractionMethod,
-      JsonNode sourcePayload) {
+      JsonNode sourcePayload,
+      UUID duplicateOfRecipeId) {
     RecipeDto created =
         createRecipeInternal(userId, body, DataQuality.IMPORTED, VersionTrigger.IMPORT);
     RecipeImport provenance =
@@ -652,7 +684,7 @@ public class RecipeServiceImpl
             .sourceUrl(sourceUrl)
             .sourcePayload(sourcePayload)
             .extractionMethod(extractionMethod)
-            .duplicateOfRecipeId(null)
+            .duplicateOfRecipeId(duplicateOfRecipeId)
             .importedAt(Instant.now(clock))
             .importedByUserId(userId)
             .build();
@@ -1750,9 +1782,22 @@ public class RecipeServiceImpl
   @Override
   @Transactional(readOnly = true)
   public List<RecipeSubstitutionDto> getSubstitutionsForVersion(UUID versionId) {
-    return substitutionMapper.toDtoList(
-        substitutionRepository.findAllByVersionIdAndStateOrderByLastAppliedAtDesc(
-            versionId, SubstitutionState.ACCEPTED));
+    return getSubstitutionsForVersion(versionId, SubstitutionState.ACCEPTED);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<RecipeSubstitutionDto> getSubstitutionsForVersion(
+      UUID versionId, SubstitutionState state) {
+    // recipe-substitution-state-filter: null state = every state (state=ALL on the REST surface);
+    // explicit state routes through the original state predicate (default ACCEPTED preserved by
+    // the single-arg overload above).
+    List<RecipeSubstitution> rows =
+        state == null
+            ? substitutionRepository.findAllByVersionIdOrderByLastAppliedAtDesc(versionId)
+            : substitutionRepository.findAllByVersionIdAndStateOrderByLastAppliedAtDesc(
+                versionId, state);
+    return substitutionMapper.toDtoList(rows);
   }
 
   @Override

@@ -1,7 +1,9 @@
 package com.example.mealprep.recipe;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -40,6 +42,7 @@ import com.example.mealprep.recipe.domain.service.internal.RecipeServiceImpl;
 import com.example.mealprep.recipe.domain.service.internal.VersionDiffer;
 import com.example.mealprep.recipe.event.RecipeCreatedEvent;
 import com.example.mealprep.recipe.event.RecipeVersionCreatedEvent;
+import com.example.mealprep.recipe.exception.RecipeImportDuplicateException;
 import com.example.mealprep.recipe.testdata.RecipeTestData;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -157,6 +160,105 @@ class RecipeServiceImplTest {
     assertThat(eventCaptor.getAllValues())
         .anyMatch(RecipeCreatedEvent.class::isInstance)
         .anyMatch(RecipeVersionCreatedEvent.class::isInstance);
+  }
+
+  // ------- dedup override matrix (recipe-import-dedup-consistency) -------
+
+  /** Candidate rows mirroring {@link RecipeTestData#defaultCreateRequest()}'s ingredient set. */
+  private void stubDedupCandidate(UUID userId, UUID candidateId) {
+    when(recipeRepository.findCurrentVersionIngredientKeysAndMethodCountForUser(userId))
+        .thenReturn(
+            List.of(
+                new Object[] {candidateId, "spaghetti.dry", 3L},
+                new Object[] {candidateId, "beef.mince", 3L},
+                new Object[] {candidateId, "tomato.passata", 3L}));
+  }
+
+  private static CreateRecipeRequest withOverride(CreateRecipeRequest base, UUID overrideId) {
+    return new CreateRecipeRequest(
+        base.name(),
+        base.description(),
+        base.ingredients(),
+        base.method(),
+        base.metadata(),
+        base.tags(),
+        overrideId);
+  }
+
+  @Test
+  void createRecipe_dedupHit_noOverride_throwsWithCandidateId() {
+    UUID userId = UUID.randomUUID();
+    UUID candidateId = UUID.randomUUID();
+    stubDedupCandidate(userId, candidateId);
+
+    assertThatThrownBy(() -> service().createRecipe(userId, RecipeTestData.defaultCreateRequest()))
+        .isInstanceOf(RecipeImportDuplicateException.class)
+        .satisfies(
+            ex -> {
+              RecipeImportDuplicateException dup = (RecipeImportDuplicateException) ex;
+              assertThat(dup.candidateRecipeId()).isEqualTo(candidateId);
+              assertThat(dup.ingredientOverlap()).isEqualTo(1.0);
+            });
+    verify(recipeRepository, never()).save(any(Recipe.class));
+  }
+
+  @Test
+  void createRecipe_dedupHit_overrideNamingExactCandidate_persists() {
+    UUID userId = UUID.randomUUID();
+    UUID candidateId = UUID.randomUUID();
+    stubDedupCandidate(userId, candidateId);
+    when(recipeRepository.save(any(Recipe.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(branchRepository.save(any(RecipeBranch.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(versionRepository.saveAndFlush(any(RecipeVersion.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(recipeRepository.saveAndFlush(any(Recipe.class))).thenAnswer(inv -> inv.getArgument(0));
+
+    RecipeDto dto =
+        service()
+            .createRecipe(userId, withOverride(RecipeTestData.defaultCreateRequest(), candidateId));
+
+    assertThat(dto).isNotNull();
+    assertThat(dto.name()).isEqualTo("Spaghetti Bolognese");
+    verify(recipeRepository).save(any(Recipe.class));
+  }
+
+  @Test
+  void createRecipe_dedupHit_overrideNamingDifferentId_stillThrows_noBlindForce() {
+    UUID userId = UUID.randomUUID();
+    UUID candidateId = UUID.randomUUID();
+    stubDedupCandidate(userId, candidateId);
+
+    assertThatThrownBy(
+            () ->
+                service()
+                    .createRecipe(
+                        userId,
+                        withOverride(RecipeTestData.defaultCreateRequest(), UUID.randomUUID())))
+        .isInstanceOf(RecipeImportDuplicateException.class)
+        .satisfies(
+            ex ->
+                assertThat(((RecipeImportDuplicateException) ex).candidateRecipeId())
+                    .isEqualTo(candidateId));
+    verify(recipeRepository, never()).save(any(Recipe.class));
+  }
+
+  @Test
+  void createRecipe_noCollision_overrideIsIgnored_persists() {
+    UUID userId = UUID.randomUUID();
+    when(recipeRepository.findCurrentVersionIngredientKeysAndMethodCountForUser(userId))
+        .thenReturn(List.of());
+    when(recipeRepository.save(any(Recipe.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(branchRepository.save(any(RecipeBranch.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(versionRepository.saveAndFlush(any(RecipeVersion.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(recipeRepository.saveAndFlush(any(Recipe.class))).thenAnswer(inv -> inv.getArgument(0));
+
+    RecipeDto dto =
+        service()
+            .createRecipe(
+                userId, withOverride(RecipeTestData.defaultCreateRequest(), UUID.randomUUID()));
+
+    assertThat(dto).isNotNull();
   }
 
   @Test

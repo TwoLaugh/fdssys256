@@ -2,8 +2,11 @@ package com.example.mealprep.recipe;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.atlassian.oai.validator.OpenApiInteractionValidator;
@@ -12,7 +15,12 @@ import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.testdata.AuthTestData;
+import com.example.mealprep.nutrition.api.dto.IngredientMappingSource;
+import com.example.mealprep.nutrition.api.dto.RecalculateRecipeNutritionRequest;
+import com.example.mealprep.nutrition.api.dto.RecipeNutritionResultDto;
+import com.example.mealprep.nutrition.domain.repository.IngredientMappingRepository;
 import com.example.mealprep.nutrition.spi.RecipeNutritionWriter;
+import com.example.mealprep.nutrition.testdata.NutritionTestData;
 import com.example.mealprep.recipe.api.dto.UpdateRecipeManualEditRequest;
 import com.example.mealprep.recipe.testdata.RecipeTestData;
 import com.example.mealprep.testsupport.OpenApiValidatorConfig;
@@ -20,6 +28,9 @@ import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.Cookie;
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -65,6 +76,7 @@ class RecipeNutritionWriterImplIT {
   @Autowired private JdbcTemplate jdbcTemplate;
   @Autowired private AuthProperties authProperties;
   @Autowired private RecipeNutritionWriter writer;
+  @Autowired private IngredientMappingRepository ingredientMappingRepository;
 
   @AfterEach
   void cleanup() {
@@ -123,6 +135,113 @@ class RecipeNutritionWriterImplIT {
             Long.class,
             recipeId);
     assertThat(count).isGreaterThanOrEqualTo(1L);
+  }
+
+  // ------- nutritionPerServing read-side exposure (recipe-version-nutrition-per-serving) -------
+
+  @Test
+  void recalcThenRead_roundTrip_nutritionPerServingOnVersionDto() throws Exception {
+    AuthedUser user = registerUser();
+    UUID recipeId = createRecipe(user);
+
+    // PENDING / not-yet-computed -> nutritionPerServing is null on the read (hero pills hidden).
+    MvcResult fresh =
+        mvc.perform(get("/api/v1/recipes/" + recipeId).cookie(user.cookie()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.currentVersionBody.nutritionPerServing").value(nullValue()))
+            .andExpect(openApi().isValid(openApiValidator))
+            .andReturn();
+    JsonNode freshBody = objectMapper.readTree(fresh.getResponse().getContentAsString());
+    UUID versionId = UUID.fromString(freshBody.get("currentVersionBody").get("id").asText());
+    UUID branchId = UUID.fromString(freshBody.get("currentBranchId").asText());
+
+    // Seed the mapping cache so the calc resolves all three default ingredients -> "calculated".
+    ingredientMappingRepository.save(
+        NutritionTestData.ingredientMapping("spaghetti.dry", IngredientMappingSource.USDA, 0.95));
+    ingredientMappingRepository.save(
+        NutritionTestData.ingredientMapping("beef.mince", IngredientMappingSource.USDA, 0.95));
+    ingredientMappingRepository.save(
+        NutritionTestData.ingredientMapping("tomato.passata", IngredientMappingSource.USDA, 0.95));
+
+    // Manual recalc (n1) persists the figures through the real writer bridge.
+    MvcResult recalc =
+        mvc.perform(
+                post(
+                        "/api/v1/nutrition/recipes/{recipeId}/versions/{versionId}/recalculate",
+                        recipeId,
+                        versionId)
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        objectMapper.writeValueAsString(
+                            new RecalculateRecipeNutritionRequest(branchId, 1))))
+            .andExpect(status().isOk())
+            .andExpect(openApi().isValid(openApiValidator))
+            .andReturn();
+    JsonNode recalcBody = objectMapper.readTree(recalc.getResponse().getContentAsString());
+    assertThat(recalcBody.get("nutritionStatus").asText()).isEqualTo("calculated");
+    int calories = recalcBody.get("caloriesPerServing").asInt();
+
+    // Read-after-write consistency: the next GET carries exactly what the recalc persisted - the
+    // hero pills are wireable from GET /recipes/{id} alone (no write op as a read workaround).
+    // (Figures may legitimately be 0 here: both compute paths currently pass gramsEstimate=null
+    // so each line contributes zero - calc accuracy is out of this ticket's scope.)
+    MvcResult reread =
+        mvc.perform(get("/api/v1/recipes/" + recipeId).cookie(user.cookie()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.nutritionStatus").value("CALCULATED"))
+            .andExpect(
+                jsonPath("$.currentVersionBody.nutritionPerServing.calories").value(calories))
+            .andExpect(jsonPath("$.currentVersionBody.nutritionPerServing.micros").exists())
+            .andExpect(openApi().isValid(openApiValidator))
+            .andReturn();
+    JsonNode stored =
+        objectMapper
+            .readTree(reread.getResponse().getContentAsString())
+            .get("currentVersionBody")
+            .get("nutritionPerServing");
+    assertThat(stored.get("proteinG").decimalValue())
+        .isEqualByComparingTo(recalcBody.get("proteinPerServingG").decimalValue());
+    assertThat(stored.get("carbsG").decimalValue())
+        .isEqualByComparingTo(recalcBody.get("carbsPerServingG").decimalValue());
+    assertThat(stored.get("fatG").decimalValue())
+        .isEqualByComparingTo(recalcBody.get("fatPerServingG").decimalValue());
+    assertThat(stored.get("fibreG").decimalValue())
+        .isEqualByComparingTo(recalcBody.get("fibrePerServingG").decimalValue());
+
+    // Now exercise the figure mapping with real non-zero numbers through the SAME published SPI
+    // seam the nutrition module writes through ("partial" -> figures present alongside the
+    // needs-review badge, per the ticket's PARTIAL edge case).
+    RecipeNutritionResultDto figured =
+        new RecipeNutritionResultDto(
+            recipeId,
+            520,
+            new BigDecimal("38.50"),
+            new BigDecimal("61.20"),
+            new BigDecimal("14.80"),
+            new BigDecimal("6.10"),
+            Map.of("iron_mg", new BigDecimal("2.50")),
+            "partial",
+            List.of());
+    writer.writeNutritionPerServing(versionId, figured);
+
+    mvc.perform(get("/api/v1/recipes/" + recipeId).cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.nutritionStatus").value("PARTIAL"))
+        .andExpect(jsonPath("$.currentVersionBody.nutritionPerServing.calories").value(520))
+        .andExpect(jsonPath("$.currentVersionBody.nutritionPerServing.proteinG").value(38.50))
+        .andExpect(jsonPath("$.currentVersionBody.nutritionPerServing.fibreG").value(6.10))
+        .andExpect(jsonPath("$.currentVersionBody.nutritionPerServing.micros.iron_mg").value(2.50))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // Historical / by-number version read carries its own stored figures too.
+    mvc.perform(
+            get("/api/v1/recipes/" + recipeId + "/versions/1")
+                .param("branchId", branchId.toString())
+                .cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.nutritionPerServing.calories").value(520))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   // ---------------- helpers ----------------
