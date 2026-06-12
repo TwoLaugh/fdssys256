@@ -287,6 +287,57 @@ class GroceryOrderControllerIT {
     assertThat(reason).contains("AI cost cap");
   }
 
+  // ---------------- back-to-draft ----------------
+
+  @Test
+  void backToDraft_fromQuoted_returns200Draft_discardsQuote_reQuoteWorks() throws Exception {
+    AuthedUser user = registerUser();
+    UUID orderId = quotedOrder(user);
+
+    mvc.perform(post(BASE + "/" + orderId + "/back-to-draft").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("DRAFT"))
+        .andExpect(jsonPath("$.statusReason").value("reverted_from_quoted"))
+        .andExpect(jsonPath("$.quotedTotalPence").doesNotExist())
+        .andExpect(jsonPath("$.providerOrderId").doesNotExist())
+        .andExpect(jsonPath("$.lines[0].quotedUnitPence").doesNotExist())
+        .andExpect(jsonPath("$.lines[0].lineStatus").value("QUEUED"))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // The discarded quote's price observations remain — append-only history.
+    Long quoteRows =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM grocery_price_history WHERE source = 'QUOTE'", Long.class);
+    assertThat(quoteRows).isEqualTo(1L);
+
+    // The standard DRAFT → QUOTED edge works again after the revert (the re-edit cycle).
+    mvc.perform(post(BASE + "/" + orderId + "/quote").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("QUOTED"))
+        .andExpect(jsonPath("$.statusReason").doesNotExist());
+  }
+
+  @Test
+  void backToDraft_fromDraft_returns422_notRevertible() throws Exception {
+    AuthedUser user = registerUser();
+    enableProvider(user.cookie());
+    UUID listId = seedList(user.userId());
+    seedLine(listId, "white rice", "White rice", 500, 1);
+    UUID orderId = createDraft(user.cookie(), listId);
+
+    mvc.perform(post(BASE + "/" + orderId + "/back-to-draft").cookie(user.cookie()))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(jsonPath("$.currentStatus").value("DRAFT"));
+  }
+
+  @Test
+  void backToDraft_unknownOrder_returns404() throws Exception {
+    AuthedUser user = registerUser();
+
+    mvc.perform(post(BASE + "/" + UUID.randomUUID() + "/back-to-draft").cookie(user.cookie()))
+        .andExpect(status().isNotFound());
+  }
+
   // ---------------- place ----------------
 
   @Test

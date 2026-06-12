@@ -344,6 +344,10 @@ public class GroceryServiceImpl
             traceId(parent));
     UUID inventoryItemId =
         MarkBoughtInventoryBridge.firstInventoryItemId(importResult).orElse(null);
+    // Persist the inventory link so undo can drive the compensating reversal
+    // (grocery-undo-pantry-reversal). Null when the import wrote nothing (pantry tracking off).
+    line.setInventoryItemId(inventoryItemId);
+    shoppingListDataGateway.saveLine(line);
 
     eventPublisher.publishEvent(
         new ShoppingListItemMarkedBoughtEvent(
@@ -426,6 +430,17 @@ public class GroceryServiceImpl
     // ONE inventory call (one provisions event).
     GroceryImportResultDto importResult =
         markBoughtInventoryBridge.applyBulk(userId, request.store(), boughtLines, traceId(parent));
+    // Persist the per-line inventory link (matched by mapping key) so undo can drive the
+    // compensating reversal (grocery-undo-pantry-reversal). Lines whose key produced no inventory
+    // row keep a null link and undo skips the reversal for them.
+    Map<String, UUID> itemIdsByKey = MarkBoughtInventoryBridge.inventoryItemIdsByKey(importResult);
+    for (ShoppingListLine line : lines) {
+      UUID linkedItemId = itemIdsByKey.get(line.getIngredientMappingKey());
+      if (linkedItemId != null) {
+        line.setInventoryItemId(linkedItemId);
+        shoppingListDataGateway.saveLine(line);
+      }
+    }
     // Best-effort: stamp the (single, when present) inventory id back onto each result.
     UUID inventoryItemId =
         MarkBoughtInventoryBridge.firstInventoryItemId(importResult).orElse(null);
@@ -457,12 +472,16 @@ public class GroceryServiceImpl
   }
 
   /**
-   * Tier-2 undo (lld/grocery.md line 587 + 01d divergence). Reverses the GROCERY-side state only:
-   * line → {@code UNFILLED}, {@code bought_*} cleared, and a COMPENSATING price note appended (the
-   * append-only observation is NEVER deleted). There is no {@code reverseGroceryOrder} on the
-   * shipped {@code ProvisionUpdateService} — undo therefore CANNOT cleanly reverse the inventory
-   * add; it logs a WARN and the result carries the manual-correction caveat (the missing provisions
-   * reverse API is flagged as a provisions follow-up). 404 missing / 409 not-{@code BOUGHT}.
+   * Tier-2 undo (lld/grocery.md line 587 + grocery-undo-pantry-reversal ticket). Reverses the
+   * grocery-side state — line → {@code UNFILLED}, {@code bought_*} cleared, a COMPENSATING price
+   * note appended (the append-only observation is NEVER deleted) — and then drives a best-effort
+   * compensating reversal of the inventory add via the provisions public surface ({@link
+   * com.example.mealprep.provisions.domain.service.ProvisionUpdateService#reverseGroceryLineAdd}):
+   * decrement by the added amount, floored at zero; item gone/changed since → no-op; every branch
+   * is audited provisions-side with actor {@code GROCERY_IMPORT}. A line whose mark-bought wrote no
+   * inventory ({@code inventoryItemId == null} — pantry tracking off) skips the reversal (unchanged
+   * behaviour). The response stays 204 — the reversal outcome is observable in the pantry audit
+   * log. 404 missing / 409 not-{@code BOUGHT}.
    */
   @Override
   @Transactional
@@ -477,6 +496,11 @@ public class GroceryServiceImpl
 
     ShoppingList parent = line.getShoppingList();
     Instant now = clock.instant();
+
+    // Capture the reversal inputs BEFORE clearing the bought-* state.
+    UUID inventoryItemId = line.getInventoryItemId();
+    BigDecimal boughtQuantity = line.getBoughtQuantity();
+    String boughtUnit = line.getBoughtUnit();
 
     // Compensating observation (append-only): a superseding MANUAL row with zero/null price and a
     // note that the prior mark-bought was undone. Never delete the original.
@@ -501,17 +525,30 @@ public class GroceryServiceImpl
     line.setBoughtPricePence(null);
     line.setBoughtAt(null);
     line.setBoughtVia(null);
+    line.setInventoryItemId(null);
     shoppingListDataGateway.saveLine(line);
     shoppingListDataGateway.touchListVersion(parent);
 
-    // No provisions inventory-reverse API exists (verified against provisions-01h: there is no
-    // reverseGroceryOrder / un-apply on ProvisionUpdateService). FLAG as a provisions follow-up;
-    // inventory must be corrected manually.
-    log.warn(
-        "undoMarkBought reversed grocery-side state for line {} but the inventory add via"
-            + " applyGroceryOrder CANNOT be reversed — no reverseGroceryOrder API on"
-            + " ProvisionUpdateService (provisions follow-up). Inventory must be corrected manually.",
-        line.getId());
+    // Best-effort compensating reversal of the inventory add (cross-module via the published
+    // provisions service only). No link → the mark-bought wrote no inventory → nothing to reverse.
+    if (inventoryItemId != null) {
+      markBoughtInventoryBridge
+          .reverseSingle(actorUserId, inventoryItemId, boughtQuantity, boughtUnit)
+          .ifPresentOrElse(
+              item ->
+                  log.info(
+                      "undoMarkBought line {}: reversed inventory add on item {} (now {} {})",
+                      line.getId(),
+                      item.id(),
+                      item.quantity(),
+                      item.unit()),
+              () ->
+                  log.info(
+                      "undoMarkBought line {}: inventory item {} unchanged (gone or"
+                          + " non-reversible) — see the provisions audit log",
+                      line.getId(),
+                      inventoryItemId));
+    }
   }
 
   // ---- Tier-2 helpers ----

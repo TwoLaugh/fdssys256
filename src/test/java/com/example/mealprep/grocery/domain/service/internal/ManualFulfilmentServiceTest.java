@@ -169,8 +169,10 @@ class ManualFulfilmentServiceTest {
     assertThat(result.priceObservationId()).isEqualTo(obsId);
     assertThat(result.inventoryItemId()).isEqualTo(inventoryId);
     assertThat(result.note()).isNull();
+    // The inventory link is persisted on the line for a later undo reversal.
+    assertThat(l.getInventoryItemId()).isEqualTo(inventoryId);
 
-    verify(shoppingListDataGateway).saveLine(l);
+    verify(shoppingListDataGateway, times(2)).saveLine(l);
     verify(shoppingListDataGateway).touchListVersion(list);
 
     ArgumentCaptor<PriceObservationWriter.WriteCommand> cmd =
@@ -391,25 +393,55 @@ class ManualFulfilmentServiceTest {
         .isInstanceOf(ShoppingListLineNotFoundException.class);
   }
 
+  @Test
+  void bulk_persistsPerLineInventoryLink_matchedByMappingKey() {
+    ShoppingListLine a = line("flour", "1.000", "kg");
+    a.setEstimatedLinePence(100);
+    ShoppingListLine b = line("rice", "2.000", "kg");
+    b.setEstimatedLinePence(200);
+    when(shoppingListDataGateway.findLinesByIds(any())).thenReturn(new ArrayList<>(List.of(a, b)));
+    stubWriterReturns(UUID.randomUUID());
+
+    UUID flourItemId = UUID.randomUUID();
+    var flourItem =
+        org.mockito.Mockito.mock(com.example.mealprep.provisions.api.dto.InventoryItemDto.class);
+    when(flourItem.id()).thenReturn(flourItemId);
+    when(flourItem.ingredientMappingKey()).thenReturn("flour");
+    when(markBoughtInventoryBridge.applyBulk(any(), any(), any(), any()))
+        .thenReturn(
+            new GroceryImportResultDto(List.of(flourItem), List.of(), List.of(), List.of()));
+
+    service.bulkMarkBought(userId, bulkReq(List.of(a, b), 300));
+
+    // Only the line whose key produced an inventory row gets the link; the other stays null.
+    assertThat(a.getInventoryItemId()).isEqualTo(flourItemId);
+    assertThat(b.getInventoryItemId()).isNull();
+  }
+
   // ============================ undoMarkBought ============================
 
   @Test
-  void undo_boughtLine_revertsToUnfilled_writesCompensatingObservation_noInventoryReverse() {
+  void undo_boughtLine_revertsToUnfilled_writesCompensatingObservation_reversesInventory() {
+    UUID inventoryItemId = UUID.randomUUID();
     ShoppingListLine l = line("flour", "1.000", "kg");
     l.setFulfilmentStatus(LineFulfilmentStatus.BOUGHT);
     l.setBoughtQuantity(new BigDecimal("1.000"));
     l.setBoughtUnit("kg");
     l.setBoughtPricePence(250);
     l.setBoughtVia(BoughtVia.MANUAL);
+    l.setInventoryItemId(inventoryItemId);
     when(shoppingListDataGateway.findLineById(l.getId())).thenReturn(Optional.of(l));
     when(priceObservationWriter.write(any()))
         .thenAnswer(inv -> observationWithId(UUID.randomUUID()));
+    when(markBoughtInventoryBridge.reverseSingle(any(), any(), any(), any()))
+        .thenReturn(Optional.empty());
 
     service.undoMarkBought(l.getId(), userId);
 
     assertThat(l.getFulfilmentStatus()).isEqualTo(LineFulfilmentStatus.UNFILLED);
     assertThat(l.getBoughtPricePence()).isNull();
     assertThat(l.getBoughtVia()).isNull();
+    assertThat(l.getInventoryItemId()).isNull(); // the link is consumed by the undo
     verify(shoppingListDataGateway).saveLine(l);
     verify(shoppingListDataGateway).touchListVersion(list);
 
@@ -420,9 +452,29 @@ class ManualFulfilmentServiceTest {
     assertThat(cmd.getValue().paidTotalPence()).isNull();
     assertThat(cmd.getValue().note()).contains("undone");
 
-    // No provisions reverse API → no inventory reversal attempted.
+    // The inventory add is reversed with the BOUGHT-time values (captured before the clear),
+    // via the provisions public surface only.
+    verify(markBoughtInventoryBridge)
+        .reverseSingle(userId, inventoryItemId, new BigDecimal("1.000"), "kg");
     verify(markBoughtInventoryBridge, never()).applySingle(any(), any(), any(), any());
     verify(markBoughtInventoryBridge, never()).applyBulk(any(), any(), any(), any());
+  }
+
+  @Test
+  void undo_lineWithoutInventoryLink_skipsReversal_unchangedBehaviour() {
+    // Mark-bought wrote no inventory (pantry tracking off) → no link → no reversal attempted.
+    ShoppingListLine l = line("rice", "2.000", "kg");
+    l.setFulfilmentStatus(LineFulfilmentStatus.BOUGHT);
+    l.setBoughtQuantity(new BigDecimal("2.000"));
+    l.setBoughtUnit("kg");
+    l.setBoughtVia(BoughtVia.MANUAL);
+    l.setInventoryItemId(null);
+    when(shoppingListDataGateway.findLineById(l.getId())).thenReturn(Optional.of(l));
+
+    service.undoMarkBought(l.getId(), userId);
+
+    assertThat(l.getFulfilmentStatus()).isEqualTo(LineFulfilmentStatus.UNFILLED);
+    verify(markBoughtInventoryBridge, never()).reverseSingle(any(), any(), any(), any());
   }
 
   @Test

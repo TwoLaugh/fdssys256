@@ -1444,6 +1444,112 @@ public class ProvisionServiceImpl
     return groceryImportProcessor.process(userId, command, AuditActor.GROCERY_IMPORT);
   }
 
+  /** Audit-payload key marking a grocery-undo reversal row (and its skip reason, when skipped). */
+  static final String REVERSAL_NOTE = "groceryLineReversal";
+
+  @Override
+  @Transactional
+  public Optional<InventoryItemDto> reverseGroceryLineAdd(
+      UUID inventoryItemId, BigDecimal quantity, String unit, UUID actorUserId) {
+    Optional<InventoryItem> found =
+        inventoryItemRepository.findByIdAndUserId(inventoryItemId, actorUserId);
+    if (found.isEmpty()) {
+      // Row gone entirely (or not owned) — nothing to reverse, nothing to attach an audit row to.
+      log.info(
+          "grocery-line reversal: inventory item {} not found for user {} — no-op",
+          inventoryItemId,
+          actorUserId);
+      return Optional.empty();
+    }
+    InventoryItem item = found.get();
+    Instant now = Instant.now(clock);
+
+    if (item.getItemStatus() != ItemLifecycleStatus.ACTIVE) {
+      // Spoiled / exhausted / wasted since the add — no-op, but visible in the item history.
+      writeReversalAudit(
+          item, actorUserId, "item_" + item.getItemStatus().name().toLowerCase(), now);
+      return Optional.empty();
+    }
+    if (item.getTrackingMode() != TrackingMode.QUANTITY) {
+      // STATUS-tracked rows have no quantity to decrement; guessing would corrupt stock.
+      writeReversalAudit(item, actorUserId, "status_tracked", now);
+      return Optional.empty();
+    }
+    if (unit != null && item.getUnit() != null && !unit.equalsIgnoreCase(item.getUnit())) {
+      // Unit drifted since the add (user edit) — a raw numeric decrement would be wrong.
+      writeReversalAudit(item, actorUserId, "unit_mismatch", now);
+      return Optional.empty();
+    }
+    if (quantity == null || quantity.signum() <= 0) {
+      writeReversalAudit(item, actorUserId, "no_quantity", now);
+      return Optional.empty();
+    }
+
+    BigDecimal previous = item.getQuantity() == null ? BigDecimal.ZERO : item.getQuantity();
+    BigDecimal next = previous.subtract(quantity).max(BigDecimal.ZERO); // floor at zero
+    boolean floored = previous.compareTo(quantity) < 0;
+    item.setQuantity(next);
+    if (next.signum() == 0) {
+      item.setItemStatus(ItemLifecycleStatus.EXHAUSTED);
+    }
+    InventoryItem saved = inventoryItemRepository.saveAndFlush(item);
+
+    Map<String, Object> before = new LinkedHashMap<>();
+    before.put(FIELD_QUANTITY, previous);
+    Map<String, Object> after = new LinkedHashMap<>();
+    after.put(FIELD_QUANTITY, next);
+    after.put(REVERSAL_NOTE, floored ? "floored_at_zero" : "reversed");
+    auditLogRepository.save(
+        new InventoryAuditLog(
+            UUID.randomUUID(),
+            saved.getId(),
+            actorUserId,
+            AuditActor.GROCERY_IMPORT,
+            actorUserId,
+            FIELD_QUANTITY,
+            objectMapper.valueToTree(before),
+            objectMapper.valueToTree(after),
+            now));
+    eventPublisher.publishEvent(
+        new ItemQuantityAdjustedEvent(
+            actorUserId,
+            List.of(saved.getId()),
+            ItemAdjustmentSource.GROCERY_IMPORT,
+            currentTraceId(),
+            now));
+    log.info(
+        "grocery-line reversal: item {} {} from {} to {} (requested {})",
+        saved.getId(),
+        floored ? "floored" : "decremented",
+        previous,
+        next,
+        quantity);
+    return Optional.of(mapper.toDto(saved));
+  }
+
+  /** No-op reversal branches still leave a trace in the item's audit history (prev == new). */
+  private void writeReversalAudit(InventoryItem item, UUID actorUserId, String reason, Instant at) {
+    BigDecimal current = item.getQuantity();
+    Map<String, Object> before = new LinkedHashMap<>();
+    before.put(FIELD_QUANTITY, current);
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put(FIELD_QUANTITY, current);
+    payload.put(REVERSAL_NOTE, "skipped_" + reason);
+    auditLogRepository.save(
+        new InventoryAuditLog(
+            UUID.randomUUID(),
+            item.getId(),
+            actorUserId,
+            AuditActor.GROCERY_IMPORT,
+            actorUserId,
+            FIELD_QUANTITY,
+            objectMapper.valueToTree(before),
+            objectMapper.valueToTree(payload),
+            at));
+    log.info(
+        "grocery-line reversal: item {} skipped ({}) — inventory unchanged", item.getId(), reason);
+  }
+
   private String computeDedupeKey(CookEventCommand command) {
     String material =
         command.mealSlotId()

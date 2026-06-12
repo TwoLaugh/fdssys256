@@ -154,6 +154,8 @@ class ShoppingListCalculator {
             .planGeneration(planGeneration)
             .generatedAt(clock.instant())
             .estimatedTotalPence(cost.totalPence())
+            .estimatedTotalMinPence(cost.minPence())
+            .estimatedTotalMaxPence(cost.maxPence())
             .estimatedTotalCurrency(DEFAULT_CURRENCY)
             .costConfidence(cost.confidence())
             .staleIngredientCount(cost.staleCount())
@@ -361,6 +363,19 @@ class ShoppingListCalculator {
 
   // ---- Step 6 ---------------------------------------------------------------------------------
 
+  /**
+   * Step-6 cost projection. Alongside the point-estimate total, composes the list-level cost band
+   * (grocery-cost-variance ticket): per line, {@code lineMin = unitMin × packCount} and {@code
+   * lineMax = unitMax × packCount} where {@code unitMin}/{@code unitMax} come from the aggregate's
+   * {@code minPence}/{@code maxPence}, falling back to the point estimate when the aggregate
+   * carries no range (e.g. reference fallback). The per-line bounds are clamped around the point
+   * estimate ({@code unitMin = min(min, point)}, {@code unitMax = max(max, point)}) so the
+   * invariant {@code min ≤ estimatedTotal ≤ max} holds by construction even when reference prices
+   * and observations disagree. A line contributes to the band iff it contributes to the total
+   * (mirrors {@code estimatedTotalPence} exactly: no aggregate / no point estimate → nothing); no
+   * aggregates at all → all three totals null (cold start). Stale aggregates still count into the
+   * band — staleness is separately surfaced via {@code staleIngredientCount}.
+   */
   private CostProjection projectCost(UUID householdId, List<ShoppingListLine> lines) {
     Set<String> keys = new LinkedHashSet<>();
     for (ShoppingListLine line : lines) {
@@ -371,6 +386,8 @@ class ShoppingListCalculator {
 
     int staleCount = 0;
     long totalPence = 0;
+    long totalMinPence = 0;
+    long totalMaxPence = 0;
     boolean anyEstimate = false;
     BigDecimal weightedConfidenceSum = BigDecimal.ZERO; // sum(confidence * linePence)
     long confidenceWeightTotal = 0; // sum(linePence)
@@ -385,6 +402,10 @@ class ShoppingListCalculator {
       int packCount = line.getSuggestedPackCount() != null ? line.getSuggestedPackCount() : 1;
       int unitPence = agg.pointEstimatePence();
       int linePence = unitPence * packCount;
+      // Band inputs: aggregate min/max when present, the point estimate otherwise; always clamped
+      // around the point estimate so min ≤ point ≤ max per line (and therefore per list).
+      int unitMin = Math.min(agg.minPence() != null ? agg.minPence() : unitPence, unitPence);
+      int unitMax = Math.max(agg.maxPence() != null ? agg.maxPence() : unitPence, unitPence);
       line.setEstimatedUnitPence(unitPence);
       line.setEstimatedLinePence(linePence);
       line.setEstimatedConfidence(agg.confidence());
@@ -394,6 +415,8 @@ class ShoppingListCalculator {
       }
       anyEstimate = true;
       totalPence += linePence;
+      totalMinPence += (long) unitMin * packCount;
+      totalMaxPence += (long) unitMax * packCount;
       if (agg.confidence() != null && linePence > 0) {
         weightedConfidenceSum =
             weightedConfidenceSum.add(agg.confidence().multiply(BigDecimal.valueOf(linePence)));
@@ -402,17 +425,23 @@ class ShoppingListCalculator {
     }
 
     if (!anyEstimate) {
-      return new CostProjection(null, null, staleCount); // no aggregates at all → null totals
+      return new CostProjection(null, null, null, null, staleCount); // no aggregates → null totals
     }
     BigDecimal confidence =
         confidenceWeightTotal > 0
             ? weightedConfidenceSum.divide(
                 BigDecimal.valueOf(confidenceWeightTotal), 3, RoundingMode.HALF_UP)
             : null;
-    return new CostProjection((int) totalPence, confidence, staleCount);
+    return new CostProjection(
+        (int) totalPence, (int) totalMinPence, (int) totalMaxPence, confidence, staleCount);
   }
 
-  private record CostProjection(Integer totalPence, BigDecimal confidence, int staleCount) {}
+  private record CostProjection(
+      Integer totalPence,
+      Integer minPence,
+      Integer maxPence,
+      BigDecimal confidence,
+      int staleCount) {}
 
   // ---- helpers --------------------------------------------------------------------------------
 

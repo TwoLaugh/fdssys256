@@ -66,6 +66,12 @@ public class ShoppingList {
   @Column(name = "estimated_total_pence")
   private Integer estimatedTotalPence;
 
+  @Column(name = "estimated_total_min_pence")
+  private Integer estimatedTotalMinPence;
+
+  @Column(name = "estimated_total_max_pence")
+  private Integer estimatedTotalMaxPence;
+
   @Column(name = "estimated_total_currency", nullable = false, length = 3)
   private String estimatedTotalCurrency;
 

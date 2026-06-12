@@ -47,11 +47,13 @@ import com.example.mealprep.grocery.event.GroceryOrderConfirmedEvent;
 import com.example.mealprep.grocery.event.GroceryOrderDeliveredEvent;
 import com.example.mealprep.grocery.event.GroceryOrderPlacedEvent;
 import com.example.mealprep.grocery.event.GroceryOrderQuotedEvent;
+import com.example.mealprep.grocery.event.GroceryOrderRevertedToDraftEvent;
 import com.example.mealprep.grocery.exception.GroceryOrderNotFoundException;
 import com.example.mealprep.grocery.exception.GrocerySubstitutionProposalNotFoundException;
 import com.example.mealprep.grocery.exception.IllegalOrderTransitionException;
 import com.example.mealprep.grocery.exception.IllegalSubstitutionStateException;
 import com.example.mealprep.grocery.exception.OrderConcurrencyConflictException;
+import com.example.mealprep.grocery.exception.OrderNotRevertibleException;
 import com.example.mealprep.grocery.exception.ProviderNotConfiguredException;
 import com.example.mealprep.grocery.testdata.GroceryTestData;
 import java.math.BigDecimal;
@@ -725,6 +727,76 @@ class GroceryOrderServiceImplTest {
     assertThatThrownBy(
             () -> service.cancel(USER_ID, new CancelOrderRequest(order.getId(), "too late")))
         .isInstanceOf(IllegalOrderTransitionException.class);
+  }
+
+  // ============================== backToDraft ==============================
+
+  @Test
+  void backToDraft_fromQuoted_revertsToDraft_discardsQuote_publishesEvent() {
+    GroceryOrderLine ln = line("flour", OrderLineStatus.ADDED);
+    ln.setQuotedUnitPence(120);
+    GroceryOrder order = order(GroceryOrderStatus.QUOTED, ln);
+    order.setProviderOrderId("prov-order");
+    order.setQuotedTotalPence(240);
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+
+    service.backToDraft(USER_ID, order.getId());
+
+    assertThat(order.getStatus()).isEqualTo(GroceryOrderStatus.DRAFT);
+    assertThat(order.getStatusReason()).isEqualTo("reverted_from_quoted");
+    assertThat(order.getProviderOrderId()).isNull();
+    assertThat(order.getQuotedTotalPence()).isNull();
+    assertThat(ln.getQuotedUnitPence()).isNull();
+    assertThat(ln.getLineStatus()).isEqualTo(OrderLineStatus.QUEUED);
+    verify(dataGateway).saveOrder(order);
+
+    ArgumentCaptor<GroceryOrderRevertedToDraftEvent> evt =
+        ArgumentCaptor.forClass(GroceryOrderRevertedToDraftEvent.class);
+    verify(eventPublisher).publishEvent(evt.capture());
+    assertThat(evt.getValue().groceryOrderId()).isEqualTo(order.getId());
+    assertThat(evt.getValue().discardedQuotedTotalPence()).isEqualTo(240);
+    assertThat(evt.getValue().occurredAt()).isEqualTo(NOW);
+  }
+
+  @Test
+  void backToDraft_fromDraft_throws422_notRevertible() {
+    GroceryOrder order = order(GroceryOrderStatus.DRAFT, line("flour", OrderLineStatus.QUEUED));
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+
+    assertThatThrownBy(() -> service.backToDraft(USER_ID, order.getId()))
+        .isInstanceOf(OrderNotRevertibleException.class);
+    assertThat(order.getStatus()).isEqualTo(GroceryOrderStatus.DRAFT);
+    verify(dataGateway, never()).saveOrder(any());
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  void backToDraft_fromPlaced_throws422_notRevertible() {
+    GroceryOrder order = order(GroceryOrderStatus.PLACED, line("flour", OrderLineStatus.ADDED));
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+
+    assertThatThrownBy(() -> service.backToDraft(USER_ID, order.getId()))
+        .isInstanceOf(OrderNotRevertibleException.class)
+        .hasMessageContaining("PLACED");
+    assertThat(order.getStatus()).isEqualTo(GroceryOrderStatus.PLACED);
+  }
+
+  @Test
+  void backToDraft_orderNotOwned_throws404() {
+    GroceryOrder order = order(GroceryOrderStatus.QUOTED, line("flour", OrderLineStatus.ADDED));
+    when(dataGateway.findOrderWithLinesById(order.getId())).thenReturn(Optional.of(order));
+
+    assertThatThrownBy(() -> service.backToDraft(UUID.randomUUID(), order.getId()))
+        .isInstanceOf(GroceryOrderNotFoundException.class);
+  }
+
+  @Test
+  void backToDraft_orderMissing_throws404() {
+    UUID missing = UUID.randomUUID();
+    when(dataGateway.findOrderWithLinesById(missing)).thenReturn(Optional.empty());
+
+    assertThatThrownBy(() -> service.backToDraft(USER_ID, missing))
+        .isInstanceOf(GroceryOrderNotFoundException.class);
   }
 
   // ============================== markUserConfirmed ==============================

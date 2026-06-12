@@ -20,6 +20,7 @@ import com.example.mealprep.provisions.api.dto.UpsertEquipmentRequest;
 import com.example.mealprep.provisions.api.dto.UpsertSupplierProductRequest;
 import com.example.mealprep.provisions.api.dto.WasteEntryDto;
 import com.example.mealprep.provisions.domain.entity.AuditActor;
+import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -217,4 +218,27 @@ public interface ProvisionUpdateService {
    * "partial failure"; the grocery module is responsible for "of 5 ordered, 3 arrived").
    */
   GroceryImportResultDto applyGroceryOrder(UUID userId, GroceryOrderImportCommand command);
+
+  /**
+   * Best-effort compensating reversal of a single grocery-line inventory add
+   * (tickets/frontend-gaps/grocery-undo-pantry-reversal.md) — the undo half of a mark-bought {@link
+   * #applyGroceryOrder} line. Branches (every reachable-row branch writes an {@code actor =
+   * GROCERY_IMPORT} audit row so the reversal is visible in the item history):
+   *
+   * <ul>
+   *   <li>Item ACTIVE, QUANTITY-tracked, unit compatible → decrement by {@code quantity}, floored
+   *       at zero (never negative — provisions' standing guardrail); a zero result marks the row
+   *       {@code EXHAUSTED} (the creation-only add is thereby removed from active inventory).
+   *       Publishes {@code ItemQuantityAdjustedEvent(source = GROCERY_IMPORT)} at AFTER_COMMIT.
+   *   <li>Item ACTIVE but STATUS-tracked or unit-mismatched → no mutation; audit row records the
+   *       skip reason (a blind decrement across units/modes would corrupt stock).
+   *   <li>Item no longer ACTIVE (spoiled / exhausted / wasted since) → no-op; audit row records it.
+   *   <li>Item row missing or not owned by {@code actorUserId} → silent no-op (nothing to audit).
+   * </ul>
+   *
+   * <p>Never throws for any of the above outcomes — undo must stay 204 on the caller's side.
+   * Returns the updated item when a decrement happened, {@code Optional.empty()} otherwise.
+   */
+  Optional<InventoryItemDto> reverseGroceryLineAdd(
+      UUID inventoryItemId, BigDecimal quantity, String unit, UUID actorUserId);
 }

@@ -257,6 +257,8 @@ class ShoppingListServiceImplTest {
         NOW,
         null,
         null,
+        null,
+        null,
         "GBP",
         null,
         0,

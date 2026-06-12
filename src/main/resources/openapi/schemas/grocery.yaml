@@ -98,6 +98,17 @@ ShoppingListDto:
     estimatedTotalPence:
       type: integer
       nullable: true
+    # Cost-variance band (grocery-cost-variance ticket): list-level bounds summed from the
+    # per-line price-history aggregates. Null (alongside estimatedTotalPence) when no price data.
+    # Invariant: estimatedTotalMinPence <= estimatedTotalPence <= estimatedTotalMaxPence.
+    estimatedTotalMinPence:
+      type: integer
+      nullable: true
+      minimum: 0
+    estimatedTotalMaxPence:
+      type: integer
+      nullable: true
+      minimum: 0
     estimatedTotalCurrency: { type: string, maxLength: 3 }
     costConfidence:
       type: number

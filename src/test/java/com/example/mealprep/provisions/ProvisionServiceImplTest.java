@@ -551,6 +551,157 @@ class ProvisionServiceImplTest {
     verifyNoInteractions(eventPublisher);
   }
 
+  // ---------------- reverseGroceryLineAdd (grocery-undo-pantry-reversal) ----------------
+
+  @Test
+  void reverseGroceryLineAdd_fullDecrementToZero_marksExhausted_writesAudit_publishesEvent() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId).quantity(new BigDecimal("2.000")).build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    var result =
+        service().reverseGroceryLineAdd(item.getId(), new BigDecimal("2.000"), "g", userId);
+
+    assertThat(result).isPresent();
+    assertThat(item.getQuantity()).isEqualByComparingTo("0");
+    assertThat(item.getItemStatus()).isEqualTo(ItemLifecycleStatus.EXHAUSTED);
+
+    ArgumentCaptor<InventoryAuditLog> audit = ArgumentCaptor.forClass(InventoryAuditLog.class);
+    verify(auditLogRepository).save(audit.capture());
+    assertThat(audit.getValue().getActor()).isEqualTo(AuditActor.GROCERY_IMPORT);
+    assertThat(audit.getValue().getActorUserId()).isEqualTo(userId);
+    assertThat(audit.getValue().getNewValueJson().get("groceryLineReversal").asText())
+        .isEqualTo("reversed");
+
+    ArgumentCaptor<com.example.mealprep.provisions.event.ItemQuantityAdjustedEvent> evt =
+        ArgumentCaptor.forClass(
+            com.example.mealprep.provisions.event.ItemQuantityAdjustedEvent.class);
+    verify(eventPublisher).publishEvent(evt.capture());
+    assertThat(evt.getValue().source())
+        .isEqualTo(com.example.mealprep.provisions.event.ItemAdjustmentSource.GROCERY_IMPORT);
+    assertThat(evt.getValue().affectedItemIds()).containsExactly(item.getId());
+  }
+
+  @Test
+  void reverseGroceryLineAdd_partialRemainder_decrementsExactly_staysActive() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId).quantity(new BigDecimal("5.000")).build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    var result =
+        service().reverseGroceryLineAdd(item.getId(), new BigDecimal("2.000"), "g", userId);
+
+    assertThat(result).isPresent();
+    assertThat(item.getQuantity()).isEqualByComparingTo("3.000");
+    assertThat(item.getItemStatus()).isEqualTo(ItemLifecycleStatus.ACTIVE);
+  }
+
+  @Test
+  void reverseGroceryLineAdd_partiallyConsumedSince_flooredAtZero_auditSaysFloored() {
+    UUID userId = UUID.randomUUID();
+    // Only 1.0 left of an added 2.0 (a cook event consumed the rest) → floor at zero, never -1.
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId).quantity(new BigDecimal("1.000")).build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+    when(inventoryItemRepository.saveAndFlush(any(InventoryItem.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    var result =
+        service().reverseGroceryLineAdd(item.getId(), new BigDecimal("2.000"), "g", userId);
+
+    assertThat(result).isPresent();
+    assertThat(item.getQuantity()).isEqualByComparingTo("0");
+    assertThat(item.getItemStatus()).isEqualTo(ItemLifecycleStatus.EXHAUSTED);
+
+    ArgumentCaptor<InventoryAuditLog> audit = ArgumentCaptor.forClass(InventoryAuditLog.class);
+    verify(auditLogRepository).save(audit.capture());
+    assertThat(audit.getValue().getNewValueJson().get("groceryLineReversal").asText())
+        .isEqualTo("floored_at_zero");
+  }
+
+  @Test
+  void reverseGroceryLineAdd_itemMissing_isSilentNoop() {
+    UUID userId = UUID.randomUUID();
+    UUID missing = UUID.randomUUID();
+    when(inventoryItemRepository.findByIdAndUserId(missing, userId)).thenReturn(Optional.empty());
+
+    var result = service().reverseGroceryLineAdd(missing, new BigDecimal("1.000"), "g", userId);
+
+    assertThat(result).isEmpty();
+    verifyNoInteractions(auditLogRepository);
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  void reverseGroceryLineAdd_itemSpoiledSince_noop_butAudited() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item =
+        ProvisionsTestData.quantityTrackedItem(userId)
+            .itemStatus(ItemLifecycleStatus.SPOILED)
+            .build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    var result =
+        service().reverseGroceryLineAdd(item.getId(), new BigDecimal("1.000"), "g", userId);
+
+    assertThat(result).isEmpty();
+    assertThat(item.getQuantity()).isEqualByComparingTo("250.000"); // untouched
+    verify(inventoryItemRepository, never()).saveAndFlush(any(InventoryItem.class));
+
+    ArgumentCaptor<InventoryAuditLog> audit = ArgumentCaptor.forClass(InventoryAuditLog.class);
+    verify(auditLogRepository).save(audit.capture());
+    assertThat(audit.getValue().getActor()).isEqualTo(AuditActor.GROCERY_IMPORT);
+    assertThat(audit.getValue().getNewValueJson().get("groceryLineReversal").asText())
+        .isEqualTo("skipped_item_spoiled");
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  void reverseGroceryLineAdd_statusTrackedItem_noop_butAudited() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item = ProvisionsTestData.statusTrackedItem(userId).build();
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    var result =
+        service().reverseGroceryLineAdd(item.getId(), new BigDecimal("1.000"), "items", userId);
+
+    assertThat(result).isEmpty();
+    verify(inventoryItemRepository, never()).saveAndFlush(any(InventoryItem.class));
+    ArgumentCaptor<InventoryAuditLog> audit = ArgumentCaptor.forClass(InventoryAuditLog.class);
+    verify(auditLogRepository).save(audit.capture());
+    assertThat(audit.getValue().getNewValueJson().get("groceryLineReversal").asText())
+        .isEqualTo("skipped_status_tracked");
+  }
+
+  @Test
+  void reverseGroceryLineAdd_unitMismatch_noop_butAudited() {
+    UUID userId = UUID.randomUUID();
+    InventoryItem item = ProvisionsTestData.quantityTrackedItem(userId).build(); // unit "g"
+    when(inventoryItemRepository.findByIdAndUserId(item.getId(), userId))
+        .thenReturn(Optional.of(item));
+
+    var result =
+        service().reverseGroceryLineAdd(item.getId(), new BigDecimal("1.000"), "kg", userId);
+
+    assertThat(result).isEmpty();
+    assertThat(item.getQuantity()).isEqualByComparingTo("250.000"); // no blind cross-unit maths
+    ArgumentCaptor<InventoryAuditLog> audit = ArgumentCaptor.forClass(InventoryAuditLog.class);
+    verify(auditLogRepository).save(audit.capture());
+    assertThat(audit.getValue().getNewValueJson().get("groceryLineReversal").asText())
+        .isEqualTo("skipped_unit_mismatch");
+  }
+
   // ---------------- softDeleteInventoryItem ----------------
 
   @Test

@@ -42,12 +42,14 @@ import com.example.mealprep.grocery.event.GroceryOrderConfirmedEvent;
 import com.example.mealprep.grocery.event.GroceryOrderDeliveredEvent;
 import com.example.mealprep.grocery.event.GroceryOrderPlacedEvent;
 import com.example.mealprep.grocery.event.GroceryOrderQuotedEvent;
+import com.example.mealprep.grocery.event.GroceryOrderRevertedToDraftEvent;
 import com.example.mealprep.grocery.event.GroceryProviderUnavailableEvent;
 import com.example.mealprep.grocery.event.SubstitutionResolvedEvent;
 import com.example.mealprep.grocery.exception.GroceryOrderNotFoundException;
 import com.example.mealprep.grocery.exception.GrocerySubstitutionProposalNotFoundException;
 import com.example.mealprep.grocery.exception.IllegalSubstitutionStateException;
 import com.example.mealprep.grocery.exception.OrderConcurrencyConflictException;
+import com.example.mealprep.grocery.exception.OrderNotRevertibleException;
 import com.example.mealprep.grocery.exception.ProviderNotConfiguredException;
 import java.time.Clock;
 import java.time.Instant;
@@ -409,6 +411,44 @@ public class GroceryOrderServiceImpl implements GroceryOrderService {
     eventPublisher.publishEvent(
         new GroceryOrderPlacedEvent(
             userId, order.getId(), order.getConfirmLink(), partial, order.getTraceId(), now));
+    return reload(order.getId());
+  }
+
+  /**
+   * {@code backToDraft} ({@code QUOTED → DRAFT}) — the re-edit revert
+   * (grocery-provisions-p3-clarifications item 1). Only legal from {@code QUOTED}: any other state
+   * → {@link OrderNotRevertibleException} (422). Discards the stale quote — {@code
+   * provider_order_id}, {@code quoted_total_pence}, and the per-line quoted prices are cleared and
+   * the line statuses reset to {@code QUEUED} — so a later re-quote starts clean ({@code DRAFT →
+   * QUOTED} is the standard edge). The QUOTE price observations already written are append-only
+   * history and are NOT deleted. Audited via {@code status_reason = "reverted_from_quoted"} on the
+   * entity + a {@link GroceryOrderRevertedToDraftEvent}.
+   */
+  @Override
+  @Transactional
+  public GroceryOrderDto backToDraft(UUID userId, UUID orderId) {
+    GroceryOrder order = loadOwnedOrderWithLines(userId, orderId);
+    if (order.getStatus() != GroceryOrderStatus.QUOTED) {
+      throw new OrderNotRevertibleException(orderId, order.getStatus());
+    }
+    // Belt-and-braces: the QUOTED → DRAFT edge is in the state-machine table (LLD lines 780-796).
+    stateMachine.assertCanTransition(order.getStatus(), GroceryOrderStatus.DRAFT);
+
+    Instant now = clock.instant();
+    Integer discardedQuoteTotal = order.getQuotedTotalPence();
+    order.setProviderOrderId(null);
+    order.setQuotedTotalPence(null);
+    for (GroceryOrderLine line : order.getLines()) {
+      line.setQuotedUnitPence(null);
+      line.setLineStatus(OrderLineStatus.QUEUED);
+    }
+    order.setStatus(GroceryOrderStatus.DRAFT);
+    order.setStatusReason("reverted_from_quoted");
+    dataGateway.saveOrder(order);
+
+    eventPublisher.publishEvent(
+        new GroceryOrderRevertedToDraftEvent(
+            userId, order.getId(), discardedQuoteTotal, order.getTraceId(), now));
     return reload(order.getId());
   }
 

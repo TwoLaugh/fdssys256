@@ -18,6 +18,7 @@ public sealed interface GroceryOrderLifecycleEvent
         GroceryOrderConfirmedEvent,
         GroceryOrderDeliveredEvent,
         GroceryOrderReconciledEvent,
+        GroceryOrderRevertedToDraftEvent,
         GroceryOrderCancelledEvent {
 
   UUID userId();

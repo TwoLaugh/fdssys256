@@ -268,6 +268,9 @@ class ShoppingListCalculatorTest {
     assertThat(flour.getEstimatedUnitPence()).isEqualTo(80);
     assertThat(flour.getEstimatedLinePence()).isEqualTo(80); // 1 pack × 80
     assertThat(list.getEstimatedTotalPence()).isEqualTo(80);
+    // Degenerate band: the helper aggregate has min == max == point estimate.
+    assertThat(list.getEstimatedTotalMinPence()).isEqualTo(80);
+    assertThat(list.getEstimatedTotalMaxPence()).isEqualTo(80);
     assertThat(list.getCostConfidence()).isEqualByComparingTo("0.900");
     assertThat(list.getStaleIngredientCount()).isZero();
   }
@@ -300,7 +303,103 @@ class ShoppingListCalculatorTest {
 
     assertThat(list.getEstimatedTotalPence()).isNull();
     assertThat(list.getCostConfidence()).isNull();
+    assertThat(list.getEstimatedTotalMinPence()).isNull(); // cold start — band omitted with total
+    assertThat(list.getEstimatedTotalMaxPence()).isNull();
     assertThat(line(list, "flour")).isNotNull();
+  }
+
+  // ---- Step 6: cost-variance band (grocery-cost-variance ticket) ------------------------------
+
+  @Test
+  void costBand_allLinesPriced_sumsPerLineMinAndMax_scaledByPackCount() {
+    RecipeDto recipe = recipe("flour", "1500", "g", 1); // 2 × 1000g packs
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    when(shoppingListDataGateway.findPacksByKey("flour"))
+        .thenReturn(List.of(packKey("flour", 1000, 1)));
+    when(priceHistoryService.getAggregatesByKeys(any(), anyCollection()))
+        .thenReturn(Map.of("flour", aggregateWithRange("flour", 80, 70, 95, "0.900", false)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    int packCount = line(list, "flour").getSuggestedPackCount();
+    assertThat(list.getEstimatedTotalPence()).isEqualTo(80 * packCount);
+    assertThat(list.getEstimatedTotalMinPence()).isEqualTo(70 * packCount);
+    assertThat(list.getEstimatedTotalMaxPence()).isEqualTo(95 * packCount);
+    assertThat(list.getEstimatedTotalMinPence()).isLessThanOrEqualTo(list.getEstimatedTotalPence());
+    assertThat(list.getEstimatedTotalPence()).isLessThanOrEqualTo(list.getEstimatedTotalMaxPence());
+  }
+
+  @Test
+  void costBand_aggregateWithoutRange_contributesPointEstimateToBothBounds() {
+    // Reference-fallback shape: point estimate present, min/max null.
+    RecipeDto recipe = recipe("flour", "750", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    when(priceHistoryService.getAggregatesByKeys(any(), anyCollection()))
+        .thenReturn(Map.of("flour", aggregateWithRange("flour", 80, null, null, "0.150", false)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    assertThat(list.getEstimatedTotalPence()).isEqualTo(80);
+    assertThat(list.getEstimatedTotalMinPence()).isEqualTo(80);
+    assertThat(list.getEstimatedTotalMaxPence()).isEqualTo(80);
+  }
+
+  @Test
+  void costBand_mixedLines_unpricedLineContributesNothing_mirrorsTotalRule() {
+    RecipeDto flour = recipe("flour", "750", "g", 1);
+    RecipeDto rice = recipe("rice", "500", "g", 1);
+    when(recipeQueryService.getById(flour.id())).thenReturn(Optional.of(flour));
+    when(recipeQueryService.getById(rice.id())).thenReturn(Optional.of(rice));
+    PlanDto plan = planWith(slot(flour), slot(rice));
+    // Only flour priced (with a range); rice has NO aggregate → contributes to neither total nor
+    // band (the documented mirror rule).
+    when(priceHistoryService.getAggregatesByKeys(any(), anyCollection()))
+        .thenReturn(Map.of("flour", aggregateWithRange("flour", 80, 60, 100, "0.900", false)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    assertThat(list.getEstimatedTotalPence()).isEqualTo(80);
+    assertThat(list.getEstimatedTotalMinPence()).isEqualTo(60);
+    assertThat(list.getEstimatedTotalMaxPence()).isEqualTo(100);
+    assertThat(list.getStaleIngredientCount()).isEqualTo(1); // the unpriced rice line
+  }
+
+  @Test
+  void costBand_pointEstimateOutsideAggregateRange_bandClampedAroundPoint() {
+    // Reference price vs observations disagree: point estimate 50 sits BELOW the observed
+    // min 60 — the band widens to include the point so min ≤ estimate ≤ max always holds.
+    RecipeDto recipe = recipe("flour", "750", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    when(priceHistoryService.getAggregatesByKeys(any(), anyCollection()))
+        .thenReturn(Map.of("flour", aggregateWithRange("flour", 50, 60, 100, "0.500", false)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    assertThat(list.getEstimatedTotalPence()).isEqualTo(50);
+    assertThat(list.getEstimatedTotalMinPence()).isEqualTo(50); // clamped down to the point
+    assertThat(list.getEstimatedTotalMaxPence()).isEqualTo(100);
+    assertThat(list.getEstimatedTotalMinPence()).isLessThanOrEqualTo(list.getEstimatedTotalPence());
+    assertThat(list.getEstimatedTotalPence()).isLessThanOrEqualTo(list.getEstimatedTotalMaxPence());
+  }
+
+  @Test
+  void costBand_staleAggregate_stillCountsIntoBand() {
+    RecipeDto recipe = recipe("flour", "750", "g", 1);
+    when(recipeQueryService.getById(recipe.id())).thenReturn(Optional.of(recipe));
+    PlanDto plan = planWith(slot(recipe));
+    when(priceHistoryService.getAggregatesByKeys(any(), anyCollection()))
+        .thenReturn(Map.of("flour", aggregateWithRange("flour", 80, 70, 95, "0.400", true)));
+
+    ShoppingList list = calculator.calculate(USER, plan, 1);
+
+    // Staleness is surfaced via staleIngredientCount, not by dropping the line from the band.
+    assertThat(list.getStaleIngredientCount()).isEqualTo(1);
+    assertThat(list.getEstimatedTotalPence()).isEqualTo(80);
+    assertThat(list.getEstimatedTotalMinPence()).isEqualTo(70);
+    assertThat(list.getEstimatedTotalMaxPence()).isEqualTo(95);
   }
 
   // ---- recipe read invocation count (chattiness probe) ----------------------------------------
@@ -558,6 +657,20 @@ class ShoppingListCalculatorTest {
       String key, Integer unitPence, String conf, boolean stale) {
     return new PriceAggregateDto(
         key, null, unitPence, new BigDecimal(conf), unitPence, unitPence, NOW, NOW, NOW, 3, stale);
+  }
+
+  /**
+   * Explicit min/max overload for the cost-band matrix (null min/max = no range, e.g. reference).
+   */
+  private static PriceAggregateDto aggregateWithRange(
+      String key,
+      Integer unitPence,
+      Integer minPence,
+      Integer maxPence,
+      String conf,
+      boolean stale) {
+    return new PriceAggregateDto(
+        key, null, unitPence, new BigDecimal(conf), minPence, maxPence, NOW, NOW, NOW, 3, stale);
   }
 
   private static ShoppingListLine line(ShoppingList list, String key) {
