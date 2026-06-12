@@ -4,6 +4,7 @@ import { Activity } from "./pages/Activity";
 import { Admin } from "./pages/Admin";
 import { Discover } from "./pages/Discover";
 import { Groceries } from "./pages/Groceries";
+import { InviteAccept } from "./pages/InviteAccept";
 import { Login } from "./pages/Login";
 import { Notifications } from "./pages/Notifications";
 import { Nutrition } from "./pages/Nutrition";
@@ -39,6 +40,8 @@ export function App() {
           <Route path="/activity" element={<Activity />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/settings" element={<Settings />} />
+          {/* Invite accept: its own deep-link surface (settings.md §3d). */}
+          <Route path="/invite" element={<InviteAccept />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="*" element={<Stub title="Not found" route="404" />} />
         </Route>

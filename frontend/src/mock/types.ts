@@ -298,23 +298,50 @@ export interface PantryState {
   supplierProducts: SupplierProductDto[];
 }
 
-/* ---- notifications --------------------------------------------------------- */
+/* ---- notifications: backend DTO mirrors -------------------------------------------
+ * Contract shapes throughout (design/frontend/pages/notifications.md §2) —
+ * re-exported from the generated OpenAPI types like every other slice. The
+ * one deliberate widening: the Java NotificationKind enum has 10 values but
+ * the OpenAPI enum only 8 (spec §8 Q1), so the mock carries the union and
+ * the page footnotes the gap.
+ */
 
-export type NotificationKind =
-  | "plan"
-  | "recipe"
-  | "grocery"
-  | "order"
-  | "pantry"
-  | "expiry"
-  | "ai";
+export type NotificationKind = components["schemas"]["NotificationKind"];
+export type NotificationSeverity = components["schemas"]["NotificationSeverity"];
+export type NotificationStatus = components["schemas"]["NotificationStatus"];
+export type DeliveryChannel = components["schemas"]["DeliveryChannel"];
+export type DeliveryOutcome = components["schemas"]["DeliveryOutcome"];
+export type DeliverySkipReason = components["schemas"]["DeliverySkipReason"];
+export type NotificationDto = components["schemas"]["NotificationDto"];
+export type NotificationSummaryDto = components["schemas"]["NotificationSummaryDto"];
+export type NotificationPreferenceDto =
+  components["schemas"]["NotificationPreferenceDto"];
+export type UpdateNotificationPreferenceRequest =
+  components["schemas"]["UpdateNotificationPreferenceRequest"];
+export type DeliveryLogEntryDto = components["schemas"]["DeliveryLogEntryDto"];
+export type BulkReadRequest = components["schemas"]["BulkReadRequest"];
 
-export interface AppNotification {
-  id: string;
-  kind: NotificationKind;
-  title: string;
-  time: string;
-  read: boolean;
+/** The two Java-only kinds missing from schemas/notification.yaml (§8 Q1). */
+export type GapNotificationKind =
+  | "STAPLE_REPLENISHMENT_NEEDED"
+  | "FEEDBACK_CONFIRMATION";
+export type AnyNotificationKind = NotificationKind | GapNotificationKind;
+
+/** NotificationDto with `kind` widened to the full Java enum so the mock can
+ *  seed rows of the two contract-missing kinds (codegen types would fail to
+ *  parse these on the wire — exactly the gap the page footnotes). */
+export type MockNotificationDto = Omit<NotificationDto, "kind" | "payload"> & {
+  kind: AnyNotificationKind;
+  payload: { kind: AnyNotificationKind } & Record<string, unknown>;
+};
+
+export interface NotificationsState {
+  /** Every row the mock knows, ALL statuses, newest first (#1 filters). */
+  rows: MockNotificationDto[];
+  /** GET /notifications/preferences (#9) — auto-seeded server-side. */
+  prefs: NotificationPreferenceDto | null;
+  /** notificationId → delivery attempts newest first (#8, lazy drawer). */
+  deliveryLog: Record<string, DeliveryLogEntryDto[]>;
 }
 
 /* ---- adaptation -----------------------------------------------------------------
@@ -525,51 +552,106 @@ export interface ActivityState {
   composePrefill: string | null;
 }
 
-/* ---- notification preferences ----------------------------------------------------- */
+/* ---- household / settings: backend DTO mirrors -------------------------------------
+ * Contract shapes throughout (design/frontend/pages/settings.md §2).
+ */
 
-export interface NotificationPrefs {
-  /** Muted kinds drop out of the bell dropdown + rail badge. */
-  muted: NotificationKind[];
-  quietStart: string;
-  quietEnd: string;
-}
-
-/* ---- household / settings ----------------------------------------------------------- */
-
-export type MemberRole = "owner" | "adult" | "child";
-
-export interface HouseholdMember {
-  id: string;
-  name: string;
-  role: MemberRole;
-  /** Per-member identity dot (CSS colour value). */
-  color: string;
-}
-
-export interface PendingInvite {
-  email: string;
-  sent: string;
-}
-
-export interface SlotConfigEntry {
-  slot: MealSlotKey;
-  time: string;
-  /** Shared household meal vs per-person. */
-  shared: boolean;
-}
-
-export interface DayTypeSlots {
-  dayType: string;
-  slots: SlotConfigEntry[];
-}
+export type HouseholdRole = components["schemas"]["HouseholdRole"];
+export type HouseholdDto = components["schemas"]["HouseholdDto"];
+export type HouseholdMemberDto = components["schemas"]["HouseholdMemberDto"];
+export type HouseholdInviteDto = components["schemas"]["HouseholdInviteDto"];
+export type InviteStatus = components["schemas"]["InviteStatus"];
+export type CreateInviteRequest = components["schemas"]["CreateInviteRequest"];
+export type AcceptInviteRequest = components["schemas"]["AcceptInviteRequest"];
+export type ChangeRoleRequest = components["schemas"]["ChangeRoleRequest"];
+export type UpdateMemberRequest = components["schemas"]["UpdateMemberRequest"];
+export type SlotKind = components["schemas"]["SlotKind"];
+export type SlotDefault = components["schemas"]["SlotDefault"];
+export type CustomSlotDefinition = components["schemas"]["CustomSlotDefinition"];
+export type HouseholdSettingsDocument =
+  components["schemas"]["HouseholdSettingsDocument"];
+export type HouseholdSettingsDto = components["schemas"]["HouseholdSettingsDto"];
+export type UpdateHouseholdSettingsRequest =
+  components["schemas"]["UpdateHouseholdSettingsRequest"];
+export type HouseholdSettingsAuditEntryDto =
+  components["schemas"]["HouseholdSettingsAuditEntryDto"];
+export type SlotConfigurationDto = components["schemas"]["SlotConfigurationDto"];
+export type SlotConfigEntryDto = components["schemas"]["SlotConfigEntryDto"];
+export type PasswordChangeRequest = components["schemas"]["PasswordChangeRequest"];
+export type ProviderConnectionRequest =
+  components["schemas"]["ProviderConnectionRequest"];
 
 export interface HouseholdState {
-  name: string;
-  members: HouseholdMember[];
-  invites: PendingInvite[];
-  slotConfig: DayTypeSlots[];
-  /** Account email (display only). */
-  email: string;
+  /** GET /households/current (#1); null plays the 404 create/join empty state. */
+  current: HouseholdDto | null;
+  /** GET /households/{id}/settings (#3). */
+  settings: HouseholdSettingsDto | null;
+  /** Settings audit log newest first (#5, lazy drawer). */
+  settingsAudit: HouseholdSettingsAuditEntryDto[];
+  /** GET .../slot-configuration (#6) — the resolved planner read-back. */
+  resolved: SlotConfigurationDto | null;
+  /** Invites, all derived statuses; the panel lists PENDING (#7). Codes are
+   *  always null here — the 201 create response is the only reveal (§3b). */
+  invites: HouseholdInviteDto[];
+  /** Mock server secret: inviteId → one-time code, for /invite redemption. */
+  inviteCodes: Record<string, string>;
+}
+
+/* ---- session / auth (login.md) ------------------------------------------------------ */
+
+export type LoginResponse = components["schemas"]["LoginResponse"];
+export type UserDto = components["schemas"]["UserDto"];
+export type RegisterRequest = components["schemas"]["RegisterRequest"];
+export type LoginRequest = components["schemas"]["LoginRequest"];
+
+/** Fresh-account onboarding scratch: which wizard resources the §4 probe
+ *  chain should treat as missing. Null = probe the real store slices. */
+export interface FreshSetupFlags {
+  household: boolean;
+  constraints: boolean;
+  lifestyle: boolean;
+  targets: boolean;
+}
+
+export interface SessionState {
+  /** The /auth/me probe result; null = 401 → router-guard redirect (§5). */
+  user: LoginResponse | null;
+  /** 423/429 demo state: refuse login until this epoch-ms (Retry-After). */
+  lockedUntilMs: number | null;
+  lockKind: "locked" | "throttled" | null;
+  /** Consecutive failed logins this session (throttle counter). */
+  failedAttempts: number;
+  freshSetup: FreshSetupFlags | null;
+}
+
+/* ---- admin (admin.md) --------------------------------------------------------------- */
+
+export type AdminStatusDto = components["schemas"]["AdminStatusDto"];
+export type AiCallLogDto = components["schemas"]["AiCallLogDto"];
+export type AiTaskType = components["schemas"]["TaskType"];
+export type ModelTier = components["schemas"]["ModelTier"];
+export type PromptTemplateDto = components["schemas"]["PromptTemplateDto"];
+export type CostSummaryDto = components["schemas"]["CostSummaryDto"];
+export type CostSummaryUserEntry = components["schemas"]["CostSummaryUserEntry"];
+export type DecisionLogDto = components["schemas"]["DecisionLogDto"];
+export type AncestryResponse = components["schemas"]["AncestryResponse"];
+export type PlannerDecisionChainDto =
+  components["schemas"]["PlannerDecisionChainDto"];
+export type PlannerDecisionRowDto = components["schemas"]["PlannerDecisionRowDto"];
+
+export interface AdminState {
+  /** Mock stand-in for `mealprep.admin.user-ids` membership (demo both ways). */
+  allowlisted: boolean;
+  /** Lazy shell probe (#1) result this session; null = not yet probed (§5). */
+  probeOutcome: "admin" | "denied" | null;
+  status: AdminStatusDto;
+  /** AI call log, newest first (#3). */
+  callLog: AiCallLogDto[];
+  promptTemplates: PromptTemplateDto[];
+  /** Decision-log rows (#5/#6/#7 lookups walk this). */
+  decisions: DecisionLogDto[];
+  /** planId → planner decision chain (#8). */
+  plannerChains: Record<string, PlannerDecisionChainDto>;
 }
 
 /* ---- discovery: backend DTO mirrors ---------------------------------------------
@@ -621,13 +703,14 @@ export interface StoreState {
   recipeData: RecipeDataState;
   grocery: GroceryState;
   pantry: PantryState;
-  notifications: AppNotification[];
+  notifications: NotificationsState;
   nutrition: NutritionState;
   targets: TargetsDto;
   preferences: PreferencesState;
   activity: ActivityState;
-  notificationPrefs: NotificationPrefs;
   household: HouseholdState;
+  session: SessionState;
+  admin: AdminState;
   discovery: DiscoveryState;
   /** Transient toast stack (409-guard + confirmation messages). */
   toasts: ToastItem[];
