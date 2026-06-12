@@ -324,6 +324,10 @@ paths:
     $ref: 'paths/discovery.yaml#/discoverySources'
   /api/v1/discovery/sources/{sourceKey}:
     $ref: 'paths/discovery.yaml#/discoverySourceById'
+  /api/v1/discovery/sources/{sourceKey}/user-disable:
+    $ref: 'paths/discovery.yaml#/discoveryUserSourceDisable'
+  /api/v1/discovery/sources/{sourceKey}/user-enable:
+    $ref: 'paths/discovery.yaml#/discoveryUserSourceEnable'
   /api/v1/discovery/admin/sources/{sourceKey}/enable:
     $ref: 'paths/discovery.yaml#/discoveryAdminSourceEnable'
   /api/v1/discovery/admin/sources/{sourceKey}/disable:

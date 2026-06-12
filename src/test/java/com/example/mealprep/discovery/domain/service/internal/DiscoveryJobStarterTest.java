@@ -147,6 +147,51 @@ class DiscoveryJobStarterTest {
         .hasMessageContaining("unknown or disabled source keys");
   }
 
+  @Test
+  void startJobWithId_userDisabledSourceKey_throws_distinctMessage() {
+    // Naming a user-disabled source → 422 like an admin-disabled one, with the distinct
+    // "disabled by you" vocabulary (ticket discovery-user-source-disable).
+    DiscoverySource userDisabled = DiscoveryTestData.sampleSource("src_ud");
+    userDisabled.setUserDisabled(true);
+    when(sourceRepository.findBySourceKeyIn(anyList())).thenReturn(List.of(userDisabled));
+    StartDiscoveryJobRequest req =
+        new StartDiscoveryJobRequest(
+            DiscoveryJobTrigger.USER_INITIATED,
+            5,
+            DiscoveryTestData.sampleConstraints(),
+            List.of("src_ud"),
+            null);
+
+    assertThatThrownBy(() -> starter.startJobWithId(UUID.randomUUID(), req, UUID.randomUUID()))
+        .isInstanceOf(DiscoveryConstraintInvalidException.class)
+        .hasMessageContaining("disabled by you")
+        .hasMessageContaining("src_ud");
+  }
+
+  @Test
+  void startJobWithId_defaultSourceSet_excludesUserDisabledRows() {
+    // Default "all enabled sources" resolution applies enabled && !userDisabled: the
+    // user-disabled row must not land in the persisted sourcesRequested.
+    UUID userId = UUID.randomUUID();
+    UUID jobId = UUID.randomUUID();
+    DiscoverySource a = DiscoveryTestData.sampleSource("src_a");
+    DiscoverySource hidden = DiscoveryTestData.sampleSource("src_hidden");
+    hidden.setUserDisabled(true);
+    when(sourceRepository.findByEnabledTrue()).thenReturn(List.of(a, hidden));
+    when(jobRepository.saveAndFlush(any(DiscoveryJob.class))).thenAnswer(inv -> inv.getArgument(0));
+    when(jobMapper.toDto(any(DiscoveryJob.class)))
+        .thenReturn(stubDto(userId, DiscoveryJobStatus.QUEUED));
+
+    StartDiscoveryJobRequest req =
+        new StartDiscoveryJobRequest(
+            DiscoveryJobTrigger.COLD_START, 5, DiscoveryTestData.sampleConstraints(), null, null);
+    starter.startJobWithId(userId, req, jobId);
+
+    ArgumentCaptor<DiscoveryJob> savedJob = ArgumentCaptor.forClass(DiscoveryJob.class);
+    verify(jobRepository).saveAndFlush(savedJob.capture());
+    assertThat(savedJob.getValue().getSourcesRequested()).containsExactly("src_a");
+  }
+
   // ---------- @Transactional contract on the new bean ----------
 
   @Test

@@ -89,7 +89,15 @@ discoveryJobCancel:
   post:
     tags: [Discovery]
     operationId: cancelDiscoveryJob
-    summary: 'Cancel a queued discovery job. Idempotent for terminal states (returns 422).'
+    summary: 'Cancel a discovery job. QUEUED flips atomically to CANCELLED; RUNNING cancels are honoured asynchronously.'
+    description: >-
+      QUEUED → flipped atomically to CANCELLED, returned immediately (200). RUNNING → 200 with the
+      still-RUNNING DTO; an in-memory cancellation flag stops the runner between candidates, which
+      then finalises the job as CANCELLED keeping all counters and the already-ingested harvest
+      (cancellation keeps the harvest). Terminal states (SUCCEEDED, FAILED, PARTIAL, CANCELLED) →
+      422 discovery-job-already-terminal. CANCELLED status is the contract; errorSummary keeps
+      "cancelled by user" for one release for consumers still string-matching. FAILED is reserved
+      for genuine failures.
     security: [{ cookieAuth: [] }]
     parameters:
       - in: path
@@ -98,7 +106,7 @@ discoveryJobCancel:
         schema: { type: string, format: uuid }
     responses:
       '200':
-        description: 'Cancelled job DTO (status flipped to FAILED).'
+        description: 'Job DTO: CANCELLED (was QUEUED) or still-RUNNING (cancel honoured asynchronously).'
         content:
           application/json:
             schema: { $ref: '../schemas/discovery.yaml#/DiscoveryJobDto' }
@@ -113,7 +121,7 @@ discoveryJobCancel:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '422':
-        description: 'Already terminal or in-flight (01b limitation).'
+        description: 'Job already in a terminal state (SUCCEEDED, FAILED, PARTIAL, CANCELLED).'
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
@@ -200,11 +208,77 @@ discoverySourceById:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 
+discoveryUserSourceDisable:
+  post:
+    tags: [Discovery]
+    operationId: userDisableDiscoverySource
+    summary: 'User: disable a discovery source (idempotent). Sets userDisabled; the admin enabled flag is untouched.'
+    description: >-
+      Sets `userDisabled = true` on the source (idempotent — re-disabling returns 200 unchanged).
+      Effective availability for job-source resolution becomes `enabled && !userDisabled`: the
+      default "all enabled sources" set excludes user-disabled rows, and naming a user-disabled
+      source in sourceKeys[] yields 422 with a "disabled by you" message (distinct from the
+      admin-disabled "unknown or disabled" message). User endpoint — any authenticated user.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: sourceKey
+        required: true
+        schema: { type: string, maxLength: 64 }
+    responses:
+      '200':
+        description: 'Source user-disabled.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/discovery.yaml#/DiscoverySourceDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Source not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+discoveryUserSourceEnable:
+  post:
+    tags: [Discovery]
+    operationId: userEnableDiscoverySource
+    summary: 'User: re-enable a discovery source (idempotent). Clears userDisabled only.'
+    description: >-
+      Clears `userDisabled` (idempotent). An admin-disabled source stays unavailable — `enabled`
+      wins; the DTO carries both flags so the panel can caption correctly. User endpoint — any
+      authenticated user.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: sourceKey
+        required: true
+        schema: { type: string, maxLength: 64 }
+    responses:
+      '200':
+        description: 'Source user-enabled.'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/discovery.yaml#/DiscoverySourceDto' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'Source not found.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
 discoveryAdminSourceEnable:
   post:
     tags: [Discovery]
     operationId: enableDiscoverySource
-    summary: 'Admin: enable a discovery source (idempotent).'
+    summary: 'Admin: enable a discovery source (idempotent). Also clears userDisabled so a re-enabled source is visible again.'
     security: [{ cookieAuth: [] }]
     parameters:
       - in: path

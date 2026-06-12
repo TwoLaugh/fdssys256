@@ -26,6 +26,7 @@ public interface DiscoverySourceMapper {
         entity.getKind(),
         entity.getBaseUrl(),
         entity.isEnabled(),
+        entity.isUserDisabled(),
         entity.getRequestsPerMinute(),
         entity.getRequestsPerDay(),
         entity.isRespectRobotsTxt(),

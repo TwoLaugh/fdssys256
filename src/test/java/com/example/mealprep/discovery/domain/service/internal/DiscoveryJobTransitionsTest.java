@@ -370,7 +370,8 @@ class DiscoveryJobTransitionsTest {
   @Test
   void finaliseTo_runningJob_transitions_returnsPopulatedOptional() {
     // Pins the guard does NOT trip for RUNNING (the normal happy path) — boundary check vs
-    // the terminal-set membership.
+    // the terminal-set membership. The cancel finalisation now lands on CANCELLED (ticket
+    // discovery-cancelled-status), errorSummary kept as belt-and-braces.
     UUID jobId = UUID.randomUUID();
     DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
     job.setId(jobId);
@@ -380,12 +381,34 @@ class DiscoveryJobTransitionsTest {
 
     Optional<DiscoveryJob> result =
         transitions.finaliseTo(
-            jobId, DiscoveryJobStatus.FAILED, "cancelled by user", List.of(), List.of("src_a"));
+            jobId, DiscoveryJobStatus.CANCELLED, "cancelled by user", List.of(), List.of("src_a"));
 
     assertThat(result).isPresent();
-    assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.FAILED);
+    assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.CANCELLED);
     assertThat(job.getErrorSummary()).isEqualTo("cancelled by user");
     verify(jobRepository, times(1)).saveAndFlush(job);
+  }
+
+  @Test
+  void finaliseTo_alreadyTerminalCancelled_isNoop() {
+    // CANCELLED joins the terminal set: a stale crash/sweep callback must not overwrite a
+    // cancelled job back to FAILED (the existing double-finalise protection covers the new
+    // state — ticket discovery-cancelled-status edge-case checklist).
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
+    job.setId(jobId);
+    job.setStatus(DiscoveryJobStatus.CANCELLED);
+    job.setErrorSummary("cancelled by user");
+    when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+    Optional<DiscoveryJob> result =
+        transitions.finaliseTo(
+            jobId, DiscoveryJobStatus.FAILED, "stale crash", List.of(), List.of("src_a"));
+
+    assertThat(result).isEmpty();
+    verify(jobRepository, never()).saveAndFlush(any());
+    assertThat(job.getStatus()).isEqualTo(DiscoveryJobStatus.CANCELLED);
+    assertThat(job.getErrorSummary()).isEqualTo("cancelled by user");
   }
 
   @Test

@@ -199,7 +199,7 @@ class DiscoveryServiceImplTest {
   // ---------- cancelJob ----------
 
   @Test
-  void cancelJob_queued_flipsToFailed() {
+  void cancelJob_queued_flipsToCancelled() {
     UUID userId = UUID.randomUUID();
     UUID jobId = UUID.randomUUID();
     DiscoveryJob job = DiscoveryTestData.sampleJob(userId);
@@ -209,10 +209,11 @@ class DiscoveryServiceImplTest {
     // The QUEUED branch now flips via a status-guarded native UPDATE (round-8 retro: avoids
     // @Version race with the async runner; discovery-6 adds the AND status = 'QUEUED' guard).
     // Stub the rowcount = 1 (guard matched) and verify the call instead of asserting in-memory
-    // entity state (the service no longer mutates the loaded entity).
+    // entity state (the service no longer mutates the loaded entity). Status is CANCELLED per
+    // ticket discovery-cancelled-status; errorSummary keeps "cancelled by user" for one release.
     when(jobRepository.markCancelledIfQueued(
             org.mockito.ArgumentMatchers.eq(jobId),
-            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.FAILED),
+            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.CANCELLED),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("cancelled by user")))
         .thenReturn(1);
@@ -222,7 +223,7 @@ class DiscoveryServiceImplTest {
     verify(jobRepository)
         .markCancelledIfQueued(
             org.mockito.ArgumentMatchers.eq(jobId),
-            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.FAILED),
+            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.CANCELLED),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("cancelled by user"));
     verify(runner).requestCancellation(jobId);
@@ -244,7 +245,7 @@ class DiscoveryServiceImplTest {
     when(jobRepository.findByIdAndUserId(jobId, userId)).thenReturn(Optional.of(job));
     when(jobRepository.markCancelledIfQueued(
             org.mockito.ArgumentMatchers.eq(jobId),
-            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.FAILED),
+            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.CANCELLED),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("cancelled by user")))
         .thenReturn(0); // guard didn't match — runner won the claim race
@@ -267,7 +268,7 @@ class DiscoveryServiceImplTest {
     when(jobRepository.findByIdAndUserId(jobId, userId)).thenReturn(Optional.of(job));
     when(jobRepository.markCancelledIfQueued(
             org.mockito.ArgumentMatchers.eq(jobId),
-            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.FAILED),
+            org.mockito.ArgumentMatchers.eq(DiscoveryJobStatus.CANCELLED),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("cancelled by user")))
         .thenReturn(0);
@@ -296,6 +297,21 @@ class DiscoveryServiceImplTest {
     when(jobRepository.findByIdAndUserId(jobId, userId)).thenReturn(Optional.of(job));
     assertThatThrownBy(() -> service.cancelJob(userId, jobId))
         .isInstanceOf(DiscoveryJobAlreadyTerminalException.class);
+  }
+
+  @Test
+  void cancelJob_terminalStateCancelled_throws422() {
+    // CANCELLED is terminal too — a double cancel of an already-cancelled job keeps the 422
+    // contract (ticket discovery-cancelled-status behavioural spec).
+    UUID userId = UUID.randomUUID();
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(userId);
+    job.setId(jobId);
+    job.setStatus(DiscoveryJobStatus.CANCELLED);
+    when(jobRepository.findByIdAndUserId(jobId, userId)).thenReturn(Optional.of(job));
+    assertThatThrownBy(() -> service.cancelJob(userId, jobId))
+        .isInstanceOf(DiscoveryJobAlreadyTerminalException.class);
+    verify(runner, never()).requestCancellation(any());
   }
 
   @Test
@@ -353,6 +369,71 @@ class DiscoveryServiceImplTest {
   void enableSource_unknownKey_throws404() {
     when(sourceRepository.findBySourceKey("nope")).thenReturn(Optional.empty());
     assertThatThrownBy(() -> service.enableSource("nope"))
+        .isInstanceOf(DiscoverySourceNotFoundException.class);
+  }
+
+  // ---------- user disable / enable (ticket discovery-user-source-disable) ----------
+
+  @Test
+  void userDisableSource_setsUserDisabled_doesNotTouchEnabled() {
+    DiscoverySource src = DiscoveryTestData.sampleSource("src_a");
+    src.setEnabled(true);
+    src.setUserDisabled(false);
+    when(sourceRepository.findBySourceKey("src_a")).thenReturn(Optional.of(src));
+    when(sourceRepository.saveAndFlush(any(DiscoverySource.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(sourceMapper.toDto(any(DiscoverySource.class))).thenReturn(stubSourceDto(true));
+
+    DiscoverySourceDto dto = service.userDisableSource("src_a");
+
+    assertThat(dto).isNotNull();
+    assertThat(src.isUserDisabled()).isTrue();
+    assertThat(src.isEnabled()).isTrue(); // admin flag untouched
+  }
+
+  @Test
+  void userDisableSource_alreadyDisabled_idempotent200() {
+    DiscoverySource src = DiscoveryTestData.sampleSource("src_a");
+    src.setUserDisabled(true);
+    when(sourceRepository.findBySourceKey("src_a")).thenReturn(Optional.of(src));
+    when(sourceRepository.saveAndFlush(any(DiscoverySource.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(sourceMapper.toDto(any(DiscoverySource.class))).thenReturn(stubSourceDto(true));
+
+    assertThat(service.userDisableSource("src_a")).isNotNull();
+    assertThat(src.isUserDisabled()).isTrue();
+  }
+
+  @Test
+  void userEnableSource_clearsUserDisabled_doesNotTouchEnabled() {
+    // Admin-disabled + user-enabled → still unavailable (`enabled` wins); this verb only clears
+    // the user flag and must not resurrect an admin-disabled source.
+    DiscoverySource src = DiscoveryTestData.sampleSource("src_a");
+    src.setEnabled(false); // admin-disabled
+    src.setUserDisabled(true);
+    when(sourceRepository.findBySourceKey("src_a")).thenReturn(Optional.of(src));
+    when(sourceRepository.saveAndFlush(any(DiscoverySource.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(sourceMapper.toDto(any(DiscoverySource.class))).thenReturn(stubSourceDto(false));
+
+    DiscoverySourceDto dto = service.userEnableSource("src_a");
+
+    assertThat(dto).isNotNull();
+    assertThat(src.isUserDisabled()).isFalse();
+    assertThat(src.isEnabled()).isFalse(); // enabled wins — admin flag untouched
+  }
+
+  @Test
+  void userDisableSource_unknownKey_throws404() {
+    when(sourceRepository.findBySourceKey("nope")).thenReturn(Optional.empty());
+    assertThatThrownBy(() -> service.userDisableSource("nope"))
+        .isInstanceOf(DiscoverySourceNotFoundException.class);
+  }
+
+  @Test
+  void userEnableSource_unknownKey_throws404() {
+    when(sourceRepository.findBySourceKey("nope")).thenReturn(Optional.empty());
+    assertThatThrownBy(() -> service.userEnableSource("nope"))
         .isInstanceOf(DiscoverySourceNotFoundException.class);
   }
 
@@ -609,6 +690,7 @@ class DiscoveryServiceImplTest {
             DiscoverySourceKind.SITEMAP,
             "https://z.test",
             true,
+            false,
             6,
             500,
             true,
@@ -626,6 +708,7 @@ class DiscoveryServiceImplTest {
             DiscoverySourceKind.SITEMAP,
             "https://a.test",
             true,
+            false,
             6,
             500,
             true,
@@ -760,6 +843,7 @@ class DiscoveryServiceImplTest {
         DiscoverySourceKind.SITEMAP,
         "https://example.test",
         enabled,
+        false,
         6,
         500,
         true,

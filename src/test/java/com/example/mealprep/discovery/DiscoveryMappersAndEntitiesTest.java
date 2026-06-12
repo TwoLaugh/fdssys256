@@ -257,7 +257,7 @@ class DiscoveryMappersAndEntitiesTest {
             .kind(DiscoverySourceKind.SITEMAP)
             .baseUrl("https://x.test/")
             .enabled(true)
-            .userDisabled(false)
+            .userDisabled(true)
             .requestsPerMinute(6)
             .requestsPerDay(500)
             .respectRobotsTxt(true)
@@ -278,6 +278,7 @@ class DiscoveryMappersAndEntitiesTest {
     assertThat(dto.kind()).isEqualTo(DiscoverySourceKind.SITEMAP);
     assertThat(dto.baseUrl()).isEqualTo("https://x.test/");
     assertThat(dto.enabled()).isTrue();
+    assertThat(dto.userDisabled()).isTrue();
     assertThat(dto.requestsPerMinute()).isEqualTo(6);
     assertThat(dto.requestsPerDay()).isEqualTo(500);
     assertThat(dto.respectRobotsTxt()).isTrue();

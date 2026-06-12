@@ -52,12 +52,14 @@ import org.springframework.transaction.annotation.Transactional;
  * <ul>
  *   <li>{@code startJob} delegates persistence + AFTER_COMMIT publication to {@link
  *       DiscoveryJobStarter}.
- *   <li>{@code cancelJob} flips {@code QUEUED → FAILED}; terminal states + the temporary RUNNING
- *       branch throw {@link DiscoveryJobAlreadyTerminalException}.
+ *   <li>{@code cancelJob} flips {@code QUEUED → CANCELLED}; the RUNNING branch sets the in-memory
+ *       cancellation flag (the runner finalises {@code CANCELLED}); terminal states throw {@link
+ *       DiscoveryJobAlreadyTerminalException}.
  *   <li>Query methods cover the user/admin read surface; scrape-log fetch pre-checks the job
  *       exists.
- *   <li>{@code enableSource} / {@code disableSource} flip the {@code enabled} flag; {@code
- *       runOrphanSweep} delegates to the runner.
+ *   <li>{@code enableSource} / {@code disableSource} flip the admin {@code enabled} flag; {@code
+ *       userDisableSource} / {@code userEnableSource} flip the user-facing {@code userDisabled}
+ *       flag; {@code runOrphanSweep} delegates to the runner.
  *   <li>{@code runJobSync} drives the synchronous COLD_START flow via {@link DiscoveryJobStarter}
  *       and the runner's sync waiter.
  * </ul>
@@ -69,7 +71,10 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
 
   private static final EnumSet<DiscoveryJobStatus> TERMINAL_STATES =
       EnumSet.of(
-          DiscoveryJobStatus.SUCCEEDED, DiscoveryJobStatus.FAILED, DiscoveryJobStatus.PARTIAL);
+          DiscoveryJobStatus.SUCCEEDED,
+          DiscoveryJobStatus.FAILED,
+          DiscoveryJobStatus.PARTIAL,
+          DiscoveryJobStatus.CANCELLED);
 
   private final DiscoveryJobRepository jobRepository;
   private final DiscoverySourceRepository sourceRepository;
@@ -199,14 +204,17 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
     //
     // discovery-6: always set the in-memory flag FIRST, then run a status-guarded UPDATE
     // (... AND j.status = 'QUEUED'). If the runner claimed the job RUNNING in the read→write
-    // window, the guard matches 0 rows rather than clobbering the now-RUNNING row back to FAILED;
-    // we then fall through to the RUNNING flag path (the flag is already set above), so the runner
-    // stops cleanly on its next iteration. We re-verify the row still exists to preserve the 404
-    // contract for a genuinely vanished job.
+    // window, the guard matches 0 rows rather than clobbering the now-RUNNING row back to
+    // CANCELLED; we then fall through to the RUNNING flag path (the flag is already set above), so
+    // the runner stops cleanly on its next iteration. We re-verify the row still exists to
+    // preserve the 404 contract for a genuinely vanished job.
+    //
+    // Status is the contract now (ticket discovery-cancelled-status); errorSummary keeps
+    // "cancelled by user" for one release as belt-and-braces for string-matching consumers.
     runner.requestCancellation(jobId);
     int rows =
         jobRepository.markCancelledIfQueued(
-            jobId, DiscoveryJobStatus.FAILED, Instant.now(), "cancelled by user");
+            jobId, DiscoveryJobStatus.CANCELLED, Instant.now(), "cancelled by user");
     if (rows == 0 && !jobRepository.existsById(jobId)) {
       // Neither flipped (already claimed/terminal) nor present — genuinely gone.
       throw new DiscoveryJobNotFoundException(jobId);
@@ -238,6 +246,35 @@ public class DiscoveryServiceImpl implements DiscoveryService, DiscoveryQuerySer
     source.setEnabled(false);
     // Deliberately not touching userDisabled — admin-driven disable is distinct from user-driven
     // (LLD line 80). 01d's runner / user-Settings path own the user flag.
+    DiscoverySource saved = sourceRepository.saveAndFlush(source);
+    return sourceMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public DiscoverySourceDto userDisableSource(String sourceKey) {
+    DiscoverySource source =
+        sourceRepository
+            .findBySourceKey(sourceKey)
+            .orElseThrow(() -> new DiscoverySourceNotFoundException(sourceKey));
+    // Idempotent: re-disabling a disabled source is a no-op write returning the same DTO. The
+    // admin `enabled` flag is deliberately untouched — user- and admin-driven disable are distinct
+    // concepts (LLD line 80); effective availability is enabled && !userDisabled.
+    source.setUserDisabled(true);
+    DiscoverySource saved = sourceRepository.saveAndFlush(source);
+    return sourceMapper.toDto(saved);
+  }
+
+  @Override
+  @Transactional
+  public DiscoverySourceDto userEnableSource(String sourceKey) {
+    DiscoverySource source =
+        sourceRepository
+            .findBySourceKey(sourceKey)
+            .orElseThrow(() -> new DiscoverySourceNotFoundException(sourceKey));
+    // Idempotent. Only clears the user flag — an admin-disabled source stays unavailable
+    // (`enabled` wins); the DTO carries both flags so the panel can caption correctly.
+    source.setUserDisabled(false);
     DiscoverySource saved = sourceRepository.saveAndFlush(source);
     return sourceMapper.toDto(saved);
   }

@@ -1,6 +1,6 @@
 DiscoveryJobStatus:
   type: string
-  enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, PARTIAL]
+  enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, PARTIAL, CANCELLED]
 DiscoveryJobTrigger:
   type: string
   enum: [COLD_START, USER_INITIATED, SCHEDULED]
@@ -93,6 +93,7 @@ DiscoverySourceDto:
     - kind
     - baseUrl
     - enabled
+    - userDisabled
     - requestsPerMinute
     - requestsPerDay
     - respectRobotsTxt
@@ -106,6 +107,13 @@ DiscoverySourceDto:
     kind: { $ref: '#/DiscoverySourceKind' }
     baseUrl: { type: string, maxLength: 255 }
     enabled: { type: boolean }
+    userDisabled:
+      type: boolean
+      description: >-
+        User-driven disable flag (Settings toggle), distinct from the admin `enabled` flag.
+        Effective availability for job-source resolution is `enabled && !userDisabled`; the DTO
+        carries both flags so the sources panel can caption "disabled by you" vs
+        "unavailable (admin)".
     requestsPerMinute: { type: integer, minimum: 0 }
     requestsPerDay: { type: integer, minimum: 0 }
     respectRobotsTxt: { type: boolean }

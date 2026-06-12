@@ -33,10 +33,12 @@ public interface DiscoveryService {
   DiscoveryJobDto runJobSync(UUID userId, StartDiscoveryJobRequest request, Duration timeout);
 
   /**
-   * Idempotent cancellation. {@code QUEUED} flips to {@code FAILED} with {@code errorSummary =
-   * "cancelled by user"}; terminal states throw {@code DiscoveryJobAlreadyTerminalException}. The
-   * {@code RUNNING} branch is a temporary 422 in 01b — discovery-01d wires the in-memory
-   * cancellation flag and changes this branch to set the flag and return success.
+   * Cancellation. {@code QUEUED} flips atomically to {@code CANCELLED}; {@code RUNNING} sets the
+   * in-memory cancellation flag (the runner finalises {@code CANCELLED} when it stops between
+   * candidates, keeping counters and the ingested harvest); terminal states (including {@code
+   * CANCELLED}) throw {@code DiscoveryJobAlreadyTerminalException}. {@code errorSummary} keeps
+   * "cancelled by user" for one release for any consumer still string-matching — the status is the
+   * contract (ticket discovery-cancelled-status).
    */
   void cancelJob(UUID userId, UUID jobId);
 
@@ -52,6 +54,19 @@ public interface DiscoveryService {
    * unknown.
    */
   DiscoverySourceDto disableSource(String sourceKey);
+
+  /**
+   * User: flip {@code userDisabled = true} on a source (idempotent). Does NOT touch the admin
+   * {@code enabled} flag; effective availability for job-source resolution is {@code enabled &&
+   * !userDisabled}. 404 if the key is unknown. Ticket discovery-user-source-disable.
+   */
+  DiscoverySourceDto userDisableSource(String sourceKey);
+
+  /**
+   * User: flip {@code userDisabled = false} (idempotent). An admin-disabled source stays
+   * unavailable — {@code enabled} wins. 404 if the key is unknown.
+   */
+  DiscoverySourceDto userEnableSource(String sourceKey);
 
   /**
    * Sweep orphan {@code RUNNING} jobs whose heartbeat went stale. Implementation lands with
