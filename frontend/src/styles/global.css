@@ -2513,12 +2513,20 @@ button.rail-item.active {
 }
 
 .slot-config-row {
-  display: grid;
-  grid-template-columns: 1fr 56px auto;
-  gap: 12px;
+  display: flex;
+  gap: 10px;
   align-items: center;
   padding: 7px 0;
   border-bottom: 1px solid var(--mp-line);
+}
+
+.slot-config-row .slot-config-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.slot-config-row .filter-chip {
+  flex: none;
 }
 
 .slot-config-name {

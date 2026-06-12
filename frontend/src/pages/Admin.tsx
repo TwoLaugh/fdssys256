@@ -139,7 +139,11 @@ function CostCard({
   setWindowHours: (h: number) => void;
   onUserClick: (userId: string) => void;
 }) {
-  const summary = useStore((s) => adminCostSummary(s, windowHours));
+  const callLog = useStore((s) => s.admin.callLog);
+  const summary = useMemo(
+    () => adminCostSummary(callLog, windowHours),
+    [callLog, windowHours],
+  );
   return (
     <div className="mp-card side-card">
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

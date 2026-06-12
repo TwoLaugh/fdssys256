@@ -6263,7 +6263,12 @@ let departedHousehold: StoreState["household"]["current"] = null;
 export function acceptInvite(code: string): AcceptInviteOutcome {
   const trimmed = code.trim();
   if (!trimmed || trimmed.length > 32) return "badRequest";
-  if (state.household.current) return "alreadyInHousehold";
+  const fresh = state.session.freshSetup;
+  // One household per user (v1): the accepter must not already be in one.
+  // In fresh-account demo mode that's judged by the wizard scratch flags.
+  if (fresh ? fresh.household : state.household.current != null) {
+    return "alreadyInHousehold";
+  }
   const entry = Object.entries(state.household.inviteCodes).find(
     ([, c]) => c.toLowerCase() === trimmed.toLowerCase(),
   );
@@ -6277,8 +6282,9 @@ export function acceptInvite(code: string): AcceptInviteOutcome {
   if (inv.issuedForUserId && inv.issuedForUserId !== me?.userId) {
     return "forbidden";
   }
-  if (state.session.freshSetup) {
-    // Fresh-account wizard branch: joining satisfies household + slots.
+  if (fresh) {
+    // Fresh-account wizard branch: joining satisfies household + slots
+    // without consuming the real seeded invite.
     markFreshStep("household");
     markFreshStep("lifestyle");
     return "ok";
@@ -6747,13 +6753,14 @@ export function setAdminAllowlisted(allowlisted: boolean): void {
 }
 
 /** GET /admin/ai/cost-summary (#2) — aggregates the call log over the window
- *  ending at the mock "now"; topUsers capped at 20, spend-descending. */
+ *  ending at the mock "now"; topUsers capped at 20, spend-descending.
+ *  NOT a useStore selector (returns a fresh object) — call it from useMemo. */
 export function adminCostSummary(
-  s: StoreState,
+  callLog: StoreState["admin"]["callLog"],
   windowHours: number,
 ): CostSummaryDto {
   const cutoff = Date.parse(nowIso()) - windowHours * 3_600_000;
-  const rows = s.admin.callLog.filter((c) => Date.parse(c.createdAt) >= cutoff);
+  const rows = callLog.filter((c) => Date.parse(c.createdAt) >= cutoff);
   const byUser = new Map<string, { calls: number; costMicroPence: number }>();
   for (const c of rows) {
     const key = c.userId ?? "system";

@@ -376,7 +376,9 @@ function SlotConfigCard({
 }) {
   const resolved = useStore((s) => s.household.resolved);
   const audit = useStore((s) => s.household.settingsAudit);
-  const members = useStore((s) => s.household.current?.members ?? []);
+  // `?? null`, not `?? []`: selectors must return stored references
+  // (useSyncExternalStore re-render contract).
+  const members = useStore((s) => s.household.current?.members ?? null);
   const [draft, setDraft] = useState<HouseholdSettingsDocument>(settings.document);
   const [draftVersion, setDraftVersion] = useState(settings.version);
   const [newLabel, setNewLabel] = useState("");
@@ -390,7 +392,7 @@ function SlotConfigCard({
   }
 
   const nameOf = (userId: string) =>
-    members.find((m) => m.userId === userId)?.displayName ?? userId;
+    members?.find((m) => m.userId === userId)?.displayName ?? userId;
 
   const setDefault = (kind: string, patch: Partial<CustomSlotDefinition>) =>
     setDraft({
