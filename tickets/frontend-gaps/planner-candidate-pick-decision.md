@@ -72,3 +72,17 @@ Squash-merge with: `docs(planner): candidate-pick product decision (frontend-gap
   [`planner-reopt-suggestion-detail.md`](planner-reopt-suggestion-detail.md).
 - Stage C reasoning exposure on `PlanDto` (plan.md §8 Q5) — P3, see
   [`planner-today-p3-clarifications.md`](planner-today-p3-clarifications.md).
+
+
+---
+
+## DECISION (2026-06-12)
+
+**Ruling: amend the HLD for v1 (Option C / no-build).** Product owner chose to keep the shipped
+contract: Stage C auto-picks server-side; candidates stay internal. Rationale: the generate →
+review → accept/reject loop already gives the user a veto, candidate exposure adds a re-compose
+path plus candidate persistence for marginal v1 value, and full-candidate generation would
+multiply per-generation AI cost. `design/meal-planner.md` Stage C amended accordingly; candidate
+exposure + user pick deferred to v2 (revisit if accept-rate telemetry shows users fighting the
+auto-pick). Frontend: the mock's five-candidate grid is removed/flag-off permanently for v1
+(`design/frontend/pages/plan.md` §8 Q1 resolved).
