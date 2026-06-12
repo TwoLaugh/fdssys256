@@ -1,6 +1,7 @@
 package com.example.mealprep.nutrition;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -13,11 +14,18 @@ import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.testdata.AuthTestData;
+import com.example.mealprep.nutrition.api.dto.EatingWindowDto;
+import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
+import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
+import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
+import com.example.mealprep.nutrition.domain.entity.Goal;
 import com.example.mealprep.nutrition.testdata.NutritionTestData;
 import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.Cookie;
+import java.math.BigDecimal;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -53,6 +61,9 @@ class WeeklyAggregateFlowIT {
     jdbcTemplate.update("DELETE FROM nutrition_intake_slot");
     jdbcTemplate.update("DELETE FROM nutrition_intake_day");
     jdbcTemplate.update("DELETE FROM nutrition_divergence_state");
+    jdbcTemplate.update("DELETE FROM nutrition_micro_target");
+    jdbcTemplate.update("DELETE FROM nutrition_targets_audit");
+    jdbcTemplate.update("DELETE FROM nutrition_targets");
     sessionRepository.deleteAll();
     userRepository.deleteAll();
   }
@@ -123,5 +134,87 @@ class WeeklyAggregateFlowIT {
         // Wednesday is index 2 (Mon=0).
         .andExpect(jsonPath("$.perDay[2].caloriesActualSoFar").value(180))
         .andExpect(jsonPath("$.weeklyTotal.caloriesActualSoFar").value(180));
+  }
+
+  @Test
+  void getWeeklyAggregate_floorViolations_datedForDailyFloors_undatedForWeeklyAverage()
+      throws Exception {
+    AuthedUser user = registerUser();
+    // protein: daily_floor enforcement with a 100g floor -> dated entry for the seeded day.
+    // carbs: weekly_average enforcement with a 100g floor -> single undated entry (7-day floor
+    // 700g vs weekly total).
+    UpdateTargetsRequest targets =
+        new UpdateTargetsRequest(
+            Goal.MAINTAIN,
+            NutritionTestData.defaultCalories(),
+            new MacroTargetDto(
+                BigDecimal.valueOf(120.0),
+                BigDecimal.valueOf(100.0),
+                "daily_floor",
+                EnforcementDirection.LOWER_FLOOR,
+                true),
+            new MacroTargetDto(
+                BigDecimal.valueOf(250.0),
+                BigDecimal.valueOf(100.0),
+                "weekly_average",
+                EnforcementDirection.BOTH_BOUNDED,
+                true),
+            new MacroTargetDto(
+                BigDecimal.valueOf(70.0),
+                null,
+                "weekly_average",
+                EnforcementDirection.BOTH_BOUNDED,
+                true),
+            new MacroTargetDto(
+                BigDecimal.valueOf(30.0),
+                null,
+                "daily_floor",
+                EnforcementDirection.LOWER_FLOOR,
+                true),
+            new MacroTargetDto(
+                BigDecimal.valueOf(20.0), null, null, EnforcementDirection.UPPER_LIMIT, false),
+            "Floor enforcement matrix",
+            NutritionTestData.defaultPerMealList(),
+            NutritionTestData.defaultMicros(),
+            new EatingWindowDto(false, null, null, null),
+            NutritionTestData.defaultActivities(),
+            0L);
+    mvc.perform(
+            post("/api/v1/nutrition/targets/initialise")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(targets)))
+        .andExpect(status().isCreated());
+
+    // Seed the Wednesday: snack with 7g protein (< 100 floor) carrying saturated fat micros.
+    ObjectNode micros = objectMapper.createObjectNode();
+    micros.put("saturated_fat_g", 2.0);
+    mvc.perform(
+            post("/api/v1/nutrition/intake/2026-05-13/snacks")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        NutritionTestData.snackRequestWithMicros(micros))))
+        .andExpect(status().isCreated());
+
+    mvc.perform(get("/api/v1/nutrition/intake/week/2026-05-11/aggregate").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.floorViolations.length()").value(2))
+        // Daily-enforcement protein floor: dated entry matching the seeded violation day; the
+        // six untracked days are absent data, not violations.
+        .andExpect(jsonPath("$.floorViolations[0].macroOrMicro").value("protein"))
+        .andExpect(jsonPath("$.floorViolations[0].date").value("2026-05-13"))
+        .andExpect(jsonPath("$.floorViolations[0].floor").value(100.0))
+        .andExpect(jsonPath("$.floorViolations[0].actual").value(7.0))
+        // Weekly-average carbs floor: undated entry with the 7-day-summed floor.
+        .andExpect(jsonPath("$.floorViolations[1].macroOrMicro").value("carbs"))
+        .andExpect(jsonPath("$.floorViolations[1].date").value(nullValue()))
+        .andExpect(jsonPath("$.floorViolations[1].floor").value(700.0))
+        .andExpect(jsonPath("$.floorViolations[1].actual").value(6.0))
+        // satFat aggregate rides perDay + weeklyTotal for free (sibling ticket).
+        .andExpect(jsonPath("$.perDay[2].satFat.actualSoFarG").value(2.0))
+        .andExpect(jsonPath("$.weeklyTotal.satFat.actualSoFarG").value(2.0))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 }

@@ -138,6 +138,22 @@ public final class NutritionTestData {
         null);
   }
 
+  /** Like {@link #defaultSnackRequest()} but carrying a micros document (e.g. saturated_fat_g). */
+  public static LogSnackRequest snackRequestWithMicros(JsonNode micros) {
+    return new LogSnackRequest(
+        "almonds",
+        null,
+        BigDecimal.valueOf(30.0),
+        180,
+        BigDecimal.valueOf(7.0),
+        BigDecimal.valueOf(6.0),
+        BigDecimal.valueOf(15.0),
+        BigDecimal.valueOf(3.0),
+        micros,
+        IntakeSource.MANUAL,
+        null);
+  }
+
   /** A reasonable list of planned-slot inputs covering all four meal slots. */
   public static List<PlannedSlotInputDto> defaultPlannedSlots() {
     List<PlannedSlotInputDto> out = new ArrayList<>();

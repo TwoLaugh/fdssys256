@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import com.example.mealprep.nutrition.api.dto.DailyAggregateDto;
+import com.example.mealprep.nutrition.api.dto.FloorViolationDto;
 import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
 import com.example.mealprep.nutrition.domain.entity.IntakeDay;
 import com.example.mealprep.nutrition.domain.entity.IntakeSlot;
@@ -199,7 +200,14 @@ class IntakeAggregatorMutationTest {
 
     WeeklyAggregateDto wk = aggregator().aggregateWeek(USER, MONDAY);
 
-    assertThat(wk.floorViolations()).containsExactlyInAnyOrder("carbs", "fat", "fibre");
+    // carbs + fat are weekly_average-enforced (builder) -> undated weekly entries with the
+    // 7-day-summed floor; fibre is daily_floor-enforced -> dated entry for the only tracked day.
+    assertThat(wk.floorViolations())
+        .extracting(FloorViolationDto::macroOrMicro, FloorViolationDto::date)
+        .containsExactlyInAnyOrder(
+            org.assertj.core.groups.Tuple.tuple("carbs", null),
+            org.assertj.core.groups.Tuple.tuple("fat", null),
+            org.assertj.core.groups.Tuple.tuple("fibre", MONDAY));
   }
 
   @Test
@@ -222,7 +230,13 @@ class IntakeAggregatorMutationTest {
 
     WeeklyAggregateDto wk = aggregator().aggregateWeek(USER, MONDAY);
 
-    assertThat(wk.floorViolations()).containsExactly("fat");
+    assertThat(wk.floorViolations()).hasSize(1);
+    FloorViolationDto v = wk.floorViolations().get(0);
+    assertThat(v.macroOrMicro()).isEqualTo("fat");
+    // weekly_average enforcement -> undated entry, floor = 50×7, actual = weekly total 7×1g.
+    assertThat(v.date()).isNull();
+    assertThat(v.floor()).isEqualByComparingTo(new BigDecimal("350.0"));
+    assertThat(v.actual()).isEqualByComparingTo(new BigDecimal("7.00"));
   }
 
   // ---------------- fixtures ----------------
