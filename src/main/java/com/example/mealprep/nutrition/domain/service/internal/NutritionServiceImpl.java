@@ -98,6 +98,7 @@ import com.example.mealprep.nutrition.exception.HealthDirectiveNotFoundException
 import com.example.mealprep.nutrition.exception.HealthDirectiveSafetyGateBlockedException;
 import com.example.mealprep.nutrition.exception.IngredientMappingNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeDayNotFoundException;
+import com.example.mealprep.nutrition.exception.IntakeSlotNotEditableException;
 import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
 import com.example.mealprep.nutrition.exception.InvalidIntakeRangeException;
@@ -1553,7 +1554,29 @@ public class NutritionServiceImpl
     IntakeDay day = requireDay(userId, onDate);
     IntakeSlot slot = requireSlot(day, userId, onDate, mealSlot);
 
+    // Transition guard (nutrition-intake-override-repair): edit is legal from PENDING, and — as
+    // the repair path for a parse-failed override — from OVERRIDDEN with needsAiParse=true. Every
+    // other decided state (CONFIRMED / EDITED / SKIPPED, or OVERRIDDEN whose parse succeeded) is
+    // terminal for edit → 422.
     IntakeSlotStatus prev = slot.getActualStatus();
+    boolean prevNeedsAiParse = slot.isNeedsAiParse();
+    boolean parseFailedOverrideRepair = prev == IntakeSlotStatus.OVERRIDDEN && prevNeedsAiParse;
+    if (prev != IntakeSlotStatus.PENDING && !parseFailedOverrideRepair) {
+      throw new IntakeSlotNotEditableException(userId, onDate, mealSlot, prev, prevNeedsAiParse);
+    }
+
+    // Audit snapshot of the pre-edit state. On the repair path this records the parse-failed
+    // OVERRIDDEN row (zeroed actuals + verbatim free text) the structured edit replaces.
+    Map<String, Object> previous = new LinkedHashMap<>();
+    previous.put("status", prev.name());
+    previous.put("needsAiParse", prevNeedsAiParse);
+    if (slot.getActualCalories() != null) {
+      previous.put("calories", slot.getActualCalories());
+    }
+    if (slot.getOverrideFreeText() != null) {
+      previous.put("freeText", slot.getOverrideFreeText());
+    }
+
     slot.setActualStatus(IntakeSlotStatus.EDITED);
     slot.setActualCalories(entry.calories());
     slot.setActualProteinG(entry.proteinG());
@@ -1562,8 +1585,9 @@ public class NutritionServiceImpl
     slot.setActualFibreG(entry.fibreG());
     slot.setActualMicros(entry.micros());
     slot.setNeedsAiParse(false);
-    slot.setOverrideFreeText(null);
-    slot.setOverriddenAt(null);
+    // overrideFreeText / overriddenAt are deliberately RETAINED (provenance — the user did say
+    // "a cheese sandwich"; the repair supplies the numbers the parse failed to produce). On the
+    // PENDING path both are null already.
 
     intakeDayRepository.saveAndFlush(day);
     Instant now = Instant.now(clock);
@@ -1573,9 +1597,15 @@ public class NutritionServiceImpl
         IntakeAuditAction.EDIT,
         mealSlot,
         null,
-        objectMapper.valueToTree(Map.of("status", prev.name())),
+        objectMapper.valueToTree(previous),
         objectMapper.valueToTree(
-            Map.of("status", IntakeSlotStatus.EDITED.name(), "calories", entry.calories())),
+            Map.of(
+                "status",
+                IntakeSlotStatus.EDITED.name(),
+                "calories",
+                entry.calories(),
+                "needsAiParse",
+                false)),
         now);
     divergenceDetector.detectAndPublish(userId, onDate, UUID.randomUUID());
     publishIntakeEvent(userId, day, IntakeAuditAction.EDIT, mealSlot, null, now);

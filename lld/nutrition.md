@@ -856,7 +856,7 @@ All error responses use RFC 9457 `ProblemDetail`. Module-specific exceptions, ma
 |---|---|
 | `NutritionTargetsNotFoundException`, `IntakeDayNotFoundException`, `IntakeSlotNotFoundException`, `JournalEntryNotFoundException`, `IngredientMappingNotFoundException`, `HealthDirectiveNotFoundException` | 404 |
 | `OptimisticLockException` (JPA), `HealthDirectiveAlreadyDecidedException` | 409 |
-| `HealthDirectiveSafetyGateBlockedException`, `IntakeOverrideParseException`, `IngredientMappingPipelineException` | 422 |
+| `HealthDirectiveSafetyGateBlockedException`, `IntakeOverrideParseException`, `IngredientMappingPipelineException`, `IntakeSlotNotEditableException` | 422 |
 | `MethodArgumentNotValidException` | 400 (`errors[]` extension) |
 
 ---
@@ -969,6 +969,7 @@ The override path **does not** trigger pantry deduction — the user already ate
 ### Flow 5: Manual intake edit and skip
 
 - `POST .../edit` with `IntakeEntryDto` → `editIntakeManually`. The user has already chosen the numeric values; service writes them directly to the slot's actual columns, sets `actualStatus = EDITED`, audits, runs divergence detection, publishes `IntakeLoggedEvent(action=EDIT)`. No AI involved.
+  - **Transition guard** (nutrition-intake-override-repair): edit is legal from `PENDING`, and — as the repair path for a parse-failed override (Flow 4 step 3's `unparseable` outcome) — from `OVERRIDDEN` with `needsAiParse = true`. The repair replaces the zeroed actuals with the user's structured values, transitions the slot to `EDITED`, clears `needsAiParse`, and **retains** `overrideFreeText` / `overriddenAt` for provenance; the `EDIT` audit row's `previous_value_json` records the parse-failed `OVERRIDDEN` state (status, `needsAiParse`, free text). Any other decided state (`CONFIRMED` / `EDITED` / `SKIPPED`, or `OVERRIDDEN` whose parse succeeded) throws `IntakeSlotNotEditableException` (422) — no backwards transitions.
 - `POST .../skip` → sets `actualStatus = SKIPPED`, zeroes the actual columns, audits, runs divergence detection (skip is a strong divergence signal — almost always trips the threshold for that macro), publishes `IntakeLoggedEvent(action=SKIP)`.
 
 ### Flow 6: USDA ingredient mapping cache hit/miss

@@ -301,6 +301,210 @@ class IntakeLifecycleFlowIT {
         .andExpect(status().isBadRequest());
   }
 
+  // ------- edit transition guard + repair path (nutrition-intake-override-repair) -------
+
+  /**
+   * Repair path: a free-text override lands {@code OVERRIDDEN + needsAiParse=true} with zeroed
+   * actuals (the parse-failed shape). A structured edit is the legal repair: values written, status
+   * {@code EDITED}, flag cleared, free text retained, EDIT audit row snapshots the pre-repair
+   * OVERRIDDEN state, {@code IntakeLoggedEvent(EDIT)} published, and the aggregate rollup reflects
+   * the repaired actuals.
+   */
+  @Test
+  void edit_repairsParseFailedOverride_overWire() throws Exception {
+    AuthedUser user = registerUser();
+    seedPrefilledDay(user.userId());
+
+    OverrideIntakeRequest overrideReq = new OverrideIntakeRequest("a cheese sandwich");
+    mvc.perform(
+            post("/api/v1/nutrition/intake/" + DAY + "/slots/DINNER/override")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(overrideReq)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.slots[2].actual.needsAiParse").value(true));
+    eventCapture.clear();
+
+    IntakeEntryDto entry =
+        new IntakeEntryDto(
+            430,
+            BigDecimal.valueOf(22.0),
+            BigDecimal.valueOf(38.0),
+            BigDecimal.valueOf(18.0),
+            BigDecimal.valueOf(4.0),
+            null);
+    mvc.perform(
+            post("/api/v1/nutrition/intake/" + DAY + "/slots/DINNER/edit")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(entry)))
+        .andExpect(status().isOk())
+        // index 2 = DINNER after ordinal sort.
+        .andExpect(jsonPath("$.slots[2].mealSlot").value("DINNER"))
+        .andExpect(jsonPath("$.slots[2].actual.status").value("EDITED"))
+        .andExpect(jsonPath("$.slots[2].actual.needsAiParse").value(false))
+        .andExpect(jsonPath("$.slots[2].actual.calories").value(430))
+        // Provenance: the verbatim free text survives the repair.
+        .andExpect(jsonPath("$.slots[2].actual.overrideFreeText").value("a cheese sandwich"))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // EDIT audit row records the parse-failed OVERRIDDEN state it repaired.
+    String previousJson =
+        jdbcTemplate.queryForObject(
+            "SELECT previous_value_json::text FROM nutrition_intake_audit WHERE action = 'EDIT'",
+            String.class);
+    com.fasterxml.jackson.databind.JsonNode previous = objectMapper.readTree(previousJson);
+    assertThat(previous.get("status").asText()).isEqualTo("OVERRIDDEN");
+    assertThat(previous.get("needsAiParse").asBoolean()).isTrue();
+    assertThat(previous.get("freeText").asText()).isEqualTo("a cheese sandwich");
+
+    // IntakeLoggedEvent(action=EDIT) published after commit.
+    assertThat(eventCapture.events())
+        .anySatisfy(ev -> assertThat(ev.action().name()).isEqualTo("EDIT"));
+
+    // The rollup reflects the repaired actuals (only DINNER decided: 430 kcal on Wednesday).
+    mvc.perform(
+            get("/api/v1/nutrition/intake/week/" + WEEK_START + "/aggregate").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.perDay[2].caloriesActualSoFar").value(430));
+  }
+
+  /** Double-submit after the repair: the slot is now EDITED — a second edit has no transition. */
+  @Test
+  void edit_returns422_onSecondEditAfterRepair() throws Exception {
+    AuthedUser user = registerUser();
+    seedPrefilledDay(user.userId());
+
+    mvc.perform(
+            post("/api/v1/nutrition/intake/" + DAY + "/slots/DINNER/override")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(new OverrideIntakeRequest("late kebab"))))
+        .andExpect(status().isOk());
+
+    IntakeEntryDto entry =
+        new IntakeEntryDto(
+            800,
+            BigDecimal.valueOf(35.0),
+            BigDecimal.valueOf(60.0),
+            BigDecimal.valueOf(40.0),
+            null,
+            null);
+    mvc.perform(
+            post("/api/v1/nutrition/intake/" + DAY + "/slots/DINNER/edit")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(entry)))
+        .andExpect(status().isOk());
+
+    mvc.perform(
+            post("/api/v1/nutrition/intake/" + DAY + "/slots/DINNER/edit")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(entry)))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/intake-slot-not-editable"))
+        .andExpect(jsonPath("$.currentStatus").value("EDITED"))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // Exactly one EDIT audit row — the rejected re-edit wrote nothing.
+    Long editAudit =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM nutrition_intake_audit WHERE action = 'EDIT'", Long.class);
+    assertThat(editAudit).isEqualTo(1L);
+  }
+
+  @Test
+  void edit_returns422_whenSlotConfirmed() throws Exception {
+    AuthedUser user = registerUser();
+    seedPrefilledDay(user.userId());
+
+    mvc.perform(
+            post("/api/v1/nutrition/intake/" + DAY + "/slots/LUNCH/confirm").cookie(user.cookie()))
+        .andExpect(status().isOk());
+
+    IntakeEntryDto entry =
+        new IntakeEntryDto(
+            420,
+            BigDecimal.valueOf(26.0),
+            BigDecimal.valueOf(52.0),
+            BigDecimal.valueOf(12.0),
+            null,
+            null);
+    mvc.perform(
+            post("/api/v1/nutrition/intake/" + DAY + "/slots/LUNCH/edit")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(entry)))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/intake-slot-not-editable"))
+        .andExpect(jsonPath("$.currentStatus").value("CONFIRMED"))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    Long editAudit =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM nutrition_intake_audit WHERE action = 'EDIT'", Long.class);
+    assertThat(editAudit).isZero();
+  }
+
+  /**
+   * OVERRIDDEN whose parse SUCCEEDED stays a decided state — no backwards transition. The
+   * parse-success shape ({@code needsAiParse=false}) is simulated by flipping the flag the way the
+   * deferred AI-parse listener will (no live AI in tests).
+   */
+  @Test
+  void edit_returns422_whenOverrideParseSucceeded() throws Exception {
+    AuthedUser user = registerUser();
+    seedPrefilledDay(user.userId());
+
+    mvc.perform(
+            post("/api/v1/nutrition/intake/" + DAY + "/slots/DINNER/override")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(new OverrideIntakeRequest("grilled salmon"))))
+        .andExpect(status().isOk());
+    // Simulate the AI parse succeeding: values land, needsAiParse clears.
+    jdbcTemplate.update(
+        "UPDATE nutrition_intake_slot SET needs_ai_parse = false, actual_calories = 520"
+            + " WHERE meal_slot = 'DINNER'");
+
+    IntakeEntryDto entry =
+        new IntakeEntryDto(
+            430,
+            BigDecimal.valueOf(22.0),
+            BigDecimal.valueOf(38.0),
+            BigDecimal.valueOf(18.0),
+            null,
+            null);
+    mvc.perform(
+            post("/api/v1/nutrition/intake/" + DAY + "/slots/DINNER/edit")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(entry)))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/intake-slot-not-editable"))
+        .andExpect(jsonPath("$.currentStatus").value("OVERRIDDEN"))
+        .andExpect(jsonPath("$.needsAiParse").value(false))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // The parsed override is untouched.
+    Integer calories =
+        jdbcTemplate.queryForObject(
+            "SELECT actual_calories FROM nutrition_intake_slot WHERE meal_slot = 'DINNER'",
+            Integer.class);
+    assertThat(calories).isEqualTo(520);
+  }
+
   // ---------------- POST /{date}/slots/{slot}/skip ----------------
 
   @Test

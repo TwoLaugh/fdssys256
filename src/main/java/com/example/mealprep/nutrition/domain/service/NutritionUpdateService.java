@@ -115,7 +115,13 @@ public interface NutritionUpdateService {
   IntakeDayDto overrideIntakeFromFreeText(
       UUID userId, LocalDate onDate, MealSlot mealSlot, String freeText);
 
-  /** Manually set a slot's actual nutrition values; flips status to {@code EDITED}. */
+  /**
+   * Manually set a slot's actual nutrition values; flips status to {@code EDITED} and clears {@code
+   * needsAiParse}. Legal from {@code PENDING}, and — as the repair path for a parse-failed override
+   * — from {@code OVERRIDDEN} with {@code needsAiParse = true} ({@code overrideFreeText} is
+   * retained for provenance). Any other decided state throws {@code IntakeSlotNotEditableException}
+   * (422) — no backwards transitions.
+   */
   IntakeDayDto editIntakeManually(
       UUID userId, LocalDate onDate, MealSlot mealSlot, IntakeEntryDto entry);
 

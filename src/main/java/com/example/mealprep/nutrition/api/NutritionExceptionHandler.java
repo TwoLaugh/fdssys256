@@ -9,6 +9,7 @@ import com.example.mealprep.nutrition.exception.HealthDirectiveSafetyGateBlocked
 import com.example.mealprep.nutrition.exception.IngredientMappingNotFoundException;
 import com.example.mealprep.nutrition.exception.IngredientMappingPipelineException;
 import com.example.mealprep.nutrition.exception.IntakeDayNotFoundException;
+import com.example.mealprep.nutrition.exception.IntakeSlotNotEditableException;
 import com.example.mealprep.nutrition.exception.IntakeSlotNotFoundException;
 import com.example.mealprep.nutrition.exception.IntakeSnackNotFoundException;
 import com.example.mealprep.nutrition.exception.InvalidDirectiveRoutingException;
@@ -82,6 +83,28 @@ public class NutritionExceptionHandler {
             "Intake slot not found",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  /**
+   * Map an illegal slot-edit transition to HTTP 422 (nutrition-intake-override-repair). Edit is
+   * legal from {@code PENDING} and from {@code OVERRIDDEN} with {@code needsAiParse = true} (the
+   * parse-failed-override repair path); every other decided state is terminal for edit.
+   */
+  @ExceptionHandler(IntakeSlotNotEditableException.class)
+  public ResponseEntity<ProblemDetail> handleIntakeSlotNotEditable(
+      IntakeSlotNotEditableException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "intake-slot-not-editable",
+            "Intake slot not editable",
+            req.getRequestURI());
+    pd.setProperty("currentStatus", ex.currentStatus());
+    pd.setProperty("needsAiParse", ex.needsAiParse());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }
