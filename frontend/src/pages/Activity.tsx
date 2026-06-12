@@ -5,11 +5,11 @@ import { TierMark, TIER_INFO } from "../components/TierMark";
 import { TintChip } from "../components/TintChip";
 import {
   acceptRecipeChange,
-  acceptReoptFix,
+  acceptSuggestion,
   answerClarification,
-  dismissReoptFix,
   markFeedbackCorrected,
   rejectRecipeChange,
+  rejectSuggestion,
   tierFor,
   useStore,
 } from "../mock/store";
@@ -74,13 +74,13 @@ function FeedbackCard({ entry }: { entry: FeedbackEntry }) {
 }
 
 export function Activity() {
-  const fix = useStore((s) => s.plan.fix);
+  const suggestion = useStore((s) => s.planner.suggestions[0]);
   const recipes = useStore((s) => s.recipes);
   const activity = useStore((s) => s.activity);
 
   const recipeChanges = recipes.filter((r) => r.pendingChange !== null);
-  // Top-3 pending changes: the plan fix first, then recipe-level changes.
-  const recipeSlots = fix ? 2 : 3;
+  // Top-3 pending changes: the plan suggestion first, then recipe changes.
+  const recipeSlots = suggestion ? 2 : 3;
 
   return (
     <div>
@@ -90,31 +90,26 @@ export function Activity() {
       />
 
       <section aria-label="Pending changes">
-        {!fix && recipeChanges.length === 0 && (
+        {!suggestion && recipeChanges.length === 0 && (
           <div className="page-loading">
             No pending changes — the advisor will raise suggestions here.
           </div>
         )}
-        {fix && (
+        {suggestion && (
           <AdvisorPanel
-            label="Suggested fix · plan"
-            headerRight={fix.sub}
-            title={fix.title}
-            impact={fix.impact}
+            label="Re-optimisation suggested · plan"
+            headerRight={`${suggestion.affectedSlotIds.length} future slot${
+              suggestion.affectedSlotIds.length === 1 ? "" : "s"
+            } affected · eaten and cooked meals stay pinned`}
+            title={suggestion.summary}
+            impact="accept writes a new draft generation for review on /plan (two-step)"
             acceptLabel="Accept changes"
-            onAccept={acceptReoptFix}
-            onDismiss={dismissReoptFix}
+            onAccept={() => acceptSuggestion(suggestion.id)}
+            onDismiss={() => rejectSuggestion(suggestion.id)}
           >
-            <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
-              {fix.swaps.map((sw) => (
-                <SwapLine
-                  key={sw.slotLabel}
-                  prefix={sw.slotLabel}
-                  from={sw.from}
-                  to={sw.to}
-                  note={sw.note}
-                />
-              ))}
+            <div className="inline-note" style={{ marginTop: 10 }}>
+              The concrete diff is only returned by the accept response — no
+              preview is possible from the list contract (plan.md §8 Q2).
             </div>
           </AdvisorPanel>
         )}

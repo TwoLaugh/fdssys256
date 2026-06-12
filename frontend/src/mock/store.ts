@@ -11,7 +11,12 @@
 import { useSyncExternalStore } from "react";
 import { MOCK_USER_ID, WEEK_DATES } from "./nutritionSeed";
 import {
-  BASE_CANDIDATES,
+  CURRENT_WEEK_START,
+  RECIPE_NAME_FALLBACK,
+  addDaysIso,
+  buildPlan,
+} from "./plannerSeed";
+import {
   createSeed,
   DISCOVERY_IMGS,
   DISCOVERY_RESULTS,
@@ -24,6 +29,7 @@ import type {
   ConfidenceTier,
   ConstraintKind,
   DailyAggregateDto,
+  DayDto,
   DirectiveUserModification,
   DiscoveryResult,
   DiscoveryStep,
@@ -38,18 +44,19 @@ import type {
   IntakeSnackDto,
   LogSnackRequest,
   MealSlot,
+  MealSlotDto,
   MealSlotKey,
   NotificationKind,
   NutritionState,
-  PlanCandidate,
-  PlanDay,
-  PlanStat,
-  PlanState,
+  PinnedReason,
+  PlanDto,
+  ProposedReoptAssignmentsDocument,
   Recipe,
-  ReoptFix,
+  ReoptSuggestionDto,
   SlotState,
   StoreState,
   TargetsDto,
+  ToastItem,
   UpdateTargetsRequest,
   WeeklyAggregateDto,
 } from "./types";
@@ -97,254 +104,873 @@ function pushNotification(
   return { ...s, notifications: [item, ...s.notifications] };
 }
 
-/* ---- plan: slot states ------------------------------------------------------- */
+/* ---- toasts ------------------------------------------------------------------ */
 
-const SLOT_ORDER: Record<SlotState, number> = {
-  planned: 0,
-  affected: 0,
-  cooking: 1,
-  cooked: 2,
-  eaten: 3,
-};
+let toastSeq = 0;
 
-function updateDay(
-  days: PlanDay[],
-  day: string,
-  fn: (d: PlanDay) => PlanDay,
-): PlanDay[] {
-  return days.map((d) => (d.day === day ? fn(d) : d));
+/** Transient toast (409-guard messages, replay notices, confirmations). */
+export function pushToast(text: string, tone: ToastItem["tone"] = "info"): void {
+  const id = ++toastSeq;
+  mutate((s) => ({ ...s, toasts: [...s.toasts, { id, text, tone }] }));
+  setTimeout(() => {
+    mutate((s) =>
+      s.toasts.some((t) => t.id === id)
+        ? { ...s, toasts: s.toasts.filter((t) => t.id !== id) }
+        : s,
+    );
+  }, 5200);
 }
 
-function updateSlot(
-  days: PlanDay[],
-  day: string,
-  slot: MealSlotKey,
-  fn: (s: PlanDay["slots"][MealSlotKey]) => PlanDay["slots"][MealSlotKey],
-): PlanDay[] {
-  return updateDay(days, day, (d) => ({
-    ...d,
-    slots: { ...d.slots, [slot]: fn(d.slots[slot]) },
-  }));
-}
-
-/**
- * Advance a slot through its lifecycle. Eaten slots are pinned — they never
- * move backwards — and no transition may go backwards in the lifecycle.
+/* ---- planner: shared helpers ----------------------------------------------------
+ * Contract shapes throughout (design/frontend/pages/plan.md). Slots carry
+ * recipe ids only — recipeName stands in for the client-side recipe cache
+ * join (spec s1).
  */
-export function setSlotState(
-  day: string,
-  slot: MealSlotKey,
-  next: SlotState,
-): void {
-  mutate((s) => {
-    const d = s.plan.days.find((x) => x.day === day);
-    if (!d) return s;
-    const current = d.slots[slot].state;
-    if (current === "eaten") return s; // pinned
-    if (SLOT_ORDER[next] < SLOT_ORDER[current]) return s; // never backwards
 
-    let out: StoreState = {
-      ...s,
-      plan: {
-        ...s.plan,
-        days: updateSlot(s.plan.days, day, slot, (sl) => ({
-          ...sl,
-          state: next,
-        })),
-      },
-    };
-
-    // Marking one of today's slots eaten confirms its intake (idempotent —
-    // no double-credit when already confirmed from the Nutrition page).
-    if (next === "eaten" && d.today) {
-      out = confirmSlotIn(out, MOCK_TODAY_ISO, MEAL_SLOT_BY_KEY[slot]);
-    }
-    return out;
-  });
-}
-
-/* ---- plan: re-optimisation fix -------------------------------------------------- */
-
-function applyFixSwaps(plan: PlanState, fix: ReoptFix): PlanState {
-  let days = plan.days;
-  for (const sw of fix.swaps) {
-    days = updateSlot(days, sw.day, sw.slot, () => ({
-      name: sw.to,
-      state: "planned",
-    }));
-  }
-  // Any stray affected marks not covered by the swaps revert to planned.
-  days = clearAffected(days);
-  return {
-    ...plan,
-    days,
-    stats: fix.statsAfter ?? plan.stats,
-    fix: null,
-  };
-}
-
-function clearAffected(days: PlanDay[]): PlanDay[] {
-  return days.map((d) => {
-    const entries = Object.entries(d.slots) as Array<
-      [MealSlotKey, PlanDay["slots"][MealSlotKey]]
-    >;
-    if (entries.every(([, sl]) => sl.state !== "affected")) return d;
-    const slots = { ...d.slots };
-    for (const [key, sl] of entries) {
-      if (sl.state === "affected") slots[key] = { ...sl, state: "planned" };
-    }
-    return { ...d, slots };
-  });
-}
-
-export function acceptReoptFix(): void {
-  mutate((s) => {
-    if (!s.plan.fix) return s;
-    const swapped = s.plan.fix.swaps
-      .map((sw) => `${sw.slotLabel} → ${sw.to.toLowerCase()}`)
-      .join(", ");
-    const out = { ...s, plan: applyFixSwaps(s.plan, s.plan.fix) };
-    return pushNotification(out, "plan", `Plan updated — ${swapped}`);
-  });
-}
-
-export function dismissReoptFix(): void {
-  mutate((s) => {
-    if (!s.plan.fix) return s;
-    return {
-      ...s,
-      plan: { ...s.plan, fix: null, days: clearAffected(s.plan.days) },
-    };
-  });
-}
-
-/* ---- plan: generation flow ------------------------------------------------------- */
-
-/**
- * Deterministic per-round score variation (no backend, no real randomness
- * needed): each regeneration rotates a small offset over fit and variety.
- */
-function buildCandidates(round: number): PlanCandidate[] {
-  const vary = (base: number, id: number, spread: number): number => {
-    if (round === 0) return base;
-    const offset = ((round * 7 + id * 3) % (spread * 2 + 1)) - spread;
-    return Math.max(50, Math.min(99, base + offset));
-  };
-  const built = BASE_CANDIDATES.map((c) => ({
-    id: c.id,
-    fit: vary(c.baseFit, c.id, 3),
-    nutrition: c.nutrition,
-    cost: c.cost,
-    conf: c.conf,
-    variety: `${vary(parseInt(c.variety, 10), c.id + 2, 2)}%`,
-    prep: c.prep,
-    warn: c.warn,
-    reasoning: c.reasoning,
-    preview: c.preview,
-  }));
-  const top = built.reduce((a, b) => (b.fit > a.fit ? b : a));
-  return built.map((c) =>
-    c.id === top.id ? { ...c, recommended: true } : c,
+export function recipeName(recipes: Recipe[], recipeId: string): string {
+  return (
+    recipes.find((r) => r.id === recipeId)?.name ??
+    RECIPE_NAME_FALLBACK[recipeId] ??
+    recipeId
   );
 }
 
-function startGeneration(s: StoreState, round: number): StoreState {
+export function findPlan(s: StoreState, planId: string): PlanDto | undefined {
+  return s.planner.plans.find((p) => p.id === planId);
+}
+
+/** Generations of one week, newest first (history drawer #3). */
+export function plansForWeek(s: StoreState, weekStartDate: string): PlanDto[] {
+  return s.planner.plans
+    .filter((p) => p.weekStartDate === weekStartDate)
+    .sort((a, b) => b.generation - a.generation);
+}
+
+/** GET /plans/active equivalent — undefined plays the 404 empty state. */
+export function activePlanForWeek(
+  s: StoreState,
+  weekStartDate: string,
+): PlanDto | undefined {
+  return s.planner.plans.find(
+    (p) => p.weekStartDate === weekStartDate && p.status === "ACTIVE",
+  );
+}
+
+function findSlot(
+  plan: PlanDto,
+  slotId: string,
+): { day: DayDto; slot: MealSlotDto } | undefined {
+  for (const day of plan.days) {
+    const slot = day.slots.find((sl) => sl.id === slotId);
+    if (slot) return { day, slot };
+  }
+  return undefined;
+}
+
+function replacePlan(s: StoreState, next: PlanDto): StoreState {
   return {
     ...s,
-    generation: { ...s.generation, status: "generating", round },
+    planner: {
+      ...s.planner,
+      plans: s.planner.plans.map((p) => (p.id === next.id ? next : p)),
+    },
   };
 }
 
-function finishGeneration(): void {
+function withSlot(
+  plan: PlanDto,
+  slotId: string,
+  fn: (sl: MealSlotDto) => MealSlotDto,
+): PlanDto {
+  return {
+    ...plan,
+    days: plan.days.map((d) =>
+      d.slots.some((sl) => sl.id === slotId)
+        ? { ...d, slots: d.slots.map((sl) => (sl.id === slotId ? fn(sl) : sl)) }
+        : d,
+    ),
+    version: plan.version + 1, // backend force-bumps on slot writes
+    updatedAt: nowStamp(),
+  };
+}
+
+/** Mock clock for planner writes (the fixed demo "today", evening). */
+function nowStamp(): string {
+  return `${MOCK_TODAY_ISO}T18:05:00Z`;
+}
+
+/* ---- planner: slot state machine (#11) ----------------------------------------------
+ * PLANNED → COOKING → COOKED → EATEN | SKIPPED, never backwards. Illegal
+ * requests 409 (toast + "re-fetch"); the seeded raced slot plays the
+ * "advanced on another device" row of the status-code map (spec §8).
+ */
+
+const SLOT_TRANSITIONS: Record<SlotState, SlotState[]> = {
+  PLANNED: ["COOKING", "SKIPPED"],
+  COOKING: ["COOKED", "SKIPPED"],
+  COOKED: ["EATEN"],
+  EATEN: [],
+  SKIPPED: [],
+};
+
+const PIN_BY_STATE: Partial<Record<SlotState, PinnedReason>> = {
+  COOKING: "COOKING",
+  COOKED: "COOKED",
+  EATEN: "EATEN",
+  SKIPPED: "SKIPPED",
+};
+
+/**
+ * PATCH /plans/{planId}/slots/{slotId}/state. Returns true when the planner
+ * write landed — callers pairing a nutrition dual-write (Today page,
+ * today.md §3b) only fire the intake call on success.
+ */
+export function changeSlotState(
+  planId: string,
+  slotId: string,
+  newState: SlotState,
+): boolean {
+  const s = state;
+  const plan = findPlan(s, planId);
+  if (!plan) {
+    pushToast("Plan no longer exists — re-fetching", "warn");
+    return false;
+  }
+  if (plan.status !== "ACTIVE") {
+    pushToast("409 — slot actions are only available on the active plan", "warn");
+    return false;
+  }
+
+  // Raced-device demo: the mock "server" already advanced this slot; the
+  // first action 409s with the server detail and the grid re-fetches.
+  const raced = s.planner.racedSlot;
+  if (raced && raced.slotId === slotId) {
+    mutate((st) => {
+      const p = findPlan(st, planId);
+      if (!p) return st;
+      const refreshed = withSlot(p, slotId, (sl) => ({
+        ...sl,
+        state: raced.serverState,
+        pinnedReason: PIN_BY_STATE[raced.serverState] ?? sl.pinnedReason,
+      }));
+      return {
+        ...replacePlan(st, refreshed),
+        planner: { ...replacePlan(st, refreshed).planner, racedSlot: null },
+      };
+    });
+    pushToast(
+      `409 — slot was already ${raced.serverState.toLowerCase()} on another device; plan re-fetched`,
+      "warn",
+    );
+    return false;
+  }
+
+  const found = findSlot(plan, slotId);
+  if (!found) {
+    pushToast("Slot no longer exists — re-fetching", "warn");
+    return false;
+  }
+  if (!SLOT_TRANSITIONS[found.slot.state].includes(newState)) {
+    pushToast(
+      `409 — invalid slot transition ${found.slot.state} → ${newState} (slots never move backwards)`,
+      "warn",
+    );
+    return false;
+  }
+
+  mutate((st) => {
+    const p = findPlan(st, planId);
+    if (!p) return st;
+    return replacePlan(
+      st,
+      withSlot(p, slotId, (sl) => ({
+        ...sl,
+        state: newState,
+        pinnedReason: PIN_BY_STATE[newState] ?? null,
+      })),
+    );
+  });
+  return true;
+}
+
+/* ---- planner: re-opt suggestions (#12, #13, #14) -------------------------------------
+ * Accepting writes a NEW GENERATED generation and supersedes the current
+ * plan — the user then accepts *that plan* (two-step confirm, spec §3e).
+ * The diff (proposedAssignments) is only revealed by the accept response
+ * (contract gap, spec §8 Q2).
+ */
+
+let planSeq = 100;
+let suggestionSeq = 10;
+
+function applyProposal(
+  plan: PlanDto,
+  proposal: ProposedReoptAssignmentsDocument,
+  planKey: string,
+): DayDto[] {
+  const bySlot = new Map(proposal.changes.map((c) => [c.slotId, c]));
+  return plan.days.map((d) => ({
+    ...d,
+    id: `${planKey}-${d.date}`,
+    slots: d.slots.map((sl) => {
+      const change = bySlot.get(sl.id);
+      if (!change) return sl;
+      return {
+        ...sl,
+        state: "PLANNED" as const,
+        pinnedReason: null,
+        scheduledRecipe: {
+          id: `sr-${planKey}-${sl.id}`,
+          recipeId: change.newRecipeId,
+          recipeVersionId: change.newRecipeVersionId ?? `${change.newRecipeId}-v1`,
+          recipeBranchId: change.newRecipeBranchId ?? `${change.newRecipeId}-main`,
+          servings: change.newServings,
+          batchCookSessionId: null,
+          augmentationNotes: null,
+          augmentationSource: null,
+          phase2Addition: false,
+        },
+      };
+    }),
+  }));
+}
+
+export function acceptSuggestion(suggestionId: string): void {
   mutate((s) => {
-    if (s.generation.status !== "generating") return s;
+    const suggestion = s.planner.suggestions.find((x) => x.id === suggestionId);
+    const proposal = s.planner.proposedBySuggestion[suggestionId];
+    if (!suggestion || suggestion.status !== "PENDING" || !proposal) return s;
+    const source = findPlan(s, suggestion.planId);
+    if (!source) return s;
+
+    const planKey = `g${++planSeq}`;
+    const newPlan: PlanDto = {
+      ...source,
+      id: `plan-${planKey}`,
+      generation: source.generation + 1,
+      replacesPlanId: source.id,
+      status: "GENERATED",
+      triggerKind: "MID_WEEK_REOPT",
+      triggerEventId: suggestion.triggerEventId ?? null,
+      traceId: `trace-${planKey}`,
+      decisionId: `decision-${planKey}`,
+      acceptedAt: null,
+      completedAt: null,
+      rejectedAt: null,
+      rejectedReason: null,
+      abandonedAt: null,
+      abandonedReason: null,
+      days: applyProposal(source, proposal, planKey),
+      rollupSummary: {
+        ...source.rollupSummary,
+        weekly: {
+          ...source.rollupSummary.weekly,
+          costEstimateGbp:
+            Math.round((source.rollupSummary.weekly.costEstimateGbp - 1.1) * 100) /
+            100,
+          varietyIndex:
+            Math.round((source.rollupSummary.weekly.varietyIndex + 0.02) * 100) /
+            100,
+        },
+      },
+      version: 1,
+      createdAt: nowStamp(),
+      updatedAt: nowStamp(),
+    };
+
+    const out: StoreState = {
+      ...s,
+      planner: {
+        ...s.planner,
+        // Accept supersedes the current plan immediately (spec §3e): the
+        // active read 404s until the new generation is accepted.
+        plans: [
+          newPlan,
+          ...s.planner.plans.map((p) =>
+            p.id === source.id && p.status === "ACTIVE"
+              ? { ...p, status: "SUPERSEDED" as const, updatedAt: nowStamp() }
+              : p,
+          ),
+        ],
+        suggestions: s.planner.suggestions.filter((x) => x.id !== suggestionId),
+        lastReoptOutcome: {
+          newPlanId: newPlan.id,
+          dto: {
+            id: suggestion.id,
+            planId: suggestion.planId,
+            triggerKind: suggestion.triggerKind,
+            triggerEventId: suggestion.triggerEventId ?? null,
+            traceId: `trace-${suggestion.id}`,
+            decisionId: null,
+            summary: suggestion.summary,
+            status: "ACCEPTED",
+            proposedAssignments: proposal,
+            createdAt: suggestion.createdAt,
+            expiresAt: suggestion.expiresAt ?? null,
+          },
+        },
+      },
+    };
+    pushToast("Changes applied as a new draft plan — review and accept");
+    return pushNotification(
+      out,
+      "plan",
+      `Re-optimisation applied — generation ${newPlan.generation} awaiting your approval`,
+    );
+  });
+}
+
+/** Dismiss (#14) — suggestion → REJECTED, strikes clear (they are derived). */
+export function rejectSuggestion(suggestionId: string): void {
+  mutate((s) => {
+    if (!s.planner.suggestions.some((x) => x.id === suggestionId)) return s;
     return {
       ...s,
-      generation: {
-        ...s.generation,
-        status: "ready",
-        candidates: buildCandidates(s.generation.round),
+      planner: {
+        ...s.planner,
+        suggestions: s.planner.suggestions.filter((x) => x.id !== suggestionId),
       },
     };
   });
 }
 
-/** Async fake: ~1.5s in "generating", then five seeded candidates. */
-export function generatePlan(): void {
-  if (state.generation.status === "generating") return;
-  mutate((s) => startGeneration(s, s.generation.round));
-  setTimeout(finishGeneration, 1500);
-}
+/* ---- planner: plan lifecycle (#7 accept · #8 reject · #9 abandon · #10 revert) ------- */
 
-/** Re-roll all five candidates with deterministically varied scores. */
-export function regenerate(): void {
-  if (state.generation.status === "generating") return;
-  mutate((s) => startGeneration(s, s.generation.round + 1));
-  setTimeout(finishGeneration, 1500);
-}
-
-function statsForCandidate(c: PlanCandidate): PlanStat[] {
-  const warnCount = c.warn?.includes("quality")
-    ? (c.warn.match(/\d+/)?.[0] ?? "1")
-    : "0";
-  return [
-    { label: "Variety", value: c.variety },
-    { label: "Est. cost", value: c.cost, sub: c.conf },
-    {
-      label: "Protein on target",
-      value: c.nutrition.startsWith("on target") ? "7 of 7 days" : "5 of 7 days",
-    },
-    { label: "Quality warnings", value: warnCount, warn: warnCount !== "0" },
-  ];
-}
-
-/**
- * Apply a candidate's dinner line-up to the active plan. Pinned slots
- * (eaten / cooking / cooked) are immutable and keep their meal.
- */
-export function acceptCandidate(id: number): void {
+export function acceptPlan(planId: string): void {
+  const plan = findPlan(state, planId);
+  if (!plan) return;
+  if (plan.status !== "GENERATED") {
+    pushToast("409 — this plan changed state elsewhere; re-fetched", "warn");
+    return;
+  }
   mutate((s) => {
-    const candidate = s.generation.candidates.find((c) => c.id === id);
-    if (!candidate) return s;
-    const days = s.plan.days.map((d, i) => {
-      const dinner = d.slots.dinner;
-      const replacement = candidate.preview[i];
-      if (
-        replacement === undefined ||
-        dinner.state === "eaten" ||
-        dinner.state === "cooked" ||
-        dinner.state === "cooking"
-      ) {
-        return d;
-      }
-      return {
-        ...d,
-        slots: {
-          ...d.slots,
-          dinner: {
-            name: replacement,
-            state: "planned" as const,
-            batch: replacement.startsWith("Batch:") || undefined,
-          },
-        },
-      };
-    });
+    const p = findPlan(s, planId);
+    if (!p || p.status !== "GENERATED") return s;
     const out: StoreState = {
       ...s,
-      plan: {
-        ...s.plan,
-        days: clearAffected(days),
-        stats: statsForCandidate(candidate),
-        meta: `regenerated Wednesday · accepted from ${s.generation.candidates.length} candidates`,
-        fix: null,
+      planner: {
+        ...s.planner,
+        plans: s.planner.plans.map((x) => {
+          if (x.id === planId) {
+            return {
+              ...x,
+              status: "ACTIVE" as const,
+              acceptedAt: nowStamp(),
+              updatedAt: nowStamp(),
+            };
+          }
+          if (x.weekStartDate === p.weekStartDate && x.status === "ACTIVE") {
+            return { ...x, status: "SUPERSEDED" as const, updatedAt: nowStamp() };
+          }
+          return x;
+        }),
+        lastReoptOutcome:
+          s.planner.lastReoptOutcome?.newPlanId === planId
+            ? null
+            : s.planner.lastReoptOutcome,
+        generation:
+          s.planner.generation.resultPlanId === planId
+            ? { ...s.planner.generation, status: "idle", resultPlanId: null }
+            : s.planner.generation,
       },
-      generation: { ...s.generation, status: "idle", candidates: [] },
     };
     return pushNotification(
       out,
       "plan",
-      `New dinner line-up accepted — candidate ${id} applied to unpinned slots`,
+      `Plan accepted — generation ${p.generation} is now active for the week of ${p.weekStartDate}`,
     );
+  });
+}
+
+/** Idempotent: re-rejecting an already-REJECTED plan is a 200 no-op. */
+export function rejectPlan(planId: string, reason?: string): void {
+  const plan = findPlan(state, planId);
+  if (!plan || plan.status === "REJECTED") return;
+  if (plan.status !== "GENERATED") {
+    pushToast("409 — this plan changed state elsewhere; re-fetched", "warn");
+    return;
+  }
+  mutate((s) => {
+    const p = findPlan(s, planId);
+    if (!p || p.status !== "GENERATED") return s;
+    const out = replacePlan(s, {
+      ...p,
+      status: "REJECTED",
+      rejectedAt: nowStamp(),
+      rejectedReason: reason?.trim() ? reason.trim().slice(0, 255) : null,
+    });
+    return {
+      ...out,
+      planner: {
+        ...out.planner,
+        lastReoptOutcome:
+          out.planner.lastReoptOutcome?.newPlanId === planId
+            ? null
+            : out.planner.lastReoptOutcome,
+        generation:
+          out.planner.generation.resultPlanId === planId
+            ? { ...out.planner.generation, status: "idle", resultPlanId: null }
+            : out.planner.generation,
+      },
+    };
+  });
+}
+
+export function abandonPlan(planId: string, reason?: string): void {
+  const plan = findPlan(state, planId);
+  if (!plan) return;
+  if (plan.status !== "ACTIVE") {
+    pushToast("409 — only the active plan can be abandoned", "warn");
+    return;
+  }
+  mutate((s) => {
+    const p = findPlan(s, planId);
+    if (!p || p.status !== "ACTIVE") return s;
+    const out = replacePlan(s, {
+      ...p,
+      status: "ABANDONED",
+      abandonedAt: nowStamp(),
+      abandonedReason: reason?.trim() ? reason.trim().slice(0, 255) : null,
+    });
+    return pushNotification(
+      out,
+      "plan",
+      `Week of ${p.weekStartDate} abandoned — generate a new plan when ready`,
+    );
+  });
+}
+
+/**
+ * POST /plans/revert — copy-forward semantics: a brand-new GENERATED
+ * generation with content copied from the target; recipes that now fail
+ * hard constraints are stripped (mock rule: anything using the spoiled
+ * chicken breast) and unfillable slots ship empty with qualityWarning.
+ */
+export function revertToPlan(targetHistoricalPlanId: string): void {
+  const STRIPPED = new Set(["chicken-stir-fry", "chicken-wrap"]);
+  mutate((s) => {
+    const target = findPlan(s, targetHistoricalPlanId);
+    if (!target || target.status === "ACTIVE" || target.status === "DRAFT") {
+      return s;
+    }
+    const latestGen = Math.max(
+      0,
+      ...s.planner.plans
+        .filter((p) => p.weekStartDate === target.weekStartDate)
+        .map((p) => p.generation),
+    );
+    const planKey = `g${++planSeq}`;
+    let strippedCount = 0;
+    const days: DayDto[] = target.days.map((d) => ({
+      ...d,
+      id: `${planKey}-${d.date}`,
+      slots: d.slots.map((sl) => {
+        const strip =
+          sl.scheduledRecipe != null && STRIPPED.has(sl.scheduledRecipe.recipeId);
+        if (strip) strippedCount += 1;
+        return {
+          ...sl,
+          id: `${planKey}-${sl.id}`,
+          state: "PLANNED" as const,
+          pinnedReason: null,
+          scheduledRecipe: strip
+            ? null
+            : sl.scheduledRecipe && {
+                ...sl.scheduledRecipe,
+                id: `sr-${planKey}-${sl.id}`,
+              },
+        };
+      }),
+    }));
+    const reverted = buildPlan({
+      id: `plan-${planKey}`,
+      generation: latestGen + 1,
+      replacesPlanId:
+        s.planner.plans.find(
+          (p) =>
+            p.weekStartDate === target.weekStartDate && p.generation === latestGen,
+        )?.id ?? target.id,
+      weekStartDate: target.weekStartDate,
+      status: "GENERATED",
+      triggerKind: "USER_INITIATED",
+      qualityWarning: strippedCount > 0,
+      createdAt: nowStamp(),
+      scoreBreakdown: target.scoreBreakdown,
+      rollupSummary:
+        strippedCount > 0
+          ? {
+              ...target.rollupSummary,
+              weekly: {
+                ...target.rollupSummary.weekly,
+                constraintViolations: [
+                  `${strippedCount} slot${strippedCount === 1 ? "" : "s"} could not be refilled — chicken breast no longer available`,
+                ],
+              },
+            }
+          : target.rollupSummary,
+      days,
+    });
+    const out: StoreState = {
+      ...s,
+      planner: {
+        ...s.planner,
+        plans: [reverted, ...s.planner.plans],
+        generation: {
+          ...s.planner.generation,
+          status: "review",
+          weekStartDate: target.weekStartDate,
+          resultPlanId: reverted.id,
+          replayed: false,
+        },
+      },
+    };
+    if (strippedCount > 0) {
+      pushToast(
+        `${strippedCount} slot${strippedCount === 1 ? "" : "s"} could not be refilled — accept the partial plan or re-optimise`,
+        "warn",
+      );
+    }
+    return pushNotification(
+      out,
+      "plan",
+      `Reverted to generation ${target.generation} — copied forward as generation ${reverted.generation} (awaiting approval)`,
+    );
+  });
+}
+
+/* ---- planner: generation flow (#5 feasibility · #6 generate) --------------------------
+ * One blocking POST returning ONE composed plan — Stage C picks server-side;
+ * there is no candidates endpoint (spec §4c / §8 Q1). Idempotency-Key fake:
+ * one key per user intent, kept until a 2xx; re-submitting the same intent
+ * serves the cached plan back (200 replay); "Regenerate all" mints a new key.
+ */
+
+let idemSeq = 0;
+
+/**
+ * Enter the stepper for a target week. The Idempotency-Key persists for the
+ * same week's intent (re-submitting serves the cached 200 replay); changing
+ * week is a new intent. An in-flight generation is never interrupted.
+ */
+export function openGenerateFlow(weekStartDate: string): void {
+  mutate((s) => {
+    const g = s.planner.generation;
+    if (g.weekStartDate === weekStartDate && g.status === "generating") return s;
+    return {
+      ...s,
+      planner: {
+        ...s.planner,
+        generation: {
+          ...g,
+          status: "idle",
+          weekStartDate,
+          forceRegenerateIfActive: false,
+          idempotencyKey:
+            g.weekStartDate === weekStartDate ? g.idempotencyKey : null,
+          resultPlanId: null,
+          replayed: false,
+        },
+      },
+    };
+  });
+}
+
+export function setForceRegenerate(value: boolean): void {
+  mutate((s) => ({
+    ...s,
+    planner: {
+      ...s.planner,
+      generation: { ...s.planner.generation, forceRegenerateIfActive: value },
+    },
+  }));
+}
+
+const GENERATED_DINNERS = [
+  "miso-salmon-traybake",
+  "black-bean-tacos",
+  "gnocchi-al-forno",
+  "prawn-stir-fry",
+  "shakshuka",
+  "chickpea-spinach-curry",
+  "veggie-chilli",
+  "chicken-pilaf",
+  "fish-tacos",
+];
+const GENERATED_BREAKFASTS = [
+  "overnight-oats",
+  "eggs-on-toast",
+  "greek-yoghurt-bowl",
+  "shakshuka",
+  "pancakes",
+];
+const GENERATED_LUNCHES = [
+  "grain-bowl",
+  "soup-bread",
+  "leftover-curry",
+  "tuna-melt",
+  "chicken-wrap",
+];
+
+function generatedSlot(
+  planKey: string,
+  date: string,
+  slotIndex: number,
+  kind: MealSlotDto["kind"],
+  recipeId: string | null,
+): MealSlotDto {
+  const shared = kind === "DINNER";
+  return {
+    id: `${planKey}-${date}-${kind.toLowerCase()}-${slotIndex}`,
+    slotIndex,
+    kind,
+    label: kind === "BREAKFAST" ? "Breakfast" : kind === "LUNCH" ? "Lunch" : "Dinner",
+    timeBudgetMin: kind === "DINNER" ? 45 : kind === "BREAKFAST" ? 15 : 20,
+    shared,
+    eaters: shared ? ["m1", "m2", "m3", "m4"] : ["m1"],
+    state: "PLANNED",
+    pinnedReason: null,
+    mealTime: kind === "BREAKFAST" ? "08:00" : kind === "DINNER" ? "19:00" : null,
+    prepStepAtTime: null,
+    scheduledRecipe:
+      recipeId === null
+        ? null
+        : {
+            id: `sr-${planKey}-${date}-${slotIndex}`,
+            recipeId,
+            recipeVersionId: `${recipeId}-v1`,
+            recipeBranchId: `${recipeId}-main`,
+            servings: shared ? 4 : 1,
+            batchCookSessionId: null,
+            augmentationNotes: null,
+            augmentationSource: null,
+            phase2Addition: false,
+          },
+  };
+}
+
+/**
+ * Compose one GENERATED plan for the target week (the mock Stage A→D).
+ * Re-optimising the current week preserves pinned slots — eaten / cooking /
+ * cooked / skipped / user-pinned meals never regenerate (HLD rule).
+ */
+function composePlan(s: StoreState, weekStartDate: string, round: number): PlanDto {
+  const planKey = `g${++planSeq}`;
+  const vary = (i: number, pool: string[]): string =>
+    pool[(i + round * 3) % pool.length];
+  const infeasible = s.planner.feasibility[weekStartDate]?.feasible === false;
+  const source = activePlanForWeek(s, weekStartDate);
+
+  const days: DayDto[] = Array.from({ length: 7 }, (_, i) => {
+    const date = addDaysIso(weekStartDate, i);
+    const sourceDay = source?.days.find((d) => d.date === date);
+    const slots: MealSlotDto[] = sourceDay
+      ? sourceDay.slots.map((sl, idx) => {
+          if (sl.pinnedReason != null || sl.state !== "PLANNED") {
+            // Pinned content copies forward verbatim.
+            return { ...sl, id: `${planKey}-${sl.id}` };
+          }
+          const pool =
+            sl.kind === "DINNER"
+              ? GENERATED_DINNERS
+              : sl.kind === "BREAKFAST"
+                ? GENERATED_BREAKFASTS
+                : GENERATED_LUNCHES;
+          return {
+            ...sl,
+            id: `${planKey}-${sl.id}`,
+            scheduledRecipe: sl.scheduledRecipe && {
+              ...sl.scheduledRecipe,
+              id: `sr-${planKey}-${sl.id}`,
+              recipeId: vary(i + idx, pool),
+            },
+          };
+        })
+      : [
+          generatedSlot(planKey, date, 0, "BREAKFAST", vary(i, GENERATED_BREAKFASTS)),
+          generatedSlot(planKey, date, 1, "LUNCH", vary(i + 1, GENERATED_LUNCHES)),
+          generatedSlot(
+            planKey,
+            date,
+            2,
+            "DINNER",
+            infeasible && i === 3 ? null : vary(i, GENERATED_DINNERS),
+          ),
+        ];
+    return { id: `${planKey}-${date}`, date, notes: null, slots: slots };
+  });
+
+  const latestGen = Math.max(
+    0,
+    ...s.planner.plans
+      .filter((p) => p.weekStartDate === weekStartDate)
+      .map((p) => p.generation),
+  );
+  const wobble = (base: number, spread: number): number =>
+    Math.round((base + (((round * 7) % (spread * 2 + 1)) - spread) / 100) * 100) /
+    100;
+
+  return buildPlan({
+    id: `plan-${planKey}`,
+    generation: latestGen + 1,
+    replacesPlanId:
+      s.planner.plans.find(
+        (p) => p.weekStartDate === weekStartDate && p.generation === latestGen,
+      )?.id ?? null,
+    weekStartDate,
+    status: "GENERATED",
+    triggerKind: "USER_INITIATED",
+    qualityWarning: infeasible,
+    aiAugmented: !infeasible, // Stage C fallback rides the infeasible demo
+    createdAt: nowStamp(),
+    scoreBreakdown: {
+      preference: wobble(0.92, 3),
+      nutrition: infeasible ? 0.71 : wobble(0.89, 3),
+      cost: wobble(0.85, 4),
+      variety: wobble(0.81, 4),
+      time: wobble(0.9, 2),
+      batch: 0.82,
+      provisions: 0.88,
+      composite: infeasible ? wobble(0.79, 3) : wobble(0.9, 3),
+      nutritionFloorGatePassed: !infeasible,
+      varietyGatePassed: true,
+      weightSchemeVersion: "v3",
+    },
+    rollupSummary: {
+      daily: days.map((d, i) => ({
+        date: d.date,
+        kcal: 2150,
+        proteinG: infeasible && (i === 1 || i === 3) ? 110 : 172,
+        fatG: 67,
+        carbsG: 218,
+        fibreG: 27,
+        costGbp: 7.4,
+        totalTimeMin: i === 6 ? 80 : 30 + ((i + round) % 3) * 5,
+        violations:
+          infeasible && i === 3
+            ? ["Protein 104 g vs 120 g floor", "Dinner slot unfilled"]
+            : infeasible && i === 1
+              ? ["Protein 112 g vs 120 g floor"]
+              : [],
+      })),
+      weekly: {
+        kcalTotal: 15050,
+        proteinAvgG: infeasible ? 158 : 174,
+        fatAvgG: 67,
+        carbsAvgG: 218,
+        costEstimateGbp: wobble(53, 0) + ((round * 2) % 5) - 2,
+        costConfidence: 0.83,
+        staleIngredientCount: 2,
+        varietyIndex: wobble(0.81, 4),
+        batchCookSessions: source ? 2 : 1,
+        constraintViolations: infeasible
+          ? [
+              "Protein floor 120 g unmet on Tue and Thu within the £55 budget",
+              "Thu dinner unfilled — no feasible recipe under current constraints",
+            ]
+          : [],
+      },
+    },
+    days,
+  });
+}
+
+/**
+ * POST /plans/generate. 409 when a generation is already running; 200
+ * cached replay when the intent's Idempotency-Key was already served;
+ * otherwise a blocking ~1.6 s compose → 201 + review.
+ */
+export function requestGeneration(): void {
+  const g = state.planner.generation;
+  if (g.status === "generating") {
+    pushToast("409 — a generation is already running; try again shortly", "warn");
+    return;
+  }
+  const key = g.idempotencyKey ?? `idem-${++idemSeq}-${g.weekStartDate}`;
+  const servedPlanId = g.served[key];
+  if (servedPlanId && findPlan(state, servedPlanId)) {
+    mutate((s) => ({
+      ...s,
+      planner: {
+        ...s.planner,
+        generation: {
+          ...s.planner.generation,
+          idempotencyKey: key,
+          status: "review",
+          resultPlanId: servedPlanId,
+          replayed: true,
+        },
+      },
+    }));
+    pushToast("Already generated — showing the existing result (200 replay)");
+    return;
+  }
+  mutate((s) => ({
+    ...s,
+    planner: {
+      ...s.planner,
+      generation: { ...s.planner.generation, status: "generating", idempotencyKey: key },
+    },
+  }));
+  setTimeout(() => {
+    mutate((s) => {
+      const gen = s.planner.generation;
+      if (gen.status !== "generating" || gen.idempotencyKey !== key) return s;
+      const plan = composePlan(s, gen.weekStartDate, gen.round);
+      return {
+        ...s,
+        planner: {
+          ...s.planner,
+          plans: [plan, ...s.planner.plans],
+          generation: {
+            ...gen,
+            status: "review",
+            resultPlanId: plan.id,
+            replayed: false,
+            served: { ...gen.served, [key]: plan.id },
+          },
+        },
+      };
+    });
+  }, 1600);
+}
+
+/** "Regenerate all" — a NEW user intent: mints a fresh Idempotency-Key. */
+export function regenerateAll(): void {
+  if (state.planner.generation.status === "generating") return;
+  mutate((s) => ({
+    ...s,
+    planner: {
+      ...s.planner,
+      generation: {
+        ...s.planner.generation,
+        idempotencyKey: null,
+        round: s.planner.generation.round + 1,
+        status: "idle",
+        resultPlanId: null,
+        replayed: false,
+      },
+    },
+  }));
+  requestGeneration();
+}
+
+/* ---- adaptation: pending-change teaser (today.md §3f) ----------------------------------
+ * Accept needs expectedOptimisticVersion which the list item doesn't carry —
+ * the mock performs the detail-fetch-then-accept pair in one step (spec §8 Q6).
+ */
+
+export function acceptPendingChange(id: string): void {
+  mutate((s) => {
+    const item = s.adaptation.pendingChanges.find((c) => c.id === id);
+    if (!item) return s;
+    // Detail GET supplies expectedOptimisticVersion; then POST accept.
+    const out = applyRecipeChange(s, item.recipeId);
+    return {
+      ...out,
+      adaptation: {
+        pendingChanges: out.adaptation.pendingChanges.filter((c) => c.id !== id),
+      },
+    };
   });
 }
 
@@ -447,15 +1073,17 @@ function bumpVersions(versions: string[]): string[] {
   ];
 }
 
-/** Clear the Today suggestion when it points at this recipe's change. */
+/** Decided pending changes leave the adaptation queue (Today teaser + #8). */
 function clearLinkedSuggestion(s: StoreState, recipeId: string): StoreState {
-  if (s.today.suggestion?.recipeId !== recipeId) return s;
+  if (!s.adaptation.pendingChanges.some((c) => c.recipeId === recipeId)) {
+    return s;
+  }
   return {
     ...s,
-    today: {
-      ...s.today,
-      suggestion: null,
-      attention: s.today.attention.filter((a) => a.kind !== "ai"),
+    adaptation: {
+      pendingChanges: s.adaptation.pendingChanges.filter(
+        (c) => c.recipeId !== recipeId,
+      ),
     },
   };
 }
@@ -521,9 +1149,10 @@ export function adjustPantryQty(id: string, delta: number): void {
 }
 
 /**
- * Mark a pantry item spoiled: logs waste, surfaces an attention item on
- * Today, and — when no fix is already pending — raises a re-optimisation
- * fix card on Plan (cross-page liveliness).
+ * Mark a pantry item spoiled: logs waste and — when nothing is already
+ * pending — raises a contract-shaped re-opt suggestion against the active
+ * plan (PROVISIONS listener, cross-page liveliness). The suggestion's diff
+ * lives server-side until accept (spec §8 Q2).
  */
 export function markSpoiled(id: string): void {
   mutate((s) => {
@@ -551,58 +1180,70 @@ export function markSpoiled(id: string): void {
           ],
         },
       },
-      today: {
-        ...s.today,
-        attention: [
-          {
-            kind: "expiry" as const,
-            text: `${item.name} marked spoiled — check the plan fix before Thursday`,
-          },
-          ...s.today.attention,
-        ],
-      },
     };
 
-    if (!out.plan.fix) {
-      // Target the first future dinner still in "planned" state.
-      const target = out.plan.days.find(
-        (d) =>
-          ["Thu", "Fri", "Sat", "Sun"].includes(d.day) &&
-          d.slots.dinner.state === "planned",
+    const active = activePlanForWeek(out, CURRENT_WEEK_START);
+    if (out.planner.suggestions.length === 0 && active) {
+      const alreadyAffected = new Set(
+        out.planner.suggestions.flatMap((x) => x.affectedSlotIds),
       );
-      if (target) {
-        const fix: ReoptFix = {
-          title: `${item.name} marked spoiled`,
-          sub: "1 future slot affected · eaten and cooked meals stay pinned",
-          swaps: [
-            {
-              day: target.day,
-              slot: "dinner",
-              slotLabel: `${target.day} dinner`,
-              from: target.slots.dinner.name,
-              to: "One-pot tomato orzo",
-              note: "pantry-friendly",
-            },
-          ],
-          impact: "Cost −£0.60 · protein unchanged · variety +1%",
+      // Target the first future dinner still PLANNED (pinned slots immune).
+      const target = active.days
+        .filter((d) => d.date > MOCK_TODAY_ISO)
+        .flatMap((d) => d.slots)
+        .find(
+          (sl) =>
+            sl.kind === "DINNER" &&
+            sl.state === "PLANNED" &&
+            sl.pinnedReason == null &&
+            sl.scheduledRecipe != null &&
+            !alreadyAffected.has(sl.id),
+        );
+      if (target?.scheduledRecipe) {
+        const sgId = `sg-${++suggestionSeq}`;
+        const suggestion: ReoptSuggestionDto = {
+          id: sgId,
+          householdId: active.householdId,
+          weekStartDate: active.weekStartDate,
+          planId: active.id,
+          triggerKind: "PROVISIONS",
+          triggerEventId: `evt-spoil-${item.id}`,
+          affectedSlotIds: [target.id],
+          summary: `${item.name} marked spoiled`,
+          status: "PENDING",
+          expiresAt: `${addDaysIso(active.weekStartDate, 7)}T00:00:00Z`,
+          createdAt: nowStamp(),
+          resolvedAt: null,
         };
         out = {
           ...out,
-          plan: {
-            ...out.plan,
-            fix,
-            days: updateSlot(out.plan.days, target.day, "dinner", (sl) => ({
-              ...sl,
-              state: "affected",
-            })),
+          planner: {
+            ...out.planner,
+            suggestions: [suggestion, ...out.planner.suggestions],
+            proposedBySuggestion: {
+              ...out.planner.proposedBySuggestion,
+              [sgId]: {
+                schemaVersion: 1,
+                changes: [
+                  {
+                    slotId: target.id,
+                    oldRecipeId: target.scheduledRecipe.recipeId,
+                    newRecipeId: "one-pot-tomato-orzo",
+                    newRecipeVersionId: "one-pot-tomato-orzo-v1",
+                    newRecipeBranchId: "one-pot-tomato-orzo-main",
+                    newServings: target.scheduledRecipe.servings,
+                    reason: "pantry-friendly",
+                  },
+                ],
+              },
+            },
           },
         };
-        out = pushNotification(
+        return pushNotification(
           out,
           "pantry",
-          `${item.name} marked spoiled — fix suggested for ${target.day} dinner`,
+          `${item.name} marked spoiled — re-optimisation suggested (1 future slot affected)`,
         );
-        return out;
       }
     }
     return pushNotification(out, "pantry", `${item.name} marked spoiled`);
@@ -615,12 +1256,6 @@ export function markSpoiled(id: string): void {
  * SKIPPED, never backwards. The single mock-only exception is repairing an
  * OVERRIDDEN slot whose AI parse failed — see editSlot.
  */
-
-const MEAL_SLOT_BY_KEY: Record<MealSlotKey, MealSlot> = {
-  breakfast: "BREAKFAST",
-  lunch: "LUNCH",
-  dinner: "DINNER",
-};
 
 /** Mock clock: every write stamps the fixed "today" evening. */
 function nowIso(): string {
@@ -1452,39 +2087,6 @@ export function computeDivergence(
   return worst;
 }
 
-/* ---- today --------------------------------------------------------------------------------- */
-
-/** Accept the Today suggestion: applies the linked recipe's pending change. */
-export function acceptTodaySuggestion(): void {
-  mutate((s) => {
-    const suggestion = s.today.suggestion;
-    if (!suggestion) return s;
-    const out = applyRecipeChange(s, suggestion.recipeId);
-    return {
-      ...out,
-      today: {
-        ...out.today,
-        suggestion: null,
-        attention: out.today.attention.filter((a) => a.kind !== "ai"),
-      },
-    };
-  });
-}
-
-export function dismissTodaySuggestion(): void {
-  mutate((s) => {
-    if (!s.today.suggestion) return s;
-    return {
-      ...s,
-      today: {
-        ...s.today,
-        suggestion: null,
-        attention: s.today.attention.filter((a) => a.kind !== "ai"),
-      },
-    };
-  });
-}
-
 /* ---- notifications ---------------------------------------------------------------------------- */
 
 export function addNotification(kind: NotificationKind, title: string): void {
@@ -1634,7 +2236,12 @@ function formatTime(minutes: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-/** Nudge a lifestyle slot time ±15 min; Today's timeline mirrors it. */
+/**
+ * Nudge a lifestyle slot time ±15 min. Today's timeline does NOT mirror it:
+ * per the serve-time contract, MealSlotDto.mealTime is the raw nullable
+ * override and the lifestyle-config fallback resolution is server-internal
+ * with no HTTP exposure (plan.md §8 Q3).
+ */
 export function adjustSlotTime(slot: MealSlotKey, direction: 1 | -1): void {
   mutate((s) => {
     const [h, m] = s.preferences.lifestyle.slotTimes[slot]
@@ -1652,13 +2259,6 @@ export function adjustSlotTime(slot: MealSlotKey, direction: 1 | -1): void {
         lifestyle: {
           ...s.preferences.lifestyle,
           slotTimes: { ...s.preferences.lifestyle.slotTimes, [slot]: time },
-        },
-      },
-      today: {
-        ...s.today,
-        slotMeta: {
-          ...s.today.slotMeta,
-          [slot]: { ...s.today.slotMeta[slot], time },
         },
       },
     };

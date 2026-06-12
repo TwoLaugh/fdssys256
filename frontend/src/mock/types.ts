@@ -11,96 +11,93 @@
 
 import type { components } from "../api/types.gen";
 
-/* ---- plan ---------------------------------------------------------------- */
+/* ---- plan: backend DTO mirrors ------------------------------------------------
+ * The planner slices mirror the real contract (design/frontend/pages/plan.md §2)
+ * exactly like the nutrition slices below — re-exported from the generated
+ * OpenAPI types so the mock validates the production shapes.
+ */
 
 export type MealSlotKey = "breakfast" | "lunch" | "dinner";
 
+type PlannerSchemas = components["schemas"];
+
+export type PlanStatus = PlannerSchemas["PlanStatus"];
+export type TriggerKind = PlannerSchemas["TriggerKind"];
+export type PlannerSlotKind = PlannerSchemas["PlannerSlotKind"];
+/** Planner slot lifecycle: PLANNED → COOKING → COOKED → EATEN | SKIPPED. */
+export type SlotState = PlannerSchemas["SlotState"];
+export type PinnedReason = NonNullable<PlannerSchemas["MealSlotDto"]["pinnedReason"]>;
+export type ReoptTriggerKind = PlannerSchemas["ReoptTriggerKind"];
+export type ConflictType = PlannerSchemas["ConflictType"];
+
+export type MealSlotDto = PlannerSchemas["MealSlotDto"];
+export type ScheduledRecipeRef = NonNullable<MealSlotDto["scheduledRecipe"]>;
+export type DayDto = PlannerSchemas["DayDto"];
+export type PlanDto = PlannerSchemas["PlanDto"];
+export type ScoreBreakdownDocument = PlannerSchemas["ScoreBreakdownDocument"];
+export type RollupSummaryDocument = PlannerSchemas["RollupSummaryDocument"];
+export type WeeklyRollupDocument = PlannerSchemas["WeeklyRollupDocument"];
+export type DailyRollupDocument = PlannerSchemas["DailyRollupDocument"];
+export type ReoptSuggestionDto = PlannerSchemas["ReoptSuggestionDto"];
+export type PlanReoptSuggestionDto = PlannerSchemas["PlanReoptSuggestionDto"];
+export type ProposedReoptAssignmentsDocument =
+  PlannerSchemas["ProposedReoptAssignmentsDocument"];
+export type ProposedSlotChange = PlannerSchemas["ProposedSlotChange"];
+export type FeasibilityCheckResultDto = PlannerSchemas["FeasibilityCheckResultDto"];
+export type ConstraintConflictDto = PlannerSchemas["ConstraintConflictDto"];
+export type ResolutionOptionDto = PlannerSchemas["ResolutionOptionDto"];
+export type GeneratePlanRequest = PlannerSchemas["GeneratePlanRequest"];
+
+/** Status-mark glyph set: the five contract slot states plus the derived
+ *  affected-by-suggestion overlay (NOT a slot state — spec §3d). */
+export type SlotMark = SlotState | "AFFECTED";
+
+/* ---- generation flow state ----------------------------------------------------- */
+
+export type GenerationStatus = "idle" | "generating" | "review";
+
 /**
- * Slot lifecycle: planned → cooking → cooked → eaten (pinned, never
- * backwards). "affected" = struck through by a pending re-optimisation fix.
+ * POST /plans/generate intent state, including the Idempotency-Key fake:
+ * one key per user intent, persisted until a 2xx lands; re-submitting with
+ * the same key serves the cached plan back (200 replay, spec §4b).
  */
-export type SlotState = "planned" | "cooking" | "cooked" | "eaten" | "affected";
-
-export interface PlanSlot {
-  name: string;
-  state: SlotState;
-  /** Linked to a batch-cook. */
-  batch?: boolean;
-}
-
-export interface PlanDay {
-  /** Short day name, e.g. "Mon". */
-  day: string;
-  /** Day of month, e.g. 8. */
-  date: number;
-  today?: boolean;
-  slots: Record<MealSlotKey, PlanSlot>;
-}
-
-export interface PlanStat {
-  label: string;
-  value: string;
-  sub?: string;
-  warn?: boolean;
-}
-
-export interface ReoptSwap {
-  day: string;
-  slot: MealSlotKey;
-  /** Display label, e.g. "Thu dinner". */
-  slotLabel: string;
-  from: string;
-  to: string;
-  note?: string;
-}
-
-export interface ReoptFix {
-  title: string;
-  sub: string;
-  swaps: ReoptSwap[];
-  impact: string;
-  /** Stat band values to apply when the fix is accepted (seeded fix only). */
-  statsAfter?: PlanStat[];
-}
-
-export interface PlanState {
-  title: string;
-  range: string;
-  meta: string;
-  stats: PlanStat[];
-  days: PlanDay[];
-  /** Pending re-optimisation fix, if any. */
-  fix: ReoptFix | null;
-}
-
-/* ---- generation ----------------------------------------------------------- */
-
-export interface PlanCandidate {
-  id: number;
-  fit: number;
-  recommended?: boolean;
-  nutrition: string;
-  cost: string;
-  conf: string;
-  variety: string;
-  prep: string;
-  warn: string | null;
-  /** Advisor-voice "why this candidate" line. */
-  reasoning: string;
-  /** Seven dinner line-up chips, Mon → Sun. */
-  preview: string[];
-}
-
-export type GenerationStatus = "idle" | "generating" | "ready";
-
 export interface GenerationState {
   status: GenerationStatus;
-  /** Regeneration round — used to deterministically vary scores. */
+  /** Target Monday (GeneratePlanRequest.weekStartDate). */
+  weekStartDate: string;
+  /** GeneratePlanRequest.forceRegenerateIfActive consent checkbox. */
+  forceRegenerateIfActive: boolean;
+  /** Current intent's Idempotency-Key; "Regenerate all" mints a new one. */
+  idempotencyKey: string | null;
+  /** Mock server replay cache: Idempotency-Key → planId already served. */
+  served: Record<string, string>;
+  resultPlanId: string | null;
+  /** True when the last response was a 200 cached replay (vs 201 created). */
+  replayed: boolean;
+  /** Regeneration round — deterministically varies generated content. */
   round: number;
-  title: string;
-  context: string;
-  feasibility: string;
-  candidates: PlanCandidate[];
+}
+
+export interface PlannerState {
+  /** Every generation the mock knows, across weeks (the plan store #1–#4). */
+  plans: PlanDto[];
+  /** PENDING re-opt suggestions (#12 list — no proposedAssignments pre-accept). */
+  suggestions: ReoptSuggestionDto[];
+  /**
+   * Mock server side: suggestionId → diff revealed by the accept response.
+   * The list DTO deliberately omits this (contract gap, spec §8 Q2).
+   */
+  proposedBySuggestion: Record<string, ProposedReoptAssignmentsDocument>;
+  /** Accept response (#13) held for the post-accept review panel. */
+  lastReoptOutcome: { dto: PlanReoptSuggestionDto; newPlanId: string } | null;
+  /** weekStartDate → feasibility check result (#5). */
+  feasibility: Record<string, FeasibilityCheckResultDto>;
+  /**
+   * Slot the mock "server" has already advanced on another device — first
+   * action on it returns the 409 + re-fetch demo (spec §8 status map).
+   */
+  racedSlot: { slotId: string; serverState: SlotState } | null;
+  generation: GenerationState;
 }
 
 /* ---- recipes -------------------------------------------------------------- */
@@ -251,38 +248,26 @@ export interface AppNotification {
   read: boolean;
 }
 
-/* ---- today ----------------------------------------------------------------- */
+/* ---- adaptation (Today's suggestion teaser) ----------------------------------
+ * Contract shape for GET /adaptation/pending-changes (today.md §3f). Today
+ * shows row 1; the Activity page owns the full top-3.
+ */
 
-export type AttentionKind = "expiry" | "defrost" | "ai";
+export type PendingChangeListItemDto =
+  components["schemas"]["PendingChangeListItemDto"];
 
-export interface AttentionItem {
-  kind: AttentionKind;
+export interface AdaptationState {
+  /** Ranked pending recipe changes, server-ordered best-first. */
+  pendingChanges: PendingChangeListItemDto[];
+}
+
+/* ---- toasts (transient UI, not a DTO) ------------------------------------------ */
+
+export interface ToastItem {
+  id: number;
   text: string;
-}
-
-export interface TodaySlotMeta {
-  time: string;
-  meta: string;
-  /** Calories credited when the slot is marked eaten. */
-  kcal: number;
-  alert?: string;
-}
-
-export interface TodaySuggestion {
-  label: string;
-  title: string;
-  sub: string;
-  /** Recipe whose pending change this suggestion applies on accept. */
-  recipeId: string;
-}
-
-export interface TodayState {
-  dateLabel: string;
-  progressLabel: string;
-  greeting: string;
-  slotMeta: Record<MealSlotKey, TodaySlotMeta>;
-  attention: AttentionItem[];
-  suggestion: TodaySuggestion | null;
+  /** warn = 409/422-style guard messages (amber). */
+  tone: "info" | "warn";
 }
 
 /* ---- nutrition: backend DTO mirrors ------------------------------------------
@@ -516,13 +501,12 @@ export interface DiscoveryState {
 /* ---- root ------------------------------------------------------------------ */
 
 export interface StoreState {
-  plan: PlanState;
-  generation: GenerationState;
+  planner: PlannerState;
+  adaptation: AdaptationState;
   recipes: Recipe[];
   grocery: GroceryState;
   pantry: PantryState;
   notifications: AppNotification[];
-  today: TodayState;
   nutrition: NutritionState;
   targets: TargetsDto;
   preferences: PreferencesState;
@@ -530,4 +514,6 @@ export interface StoreState {
   notificationPrefs: NotificationPrefs;
   household: HouseholdState;
   discovery: DiscoveryState;
+  /** Transient toast stack (409-guard + confirmation messages). */
+  toasts: ToastItem[];
 }
