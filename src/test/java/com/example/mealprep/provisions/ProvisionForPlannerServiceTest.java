@@ -429,6 +429,7 @@ class ProvisionForPlannerServiceTest {
             userId,
             HouseholdRole.primary,
             "alice",
+            null, // username (auth join; not exercised here)
             0,
             joined,
             0);
@@ -460,6 +461,7 @@ class ProvisionForPlannerServiceTest {
             userId,
             HouseholdRole.primary,
             "alice",
+            null, // username (auth join; not exercised here)
             0,
             joined,
             0);
@@ -495,6 +497,7 @@ class ProvisionForPlannerServiceTest {
             otherUserId,
             HouseholdRole.member,
             "older-bob",
+            null, // username (auth join; not exercised here)
             0,
             otherJoined,
             0);
@@ -505,6 +508,7 @@ class ProvisionForPlannerServiceTest {
             userId,
             HouseholdRole.primary,
             "alice",
+            null, // username (auth join; not exercised here)
             0,
             userJoined,
             0);
@@ -535,6 +539,7 @@ class ProvisionForPlannerServiceTest {
             userId,
             HouseholdRole.primary,
             "alice",
+            null, // username (auth join; not exercised here)
             0,
             joined,
             0);

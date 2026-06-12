@@ -283,6 +283,7 @@ class NotificationKindResolverTest {
             primaryUser,
             HouseholdRole.primary,
             "Primary",
+            null, // username (auth join; not exercised here)
             0,
             Instant.now(),
             0L);
@@ -293,6 +294,7 @@ class NotificationKindResolverTest {
             UUID.randomUUID(),
             HouseholdRole.member,
             "Member",
+            null, // username (auth join; not exercised here)
             1,
             Instant.now(),
             0L);

@@ -160,6 +160,7 @@ class PlannerColdStartIT {
             userId,
             HouseholdRole.primary,
             "owner",
+            null, // username (auth join; not exercised here)
             0,
             Instant.now(),
             0L);

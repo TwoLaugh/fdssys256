@@ -10,6 +10,10 @@ HouseholdMemberDto:
     userId: { type: string, format: uuid }
     role: { $ref: '#/HouseholdRole' }
     displayName: { type: string, maxLength: 64, nullable: true }
+    username:
+      type: string
+      nullable: true
+      description: 'Login username (read-only, joined from auth). Null only when the user no longer resolves (soft-deleted).'
     priority: { type: integer, minimum: 0, maximum: 1000 }
     joinedAt: { type: string, format: date-time }
     version: { type: integer, format: int64 }

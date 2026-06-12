@@ -11,6 +11,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.example.mealprep.auth.domain.service.AuthQueryService;
 import com.example.mealprep.household.api.dto.AddMemberRequest;
 import com.example.mealprep.household.api.dto.ChangeRoleRequest;
 import com.example.mealprep.household.api.dto.HouseholdMemberDto;
@@ -89,6 +90,7 @@ class HouseholdMutationKillsTest {
   @Mock private HouseholdSettingsAuditLogRepository householdSettingsAuditLogRepository;
   @Mock private HouseholdInviteRepository householdInviteRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private AuthQueryService authQueryService;
 
   private final HouseholdMapper mapper =
       new com.example.mealprep.household.api.mapper.HouseholdMapperImpl();
@@ -127,7 +129,8 @@ class HouseholdMutationKillsTest {
         eventPublisher,
         fixedClock,
         SoftPreferencesReaderTestSupport.emptyProvider(),
-        new SoftPreferenceMerger(fixedClock));
+        new SoftPreferenceMerger(fixedClock),
+        authQueryService);
   }
 
   // ============================================================================================

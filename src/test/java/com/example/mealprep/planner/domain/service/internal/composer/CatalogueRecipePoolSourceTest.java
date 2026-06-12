@@ -60,6 +60,7 @@ class CatalogueRecipePoolSourceTest {
         userId,
         HouseholdRole.primary,
         "member",
+        null, // username (auth join; not exercised here)
         0,
         Instant.parse("2026-01-01T00:00:00Z"),
         0L);

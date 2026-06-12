@@ -8,6 +8,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.auth.api.dto.UserDto;
+import com.example.mealprep.auth.domain.service.AuthQueryService;
 import com.example.mealprep.household.api.dto.AcceptInviteRequest;
 import com.example.mealprep.household.api.dto.CreateInviteRequest;
 import com.example.mealprep.household.api.dto.HouseholdInviteDto;
@@ -68,6 +70,7 @@ class HouseholdInvitesServiceTest {
   @Mock private HouseholdSettingsAuditLogRepository householdSettingsAuditLogRepository;
   @Mock private HouseholdInviteRepository householdInviteRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private AuthQueryService authQueryService;
 
   private final HouseholdMapper mapper =
       new com.example.mealprep.household.api.mapper.HouseholdMapperImpl();
@@ -112,8 +115,8 @@ class HouseholdInvitesServiceTest {
         eventPublisher,
         fixedClock,
         com.example.mealprep.household.testdata.SoftPreferencesReaderTestSupport.emptyProvider(),
-        new com.example.mealprep.household.domain.service.internal.SoftPreferenceMerger(
-            fixedClock));
+        new com.example.mealprep.household.domain.service.internal.SoftPreferenceMerger(fixedClock),
+        authQueryService);
   }
 
   // ---------------- createInvite ----------------
@@ -325,6 +328,69 @@ class HouseholdInvitesServiceTest {
             .orElseThrow();
     assertThat(inviteAccepted.acceptedByUserId()).isEqualTo(accepterId);
     assertThat(inviteAccepted.grantedRole()).isEqualTo(HouseholdRole.member);
+  }
+
+  @Test
+  void acceptInvite_defaultsDisplayNameFromAccepterUsername() {
+    UUID accepterId = UUID.randomUUID();
+    UUID householdId = UUID.randomUUID();
+    Household household = HouseholdTestData.household().withId(householdId).build();
+    HouseholdInvite invite =
+        HouseholdTestData.invite()
+            .withHouseholdId(householdId)
+            .withInviteCode("USERNAMEDFLTCD12")
+            .withIntendedRole(HouseholdRole.member)
+            .withExpiresAt(fixedNow.plus(1, ChronoUnit.DAYS))
+            .build();
+    when(householdInviteRepository.findByInviteCode("USERNAMEDFLTCD12"))
+        .thenReturn(Optional.of(invite));
+    when(householdMemberRepository.findByUserId(accepterId)).thenReturn(Optional.empty());
+    when(householdRepository.findWithMembersById(householdId)).thenReturn(Optional.of(household));
+    when(householdRepository.saveAndFlush(any(Household.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(householdInviteRepository.saveAndFlush(any(HouseholdInvite.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(authQueryService.getUser(accepterId))
+        .thenReturn(Optional.of(new UserDto(accepterId, "alice", fixedNow)));
+
+    HouseholdMemberDto memberDto =
+        service().acceptInvite(accepterId, new AcceptInviteRequest("USERNAMEDFLTCD12"));
+
+    // Half 2 of the display-names ticket: a fresh member is never a UUID stub — the persisted row
+    // (not just the response DTO) carries the username as its displayName default.
+    assertThat(memberDto.displayName()).isEqualTo("alice");
+    assertThat(memberDto.username()).isEqualTo("alice");
+    assertThat(household.getMembers()).hasSize(1);
+    assertThat(household.getMembers().get(0).getDisplayName()).isEqualTo("alice");
+  }
+
+  @Test
+  void acceptInvite_usernameUnresolvable_leavesDisplayNameNull() {
+    UUID accepterId = UUID.randomUUID();
+    UUID householdId = UUID.randomUUID();
+    Household household = HouseholdTestData.household().withId(householdId).build();
+    HouseholdInvite invite =
+        HouseholdTestData.invite()
+            .withHouseholdId(householdId)
+            .withInviteCode("NOUSERNAMECODE12")
+            .withIntendedRole(HouseholdRole.member)
+            .withExpiresAt(fixedNow.plus(1, ChronoUnit.DAYS))
+            .build();
+    when(householdInviteRepository.findByInviteCode("NOUSERNAMECODE12"))
+        .thenReturn(Optional.of(invite));
+    when(householdMemberRepository.findByUserId(accepterId)).thenReturn(Optional.empty());
+    when(householdRepository.findWithMembersById(householdId)).thenReturn(Optional.of(household));
+    when(householdRepository.saveAndFlush(any(Household.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(householdInviteRepository.saveAndFlush(any(HouseholdInvite.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(authQueryService.getUser(accepterId)).thenReturn(Optional.empty());
+
+    HouseholdMemberDto memberDto =
+        service().acceptInvite(accepterId, new AcceptInviteRequest("NOUSERNAMECODE12"));
+
+    assertThat(memberDto.displayName()).isNull();
+    assertThat(memberDto.username()).isNull();
   }
 
   @Test

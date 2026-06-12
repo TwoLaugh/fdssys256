@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.auth.domain.service.AuthQueryService;
 import com.example.mealprep.household.api.dto.MergeStrategy;
 import com.example.mealprep.household.api.dto.MergedSoftPreferencesDto;
 import com.example.mealprep.household.api.dto.SoftPreferenceBundleDto;
@@ -55,6 +56,7 @@ class HouseholdMergeServiceTest {
   @Mock private HouseholdSettingsAuditLogRepository householdSettingsAuditLogRepository;
   @Mock private HouseholdInviteRepository householdInviteRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private AuthQueryService authQueryService;
 
   private final HouseholdMapper mapper =
       new com.example.mealprep.household.api.mapper.HouseholdMapperImpl();
@@ -96,7 +98,8 @@ class HouseholdMergeServiceTest {
         fixedClock,
         SoftPreferencesReaderTestSupport.providerOf(
             SoftPreferencesReaderTestSupport.fixedReader(bundles)),
-        merger);
+        merger,
+        authQueryService);
   }
 
   @Test
