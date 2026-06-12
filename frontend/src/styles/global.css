@@ -3820,3 +3820,17 @@ button.rail-item.active {
   font-weight: 400;
   color: var(--mp-muted);
 }
+
+/* ---- Notifications: delivery-log drawer (notifications.md §3d) -------------- */
+
+.delivery-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.delivery-row:last-child {
+  border-bottom: none;
+}

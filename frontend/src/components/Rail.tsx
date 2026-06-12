@@ -6,6 +6,7 @@ import {
   History,
   Package,
   Settings,
+  ShieldCheck,
   ShoppingBasket,
   SlidersHorizontal,
   Sun,
@@ -47,14 +48,20 @@ function RailLink({ item }: { item: RailItem }) {
   );
 }
 
-export function Rail({ unreadCount }: { unreadCount: number }) {
+/** /admin is hidden by default — it only appears after the shell's lazy
+ *  status probe came back 200 (admin.md §5: allowlist is config, invisible
+ *  to the client; fail-closed). */
+export function Rail({ showAdmin }: { showAdmin: boolean }) {
   return (
     <nav className="rail" aria-label="Primary">
       {MAIN_ITEMS.map((item) => (
         <RailLink key={item.to} item={item} />
       ))}
       <div className="rail-spacer" />
-      <BellMenu badge={unreadCount} />
+      <BellMenu />
+      {showAdmin && (
+        <RailLink item={{ to: "/admin", label: "Admin", icon: ShieldCheck }} />
+      )}
       <RailLink item={{ to: "/settings", label: "Settings", icon: Settings }} />
     </nav>
   );

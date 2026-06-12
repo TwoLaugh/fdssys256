@@ -554,7 +554,9 @@ function HistoryDrawer({
 export function Plan() {
   const planner = useStore((s) => s.planner);
   const recipes = useStore((s) => s.recipes);
-  const members = useStore((s) => s.household.members);
+  // Member id → display name join; a member without a displayName renders
+  // as the userId stub (no username join exists — settings.md §8 Q2).
+  const members = useStore((s) => s.household.current?.members ?? null);
   const navigate = useNavigate();
 
   const [weekIdx, setWeekIdx] = useState(KNOWN_WEEKS.indexOf(CURRENT_WEEK_START));
@@ -575,7 +577,9 @@ export function Plan() {
     weekPlans[0];
 
   const nameOf = (id: string) => recipeName(recipes, id);
-  const memberNames = Object.fromEntries(members.map((m) => [m.id, m.name]));
+  const memberNames = Object.fromEntries(
+    (members ?? []).map((m) => [m.id, m.displayName ?? m.userId]),
+  );
 
   const suggestion = planner.suggestions.find(
     (sg) => sg.weekStartDate === week,

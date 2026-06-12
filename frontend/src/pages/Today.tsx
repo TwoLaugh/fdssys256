@@ -13,7 +13,10 @@ import type { NutritionStat } from "../api";
 import { AdvisorCard } from "../components/AdvisorCard";
 import { MealRow } from "../components/MealRow";
 import type { MealRowMeal } from "../components/MealRow";
-import { NotificationGlyph } from "../components/NotificationGlyph";
+import {
+  NotificationGlyph,
+  resolveActionTarget,
+} from "../components/NotificationGlyph";
 import { StatBand } from "../components/StatBand";
 import { MOCK_TODAY_ISO, QUICK_SNACKS, WEEK_DATES } from "../mock/nutritionSeed";
 import { CURRENT_WEEK_START } from "../mock/plannerSeed";
@@ -34,7 +37,6 @@ import type {
   MacroTargetDto,
   MealSlot,
   MealSlotDto,
-  NotificationKind,
   SlotState,
 } from "../mock/types";
 import { prettyDate } from "./nutrition/shared";
@@ -63,16 +65,6 @@ const ROW_ACTIONS: Partial<
   COOKED: [{ label: "Mark eaten", next: "EATEN", primary: true }],
 };
 
-const KIND_ROUTE: Record<NotificationKind, string> = {
-  plan: "/plan",
-  recipe: "/recipes",
-  grocery: "/groceries",
-  order: "/groceries",
-  pantry: "/pantry",
-  expiry: "/pantry",
-  ai: "/activity",
-};
-
 const DIMENSION_LABEL: Record<string, string> = {
   SALT_LEVEL: "salt level",
   PROTEIN: "protein",
@@ -96,12 +88,16 @@ export function Today() {
   const recipes = useStore((s) => s.recipes);
   const intakeDay = useStore((s) => s.nutrition.intakeDays[MOCK_TODAY_ISO]);
   const targets = useStore((s) => s.targets);
-  const notifications = useStore((s) => s.notifications);
+  const notificationRows = useStore((s) => s.notifications.rows);
   // Budget is a provisions concern — the pantry BudgetDto is the record.
   const weeklyBudget = useStore((s) => s.pantry.budget?.weeklyTarget ?? 55);
   const pendingChange = useStore((s) => s.adaptation.pendingChanges[0]);
   const userName = useStore(
-    (s) => s.household.members.find((m) => m.role === "owner")?.name ?? "there",
+    (s) =>
+      s.household.current?.members.find((m) => m.role === "primary")
+        ?.displayName ??
+      s.session.user?.username ??
+      "there",
   );
   const navigate = useNavigate();
   const [snackOpen, setSnackOpen] = useState(false);
@@ -219,8 +215,8 @@ export function Today() {
   ];
 
   /* ---- §3d needs attention (top-3 unread; read-only here) ---- */
-  const unread = notifications.filter((n) => !n.read);
-  const urgentCount = unread.filter((n) => n.kind === "expiry").length;
+  const unread = notificationRows.filter((n) => n.status === "UNREAD");
+  const urgentCount = unread.filter((n) => n.severity === "URGENT").length;
 
   /* ---- §3f teaser expiry ---- */
   const expiresInDays = pendingChange
@@ -332,7 +328,9 @@ export function Today() {
                 key={n.id}
                 type="button"
                 className="attention-item attention-link"
-                onClick={() => navigate(KIND_ROUTE[n.kind])}
+                onClick={() =>
+                  navigate(resolveActionTarget(n.actionTargetUri) ?? "/notifications")
+                }
               >
                 <NotificationGlyph kind={n.kind} />
                 <span>{n.title}</span>

@@ -37,18 +37,27 @@ import {
   SELF_ACTOR,
 } from "./recipeSeed";
 import { createSeed, MOCK_TODAY_ISO } from "./seed";
+import {
+  ALL_NOTIFICATION_KINDS,
+  resolveSlotConfiguration,
+} from "./settingsAdminSeed";
 import type {
   ActivityLevel,
+  AncestryResponse,
   AnswerClarificationRequest,
-  AppNotification,
+  AnyNotificationKind,
+  ChangeRoleRequest,
   ClarificationQueryDto,
   ConfidenceTier,
+  CostSummaryDto,
   CreateBranchRequest,
   CreateInventoryItemRequest,
+  CreateInviteRequest,
   CreateRatingRequest,
   CreateRecipeRequest,
   CreateSubstitutionRequest,
   DailyAggregateDto,
+  DecisionLogDto,
   DayDto,
   Destination,
   DirectiveUserModification,
@@ -60,6 +69,9 @@ import type {
   GroceryOrderStatus,
   GrocerySubstitutionProposalDto,
   HardConstraintsAuditEntryDto,
+  HouseholdInviteDto,
+  HouseholdMemberDto,
+  HouseholdSettingsAuditEntryDto,
   IngredientNutritionDocument,
   IngredientNutritionDto,
   IntakeDayDto,
@@ -76,9 +88,14 @@ import type {
   MealSlotDto,
   MealSlotKey,
   MisclassificationCorrectionDto,
-  NotificationKind,
+  MockNotificationDto,
+  NotificationSeverity,
+  NotificationSummaryDto,
   NutritionState,
+  PasswordChangeRequest,
   PendingChangeDto,
+  PlannerDecisionChainDto,
+  ProviderConnectionRequest,
   PinnedReason,
   PlanDto,
   PriceAggregateDto,
@@ -97,6 +114,7 @@ import type {
   RevertToVersionRequest,
   RoutingDecision,
   RoutingDecisionDto,
+  SessionState,
   ShoppingListDto,
   ShoppingListLineDto,
   SlotState,
@@ -112,8 +130,11 @@ import type {
   UiContextDto,
   UpdateBudgetRequest,
   UpdateHardConstraintsRequest,
+  UpdateHouseholdSettingsRequest,
   UpdateInventoryItemRequest,
   UpdateLifestyleConfigRequest,
+  UpdateMemberRequest,
+  UpdateNotificationPreferenceRequest,
   UpdateRecipeManualEditRequest,
   UpdateTargetsRequest,
   UpsertEquipmentRequest,
@@ -149,20 +170,142 @@ export function useStore<T>(selector: (s: StoreState) => T): T {
 }
 
 let notificationSeq = 100;
+let deliverySeq = 100;
 
+/** Legacy in-app event channels (call sites predate the contract rebuild) →
+ *  contract NotificationKind. The two Java-only kinds appear here because the
+ *  backend genuinely emits them — the OpenAPI enum is missing them (§8 Q1). */
+const CHANNEL_KIND: Record<
+  "plan" | "recipe" | "grocery" | "order" | "pantry" | "expiry" | "ai",
+  AnyNotificationKind
+> = {
+  plan: "PLANNER_PLAN_GENERATED",
+  recipe: "FEEDBACK_CONFIRMATION",
+  grocery: "STAPLE_REPLENISHMENT_NEEDED",
+  order: "STAPLE_REPLENISHMENT_NEEDED",
+  pantry: "PROVISION_ITEM_SPOILED",
+  expiry: "PROVISION_ITEM_NEAR_EXPIRY",
+  ai: "FEEDBACK_CONFIRMATION",
+};
+
+/** Server default deep links per kind (notifications.md §3c) — note these are
+ *  the backend's `/app/*` URIs, not IA routes (the §8 Q2 mismatch; the client
+ *  maps them via resolveActionTarget). */
+const KIND_DEFAULT_TARGET: Record<AnyNotificationKind, string> = {
+  PROVISION_ITEM_NEAR_EXPIRY: "/app/provisions/inventory",
+  PROVISION_ITEM_SPOILED: "/app/provisions/inventory",
+  PROVISION_DEFROST_REMINDER: "/app/provisions/inventory",
+  NUTRITION_INTAKE_DIVERGED: "/app/nutrition/intake/today",
+  HEALTH_DIRECTIVE_RECEIVED: "/app/nutrition/health-directives/latest",
+  PLANNER_PREP_REMINDER: "/app/planner/slots/next",
+  PLANNER_REOPT_SUGGESTED: "/app/plans/current",
+  PLANNER_PLAN_GENERATED: "/app/plans/current",
+  STAPLE_REPLENISHMENT_NEEDED: "/app/provisions/inventory",
+  FEEDBACK_CONFIRMATION: "/app/feedback/latest",
+};
+
+const KIND_SEVERITY: Partial<Record<AnyNotificationKind, NotificationSeverity>> = {
+  PROVISION_ITEM_SPOILED: "URGENT",
+  HEALTH_DIRECTIVE_RECEIVED: "URGENT",
+  PROVISION_DEFROST_REMINDER: "ATTENTION",
+  PLANNER_REOPT_SUGGESTED: "ATTENTION",
+};
+
+/**
+ * Append (or bundle) a contract NotificationDto row from an in-app event.
+ * Mirrors the server pipeline: bursts of the same kind inside the user's
+ * debounceWindowMinutes are absorbed into the newest row (`bundleCount`+1
+ * plus a DEDUPED_INTO_BUNDLE delivery-log entry); otherwise a fresh UNREAD
+ * row lands with a DELIVERED IN_APP log entry.
+ */
 function pushNotification(
   s: StoreState,
-  kind: NotificationKind,
+  channel: keyof typeof CHANNEL_KIND,
   title: string,
 ): StoreState {
-  const item: AppNotification = {
-    id: `n${++notificationSeq}`,
+  const kind = CHANNEL_KIND[channel];
+  const createdAt = nowIso();
+  const windowMin = s.notifications.prefs?.debounceWindowMinutes ?? 30;
+  const bundleHost = s.notifications.rows.find(
+    (n) =>
+      n.kind === kind &&
+      n.status === "UNREAD" &&
+      Date.parse(createdAt) - Date.parse(n.createdAt) < windowMin * 60_000,
+  );
+  if (bundleHost) {
+    const merged: MockNotificationDto = {
+      ...bundleHost,
+      title,
+      bundleCount: bundleHost.bundleCount + 1,
+      createdAt,
+      version: bundleHost.version + 1,
+    };
+    return {
+      ...s,
+      notifications: {
+        ...s.notifications,
+        rows: [
+          merged,
+          ...s.notifications.rows.filter((n) => n.id !== bundleHost.id),
+        ],
+        deliveryLog: {
+          ...s.notifications.deliveryLog,
+          [merged.id]: [
+            {
+              id: `dlv-r${++deliverySeq}`,
+              notificationId: merged.id,
+              channel: "IN_APP",
+              outcome: "SKIPPED",
+              skipReason: "DEDUPED_INTO_BUNDLE",
+              attemptedAt: createdAt,
+            },
+            ...(s.notifications.deliveryLog[merged.id] ?? []),
+          ],
+        },
+      },
+    };
+  }
+  const id = `ntf-r${++notificationSeq}`;
+  const item: MockNotificationDto = {
+    id,
+    userId: MOCK_USER_ID,
+    householdId: HOUSEHOLD_ID,
     kind,
+    severity: KIND_SEVERITY[kind] ?? "INFO",
     title,
-    time: "Just now",
-    read: false,
+    body: title,
+    payload: { kind },
+    status: "UNREAD",
+    actionTargetUri: KIND_DEFAULT_TARGET[kind],
+    bundleCount: 1,
+    bundleKeys: null,
+    traceId: null,
+    createdAt,
+    readAt: null,
+    actionedAt: null,
+    dismissedAt: null,
+    version: 0,
   };
-  return { ...s, notifications: [item, ...s.notifications] };
+  return {
+    ...s,
+    notifications: {
+      ...s.notifications,
+      rows: [item, ...s.notifications.rows],
+      deliveryLog: {
+        ...s.notifications.deliveryLog,
+        [id]: [
+          {
+            id: `dlv-r${++deliverySeq}`,
+            notificationId: id,
+            channel: "IN_APP",
+            outcome: "DELIVERED",
+            skipReason: null,
+            attemptedAt: createdAt,
+          },
+        ],
+      },
+    },
+  };
 }
 
 /* ---- toasts ------------------------------------------------------------------ */
@@ -4776,56 +4919,183 @@ export function computeDivergence(
 
 /* ---- notifications ---------------------------------------------------------------------------- */
 
-export function addNotification(kind: NotificationKind, title: string): void {
-  mutate((s) => pushNotification(s, kind, title));
+/**
+ * The §3b status state machine, server-enforced (anything else → 409):
+ * UNREAD → READ | ACTIONED | DISMISSED · READ → ACTIONED | DISMISSED ·
+ * ACTIONED → DISMISSED · DISMISSED terminal.
+ */
+const LEGAL_TRANSITIONS: Record<
+  MockNotificationDto["status"],
+  MockNotificationDto["status"][]
+> = {
+  UNREAD: ["READ", "ACTIONED", "DISMISSED"],
+  READ: ["ACTIONED", "DISMISSED"],
+  ACTIONED: ["DISMISSED"],
+  DISMISSED: [],
+};
+
+function transitionNotification(
+  s: StoreState,
+  id: string,
+  next: MockNotificationDto["status"],
+  /** §5: a 409 because the row is already past that state is swallowed. */
+  swallow409: boolean,
+): StoreState {
+  const n = s.notifications.rows.find((r) => r.id === id);
+  if (!n) {
+    pushToast("404 — notification no longer exists", "warn");
+    return s;
+  }
+  if (!LEGAL_TRANSITIONS[n.status].includes(next)) {
+    if (!swallow409) {
+      pushToast(`409 — already ${n.status.toLowerCase()}`, "warn");
+    }
+    return s; // silent re-fetch: the stored row already reflects the server
+  }
+  const stamped: MockNotificationDto = {
+    ...n,
+    status: next,
+    readAt: next === "READ" ? nowIso() : n.readAt,
+    actionedAt: next === "ACTIONED" ? nowIso() : n.actionedAt,
+    dismissedAt: next === "DISMISSED" ? nowIso() : n.dismissedAt,
+    version: n.version + 1,
+  };
+  return {
+    ...s,
+    notifications: {
+      ...s.notifications,
+      rows: s.notifications.rows.map((r) => (r.id === id ? stamped : r)),
+    },
+  };
 }
 
+/** POST /notifications/{id}/read (#4) — row click / explicit mark-read. */
 export function markNotificationRead(id: string): void {
-  mutate((s) => ({
-    ...s,
-    notifications: s.notifications.map((n) =>
-      n.id === id ? { ...n, read: true } : n,
-    ),
-  }));
+  mutate((s) => transitionNotification(s, id, "READ", true));
 }
 
-export function markAllNotificationsRead(): void {
-  mutate((s) => ({
-    ...s,
-    notifications: s.notifications.map((n) =>
-      n.read ? n : { ...n, read: true },
-    ),
-  }));
+/** POST /notifications/{id}/action (#6) — fired before following the deep
+ *  link; a 409 because the row was already ACTIONED is swallowed (§3b). */
+export function actionNotification(id: string): void {
+  mutate((s) => transitionNotification(s, id, "ACTIONED", true));
 }
 
+/** POST /notifications/{id}/dismiss (#5). */
 export function dismissNotification(id: string): void {
-  mutate((s) => ({
-    ...s,
-    notifications: s.notifications.filter((n) => n.id !== id),
-  }));
+  mutate((s) => transitionNotification(s, id, "DISMISSED", false));
 }
 
-export function toggleMutedKind(kind: NotificationKind): void {
+/** POST /notifications/bulk/read (#7) — empty kinds = all kinds; only ever
+ *  targets UNREAD rows server-side. Returns BulkReadResponse.updated. */
+export function bulkMarkNotificationsRead(kinds: AnyNotificationKind[]): number {
+  let updated = 0;
   mutate((s) => ({
     ...s,
-    notificationPrefs: {
-      ...s.notificationPrefs,
-      muted: s.notificationPrefs.muted.includes(kind)
-        ? s.notificationPrefs.muted.filter((k) => k !== kind)
-        : [...s.notificationPrefs.muted, kind],
+    notifications: {
+      ...s.notifications,
+      rows: s.notifications.rows.map((n) => {
+        if (n.status !== "UNREAD") return n;
+        if (kinds.length > 0 && !kinds.includes(n.kind)) return n;
+        updated += 1;
+        return { ...n, status: "READ", readAt: nowIso(), version: n.version + 1 };
+      }),
+    },
+  }));
+  return updated;
+}
+
+/** GET /notifications/preferences (#9) — auto-seeds defaults on first open
+ *  (idempotent), so the panel never has an empty state. */
+export function loadNotificationPrefs(): void {
+  if (state.notifications.prefs) return;
+  mutate((s) => ({
+    ...s,
+    notifications: {
+      ...s.notifications,
+      prefs: {
+        id: "ntf-pref-seeded",
+        userId: MOCK_USER_ID,
+        // PLANNER_PLAN_GENERATED seeds OFF; everything else ON (§3e).
+        enabledKinds: Object.fromEntries(
+          ALL_NOTIFICATION_KINDS.map((k) => [k, k !== "PLANNER_PLAN_GENERATED"]),
+        ),
+        quietHoursEnabled: true,
+        quietHoursStart: "22:00",
+        quietHoursEnd: "07:00",
+        timezone: "Europe/London",
+        debounceWindowMinutes: 30,
+        version: 0,
+      },
     },
   }));
 }
 
-export function setQuietHours(start: string, end: string): void {
+export type SavePrefsOutcome = "ok" | "conflict" | "invalid";
+
+/** PUT /notifications/preferences (#10) — a FULL replace. Always send the
+ *  whole document incl. expectedVersion (the Java record binds primitives —
+ *  omitted fields silently default and a missing version 409s; §8 Q5). */
+export function saveNotificationPrefs(
+  req: UpdateNotificationPreferenceRequest,
+): SavePrefsOutcome {
+  const cur = state.notifications.prefs;
+  if (!cur) return "conflict";
+  if (req.expectedVersion !== cur.version) {
+    pushToast("409 — preferences changed elsewhere; review and save again", "warn");
+    return "conflict";
+  }
+  // @ValidQuietHours: enabled-with-null-times → 400 (§3e).
+  if (req.quietHoursEnabled && (!req.quietHoursStart || !req.quietHoursEnd)) {
+    return "invalid";
+  }
+  if (
+    req.debounceWindowMinutes != null &&
+    (req.debounceWindowMinutes < 0 || req.debounceWindowMinutes > 360)
+  ) {
+    return "invalid";
+  }
   mutate((s) => ({
     ...s,
-    notificationPrefs: {
-      ...s.notificationPrefs,
-      quietStart: start,
-      quietEnd: end,
+    notifications: {
+      ...s.notifications,
+      prefs: {
+        ...cur,
+        enabledKinds: req.enabledKinds,
+        quietHoursEnabled: req.quietHoursEnabled ?? false,
+        quietHoursStart: req.quietHoursStart ?? null,
+        quietHoursEnd: req.quietHoursEnd ?? null,
+        timezone: req.timezone,
+        debounceWindowMinutes: req.debounceWindowMinutes ?? 0,
+        version: cur.version + 1,
+      },
     },
   }));
+  pushToast("Notification preferences saved");
+  return "ok";
+}
+
+/** GET /notifications/summary (#2) — memoised per rows reference so the
+ *  selector returns a stable object (useSyncExternalStore contract). */
+let summaryCache: {
+  rows: MockNotificationDto[];
+  value: NotificationSummaryDto;
+} | null = null;
+
+export function selectNotificationSummary(s: StoreState): NotificationSummaryDto {
+  const rows = s.notifications.rows;
+  if (!summaryCache || summaryCache.rows !== rows) {
+    const unread = rows.filter((n) => n.status === "UNREAD");
+    summaryCache = {
+      rows,
+      value: {
+        unreadCount: unread.length,
+        attentionCount: unread.filter((n) => n.severity === "ATTENTION").length,
+        urgentCount: unread.filter((n) => n.severity === "URGENT").length,
+        generatedAt: nowIso(),
+      },
+    };
+  }
+  return summaryCache.value;
 }
 
 /* ---- preferences (preferences.md) -----------------------------------------------------------------
@@ -5832,66 +6102,728 @@ export function clearComposePrefill(): void {
 
 /* ---- household ------------------------------------------------------------------------------------------ */
 
-export function renameHousehold(name: string): void {
-  const trimmed = name.trim();
-  if (!trimmed) return;
-  mutate((s) => ({ ...s, household: { ...s.household, name: trimmed } }));
+/* ---- household / settings (settings.md) -----------------------------------------------------
+ * Contract shapes throughout. Primary-only writes are render-gated in the UI;
+ * the mock still enforces last-primary invariants (409) and optimistic
+ * versions so stale saves surface the way the live API would.
+ */
+
+let inviteSeq = 2002;
+let settingsAuditSeq = 100;
+
+/** Derived invite status — never persisted (contract note on InviteStatus). */
+export function inviteStatus(inv: HouseholdInviteDto): HouseholdInviteDto["status"] {
+  if (inv.revokedAt) return "REVOKED";
+  if (inv.acceptedAt) return "ACCEPTED";
+  if (Date.parse(inv.expiresAt) < Date.parse(nowIso())) return "EXPIRED";
+  return "PENDING";
 }
 
-export function inviteMember(email: string): void {
-  const trimmed = email.trim();
-  if (!trimmed) return;
+/** POST /households (#2) — 409 when the caller is already in one (v1: one
+ *  household per user). Returns false on the 409 so callers can advance. */
+export function createHousehold(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  if (state.session.freshSetup) {
+    markFreshStep("household");
+    return true;
+  }
+  if (state.household.current) {
+    pushToast("409 — you're already in a household", "warn");
+    return false;
+  }
+  const me = state.session.user;
+  const hhId = `hh-${Date.now()}`;
   mutate((s) => {
-    if (s.household.invites.some((i) => i.email === trimmed)) return s;
-    return pushNotification(
-      {
-        ...s,
-        household: {
-          ...s.household,
-          invites: [
-            ...s.household.invites,
-            { email: trimmed, sent: "Sent just now" },
-          ],
+    const household = {
+      id: hhId,
+      name: trimmed,
+      createdByUserId: me?.userId ?? MOCK_USER_ID,
+      createdAt: nowIso(),
+      version: 0,
+      members: [
+        {
+          id: `m-${Date.now()}`,
+          householdId: hhId,
+          userId: me?.userId ?? MOCK_USER_ID,
+          role: "primary" as const,
+          displayName: me?.username ?? null,
+          priority: 100,
+          joinedAt: nowIso(),
+          version: 0,
         },
+      ],
+    };
+    const settings = {
+      id: `hhs-${Date.now()}`,
+      householdId: household.id,
+      document: {
+        slotDefaults: {
+          breakfast: { shared: false, headcount: null, timeBudgetMin: null },
+          lunch: { shared: false, headcount: null, timeBudgetMin: null },
+          dinner: { shared: true, headcount: null, timeBudgetMin: null },
+          snack: { shared: false, headcount: null, timeBudgetMin: null },
+        },
+        customSlots: [],
+        defaultHeadcount: 1,
       },
-      "ai",
-      `Invite sent to ${trimmed}`,
-    );
+      version: 0,
+      createdAt: nowIso(),
+    };
+    return {
+      ...s,
+      household: {
+        ...s.household,
+        current: household,
+        settings,
+        resolved: resolveSlotConfiguration(household, settings),
+      },
+    };
+  });
+  return true;
+}
+
+/** POST /households/current/invites (#8) — the 201 response is the ONLY
+ *  carrier of the invite code; the stored list row redacts it (§3b). */
+export function createInvite(req: CreateInviteRequest): HouseholdInviteDto | null {
+  const household = state.household.current;
+  if (!household) return null;
+  const id = `inv-${++inviteSeq}`;
+  // Server caps expiry at now+30d and silently truncates (§8 Q5) — the UI
+  // should echo the returned expiresAt, not the requested one.
+  const capMs = Date.parse(nowIso()) + 30 * 86_400_000;
+  const expiresAt = new Date(
+    Math.min(Date.parse(req.expiresAt), capMs),
+  ).toISOString();
+  const code = `MP-${id.toUpperCase().replace("INV-", "")}-${Math.random()
+    .toString(36)
+    .slice(2, 6)
+    .toUpperCase()}`;
+  const stored: HouseholdInviteDto = {
+    id,
+    householdId: household.id,
+    inviteCode: null,
+    issuedByUserId: state.session.user?.userId ?? MOCK_USER_ID,
+    issuedForUserId: req.issuedForUserId ?? null,
+    intendedRole: req.intendedRole,
+    expiresAt,
+    acceptedAt: null,
+    revokedAt: null,
+    status: "PENDING",
+  };
+  mutate((s) => ({
+    ...s,
+    household: {
+      ...s.household,
+      invites: [stored, ...s.household.invites],
+      inviteCodes: { ...s.household.inviteCodes, [id]: code },
+    },
+  }));
+  return { ...stored, inviteCode: code };
+}
+
+/** DELETE /households/current/invites/{id} (#9) — 409 if already resolved. */
+export function revokeInvite(inviteId: string): void {
+  mutate((s) => {
+    const inv = s.household.invites.find((i) => i.id === inviteId);
+    if (!inv) {
+      pushToast("404 — invite no longer exists", "warn");
+      return s;
+    }
+    if (inviteStatus(inv) !== "PENDING") {
+      pushToast("409 — invite already accepted or revoked", "warn");
+      return s;
+    }
+    return {
+      ...s,
+      household: {
+        ...s.household,
+        invites: s.household.invites.map((i) =>
+          i.id === inviteId ? { ...i, revokedAt: nowIso(), status: "REVOKED" } : i,
+        ),
+      },
+    };
   });
 }
 
-export function revokeInvite(email: string): void {
-  mutate((s) => ({
-    ...s,
-    household: {
-      ...s.household,
-      invites: s.household.invites.filter((i) => i.email !== email),
-    },
-  }));
+export type AcceptInviteOutcome =
+  | "ok"
+  | "badRequest"
+  | "forbidden"
+  | "notFound"
+  | "alreadyInHousehold"
+  | "gone";
+
+/** Server-side stash so leave→re-accept is demoable: the household survives
+ *  on the "server" while the client's /households/current 404s. */
+let departedHousehold: StoreState["household"]["current"] = null;
+
+/** POST /invites/accept (§3d status ladder) — 200 returns the new membership,
+ *  NOT the household (follow with #1). */
+export function acceptInvite(code: string): AcceptInviteOutcome {
+  const trimmed = code.trim();
+  if (!trimmed || trimmed.length > 32) return "badRequest";
+  if (state.household.current) return "alreadyInHousehold";
+  const entry = Object.entries(state.household.inviteCodes).find(
+    ([, c]) => c.toLowerCase() === trimmed.toLowerCase(),
+  );
+  if (!entry) return "notFound";
+  const inv = state.household.invites.find((i) => i.id === entry[0]);
+  if (!inv) return "notFound";
+  const status = inviteStatus(inv);
+  if (status === "EXPIRED" || status === "REVOKED") return "gone";
+  if (status === "ACCEPTED") return "gone";
+  const me = state.session.user;
+  if (inv.issuedForUserId && inv.issuedForUserId !== me?.userId) {
+    return "forbidden";
+  }
+  if (state.session.freshSetup) {
+    // Fresh-account wizard branch: joining satisfies household + slots.
+    markFreshStep("household");
+    markFreshStep("lifestyle");
+    return "ok";
+  }
+  const host = departedHousehold;
+  if (!host) return "notFound";
+  mutate((s) => {
+    const member: HouseholdMemberDto = {
+      id: `m-${Date.now()}`,
+      householdId: host.id,
+      userId: me?.userId ?? MOCK_USER_ID,
+      role: inv.intendedRole,
+      displayName: me?.username ?? null,
+      priority: 100,
+      joinedAt: nowIso(),
+      version: 0,
+    };
+    const rejoined = { ...host, members: [...host.members, member] };
+    return {
+      ...s,
+      household: {
+        ...s.household,
+        current: rejoined,
+        invites: s.household.invites.map((i) =>
+          i.id === inv.id ? { ...i, acceptedAt: nowIso(), status: "ACCEPTED" } : i,
+        ),
+        resolved: s.household.settings
+          ? resolveSlotConfiguration(rejoined, s.household.settings)
+          : s.household.resolved,
+      },
+    };
+  });
+  departedHousehold = null;
+  return "ok";
 }
 
-export function toggleSlotShared(dayType: string, slot: MealSlotKey): void {
-  mutate((s) => ({
-    ...s,
-    household: {
-      ...s.household,
-      slotConfig: s.household.slotConfig.map((d) =>
-        d.dayType !== dayType
-          ? d
-          : {
-              ...d,
-              slots: d.slots.map((sl) =>
-                sl.slot === slot ? { ...sl, shared: !sl.shared } : sl,
-              ),
-            },
+/** PATCH /households/current/members/{id} (#10) — null = no change. */
+export function updateMember(memberId: string, req: UpdateMemberRequest): boolean {
+  const household = state.household.current;
+  const member = household?.members.find((m) => m.id === memberId);
+  if (!household || !member) {
+    pushToast("404 — member no longer exists", "warn");
+    return false;
+  }
+  if (req.expectedVersion !== member.version) {
+    pushToast("409 — member changed elsewhere; re-fetched", "warn");
+    return false;
+  }
+  mutate((s) => {
+    const cur = s.household.current;
+    if (!cur) return s;
+    const next = {
+      ...cur,
+      members: cur.members.map((m) =>
+        m.id === memberId
+          ? {
+              ...m,
+              priority: req.priority ?? m.priority,
+              displayName:
+                req.displayName !== undefined && req.displayName !== null
+                  ? req.displayName
+                  : m.displayName,
+              version: m.version + 1,
+            }
+          : m,
       ),
+    };
+    return { ...s, household: { ...s.household, current: next } };
+  });
+  return true;
+}
+
+/** POST /households/current/members/{id}/role (#12 — POST, not PUT: §8 Q3).
+ *  Demoting the last primary → 409. */
+export function changeMemberRole(memberId: string, req: ChangeRoleRequest): boolean {
+  const household = state.household.current;
+  const member = household?.members.find((m) => m.id === memberId);
+  if (!household || !member) {
+    pushToast("404 — member no longer exists", "warn");
+    return false;
+  }
+  if (req.expectedVersion !== member.version) {
+    pushToast("409 — member changed elsewhere; re-fetched", "warn");
+    return false;
+  }
+  const primaries = household.members.filter((m) => m.role === "primary");
+  if (
+    member.role === "primary" &&
+    req.newRole === "member" &&
+    primaries.length === 1
+  ) {
+    pushToast("409 — that's the last primary; promote someone else first", "warn");
+    return false;
+  }
+  mutate((s) => {
+    const cur = s.household.current;
+    if (!cur) return s;
+    return {
+      ...s,
+      household: {
+        ...s.household,
+        current: {
+          ...cur,
+          members: cur.members.map((m) =>
+            m.id === memberId
+              ? { ...m, role: req.newRole, version: m.version + 1 }
+              : m,
+          ),
+        },
+      },
+    };
+  });
+  return true;
+}
+
+/** DELETE /households/current/members/{id} (#11) — primary removes anyone;
+ *  a member may only self-remove ("Leave household"). Removing the last
+ *  primary while others remain → 409. Self-removal clears household scope. */
+export function removeMember(memberId: string): "ok" | "left" | "blocked" {
+  const household = state.household.current;
+  const member = household?.members.find((m) => m.id === memberId);
+  if (!household || !member) {
+    pushToast("404 — member no longer exists", "warn");
+    return "blocked";
+  }
+  const isSelf = member.userId === state.session.user?.userId;
+  const primaries = household.members.filter((m) => m.role === "primary");
+  if (
+    member.role === "primary" &&
+    primaries.length === 1 &&
+    household.members.length > 1
+  ) {
+    pushToast("409 — last primary; promote someone else first", "warn");
+    return "blocked";
+  }
+  if (isSelf) {
+    // Stash the household "server-side" so an invite accept can rejoin.
+    departedHousehold = {
+      ...household,
+      members: household.members.filter((m) => m.id !== memberId),
+    };
+    mutate((s) => ({
+      ...s,
+      household: { ...s.household, current: null, resolved: null },
+    }));
+    return "left";
+  }
+  mutate((s) => {
+    const cur = s.household.current;
+    if (!cur) return s;
+    const next = {
+      ...cur,
+      members: cur.members.filter((m) => m.id !== memberId),
+    };
+    return {
+      ...s,
+      household: {
+        ...s.household,
+        current: next,
+        resolved: s.household.settings
+          ? resolveSlotConfiguration(next, s.household.settings)
+          : s.household.resolved,
+      },
+    };
+  });
+  return "ok";
+}
+
+/** Flatten a HouseholdSettingsDocument to fieldPath → value for audit diffs. */
+function settingsFieldPaths(
+  doc: UpdateHouseholdSettingsRequest["document"],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, d] of Object.entries(doc.slotDefaults)) {
+    out[`slotDefaults.${key}.shared`] = d.shared;
+    out[`slotDefaults.${key}.headcount`] = d.headcount ?? null;
+    out[`slotDefaults.${key}.timeBudgetMin`] = d.timeBudgetMin ?? null;
+  }
+  for (const c of doc.customSlots) {
+    out[`customSlots[${c.key}]`] = {
+      label: c.label,
+      backedByKind: c.backedByKind,
+      shared: c.shared,
+      headcount: c.headcount ?? null,
+      timeBudgetMin: c.timeBudgetMin ?? null,
+    };
+  }
+  out["defaultHeadcount"] = doc.defaultHeadcount ?? null;
+  return out;
+}
+
+/** PUT /households/{id}/settings (#4) — full document replace with
+ *  expectedVersion; every changed fieldPath lands an audit row (#5). */
+export function saveHouseholdSettings(req: UpdateHouseholdSettingsRequest): boolean {
+  const cur = state.household.settings;
+  const household = state.household.current;
+  if (!cur || !household) return false;
+  if (req.expectedVersion !== cur.version) {
+    pushToast("409 — settings changed elsewhere; review and save again", "warn");
+    return false;
+  }
+  const before = settingsFieldPaths(cur.document);
+  const after = settingsFieldPaths(req.document);
+  const audit: HouseholdSettingsAuditEntryDto[] = [];
+  for (const path of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (JSON.stringify(before[path]) !== JSON.stringify(after[path])) {
+      audit.push({
+        id: `hsa-r${++settingsAuditSeq}`,
+        actorUserId: state.session.user?.userId ?? MOCK_USER_ID,
+        fieldPath: path,
+        previousValue: before[path] ?? null,
+        newValue: after[path] ?? null,
+        occurredAt: nowIso(),
+      });
+    }
+  }
+  mutate((s) => {
+    const nextSettings = {
+      ...cur,
+      document: req.document,
+      version: cur.version + 1,
+    };
+    return {
+      ...s,
+      household: {
+        ...s.household,
+        settings: nextSettings,
+        settingsAudit: [...audit, ...s.household.settingsAudit],
+        // #6 read-back: what the planner will actually see.
+        resolved: resolveSlotConfiguration(household, nextSettings),
+      },
+    };
+  });
+  pushToast(`Slot configuration saved — ${audit.length} field(s) changed`);
+  return true;
+}
+
+/* ---- auth / session (login.md, settings.md §3e) -------------------------------------------- */
+
+/** Mock credential store; register() adds to it. The seeded password backs
+ *  the change-password 401-generic demo. */
+const mockUsers: Record<string, { userId: string; password: string }> = {
+  iren: { userId: MOCK_USER_ID, password: "plan-the-week-12" },
+};
+
+export const MOCK_SEED_PASSWORD = "plan-the-week-12";
+
+export type LoginOutcome =
+  | { kind: "ok" }
+  | { kind: "invalid" } // 401 — one generic message, never "no such user"
+  | { kind: "locked"; retryAfterS: number } // 423
+  | { kind: "throttled"; retryAfterS: number }; // 429
+
+/** POST /auth/login (#1). Demo paths: a username containing "locked" → 423;
+ *  5 consecutive failures → 429. Real "now" drives the countdowns. */
+export function login(username: string, password: string): LoginOutcome {
+  const name = username.trim().toLowerCase();
+  const wallNow = Date.now();
+  const lockedUntil = state.session.lockedUntilMs;
+  if (lockedUntil && lockedUntil > wallNow) {
+    const retryAfterS = Math.ceil((lockedUntil - wallNow) / 1000);
+    return state.session.lockKind === "locked"
+      ? { kind: "locked", retryAfterS }
+      : { kind: "throttled", retryAfterS };
+  }
+  if (name.includes("locked")) {
+    mutate((s) => ({
+      ...s,
+      session: { ...s.session, lockedUntilMs: wallNow + 30_000, lockKind: "locked" },
+    }));
+    return { kind: "locked", retryAfterS: 30 };
+  }
+  const known = mockUsers[name];
+  if (!known || known.password !== password) {
+    const failures = state.session.failedAttempts + 1;
+    if (failures >= 5) {
+      mutate((s) => ({
+        ...s,
+        session: {
+          ...s.session,
+          failedAttempts: 0,
+          lockedUntilMs: wallNow + 10_000,
+          lockKind: "throttled",
+        },
+      }));
+      return { kind: "throttled", retryAfterS: 10 };
+    }
+    mutate((s) => ({ ...s, session: { ...s.session, failedAttempts: failures } }));
+    return { kind: "invalid" };
+  }
+  mutate((s) => ({
+    ...s,
+    session: {
+      ...s.session,
+      user: { userId: known.userId, username: name },
+      failedAttempts: 0,
+      lockedUntilMs: null,
+      lockKind: null,
+    },
+  }));
+  return { kind: "ok" };
+}
+
+export type RegisterOutcome = "ok" | "taken";
+
+/** POST /auth/register (#2) — 201 + cookie = auto-login (locked decision);
+ *  a fresh account starts the onboarding probe chain with everything 404. */
+export function register(username: string, password: string): RegisterOutcome {
+  const name = username.trim().toLowerCase();
+  if (mockUsers[name]) return "taken";
+  const userId = `user-${name}-${Date.now() % 10_000}`;
+  mockUsers[name] = { userId, password };
+  mutate((s) => ({
+    ...s,
+    session: {
+      ...s.session,
+      user: { userId, username: name },
+      failedAttempts: 0,
+      lockedUntilMs: null,
+      lockKind: null,
+      freshSetup: {
+        household: false,
+        constraints: false,
+        lifestyle: false,
+        targets: false,
+      },
+    },
+  }));
+  return "ok";
+}
+
+/** POST /auth/logout — per-device; other sessions survive (GAP-71). The
+ *  router guard then redirects every shell route to /login. */
+export function logout(): void {
+  mutate((s) => ({ ...s, session: { ...s.session, user: null } }));
+}
+
+export type ChangePasswordOutcome = "ok" | "unauthorized" | "conflict";
+
+/** PUT /auth/password (#13) — wrong current password is a GENERIC 401 (it
+ *  also counts toward the login throttle); success re-issues the calling
+ *  session via Set-Cookie and revokes all others (lld/auth.md Flow 5). */
+export function changePassword(req: PasswordChangeRequest): ChangePasswordOutcome {
+  const me = state.session.user;
+  if (!me) return "unauthorized";
+  const record = mockUsers[me.username];
+  if (!record || record.password !== req.currentPassword) return "unauthorized";
+  if (req.newPassword === req.currentPassword) return "conflict";
+  record.password = req.newPassword;
+  return "ok";
+}
+
+/* ---- onboarding (onboarding.md) ------------------------------------------------------------- */
+
+function markFreshStep(step: keyof NonNullable<SessionState["freshSetup"]>): void {
+  mutate((s) =>
+    s.session.freshSetup
+      ? {
+          ...s,
+          session: {
+            ...s.session,
+            freshSetup: { ...s.session.freshSetup, [step]: true },
+          },
+        }
+      : s,
+  );
+}
+
+export { markFreshStep as completeFreshSetupStep };
+
+/** §4 probe chain: first unsatisfied step index (0-based), or null when all
+ *  satisfied (→ redirect /). Wizard state is derived, never stored. */
+export function onboardingResumeStep(s: StoreState): number | null {
+  const fresh = s.session.freshSetup;
+  const hasHousehold = fresh ? fresh.household : s.household.current != null;
+  if (!hasHousehold) return 0;
+  const hasConstraints = fresh
+    ? fresh.constraints
+    : s.preferences.hardConstraints != null;
+  if (!hasConstraints) return 2;
+  const hasLifestyle = fresh ? fresh.lifestyle : s.preferences.lifestyle != null;
+  if (!hasLifestyle) return 3;
+  const hasTargets = fresh ? fresh.targets : s.targets != null;
+  if (!hasTargets) return 4;
+  return null;
+}
+
+/** Demo entry: replay the wizard as a fresh account without nuking the seed. */
+export function replayOnboardingAsFresh(): void {
+  mutate((s) => ({
+    ...s,
+    session: {
+      ...s.session,
+      freshSetup: {
+        household: false,
+        constraints: false,
+        lifestyle: false,
+        targets: false,
+      },
     },
   }));
 }
 
-/** Fake password change — succeeds with a notification, nothing stored. */
-export function changePassword(): void {
-  mutate((s) => pushNotification(s, "ai", "Password updated"));
+export function exitOnboarding(): void {
+  mutate((s) => ({ ...s, session: { ...s.session, freshSetup: null } }));
+}
+
+/* ---- grocery provider connection (settings.md §3f) ------------------------------------------ */
+
+/** PUT /grocery/orders/providers/{key} (#16) — connect / pause / refresh. */
+export function saveProviderConnection(req: ProviderConnectionRequest): void {
+  mutate((s) => {
+    const cur = s.grocery.providerState;
+    const next = cur
+      ? {
+          ...cur,
+          providerKey: req.providerKey,
+          enabled: req.enabled ?? cur.enabled,
+          scheduledRefreshEnabled:
+            req.scheduledRefreshEnabled ?? cur.scheduledRefreshEnabled,
+          refreshTopNIngredients:
+            req.refreshTopNIngredients ?? cur.refreshTopNIngredients,
+        }
+      : {
+          id: `prov-${Date.now()}`,
+          userId: s.session.user?.userId ?? MOCK_USER_ID,
+          providerKey: req.providerKey,
+          enabled: req.enabled ?? true,
+          sessionExpiresAt: null,
+          lastLoginAt: nowIso(),
+          lastFailureAt: null,
+          lastFailureReason: null,
+          consecutiveFailures: 0,
+          scheduledRefreshEnabled: req.scheduledRefreshEnabled ?? false,
+          refreshTopNIngredients: req.refreshTopNIngredients ?? 0,
+        };
+    return { ...s, grocery: { ...s.grocery, providerState: next } };
+  });
+}
+
+/* ---- admin (admin.md) ------------------------------------------------------------------------ */
+
+/** The shell's once-per-session lazy probe (#1): 200 → reveal the nav entry;
+ *  403 → never show it again this session (§5). */
+export function probeAdmin(): void {
+  if (state.admin.probeOutcome) return;
+  mutate((s) => ({
+    ...s,
+    admin: {
+      ...s.admin,
+      probeOutcome: s.admin.allowlisted ? "admin" : "denied",
+    },
+  }));
+}
+
+/** Mock-only demo control for the allowlist flag (admin.md §8 delta 1). */
+export function setAdminAllowlisted(allowlisted: boolean): void {
+  mutate((s) => ({
+    ...s,
+    admin: {
+      ...s.admin,
+      allowlisted,
+      probeOutcome: allowlisted ? "admin" : "denied",
+    },
+  }));
+}
+
+/** GET /admin/ai/cost-summary (#2) — aggregates the call log over the window
+ *  ending at the mock "now"; topUsers capped at 20, spend-descending. */
+export function adminCostSummary(
+  s: StoreState,
+  windowHours: number,
+): CostSummaryDto {
+  const cutoff = Date.parse(nowIso()) - windowHours * 3_600_000;
+  const rows = s.admin.callLog.filter((c) => Date.parse(c.createdAt) >= cutoff);
+  const byUser = new Map<string, { calls: number; costMicroPence: number }>();
+  for (const c of rows) {
+    const key = c.userId ?? "system";
+    const cur = byUser.get(key) ?? { calls: 0, costMicroPence: 0 };
+    byUser.set(key, {
+      calls: cur.calls + 1,
+      costMicroPence: cur.costMicroPence + c.costMicroPence,
+    });
+  }
+  return {
+    windowHours,
+    totalCalls: rows.length,
+    totalMicroPence: rows.reduce((acc, c) => acc + c.costMicroPence, 0),
+    topUsers: [...byUser.entries()]
+      .map(([userId, v]) => ({ userId, ...v }))
+      .sort((a, b) => b.costMicroPence - a.costMicroPence)
+      .slice(0, 20),
+  };
+}
+
+/** GET /admin/decision-log/{id} (#5). */
+export function findDecision(s: StoreState, id: string): DecisionLogDto | undefined {
+  return s.admin.decisions.find((d) => d.decisionId === id.trim());
+}
+
+/** GET /admin/decision-log/trace/{traceId} (#6) — creation-ordered; an empty
+ *  list is a valid result, not an error. */
+export function decisionsForTrace(s: StoreState, traceId: string): DecisionLogDto[] {
+  return s.admin.decisions
+    .filter((d) => d.traceId === traceId.trim())
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/** GET /admin/decision-log/{id}/ancestry (#7) — walks parentDecisionId up to
+ *  maxDepth; hitting the cap sets cycleDetected (§3d red warning). */
+export function walkAncestry(
+  s: StoreState,
+  decisionId: string,
+  maxDepth = 32,
+): AncestryResponse | null {
+  let cur = findDecision(s, decisionId);
+  if (!cur) return null;
+  const chain: DecisionLogDto[] = [cur];
+  let depth = 0;
+  while (cur.parentDecisionId && depth < maxDepth) {
+    const parent = s.admin.decisions.find(
+      (d) => d.decisionId === cur!.parentDecisionId,
+    );
+    if (!parent) break;
+    chain.push(parent);
+    cur = parent;
+    depth += 1;
+  }
+  return {
+    ancestors: chain.reverse(), // root-first (§3d)
+    cycleDetected: depth >= maxDepth && cur.parentDecisionId != null,
+  };
+}
+
+/** GET /admin/planner/decisions/{planId} (#8) — empty rows for pre-planner-01l
+ *  plans (no retroactive backfill). */
+export function plannerChainFor(
+  s: StoreState,
+  planId: string,
+  traceId?: string,
+): PlannerDecisionChainDto {
+  const chain = s.admin.plannerChains[planId.trim()];
+  if (!chain) return { planId: planId.trim(), rows: [] };
+  if (!traceId?.trim()) return chain;
+  return { ...chain, rows: chain.rows.filter((r) => r.traceId === traceId.trim()) };
 }
 
 /* ---- discovery (discover.md) --------------------------------------------------------------
@@ -6183,12 +7115,5 @@ export function cancelDiscoveryJob(jobId: string): void {
 }
 
 /* ---- shared selectors --------------------------------------------------------------------------- */
-
-/** Unread count for the rail badge + bell — muted kinds don't count. */
-export function selectUnreadCount(s: StoreState): number {
-  return s.notifications.reduce(
-    (acc, n) =>
-      acc + (n.read || s.notificationPrefs.muted.includes(n.kind) ? 0 : 1),
-    0,
-  );
-}
+/* The rail badge + bell read selectNotificationSummary (defined with the
+ * notifications actions above) — one store backs page, bell and digest. */
