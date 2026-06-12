@@ -100,53 +100,75 @@ export interface PlannerState {
   generation: GenerationState;
 }
 
-/* ---- recipes -------------------------------------------------------------- */
+/* ---- recipes: backend DTO mirrors ---------------------------------------------
+ * The recipe slices mirror the real contract (design/frontend/pages/recipes.md,
+ * recipe-detail.md §2) exactly like the nutrition + planner slices — re-exported
+ * from the generated OpenAPI types so the mock validates production shapes.
+ */
 
-export type QualityTier =
-  | "user verified"
-  | "imported"
-  | "ai generated"
-  | "web discovered";
+type RecipeSchemas = components["schemas"];
 
-export interface RecipeIngredient {
-  n: string;
-  q: string;
-  /** Substitution chip, e.g. "swap: tamari". */
-  swap?: string;
-}
+export type Catalogue = RecipeSchemas["Catalogue"];
+export type DataQuality = RecipeSchemas["DataQuality"];
+export type NutritionStatus = RecipeSchemas["NutritionStatus"];
+export type VersionTrigger = RecipeSchemas["VersionTrigger"];
 
-export interface RecipePendingChange {
-  title: string;
-  sub: string;
-  from: string;
-  to: string;
-  /** Name of the ingredient the delta applies to. */
-  ingredient: string;
-  /** New quantity for that ingredient when accepted. */
-  newQty: string;
-}
+export type RecipeDto = RecipeSchemas["RecipeDto"];
+export type RecipeVersionDto = RecipeSchemas["RecipeVersionDto"];
+export type RecipeBranchDto = RecipeSchemas["RecipeBranchDto"];
+export type IngredientDto = RecipeSchemas["IngredientDto"];
+export type MethodStepDto = RecipeSchemas["MethodStepDto"];
+export type RecipeMetadataDto = RecipeSchemas["RecipeMetadataDto"];
+export type RecipeTagsDto = RecipeSchemas["RecipeTagsDto"];
+export type RecipeDiffDto = RecipeSchemas["RecipeDiffDto"];
+export type IngredientChangeDto = RecipeSchemas["IngredientChangeDto"];
 
-export interface Recipe {
-  id: string;
-  name: string;
-  cuisine: string;
-  timeMin: number;
-  serves: number;
-  /** Headline taste score, 0–100. */
-  taste: number;
-  tier: QualityTier;
-  img: string;
-  source: string;
-  ratings: Array<{ label: string; val: number }>;
-  /** Per-serving pills, e.g. "520 kcal". */
-  nutrition: string[];
-  ingredients: RecipeIngredient[];
-  moreIngredients?: string;
-  steps: string[];
-  moreSteps?: string;
-  /** Newest first; index 0 carries the " current" suffix. */
-  versions: string[];
-  pendingChange: RecipePendingChange | null;
+export type RecipeSubstitutionDto = RecipeSchemas["RecipeSubstitutionDto"];
+export type SubstitutionState = RecipeSchemas["SubstitutionState"];
+export type SubstitutionReason = RecipeSchemas["SubstitutionReason"];
+export type CreateSubstitutionRequest = RecipeSchemas["CreateSubstitutionRequest"];
+
+export type RecipeRatingDto = RecipeSchemas["RecipeRatingDto"];
+export type RecipeRatingSummaryDto = RecipeSchemas["RecipeRatingSummaryDto"];
+export type CreateRatingRequest = RecipeSchemas["CreateRatingRequest"];
+
+export type CreateRecipeRequest = RecipeSchemas["CreateRecipeRequest"];
+export type CreateIngredientRequest = RecipeSchemas["CreateIngredientRequest"];
+export type CreateMethodStepRequest = RecipeSchemas["CreateMethodStepRequest"];
+export type CreateRecipeMetadataRequest =
+  RecipeSchemas["CreateRecipeMetadataRequest"];
+export type UpdateRecipeManualEditRequest =
+  RecipeSchemas["UpdateRecipeManualEditRequest"];
+export type CreateBranchRequest = RecipeSchemas["CreateBranchRequest"];
+export type RevertToVersionRequest = RecipeSchemas["RevertToVersionRequest"];
+
+export type RecipeImportPreview = RecipeSchemas["RecipeImportPreview"];
+export type ConfirmImportRequest = RecipeSchemas["ConfirmImportRequest"];
+export type RecipeImportDto = RecipeSchemas["RecipeImportDto"];
+export type RecipeNutritionResultDto = RecipeSchemas["RecipeNutritionResultDto"];
+
+/**
+ * Server-side recipe data the page reads per-recipe (versions, substitutions,
+ * ratings, provenance, recalc results). Keyed maps stand in for the per-recipe
+ * GET endpoints; `StoreState.recipes` itself stands in for the MISSING library
+ * list endpoint (recipes.md §8 Q1 — the headline backend gap).
+ */
+export interface RecipeDataState {
+  /** recipeId → branchId → versions ascending by versionNumber (#6/#7). */
+  versions: Record<string, Record<string, RecipeVersionDto[]>>;
+  /** recipeId → substitution rows, all states (reads filter; PROPOSED rows
+   *  are client-remembered only — recipe-detail.md §11 Q2). */
+  substitutions: Record<string, RecipeSubstitutionDto[]>;
+  /** recipeId → rating rows, newest first (#18–#23; summaries computed). */
+  ratings: Record<string, RecipeRatingDto[]>;
+  /** recipeId → import provenance; absent = manual recipe (the #15 404). */
+  provenance: Record<string, RecipeImportDto>;
+  /**
+   * versionId → recalculate result (n1). The ONLY contract source of
+   * per-serving numbers — RecipeVersionDto carries no nutritionPerServing
+   * (recipe-detail.md §11 Q1, headline gap). Populated by Recalculate only.
+   */
+  nutritionByVersion: Record<string, RecipeNutritionResultDto>;
 }
 
 /* ---- grocery -------------------------------------------------------------- */
@@ -248,17 +270,28 @@ export interface AppNotification {
   read: boolean;
 }
 
-/* ---- adaptation (Today's suggestion teaser) ----------------------------------
- * Contract shape for GET /adaptation/pending-changes (today.md §3f). Today
- * shows row 1; the Activity page owns the full top-3.
+/* ---- adaptation -----------------------------------------------------------------
+ * Contract shapes for GET /adaptation/pending-changes (+ detail, + per-recipe
+ * history). Today shows row 1; Activity owns the top-3; recipe-detail consumes
+ * the per-recipe slice (recipe-detail.md §10, a1–a5).
  */
 
 export type PendingChangeListItemDto =
   components["schemas"]["PendingChangeListItemDto"];
+export type PendingChangeDto = components["schemas"]["PendingChangeDto"];
+export type PendingChangeStatus = components["schemas"]["PendingChangeStatus"];
+export type ChangeDimension = PendingChangeListItemDto["changeDimension"];
 
 export interface AdaptationState {
-  /** Ranked pending recipe changes, server-ordered best-first. */
+  /** Ranked pending recipe changes, server-ordered best-first (a1). */
   pendingChanges: PendingChangeListItemDto[];
+  /**
+   * Mock server side: id → full detail (a2). Accept requires the detail's
+   * optimisticVersion — expand-then-accept, two calls (spec §11 Q5).
+   */
+  detailById: Record<string, PendingChangeDto>;
+  /** recipeId → resolved past proposals, newest first (a5 history). */
+  historyByRecipe: Record<string, PendingChangeDto[]>;
 }
 
 /* ---- toasts (transient UI, not a DTO) ------------------------------------------ */
@@ -456,46 +489,39 @@ export interface HouseholdState {
   email: string;
 }
 
-/* ---- discovery ------------------------------------------------------------------------ */
+/* ---- discovery: backend DTO mirrors ---------------------------------------------
+ * Contract shapes throughout (design/frontend/pages/discover.md §2): the job
+ * lifecycle is QUEUED → RUNNING → SUCCEEDED | FAILED | PARTIAL; results are
+ * scrape-log SUCCESS rows joined to already-persisted system-catalogue recipes.
+ */
 
-export type DiscoveryStep = "QUEUED" | "SEARCHING" | "FILTERING" | "DONE";
-
-export interface DiscoveryResult {
-  id: string;
-  title: string;
-  domain: string;
-  /** AI-filter confidence, 0–1. */
-  conf: number;
-  status: "new" | "kept" | "skipped";
-  timeMin: number;
-  cuisine: string;
-}
-
-export interface DiscoverySource {
-  domain: string;
-  hits: number;
-}
-
-export interface DiscoveryJob {
-  id: string;
-  query: string;
-  constraints: string[];
-  step: DiscoveryStep;
-  /** Populated when the job reaches DONE. */
-  results: DiscoveryResult[];
-  sources: DiscoverySource[];
-}
-
-export interface DiscoveryHistoryEntry {
-  query: string;
-  when: string;
-  found: number;
-  kept: number;
-}
+export type DiscoveryJobDto = components["schemas"]["DiscoveryJobDto"];
+export type DiscoveryJobStatus = components["schemas"]["DiscoveryJobStatus"];
+export type DiscoveryJobTrigger = components["schemas"]["DiscoveryJobTrigger"];
+export type DiscoveryConstraints = components["schemas"]["DiscoveryConstraints"];
+export type StartDiscoveryJobRequest =
+  components["schemas"]["StartDiscoveryJobRequest"];
+export type DiscoveryScrapeLogEntryDto =
+  components["schemas"]["DiscoveryScrapeLogEntryDto"];
+export type ScrapeOutcome = components["schemas"]["ScrapeOutcome"];
+export type ScrapeSkipReason = components["schemas"]["ScrapeSkipReason"];
+export type RobotsTxtOutcome = components["schemas"]["RobotsTxtOutcome"];
+export type DiscoverySourceDto = components["schemas"]["DiscoverySourceDto"];
+export type DiscoverySourceKind = components["schemas"]["DiscoverySourceKind"];
 
 export interface DiscoveryState {
-  job: DiscoveryJob | null;
-  history: DiscoveryHistoryEntry[];
+  /** Every job the mock knows, queued-at descending (#5 history page). */
+  jobs: DiscoveryJobDto[];
+  /** jobId → scrape-log rows in occurrence order (#4; written eagerly). */
+  scrapeLog: Record<string, DiscoveryScrapeLogEntryDto[]>;
+  /** Source registry (#6) — read-only in v1 (user disable unshipped, §9 Q4). */
+  sources: DiscoverySourceDto[];
+  /** Job whose card is mounted (start panel / history row click). */
+  openJobId: string | null;
+  /** Scrape-row ids locally dismissed via Skip — no contract call (§9 Q5). */
+  skippedRowIds: string[];
+  /** RUNNING-cancel flag: stops the mock runner between candidates (§4). */
+  cancelRequested: string | null;
 }
 
 /* ---- root ------------------------------------------------------------------ */
@@ -503,7 +529,13 @@ export interface DiscoveryState {
 export interface StoreState {
   planner: PlannerState;
   adaptation: AdaptationState;
-  recipes: Recipe[];
+  /**
+   * Library rows on the production DTO. NOTE: the shipped contract has NO
+   * GET /recipes list endpoint (recipes.md §8 Q1) — this array stands in for
+   * it and the library page footnotes the gap.
+   */
+  recipes: RecipeDto[];
+  recipeData: RecipeDataState;
   grocery: GroceryState;
   pantry: PantryState;
   notifications: AppNotification[];

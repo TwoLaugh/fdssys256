@@ -17,22 +17,38 @@ import {
   buildPlan,
 } from "./plannerSeed";
 import {
-  createSeed,
-  DISCOVERY_IMGS,
-  DISCOVERY_RESULTS,
-  DISCOVERY_SOURCES,
-  MOCK_TODAY_ISO,
-} from "./seed";
+  computeDiff,
+  hashCode,
+  ingredientsFromRequest,
+  mainBranchId,
+  ratingAggregate,
+  stepsFromRequest,
+} from "./recipeLogic";
+import {
+  buildRecipe,
+  DEDUP_DEMO_URL,
+  DEDUP_PARSED_RECIPE,
+  DISCOVERY_RUN_SCRIPT,
+  GENERIC_PARSE_WARNINGS,
+  GENERIC_PARSED_RECIPE,
+  HARD_CONSTRAINT_KEYS,
+  rowFromScript,
+  SELF_ACTOR,
+} from "./recipeSeed";
+import { createSeed, MOCK_TODAY_ISO } from "./seed";
 import type {
   ActivityLevel,
   AppNotification,
   ConfidenceTier,
   ConstraintKind,
+  CreateBranchRequest,
+  CreateRatingRequest,
+  CreateRecipeRequest,
+  CreateSubstitutionRequest,
   DailyAggregateDto,
   DayDto,
   DirectiveUserModification,
-  DiscoveryResult,
-  DiscoveryStep,
+  DiscoveryJobDto,
   EnforcementDirection,
   FeedbackEntry,
   FeedbackRoute,
@@ -48,15 +64,25 @@ import type {
   MealSlotKey,
   NotificationKind,
   NutritionState,
+  PendingChangeDto,
   PinnedReason,
   PlanDto,
   ProposedReoptAssignmentsDocument,
-  Recipe,
+  RecipeDiffDto,
+  RecipeDto,
+  RecipeImportPreview,
+  RecipeNutritionResultDto,
+  RecipeRatingDto,
+  RecipeSubstitutionDto,
+  RecipeVersionDto,
   ReoptSuggestionDto,
+  RevertToVersionRequest,
   SlotState,
+  StartDiscoveryJobRequest,
   StoreState,
   TargetsDto,
   ToastItem,
+  UpdateRecipeManualEditRequest,
   UpdateTargetsRequest,
   WeeklyAggregateDto,
 } from "./types";
@@ -127,7 +153,7 @@ export function pushToast(text: string, tone: ToastItem["tone"] = "info"): void 
  * join (spec s1).
  */
 
-export function recipeName(recipes: Recipe[], recipeId: string): string {
+export function recipeName(recipes: RecipeDto[], recipeId: string): string {
   return (
     recipes.find((r) => r.id === recipeId)?.name ??
     RECIPE_NAME_FALLBACK[recipeId] ??
@@ -954,26 +980,6 @@ export function regenerateAll(): void {
   requestGeneration();
 }
 
-/* ---- adaptation: pending-change teaser (today.md §3f) ----------------------------------
- * Accept needs expectedOptimisticVersion which the list item doesn't carry —
- * the mock performs the detail-fetch-then-accept pair in one step (spec §8 Q6).
- */
-
-export function acceptPendingChange(id: string): void {
-  mutate((s) => {
-    const item = s.adaptation.pendingChanges.find((c) => c.id === id);
-    if (!item) return s;
-    // Detail GET supplies expectedOptimisticVersion; then POST accept.
-    const out = applyRecipeChange(s, item.recipeId);
-    return {
-      ...out,
-      adaptation: {
-        pendingChanges: out.adaptation.pendingChanges.filter((c) => c.id !== id),
-      },
-    };
-  });
-}
-
 /* ---- grocery ----------------------------------------------------------------------- */
 
 /** Toggle an item between open and bought (toggling back is the undo). */
@@ -1062,74 +1068,1267 @@ export function resolveSubstitution(accept: boolean): void {
   });
 }
 
-/* ---- recipes --------------------------------------------------------------------------- */
+/* ---- recipes: shared machinery -----------------------------------------------------------
+ * Contract shapes throughout (design/frontend/pages/recipes.md +
+ * recipe-detail.md). Every write returns through the same channels the real
+ * API would: version appends bump RecipeDto.currentVersion + optimisticVersion
+ * and re-hydrate currentVersionBody; guard failures surface as status-code
+ * toasts per the specs' §8/§11 maps.
+ */
 
-function bumpVersions(versions: string[]): string[] {
-  const head = versions[0] ?? "v0 current";
-  const n = parseInt(head.replace(/^v/, ""), 10);
-  return [
-    `v${(Number.isNaN(n) ? 0 : n) + 1} current`,
-    ...versions.map((v) => v.replace(" current", "")),
-  ];
+function findRecipe(s: StoreState, recipeId: string): RecipeDto | undefined {
+  return s.recipes.find((r) => r.id === recipeId);
 }
 
-/** Decided pending changes leave the adaptation queue (Today teaser + #8). */
-function clearLinkedSuggestion(s: StoreState, recipeId: string): StoreState {
-  if (!s.adaptation.pendingChanges.some((c) => c.recipeId === recipeId)) {
-    return s;
-  }
+function replaceRecipe(s: StoreState, next: RecipeDto): StoreState {
   return {
     ...s,
-    adaptation: {
-      pendingChanges: s.adaptation.pendingChanges.filter(
-        (c) => c.recipeId !== recipeId,
+    recipes: s.recipes.map((r) => (r.id === next.id ? next : r)),
+  };
+}
+
+/** Versions of one branch, ascending (GET …/versions equivalent). */
+export function versionsFor(
+  s: StoreState,
+  recipeId: string,
+  branchId: string,
+): RecipeVersionDto[] {
+  return s.recipeData.versions[recipeId]?.[branchId] ?? [];
+}
+
+export function currentVersionOf(
+  s: StoreState,
+  recipe: RecipeDto,
+): RecipeVersionDto | undefined {
+  const branchId = recipe.currentBranchId ?? mainBranchId(recipe.id);
+  const list = versionsFor(s, recipe.id, branchId);
+  return list[list.length - 1];
+}
+
+interface VersionBody {
+  ingredients: RecipeVersionDto["ingredients"];
+  methodSteps: RecipeVersionDto["methodSteps"];
+  metadata: RecipeVersionDto["metadata"];
+  tags: RecipeVersionDto["tags"];
+}
+
+let versionSeq = 100;
+
+/**
+ * Append a new version on a branch; bumps the branch + recipe counters and —
+ * when the branch is current — re-hydrates currentVersionBody. Body-changing
+ * writes flip nutritionStatus back to PENDING (imported/edited nutrition is
+ * always recomputed internally — HLD rule).
+ */
+function appendVersion(
+  s: StoreState,
+  recipeId: string,
+  branchId: string,
+  body: VersionBody,
+  trigger: RecipeVersionDto["trigger"],
+  changeReason: string | null,
+  actor: string = SELF_ACTOR,
+): { state: StoreState; version: RecipeVersionDto } | null {
+  const recipe = findRecipe(s, recipeId);
+  const list = versionsFor(s, recipeId, branchId);
+  const parent = list[list.length - 1];
+  if (!recipe || !parent) return null;
+  const version: RecipeVersionDto = {
+    id: `${recipeId}-gen-${++versionSeq}`,
+    branchId,
+    versionNumber: parent.versionNumber + 1,
+    parentVersionId: parent.id,
+    trigger,
+    changeReason,
+    embeddingStatus: "PENDING",
+    createdAt: nowIso(),
+    createdByActor: actor,
+    adapterTraceId: null,
+    ...body,
+    appliedSubstitutionIds: null,
+  };
+  const isCurrentBranch =
+    (recipe.currentBranchId ?? mainBranchId(recipeId)) === branchId;
+  const nextDto: RecipeDto = {
+    ...recipe,
+    currentVersion: isCurrentBranch ? version.versionNumber : recipe.currentVersion,
+    currentVersionBody: isCurrentBranch ? version : recipe.currentVersionBody,
+    nutritionStatus: "PENDING",
+    optimisticVersion: recipe.optimisticVersion + 1,
+    updatedAt: nowIso(),
+    branches: recipe.branches.map((b) =>
+      b.id === branchId
+        ? { ...b, currentVersion: version.versionNumber, version: b.version + 1 }
+        : b,
+    ),
+  };
+  const state: StoreState = {
+    ...replaceRecipe(s, nextDto),
+    recipeData: {
+      ...s.recipeData,
+      versions: {
+        ...s.recipeData.versions,
+        [recipeId]: {
+          ...s.recipeData.versions[recipeId],
+          [branchId]: [...list, version],
+        },
+      },
+    },
+  };
+  return { state, version };
+}
+
+/* ---- recipes: catalogue state machine (recipes.md §5) -------------------------------- */
+
+/** POST /recipes/{id}/promote — flip-in-place SYSTEM → USER (one tap). */
+export function promoteRecipe(recipeId: string): boolean {
+  const recipe = findRecipe(state, recipeId);
+  if (!recipe) {
+    pushToast("404 — recipe no longer exists", "warn");
+    return false;
+  }
+  if (recipe.catalogue === "USER") {
+    pushToast("422 — already in your library", "warn");
+    return false;
+  }
+  if (recipe.archivedAt) {
+    pushToast("422 — unarchive the recipe before promoting it", "warn");
+    return false;
+  }
+  mutate((s) => {
+    const r = findRecipe(s, recipeId);
+    if (!r || r.catalogue !== "SYSTEM") return s;
+    return pushNotification(
+      replaceRecipe(s, {
+        ...r,
+        catalogue: "USER",
+        optimisticVersion: r.optimisticVersion + 1,
+        updatedAt: nowIso(),
+      }),
+      "recipe",
+      `${r.name} added to your library — versions and ratings preserved`,
+    );
+  });
+  return true;
+}
+
+/** POST /recipes/{id}/demote — flip to SYSTEM; data preserved, not a delete. */
+export function demoteRecipe(recipeId: string): void {
+  const recipe = findRecipe(state, recipeId);
+  if (!recipe) {
+    pushToast("404 — recipe no longer exists", "warn");
+    return;
+  }
+  if (recipe.catalogue === "SYSTEM") {
+    pushToast("422 — already in the recipe pool", "warn");
+    return;
+  }
+  mutate((s) => {
+    const r = findRecipe(s, recipeId);
+    if (!r || r.catalogue !== "USER") return s;
+    return pushNotification(
+      replaceRecipe(s, {
+        ...r,
+        catalogue: "SYSTEM",
+        optimisticVersion: r.optimisticVersion + 1,
+        updatedAt: nowIso(),
+      }),
+      "recipe",
+      `${r.name} moved to the recipe pool — your versions are preserved`,
+    );
+  });
+}
+
+/** POST /recipes/{id}/archive — idempotent (re-archive is a 204 no-op). */
+export function archiveRecipe(recipeId: string): void {
+  mutate((s) => {
+    const r = findRecipe(s, recipeId);
+    if (!r || r.archivedAt) return s; // idempotent
+    return replaceRecipe(s, {
+      ...r,
+      archivedAt: nowIso(),
+      optimisticVersion: r.optimisticVersion + 1,
+      updatedAt: nowIso(),
+    });
+  });
+}
+
+export function unarchiveRecipe(recipeId: string): void {
+  mutate((s) => {
+    const r = findRecipe(s, recipeId);
+    if (!r || !r.archivedAt) return s; // idempotent
+    return replaceRecipe(s, {
+      ...r,
+      archivedAt: null,
+      optimisticVersion: r.optimisticVersion + 1,
+      updatedAt: nowIso(),
+    });
+  });
+}
+
+/* ---- recipes: dedup gate + create/import (recipes.md §4) ------------------------------ */
+
+const DEDUP_THRESHOLD = 0.8;
+
+export interface DedupHit {
+  candidateRecipeId: string;
+  ingredientOverlap: number;
+}
+
+/** ≥80 % Jaccard overlap of normalised ingredient-mapping-key sets. */
+function findDedupCandidate(
+  s: StoreState,
+  req: CreateRecipeRequest,
+): DedupHit | null {
+  const keys = new Set(
+    req.ingredients.map((i) => i.ingredientMappingKey.trim().toLowerCase()),
+  );
+  let best: DedupHit | null = null;
+  for (const r of s.recipes) {
+    if (r.deletedAt || !r.currentVersionBody) continue;
+    const theirs = new Set(
+      r.currentVersionBody.ingredients.map((i) =>
+        i.ingredientMappingKey.trim().toLowerCase(),
       ),
+    );
+    const intersection = [...keys].filter((k) => theirs.has(k)).length;
+    const union = new Set([...keys, ...theirs]).size;
+    if (union === 0) continue;
+    const overlap = Math.round((intersection / union) * 100) / 100;
+    if (overlap >= DEDUP_THRESHOLD && (!best || overlap > best.ingredientOverlap)) {
+      best = { candidateRecipeId: r.id, ingredientOverlap: overlap };
+    }
+  }
+  return best;
+}
+
+let recipeSeq = 0;
+
+function slugify(text: string): string {
+  return (
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "recipe"
+  );
+}
+
+function materialiseRecipe(
+  s: StoreState,
+  req: CreateRecipeRequest,
+  opts: {
+    quality: RecipeDto["dataQuality"];
+    sourceUrl?: string | null;
+    extractionMethod?: string | null;
+  },
+): { state: StoreState; recipeId: string } {
+  let id = slugify(req.name);
+  if (findRecipe(s, id)) id = `${id}-${++recipeSeq}`;
+  const built = buildRecipe({
+    id,
+    name: req.name,
+    desc: req.description ?? "",
+    catalogue: "USER", // imports/creates always land in the caller's catalogue
+    quality: opts.quality,
+    nutrition: "PENDING", // external nutrition discarded; recalculated internally
+    img: null,
+    cuisine: req.metadata.cuisine ?? "—",
+    prep: req.metadata.prepTimeMins,
+    cook: req.metadata.cookTimeMins,
+    servings: req.metadata.servings,
+    mealTypes: req.metadata.mealTypes ?? [],
+    equipment: req.metadata.equipmentRequired ?? [],
+    fridgeDays: req.metadata.fridgeDays ?? undefined,
+    freezerWeeks: req.metadata.freezerWeeks ?? undefined,
+    packable: req.metadata.packable ?? false,
+    tags: req.tags
+      ? {
+          protein: req.tags.protein ?? null,
+          cookingMethod: req.tags.cookingMethod ?? null,
+          complexity: req.tags.complexity ?? null,
+          flavourProfile: req.tags.flavourProfile ?? [],
+          dietaryFlags: req.tags.dietaryFlags ?? [],
+        }
+      : null,
+    ing: req.ingredients.map((i) => ({
+      k: i.ingredientMappingKey,
+      n: i.displayName,
+      q: i.quantity ?? null,
+      u: i.unit ?? null,
+      prep: i.preparation ?? null,
+      opt: i.optional ?? false,
+    })),
+    steps: req.method.map((m) => ({
+      t: m.instruction,
+      m: m.durationMinutes ?? undefined,
+    })),
+    createdAt: nowIso(),
+    trigger: opts.quality === "IMPORTED" ? "IMPORT" : "MANUAL_CREATE",
+  });
+  let next: StoreState = {
+    ...s,
+    recipes: [built.dto, ...s.recipes],
+    recipeData: {
+      ...s.recipeData,
+      versions: { ...s.recipeData.versions, [id]: built.versions },
+    },
+  };
+  if (opts.sourceUrl !== undefined) {
+    next = {
+      ...next,
+      recipeData: {
+        ...next.recipeData,
+        provenance: {
+          ...next.recipeData.provenance,
+          [id]: {
+            id: `imp-${id}`,
+            recipeId: id,
+            sourceType: opts.sourceUrl ? "URL" : "MANUAL",
+            sourceUrl: opts.sourceUrl ?? null,
+            sourcePayload: null,
+            extractionMethod: opts.extractionMethod ?? null,
+            duplicateOfRecipeId: null,
+            importedAt: nowIso(),
+            importedByUserId: MOCK_USER_ID,
+          },
+        },
+      },
+    };
+  }
+  return { state: next, recipeId: id };
+}
+
+export type CreateRecipeOutcome =
+  | { kind: "created"; recipeId: string }
+  | { kind: "duplicate"; hit: DedupHit };
+
+/** POST /recipes — manual create; runs the dedup gate (422 → §4c dialog). */
+export function createRecipeManual(req: CreateRecipeRequest): CreateRecipeOutcome {
+  const hit = findDedupCandidate(state, req);
+  if (hit) return { kind: "duplicate", hit };
+  let outcome: CreateRecipeOutcome = { kind: "duplicate", hit: { candidateRecipeId: "", ingredientOverlap: 0 } };
+  mutate((s) => {
+    const made = materialiseRecipe(s, req, { quality: "USER_VERIFIED" });
+    outcome = { kind: "created", recipeId: made.recipeId };
+    return pushNotification(
+      made.state,
+      "recipe",
+      `${req.name} added to your library — nutrition calculating`,
+    );
+  });
+  return outcome;
+}
+
+export type ImportPreviewOutcome =
+  | { kind: "preview"; preview: RecipeImportPreview }
+  | { kind: "failure"; failureReason: string; detail: string };
+
+let previewSeq = 0;
+
+/**
+ * POST /imports/preview-url (#3) — deliberately non-transactional read.
+ * Mock extraction routes by URL: the seeded DEDUP_DEMO_URL previews a
+ * near-duplicate of chicken-stir-fry; substrings simulate the §4a
+ * failureReason vocabulary (timeout / blocked / broken / no-recipe / huge).
+ */
+export function previewImportFromUrl(url: string): ImportPreviewOutcome {
+  const u = url.toLowerCase();
+  if (u.includes("timeout")) {
+    return { kind: "failure", failureReason: "fetch_timeout", detail: "Read timed out after 10 s" };
+  }
+  if (u.includes("blocked")) {
+    return { kind: "failure", failureReason: "fetch_4xx_403", detail: "The site returned HTTP 403" };
+  }
+  if (u.includes("broken")) {
+    return { kind: "failure", failureReason: "fetch_5xx_500", detail: "The site returned HTTP 500" };
+  }
+  if (u.includes("no-recipe") || u.includes("essay")) {
+    return {
+      kind: "failure",
+      failureReason: "no_extractor_matched",
+      detail: "No recipe markup (json-ld / microdata / known selectors) found",
+    };
+  }
+  if (u.includes("huge")) {
+    return { kind: "failure", failureReason: "oversize", detail: "Page exceeded the 4 MB extraction cap" };
+  }
+  const parsedRecipe =
+    url === DEDUP_DEMO_URL ? DEDUP_PARSED_RECIPE : GENERIC_PARSED_RECIPE;
+  const hit = findDedupCandidate(state, parsedRecipe);
+  return {
+    kind: "preview",
+    preview: {
+      previewToken: `pt-${++previewSeq}`,
+      parsedRecipe,
+      sourceUrl: url,
+      extractionMethod: url === DEDUP_DEMO_URL ? "microdata" : "json_ld",
+      validationWarnings: url === DEDUP_DEMO_URL ? [] : GENERIC_PARSE_WARNINGS,
+      dedupCandidate: hit
+        ? { recipeId: hit.candidateRecipeId, ingredientOverlap: hit.ingredientOverlap }
+        : null,
     },
   };
 }
 
-function applyRecipeChange(s: StoreState, recipeId: string): StoreState {
-  const recipe = s.recipes.find((r) => r.id === recipeId);
-  const change = recipe?.pendingChange;
-  if (!recipe || !change) return s;
-  const recipes = s.recipes.map((r) =>
-    r.id !== recipeId
-      ? r
-      : {
-          ...r,
-          versions: bumpVersions(r.versions),
-          ingredients: r.ingredients.map((it) =>
-            it.n === change.ingredient ? { ...it, q: change.newQty } : it,
-          ),
-          pendingChange: null,
-        },
-  );
-  const newVersion = bumpVersions(recipe.versions)[0].replace(" current", "");
-  return pushNotification(
-    clearLinkedSuggestion({ ...s, recipes }, recipeId),
-    "recipe",
-    `${recipe.name} updated — ${change.title.toLowerCase()} (${newVersion} created)`,
-  );
+/** POST /imports/preview-html (#4) — the in-app-browser "Save recipe" path. */
+export function previewImportFromHtml(url: string, html: string): ImportPreviewOutcome {
+  if (html.trim().length < 40) {
+    return {
+      kind: "failure",
+      failureReason: "no_extractor_matched",
+      detail: "Supplied markup too small to contain a recipe",
+    };
+  }
+  const hit = findDedupCandidate(state, GENERIC_PARSED_RECIPE);
+  return {
+    kind: "preview",
+    preview: {
+      previewToken: `pt-${++previewSeq}`,
+      parsedRecipe: GENERIC_PARSED_RECIPE,
+      sourceUrl: url,
+      extractionMethod: "common_selectors",
+      validationWarnings: GENERIC_PARSE_WARNINGS,
+      dedupCandidate: hit
+        ? { recipeId: hit.candidateRecipeId, ingredientOverlap: hit.ingredientOverlap }
+        : null,
+    },
+  };
 }
 
-export function acceptRecipeChange(recipeId: string): void {
-  mutate((s) => applyRecipeChange(s, recipeId));
-}
-
-export function rejectRecipeChange(recipeId: string): void {
+/** POST /imports/confirm (#5) — the reviewed body is authoritative; dedup
+ *  runs BEFORE persistence (422 recipe-import-duplicate → §4c dialog). */
+export function confirmImport(
+  req: CreateRecipeRequest,
+  sourceUrl: string,
+  extractionMethod: string | null,
+): CreateRecipeOutcome {
+  const hit = findDedupCandidate(state, req);
+  if (hit) return { kind: "duplicate", hit };
+  let outcome: CreateRecipeOutcome = { kind: "duplicate", hit: { candidateRecipeId: "", ingredientOverlap: 0 } };
   mutate((s) => {
-    const recipe = s.recipes.find((r) => r.id === recipeId);
-    if (!recipe?.pendingChange) return s;
-    return clearLinkedSuggestion(
-      {
-        ...s,
-        recipes: s.recipes.map((r) =>
-          r.id === recipeId ? { ...r, pendingChange: null } : r,
-        ),
-      },
-      recipeId,
+    const made = materialiseRecipe(s, req, {
+      quality: "IMPORTED",
+      sourceUrl,
+      extractionMethod,
+    });
+    outcome = { kind: "created", recipeId: made.recipeId };
+    return pushNotification(
+      made.state,
+      "recipe",
+      `${req.name} imported — nutrition calculating`,
     );
   });
+  return outcome;
+}
+
+/* ---- recipes: branches (recipe-detail.md §5a) ----------------------------------------- */
+
+/** POST /recipes/{id}/branches. Returns the new branch id, or null on guard. */
+export function createVariantBranch(
+  recipeId: string,
+  req: CreateBranchRequest,
+): string | null {
+  const recipe = findRecipe(state, recipeId);
+  if (!recipe) {
+    pushToast("404 — recipe no longer exists", "warn");
+    return null;
+  }
+  if (recipe.catalogue === "SYSTEM") {
+    pushToast("422 — pool recipes can't be branched; add to your library first", "warn");
+    return null;
+  }
+  if (req.name === "main") {
+    pushToast("422 — 'main' is reserved", "warn");
+    return null;
+  }
+  if (!/^[a-z0-9-]+$/.test(req.name)) {
+    pushToast("400 — branch name must be a slug (a–z, 0–9, hyphen)", "warn");
+    return null;
+  }
+  if (recipe.branches.some((b) => b.name === req.name)) {
+    pushToast(`409 — branch name '${req.name}' is taken`, "warn");
+    return null;
+  }
+  const allVersions = Object.values(
+    state.recipeData.versions[recipeId] ?? {},
+  ).flat();
+  const forkPoint = allVersions.find((v) => v.id === req.branchPointVersionId);
+  if (!forkPoint) {
+    pushToast("422 — fork-point version doesn't belong to this recipe", "warn");
+    return null;
+  }
+  const branchId = `${recipeId}-${req.name}`;
+  mutate((s) => {
+    const r = findRecipe(s, recipeId);
+    if (!r) return s;
+    const startVersion: RecipeVersionDto = {
+      id: `${branchId}-v1`,
+      branchId,
+      versionNumber: 1,
+      parentVersionId: forkPoint.id, // cross-branch lineage (branch-start row)
+      trigger: "BRANCH_CREATION",
+      changeReason: req.reason,
+      embeddingStatus: "PENDING",
+      createdAt: nowIso(),
+      createdByActor: SELF_ACTOR,
+      adapterTraceId: null,
+      ingredients: ingredientsFromRequest(req.body.ingredients, forkPoint.ingredients),
+      methodSteps: stepsFromRequest(req.body.method),
+      metadata: {
+        servings: req.body.metadata.servings,
+        prepTimeMins: req.body.metadata.prepTimeMins,
+        cookTimeMins: req.body.metadata.cookTimeMins,
+        totalTimeMins: req.body.metadata.totalTimeMins,
+        equipmentRequired: req.body.metadata.equipmentRequired ?? [],
+        fridgeDays: req.body.metadata.fridgeDays ?? null,
+        freezerWeeks: req.body.metadata.freezerWeeks ?? null,
+        packable: req.body.metadata.packable ?? false,
+        cuisine: req.body.metadata.cuisine ?? null,
+        mealTypes: req.body.metadata.mealTypes ?? [],
+      },
+      tags: req.body.tags
+        ? {
+            protein: req.body.tags.protein ?? null,
+            cookingMethod: req.body.tags.cookingMethod ?? null,
+            complexity: req.body.tags.complexity ?? null,
+            flavourProfile: req.body.tags.flavourProfile ?? [],
+            dietaryFlags: req.body.tags.dietaryFlags ?? [],
+          }
+        : null,
+      appliedSubstitutionIds: null,
+    };
+    // NOTE: creating a branch does NOT switch currentBranchId (§5a).
+    const next: RecipeDto = {
+      ...r,
+      optimisticVersion: r.optimisticVersion + 1,
+      updatedAt: nowIso(),
+      branches: [
+        ...r.branches,
+        {
+          id: branchId,
+          recipeId,
+          parentBranchId: forkPoint.branchId,
+          branchPointVersionId: forkPoint.id,
+          name: req.name,
+          label: req.label ?? null,
+          reason: req.reason,
+          currentVersion: 1,
+          divergenceScore: 0.12,
+          createdAt: nowIso(),
+          createdByActor: SELF_ACTOR,
+          adapterTraceId: null,
+          version: 1,
+        },
+      ],
+    };
+    return pushNotification(
+      {
+        ...replaceRecipe(s, next),
+        recipeData: {
+          ...s.recipeData,
+          versions: {
+            ...s.recipeData.versions,
+            [recipeId]: {
+              ...s.recipeData.versions[recipeId],
+              [branchId]: [startVersion],
+            },
+          },
+        },
+      },
+      "recipe",
+      `${r.name} forked as '${req.label ?? req.name}' from v${forkPoint.versionNumber}`,
+    );
+  });
+  return branchId;
+}
+
+/* ---- recipes: edit + revert (recipe-detail.md §4b/§5b) -------------------------------- */
+
+export type EditOutcome = "ok" | "conflict" | "noop" | "catalogue" | "missing";
+
+/** PUT /recipes/{id} — full replacement; new version, trigger MANUAL_EDIT. */
+export function editRecipe(
+  recipeId: string,
+  req: UpdateRecipeManualEditRequest,
+): EditOutcome {
+  const recipe = findRecipe(state, recipeId);
+  if (!recipe) return "missing";
+  if (recipe.catalogue === "SYSTEM") {
+    pushToast("422 recipe-catalogue-violation — promote to your library first", "warn");
+    return "catalogue";
+  }
+  if (req.expectedOptimisticVersion !== recipe.optimisticVersion) {
+    pushToast("409 — recipe changed since you opened it; reloaded", "warn");
+    return "conflict";
+  }
+  const current = currentVersionOf(state, recipe);
+  if (!current) return "missing";
+  const branchId = recipe.currentBranchId ?? mainBranchId(recipeId);
+  let changed = recipe.name !== req.name || (recipe.description ?? "") !== (req.description ?? "");
+  const body: VersionBody = {
+    ingredients: ingredientsFromRequest(req.ingredients, current.ingredients),
+    methodSteps: stepsFromRequest(req.method),
+    metadata: {
+      servings: req.metadata.servings,
+      prepTimeMins: req.metadata.prepTimeMins,
+      cookTimeMins: req.metadata.cookTimeMins,
+      totalTimeMins: req.metadata.totalTimeMins,
+      equipmentRequired: req.metadata.equipmentRequired ?? [],
+      fridgeDays: req.metadata.fridgeDays ?? null,
+      freezerWeeks: req.metadata.freezerWeeks ?? null,
+      packable: req.metadata.packable ?? false,
+      cuisine: req.metadata.cuisine ?? null,
+      mealTypes: req.metadata.mealTypes ?? [],
+    },
+    tags: req.tags
+      ? {
+          protein: req.tags.protein ?? null,
+          cookingMethod: req.tags.cookingMethod ?? null,
+          complexity: req.tags.complexity ?? null,
+          flavourProfile: req.tags.flavourProfile ?? [],
+          dietaryFlags: req.tags.dietaryFlags ?? [],
+        }
+      : null,
+  };
+  const probe = computeDiff(current, {
+    ...current,
+    ingredients: body.ingredients,
+    methodSteps: body.methodSteps,
+    metadata: body.metadata,
+    tags: body.tags,
+  });
+  changed =
+    changed ||
+    probe.ingredientChanges.length > 0 ||
+    probe.methodChanges.length > 0 ||
+    probe.metadataChanges.length > 0 ||
+    probe.tagChanges.length > 0;
+  if (!changed) {
+    pushToast("400 — nothing changed; no version written", "warn");
+    return "noop";
+  }
+  mutate((s) => {
+    const r = findRecipe(s, recipeId);
+    if (!r) return s;
+    const appended = appendVersion(s, recipeId, branchId, body, "MANUAL_EDIT", req.changeReason);
+    if (!appended) return s;
+    const withName = replaceRecipe(appended.state, {
+      ...(findRecipe(appended.state, recipeId) as RecipeDto),
+      name: req.name,
+      description: req.description ?? null,
+    });
+    return pushNotification(
+      withName,
+      "recipe",
+      `${req.name} edited — v${appended.version.versionNumber} created`,
+    );
+  });
+  return "ok";
+}
+
+/** POST /recipes/{id}/versions/revert — writes a NEW version cloning the
+ *  target (trigger REVERT); history is never rewritten. */
+export function revertRecipe(recipeId: string, req: RevertToVersionRequest): boolean {
+  const recipe = findRecipe(state, recipeId);
+  if (!recipe) return false;
+  if (recipe.catalogue === "SYSTEM") {
+    pushToast("422 recipe-catalogue-violation — promote to your library first", "warn");
+    return false;
+  }
+  if (req.expectedRecipeOptimisticVersion !== recipe.optimisticVersion) {
+    pushToast("409 — recipe changed since you opened it; reloaded", "warn");
+    return false;
+  }
+  const list = versionsFor(state, recipeId, req.branchId);
+  const target = list.find((v) => v.versionNumber === req.versionNumber);
+  const head = list[list.length - 1];
+  if (!target || !head) {
+    pushToast("422 — version not found on that branch", "warn");
+    return false;
+  }
+  if (target.id === head.id) {
+    pushToast("400 — that's already the current version; nothing to revert", "warn");
+    return false;
+  }
+  mutate((s) => {
+    const appended = appendVersion(
+      s,
+      recipeId,
+      req.branchId,
+      {
+        ingredients: target.ingredients,
+        methodSteps: target.methodSteps,
+        metadata: target.metadata,
+        tags: target.tags,
+      },
+      "REVERT",
+      `Revert to v${target.versionNumber}`,
+    );
+    if (!appended) return s;
+    return pushNotification(
+      appended.state,
+      "recipe",
+      `${recipe.name} reverted — v${appended.version.versionNumber} copies v${target.versionNumber}`,
+    );
+  });
+  return true;
+}
+
+/* ---- recipes: substitutions state machine (recipe-detail.md §6) ----------------------- */
+
+let subSeq = 0;
+
+function withSubstitutions(
+  s: StoreState,
+  recipeId: string,
+  fn: (rows: RecipeSubstitutionDto[]) => RecipeSubstitutionDto[],
+): StoreState {
+  return {
+    ...s,
+    recipeData: {
+      ...s.recipeData,
+      substitutions: {
+        ...s.recipeData.substitutions,
+        [recipeId]: fn(s.recipeData.substitutions[recipeId] ?? []),
+      },
+    },
+  };
+}
+
+/** POST /recipes/{id}/substitutions — lands PROPOSED. */
+export function proposeSubstitution(
+  recipeId: string,
+  req: CreateSubstitutionRequest,
+): boolean {
+  const recipe = findRecipe(state, recipeId);
+  if (!recipe) return false;
+  if (recipe.catalogue === "SYSTEM") {
+    pushToast("422 — pool recipes can't take substitutions; promote first", "warn");
+    return false;
+  }
+  const allVersions = Object.values(state.recipeData.versions[recipeId] ?? {}).flat();
+  const version = allVersions.find((v) => v.id === req.versionId);
+  if (!version) {
+    pushToast("422 — version not found on this recipe", "warn");
+    return false;
+  }
+  if (
+    !version.ingredients.some(
+      (i) => i.ingredientMappingKey === req.original.ingredientMappingKey,
+    )
+  ) {
+    pushToast("422 — original ingredient isn't on that version", "warn");
+    return false;
+  }
+  mutate((s) =>
+    withSubstitutions(s, recipeId, (rows) => [
+      ...rows,
+      {
+        id: `sub-new-${++subSeq}`,
+        recipeId,
+        versionId: req.versionId,
+        branchId: version.branchId,
+        original: req.original,
+        substitute: req.substitute,
+        reason: req.reason,
+        constraintRef: req.constraintRef ?? null,
+        methodOverlay: req.methodOverlay ?? null,
+        notes: req.notes ?? null,
+        temporary: req.temporary,
+        applicationCount: 0,
+        lastAppliedAt: null,
+        state: "PROPOSED",
+        promotedToVersionId: null,
+        createdAt: nowIso(),
+        createdByActor: SELF_ACTOR,
+        adapterTraceId: null,
+        version: 1,
+      },
+    ]),
+  );
+  return true;
+}
+
+export type SubstitutionAction = "accept" | "reject" | "promote-to-version";
+
+/**
+ * POST /substitutions/{subId}/{action}. Shipped state machine: PROPOSED →
+ * ACCEPTED | REJECTED; ACCEPTED → SUPERSEDED on promote; REJECTED → ACCEPTED
+ * is legal (re-accept); only SUPERSEDED is hard-terminal (§11 Q3).
+ */
+export function actOnSubstitution(
+  recipeId: string,
+  subId: string,
+  action: SubstitutionAction,
+  body: { expectedVersion: number; reason?: string | null; changeReason?: string },
+): void {
+  const rows = state.recipeData.substitutions[recipeId] ?? [];
+  const sub = rows.find((x) => x.id === subId);
+  if (!sub) {
+    pushToast("404 — substitution no longer exists", "warn");
+    return;
+  }
+  if (sub.version !== body.expectedVersion) {
+    pushToast("409 — substitution changed elsewhere; row re-fetched", "warn");
+    return;
+  }
+  if (sub.state === "SUPERSEDED") {
+    pushToast("422 — already made permanent (terminal)", "warn");
+    return;
+  }
+  if (action === "accept") {
+    if (sub.state === "ACCEPTED") return; // idempotent 200 no-op, no bump
+    mutate((s) =>
+      withSubstitutions(s, recipeId, (xs) =>
+        xs.map((x) =>
+          x.id === subId
+            ? { ...x, state: "ACCEPTED", version: x.version + 1 }
+            : x,
+        ),
+      ),
+    );
+    return;
+  }
+  if (action === "reject") {
+    if (sub.state === "REJECTED") return;
+    mutate((s) =>
+      withSubstitutions(s, recipeId, (xs) =>
+        xs.map((x) =>
+          x.id === subId
+            ? { ...x, state: "REJECTED", version: x.version + 1 }
+            : x,
+        ),
+      ),
+    );
+    return;
+  }
+  // promote-to-version
+  if (sub.state !== "ACCEPTED") {
+    pushToast("422 — only an accepted substitution can be made permanent", "warn");
+    return;
+  }
+  if (!body.changeReason?.trim()) {
+    pushToast("400 — a change note is required to make a swap permanent", "warn");
+    return;
+  }
+  mutate((s) => {
+    const recipe = findRecipe(s, recipeId);
+    const version = Object.values(s.recipeData.versions[recipeId] ?? {})
+      .flat()
+      .find((v) => v.id === sub.versionId);
+    if (!recipe || !version) return s;
+    const ingredients = version.ingredients.map((i) =>
+      i.ingredientMappingKey === sub.original.ingredientMappingKey
+        ? {
+            ...i,
+            id: `ing-promo-${++subSeq}`,
+            ingredientMappingKey: sub.substitute.ingredientMappingKey,
+            displayName:
+              sub.substitute.ingredientMappingKey.charAt(0).toUpperCase() +
+              sub.substitute.ingredientMappingKey.slice(1),
+            quantity: sub.substitute.quantity,
+            unit: sub.substitute.unit,
+          }
+        : i,
+    );
+    const overlayByStep = new Map(
+      (sub.methodOverlay ?? []).map((l) => [l.step, l.instruction]),
+    );
+    const methodSteps = version.methodSteps.map((m) =>
+      overlayByStep.has(m.stepNumber)
+        ? { ...m, instruction: overlayByStep.get(m.stepNumber) as string }
+        : m,
+    );
+    const appended = appendVersion(
+      s,
+      recipeId,
+      version.branchId,
+      { ingredients, methodSteps, metadata: version.metadata, tags: version.tags },
+      "SUBSTITUTION_PROMOTION",
+      body.changeReason ?? null,
+    );
+    if (!appended) return s;
+    const out = withSubstitutions(appended.state, recipeId, (xs) =>
+      xs.map((x) =>
+        x.id === subId
+          ? {
+              ...x,
+              state: "SUPERSEDED" as const,
+              promotedToVersionId: appended.version.id,
+              version: x.version + 1,
+            }
+          : x,
+      ),
+    );
+    return pushNotification(
+      out,
+      "recipe",
+      `${recipe.name}: swap made permanent — v${appended.version.versionNumber} created`,
+    );
+  });
+}
+
+/* ---- recipes: ratings (recipe-detail.md §7) -------------------------------------------- */
+
+let userRatingSeq = 500;
+
+function withRatings(
+  s: StoreState,
+  recipeId: string,
+  fn: (rows: RecipeRatingDto[]) => RecipeRatingDto[],
+): StoreState {
+  return {
+    ...s,
+    recipeData: {
+      ...s.recipeData,
+      ratings: {
+        ...s.recipeData.ratings,
+        [recipeId]: fn(s.recipeData.ratings[recipeId] ?? []),
+      },
+    },
+  };
+}
+
+export function myRatingFor(
+  s: StoreState,
+  recipeId: string,
+  versionId: string,
+): RecipeRatingDto | undefined {
+  return (s.recipeData.ratings[recipeId] ?? []).find(
+    (r) => r.userId === MOCK_USER_ID && r.versionId === versionId,
+  );
+}
+
+/**
+ * POST /recipes/{id}/ratings — one per user per version. When mine already
+ * exists the real call 409s; the page switches to the PUT path silently
+ * (§7b), which this mock performs in one step.
+ */
+export function submitRating(recipeId: string, req: CreateRatingRequest): void {
+  const mine = myRatingFor(state, recipeId, req.versionId);
+  if (mine) {
+    updateRating(recipeId, mine.id, req, mine.optimisticVersion);
+    pushToast("Already rated this version — updated instead (409 → PUT)");
+    return;
+  }
+  mutate((s) =>
+    withRatings(s, recipeId, (rows) => [
+      {
+        id: `rate-u${++userRatingSeq}`,
+        recipeId,
+        versionId: req.versionId,
+        userId: MOCK_USER_ID,
+        householdId: null,
+        slotId: req.slotId ?? null,
+        taste: req.taste,
+        effortWorthIt: req.effortWorthIt ?? null,
+        portionFit: req.portionFit ?? null,
+        repeatValue: req.repeatValue ?? null,
+        aggregate: ratingAggregate(req),
+        notes: req.notes ?? null,
+        traceId: null,
+        optimisticVersion: 1,
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      },
+      ...rows,
+    ]),
+  );
+}
+
+/** PUT /recipes/{id}/ratings/{ratingId}. */
+export function updateRating(
+  recipeId: string,
+  ratingId: string,
+  req: CreateRatingRequest,
+  expectedVersion: number,
+): void {
+  const row = (state.recipeData.ratings[recipeId] ?? []).find((r) => r.id === ratingId);
+  if (!row) {
+    pushToast("404 — rating no longer exists", "warn");
+    return;
+  }
+  if (row.optimisticVersion !== expectedVersion) {
+    pushToast("409 — your rating changed elsewhere; reloaded", "warn");
+    return;
+  }
+  mutate((s) =>
+    withRatings(s, recipeId, (rows) =>
+      rows.map((r) =>
+        r.id === ratingId
+          ? {
+              ...r,
+              taste: req.taste,
+              effortWorthIt: req.effortWorthIt ?? null,
+              portionFit: req.portionFit ?? null,
+              repeatValue: req.repeatValue ?? null,
+              aggregate: ratingAggregate(req),
+              notes: req.notes ?? null,
+              optimisticVersion: r.optimisticVersion + 1,
+              updatedAt: nowIso(),
+            }
+          : r,
+      ),
+    ),
+  );
+}
+
+/** DELETE /recipes/{id}/ratings/{ratingId} → 204. */
+export function deleteRating(recipeId: string, ratingId: string): void {
+  mutate((s) =>
+    withRatings(s, recipeId, (rows) => rows.filter((r) => r.id !== ratingId)),
+  );
+}
+
+/* ---- recipes: image upload (#16) -------------------------------------------------------- */
+
+/** POST /recipes/{id}/image — size/MIME pre-checks live in the dropzone. */
+export function setRecipeImage(recipeId: string, objectUrl: string): void {
+  mutate((s) => {
+    const r = findRecipe(s, recipeId);
+    if (!r || r.catalogue === "SYSTEM") return s; // 403 — owner only
+    return replaceRecipe(s, {
+      ...r,
+      imageUrl: objectUrl,
+      optimisticVersion: r.optimisticVersion + 1,
+      updatedAt: nowIso(),
+    });
+  });
+}
+
+/* ---- recipes: nutrition recalculate (n1, nutrition.md §7) -------------------------------- */
+
+/**
+ * POST /nutrition/recipes/{id}/versions/{vid}/recalculate. Deterministic fake
+ * numbers; needs-review rows surface as unmapped[] and hold status at
+ * partial. This is the ONLY way the mock (or the contract) yields
+ * per-serving numbers — recipe-detail.md §11 Q1.
+ */
+export function recalculateNutrition(recipeId: string): RecipeNutritionResultDto | null {
+  const recipe = findRecipe(state, recipeId);
+  const version = recipe && currentVersionOf(state, recipe);
+  if (!recipe || !version) return null;
+  const h = hashCode(version.id);
+  const unmapped = version.ingredients
+    .filter((i) => i.needsReview)
+    .map((i) => ({
+      name: i.displayName,
+      reason: "USDA match below the 0.70 confidence floor",
+      confidence: i.mappingConfidence ?? 0,
+    }));
+  const result: RecipeNutritionResultDto = {
+    recipeId,
+    caloriesPerServing: 380 + (h % 260),
+    proteinPerServingG: Math.round((14 + ((h >> 3) % 26)) * 10) / 10,
+    carbsPerServingG: Math.round((30 + ((h >> 5) % 50)) * 10) / 10,
+    fatPerServingG: Math.round((9 + ((h >> 7) % 22)) * 10) / 10,
+    fibrePerServingG: Math.round((3 + ((h >> 9) % 9)) * 10) / 10,
+    microsPerServing: {
+      sodium_mg: 300 + ((h >> 4) % 500),
+      iron_mg: Math.round((1.5 + ((h >> 6) % 40) / 10) * 10) / 10,
+    },
+    nutritionStatus: unmapped.length > 0 ? "partial" : "calculated",
+    unmapped,
+  };
+  mutate((s) => {
+    const r = findRecipe(s, recipeId);
+    if (!r) return s;
+    return {
+      ...replaceRecipe(s, {
+        ...r,
+        nutritionStatus: unmapped.length > 0 ? "PARTIAL" : "CALCULATED",
+        updatedAt: nowIso(),
+      }),
+      recipeData: {
+        ...s.recipeData,
+        nutritionByVersion: {
+          ...s.recipeData.nutritionByVersion,
+          [version.id]: result,
+        },
+      },
+    };
+  });
+  return result;
+}
+
+/* ---- adaptation: pending changes (recipe-detail.md §10, a1–a5) ---------------------------
+ * Accept needs expectedOptimisticVersion from the DETAIL read — the list row
+ * doesn't carry it (expand-then-accept, two calls; §11 Q5). Accept routes the
+ * proposal through a NEW VERSION (trigger ADAPTATION_PIPELINE).
+ */
+
+function applyDiffToBody(
+  version: RecipeVersionDto,
+  diff: RecipeDiffDto,
+): VersionBody {
+  let ingredients = [...version.ingredients];
+  for (const ch of diff.ingredientChanges) {
+    if (ch.action === "MODIFIED" && ch.from?.ingredientMappingKey && ch.to) {
+      const to = ch.to;
+      ingredients = ingredients.map((i) =>
+        i.ingredientMappingKey === ch.from?.ingredientMappingKey
+          ? {
+              ...i,
+              quantity: to.quantity ?? i.quantity,
+              unit: to.unit ?? i.unit,
+              preparation: to.preparation ?? i.preparation,
+              displayName: to.displayName ?? i.displayName,
+            }
+          : i,
+      );
+    } else if (ch.action === "ADDED" && ch.to?.ingredientMappingKey) {
+      const to = ch.to;
+      ingredients = [
+        ...ingredients,
+        {
+          id: `ing-adapt-${++subSeq}`,
+          lineOrder: ingredients.length,
+          ingredientMappingKey: to.ingredientMappingKey as string,
+          displayName: to.displayName ?? (to.ingredientMappingKey as string),
+          quantity: to.quantity ?? null,
+          unit: to.unit ?? null,
+          preparation: to.preparation ?? null,
+          optional: to.optional ?? false,
+          needsReview: false,
+          mappingConfidence: 0.9,
+        },
+      ];
+    } else if (ch.action === "REMOVED" && ch.from?.ingredientMappingKey) {
+      ingredients = ingredients.filter(
+        (i) => i.ingredientMappingKey !== ch.from?.ingredientMappingKey,
+      );
+    }
+  }
+  let metadata = version.metadata;
+  for (const ch of diff.metadataChanges) {
+    if (metadata && ch.field === "servings" && typeof ch.to === "number") {
+      metadata = { ...metadata, servings: ch.to };
+    }
+  }
+  let methodSteps = version.methodSteps;
+  for (const ch of diff.methodChanges) {
+    if (ch.action === "MODIFIED" && ch.to) {
+      const to = ch.to;
+      methodSteps = methodSteps.map((m) =>
+        m.stepNumber === ch.step ? { ...m, instruction: to } : m,
+      );
+    }
+  }
+  return { ingredients, methodSteps, metadata, tags: version.tags };
+}
+
+/** Best-effort read of the opaque proposedDiff as a RecipeDiffDto (§10 — the
+ *  pipeline's shape matches in this mock; flagged Q6 in the spec). */
+export function diffFromProposed(detail: PendingChangeDto): RecipeDiffDto | null {
+  const d = detail.userEdits ?? detail.proposedDiff;
+  if (!d || !Array.isArray((d as { ingredientChanges?: unknown }).ingredientChanges)) {
+    return null;
+  }
+  return d as unknown as RecipeDiffDto;
+}
+
+function resolvePendingChange(
+  s: StoreState,
+  id: string,
+  next: PendingChangeDto,
+): StoreState {
+  return {
+    ...s,
+    adaptation: {
+      pendingChanges: s.adaptation.pendingChanges.filter((c) => c.id !== id),
+      detailById: { ...s.adaptation.detailById, [id]: next },
+      historyByRecipe: {
+        ...s.adaptation.historyByRecipe,
+        [next.recipeId]: [
+          next,
+          ...(s.adaptation.historyByRecipe[next.recipeId] ?? []),
+        ],
+      },
+    },
+  };
+}
+
+/**
+ * POST /adaptation/pending-changes/{id}/accept. userEdits (opaque overlay)
+ * null = as proposed; the modify-then-accept path passes the edited diff.
+ */
+export function acceptPendingChange(
+  id: string,
+  userEdits?: RecipeDiffDto | null,
+  expectedOptimisticVersion?: number,
+): void {
+  const detail = state.adaptation.detailById[id];
+  if (!detail || detail.status !== "PENDING") {
+    pushToast("422 — this suggestion is no longer pending", "warn");
+    return;
+  }
+  if (
+    expectedOptimisticVersion !== undefined &&
+    expectedOptimisticVersion !== detail.optimisticVersion
+  ) {
+    pushToast("409 — this suggestion changed; re-fetched", "warn");
+    return;
+  }
+  mutate((s) => {
+    const recipe = findRecipe(s, detail.recipeId);
+    if (!recipe) return s;
+    const branchId = detail.baseBranchId;
+    const list = versionsFor(s, detail.recipeId, branchId);
+    const base =
+      list.find((v) => v.id === detail.baseVersionId) ?? list[list.length - 1];
+    if (!base) return s;
+    const effective =
+      userEdits ?? diffFromProposed(detail) ?? {
+        fromVersionId: base.id,
+        toVersionId: base.id,
+        ingredientChanges: [],
+        methodChanges: [],
+        metadataChanges: [],
+        tagChanges: [],
+      };
+    const appended = appendVersion(
+      s,
+      detail.recipeId,
+      branchId,
+      applyDiffToBody(list[list.length - 1] ?? base, effective),
+      "ADAPTATION_PIPELINE",
+      detail.reasoning.split(".")[0],
+      "adaptation_pipeline",
+    );
+    if (!appended) return s;
+    const resolved: PendingChangeDto = {
+      ...detail,
+      status: userEdits ? "MODIFIED" : "ACCEPTED",
+      userEdits: userEdits ? (userEdits as unknown as Record<string, unknown>) : null,
+      acceptedVersionId: appended.version.id,
+      resolvedAt: nowIso(),
+      optimisticVersion: detail.optimisticVersion + 1,
+    };
+    return pushNotification(
+      resolvePendingChange(appended.state, id, resolved),
+      "recipe",
+      `${recipe.name} updated — suggestion applied (v${appended.version.versionNumber} created)`,
+    );
+  });
+}
+
+/** POST /adaptation/pending-changes/{id}/reject (+optional reasonNote). */
+export function rejectPendingChange(id: string, reasonNote?: string): void {
+  const detail = state.adaptation.detailById[id];
+  if (!detail || detail.status !== "PENDING") {
+    pushToast("422 — this suggestion is no longer pending", "warn");
+    return;
+  }
+  void reasonNote; // ≤200, audit-only — not displayed anywhere in v1
+  mutate((s) =>
+    resolvePendingChange(s, id, {
+      ...detail,
+      status: "REJECTED",
+      resolvedAt: nowIso(),
+      optimisticVersion: detail.optimisticVersion + 1,
+    }),
+  );
 }
 
 /* ---- pantry ------------------------------------------------------------------------------ */
@@ -2534,172 +3733,292 @@ export function changePassword(): void {
   mutate((s) => pushNotification(s, "ai", "Password updated"));
 }
 
-/* ---- discovery -------------------------------------------------------------------------------------------- */
-
-let discoverySeq = 10;
-
-const DISCOVERY_STEPS: DiscoveryStep[] = [
-  "QUEUED",
-  "SEARCHING",
-  "FILTERING",
-  "DONE",
-];
-
-function advanceDiscovery(jobId: string): void {
-  mutate((s) => {
-    const job = s.discovery.job;
-    if (!job || job.id !== jobId || job.step === "DONE") return s;
-    const next =
-      DISCOVERY_STEPS[DISCOVERY_STEPS.indexOf(job.step) + 1] ?? "DONE";
-    if (next !== "DONE") {
-      return { ...s, discovery: { ...s.discovery, job: { ...job, step: next } } };
-    }
-    const results: DiscoveryResult[] = DISCOVERY_RESULTS.map((r) => ({
-      ...r,
-      status: "new",
-    }));
-    return pushNotification(
-      {
-        ...s,
-        discovery: {
-          ...s.discovery,
-          job: {
-            ...job,
-            step: "DONE",
-            results,
-            sources: [...DISCOVERY_SOURCES],
-          },
-        },
-      },
-      "ai",
-      `Discovery finished — ${results.length} candidates from ${DISCOVERY_SOURCES.length} sources`,
-    );
-  });
-  if (state.discovery.job?.id === jobId && state.discovery.job.step !== "DONE") {
-    setTimeout(() => advanceDiscovery(jobId), 1000);
-  }
-}
-
-/**
- * Start a fake discovery job: QUEUED → SEARCHING → FILTERING → DONE on a
- * ~1s timer per step. A finished previous job is archived to history.
+/* ---- discovery (discover.md) --------------------------------------------------------------
+ * Contract lifecycle: QUEUED → RUNNING → SUCCEEDED | FAILED | PARTIAL.
+ * Scrape-log rows are written eagerly per fetch (the live progress feed);
+ * SUCCESS rows persist the recipe into the SYSTEM catalogue immediately —
+ * "Keep" is then just POST /recipes/{id}/promote (the traced handoff, §5).
  */
-export function startDiscovery(query: string, constraints: string[]): void {
-  if (state.discovery.job && state.discovery.job.step !== "DONE") return;
-  const id = `job${++discoverySeq}`;
-  mutate((s) => {
-    const prev = s.discovery.job;
-    const history =
-      prev && prev.step === "DONE"
-        ? [
-            {
-              query: prev.query,
-              when: "Today",
-              found: prev.results.length,
-              kept: prev.results.filter((r) => r.status === "kept").length,
-            },
-            ...s.discovery.history,
-          ]
-        : s.discovery.history;
-    return {
-      ...s,
-      discovery: {
-        ...s.discovery,
-        history,
-        job: {
-          id,
-          query: query.trim() || "weeknight dinners",
-          constraints,
-          step: "QUEUED",
-          results: [],
-          sources: [],
-        },
-      },
-    };
-  });
-  setTimeout(() => advanceDiscovery(id), 1000);
+
+let discoveryJobSeq = 0;
+
+function findJob(s: StoreState, jobId: string): DiscoveryJobDto | undefined {
+  return s.discovery.jobs.find((j) => j.id === jobId);
 }
 
-/** Build a catalogue entry for a kept discovery result. */
-function makeDiscoveredRecipe(r: DiscoveryResult, imgIdx: number): Recipe {
-  const taste = Math.round(68 + r.conf * 20);
+function replaceJob(s: StoreState, next: DiscoveryJobDto): StoreState {
   return {
-    id: `disc-${r.id}-${discoverySeq}`,
-    name: r.title,
-    cuisine: r.cuisine,
-    timeMin: r.timeMin,
-    serves: 4,
-    taste,
-    tier: "web discovered",
-    img: DISCOVERY_IMGS[imgIdx % DISCOVERY_IMGS.length],
-    source: `Discovered from ${r.domain} · version 1`,
-    ratings: [
-      { label: "Taste", val: taste },
-      { label: "Worth the effort", val: taste - 4 },
-      { label: "Portion fit", val: taste - 7 },
-      { label: "Would repeat", val: taste - 5 },
-    ],
-    nutrition: ["≈480 kcal", "≈24 g protein", "≈52 g carbs", "≈16 g fat"],
-    ingredients: [
-      { n: "Olive oil", q: "2 tbsp" },
-      { n: "Garlic", q: "2 cloves" },
-      { n: "Seasonal vegetables", q: "400 g" },
-    ],
-    moreIngredients: `+ full list from ${r.domain}`,
-    steps: [
-      "Outline imported from the source page on keep.",
-      "Cook to the source method — timings verified on import.",
-    ],
-    moreSteps: "+ full method from source",
-    versions: ["v1 current"],
-    pendingChange: null,
+    ...s,
+    discovery: {
+      ...s.discovery,
+      jobs: s.discovery.jobs.map((j) => (j.id === next.id ? next : j)),
+    },
   };
 }
 
-/** Keep a discovery result: adds it to the recipe catalogue. */
-export function keepDiscoveryResult(id: string): void {
-  mutate((s) => {
-    const job = s.discovery.job;
-    const result = job?.results.find((r) => r.id === id);
-    if (!job || !result || result.status !== "new") return s;
-    const imgIdx = job.results.indexOf(result);
-    return pushNotification(
-      {
-        ...s,
-        recipes: [...s.recipes, makeDiscoveredRecipe(result, imgIdx)],
-        discovery: {
-          ...s.discovery,
-          job: {
-            ...job,
-            results: job.results.map((r) =>
-              r.id === id ? { ...r, status: "kept" } : r,
-            ),
-          },
-        },
-      },
-      "recipe",
-      `${result.title} added to your catalogue — web discovered`,
-    );
-  });
+export function openDiscoveryJob(jobId: string | null): void {
+  mutate((s) => ({ ...s, discovery: { ...s.discovery, openJobId: jobId } }));
 }
 
-export function skipDiscoveryResult(id: string): void {
-  mutate((s) => {
-    const job = s.discovery.job;
-    if (!job) return s;
+/** Skip = local dismissal only; the recipe stays in the system catalogue and
+ *  the planner may still draw on it (no contract call — §9 Q5). */
+export function skipDiscoveryRow(rowId: string): void {
+  mutate((s) =>
+    s.discovery.skippedRowIds.includes(rowId)
+      ? s
+      : {
+          ...s,
+          discovery: {
+            ...s.discovery,
+            skippedRowIds: [...s.discovery.skippedRowIds, rowId],
+          },
+        },
+  );
+}
+
+/** True while the user has a live (QUEUED/RUNNING) job — the start button
+ *  disables (UI rule; the contract itself allows concurrency). */
+export function hasLiveDiscoveryJob(s: StoreState): boolean {
+  return s.discovery.jobs.some(
+    (j) => j.status === "QUEUED" || j.status === "RUNNING",
+  );
+}
+
+function finalizeJob(
+  s: StoreState,
+  jobId: string,
+  status: DiscoveryJobDto["status"],
+  errorSummary: string | null,
+): StoreState {
+  const job = findJob(s, jobId);
+  if (!job) return s;
+  const rows = s.discovery.scrapeLog[jobId] ?? [];
+  const bySource = new Map<string, { ok: number; err: number }>();
+  for (const row of rows) {
+    const slot = bySource.get(row.sourceKey) ?? { ok: 0, err: 0 };
+    if (row.status === "HTTP_ERROR") slot.err += 1;
+    else slot.ok += 1;
+    bySource.set(row.sourceKey, slot);
+  }
+  const sourcesSucceeded = job.sourcesRequested.filter(
+    (k) => (bySource.get(k)?.ok ?? 0) > 0,
+  );
+  const sourcesFailed = job.sourcesRequested.filter((k) => {
+    const slot = bySource.get(k);
+    return slot != null && slot.ok === 0 && slot.err > 0;
+  });
+  const replaced = replaceJob(s, {
+    ...job,
+    status,
+    completedAt: nowIso(),
+    sourcesSucceeded,
+    sourcesFailed,
+    errorSummary,
+    optimisticVersion: job.optimisticVersion + 1,
+  });
+  return {
+    ...replaced,
+    discovery: { ...replaced.discovery, cancelRequested: null },
+  };
+}
+
+function runDiscoveryStep(jobId: string, scriptIndex: number): void {
+  const s = state;
+  const job = findJob(s, jobId);
+  if (!job || job.status !== "RUNNING") return;
+
+  // RUNNING cancel honoured between candidates (in-memory flag, §4).
+  if (s.discovery.cancelRequested === jobId) {
+    mutate((st) =>
+      pushNotification(
+        finalizeJob(st, jobId, "FAILED", "cancelled by user"),
+        "ai",
+        `Discovery cancelled — ${findJob(st, jobId)?.recipesIngested ?? 0} already-saved recipes kept`,
+      ),
+    );
+    return;
+  }
+
+  const allowed = new Set(job.sourcesRequested);
+  const script = DISCOVERY_RUN_SCRIPT.filter((f) => allowed.has(f.sourceKey));
+  if (scriptIndex >= script.length) {
+    mutate((st) => {
+      const j = findJob(st, jobId);
+      const out = finalizeJob(st, jobId, "SUCCEEDED", null);
+      return pushNotification(
+        out,
+        "ai",
+        `Discovery finished — ${j?.recipesIngested ?? 0} recipes saved to the pool`,
+      );
+    });
+    return;
+  }
+
+  const fetch = script[scriptIndex];
+  mutate((st) => {
+    const j = findJob(st, jobId);
+    if (!j || j.status !== "RUNNING") return st;
+    const quotaMet = j.recipesIngested >= j.requestedCount;
+    let next = st;
+    let recipeId: string | null = null;
+    let effective = fetch;
+    if (fetch.status === "SUCCESS" && fetch.recipe) {
+      if (quotaMet) {
+        effective = { ...fetch, status: "SKIPPED", skipReason: "JOB_QUOTA_REACHED", recipe: undefined };
+      } else {
+        recipeId = findRecipe(st, fetch.recipe.id)
+          ? `${fetch.recipe.id}-${jobId}`
+          : fetch.recipe.id;
+        const built = buildRecipe({ ...fetch.recipe, id: recipeId, createdAt: nowIso() });
+        next = {
+          ...st,
+          recipes: [built.dto, ...st.recipes],
+          recipeData: {
+            ...st.recipeData,
+            versions: { ...st.recipeData.versions, [recipeId]: built.versions },
+            provenance: {
+              ...st.recipeData.provenance,
+              [recipeId]: {
+                id: `imp-${recipeId}`,
+                recipeId,
+                sourceType: "WEB_DISCOVERED",
+                sourceUrl: fetch.url,
+                sourcePayload: null,
+                extractionMethod: fetch.method ?? null,
+                duplicateOfRecipeId: null,
+                importedAt: nowIso(),
+                importedByUserId: MOCK_USER_ID,
+              },
+            },
+          },
+        };
+      }
+    }
+    const row = rowFromScript(jobId, effective, recipeId, nowIso());
+    const counters = {
+      candidatesSeen: j.candidatesSeen + 1,
+      candidatesAfterFilter:
+        j.candidatesAfterFilter + (effective.skipReason === "AI_FILTER_REJECTED" ? 0 : 1),
+      recipesIngested: j.recipesIngested + (recipeId ? 1 : 0),
+      recipesSkippedDuplicate:
+        j.recipesSkippedDuplicate + (effective.status === "DUPLICATE" ? 1 : 0),
+    };
+    const replaced = replaceJob(next, { ...j, ...counters });
     return {
-      ...s,
+      ...replaced,
       discovery: {
-        ...s.discovery,
-        job: {
-          ...job,
-          results: job.results.map((r) =>
-            r.id === id && r.status === "new" ? { ...r, status: "skipped" } : r,
-          ),
+        ...replaced.discovery,
+        scrapeLog: {
+          ...replaced.discovery.scrapeLog,
+          [jobId]: [...(replaced.discovery.scrapeLog[jobId] ?? []), row],
         },
       },
     };
   });
+  setTimeout(() => runDiscoveryStep(jobId, scriptIndex + 1), 700);
+}
+
+/**
+ * POST /discovery/jobs (202 + QUEUED DTO; the caller polls — no push channel
+ * in v1, §9 Q1). Constraints are frozen at enqueue; the hard-constraint
+ * snapshot is injected by the CALLER (client-trust hole, §9 Q3).
+ */
+export function startDiscoveryJob(req: StartDiscoveryJobRequest): void {
+  if (hasLiveDiscoveryJob(state)) {
+    pushToast("A discovery is already running — wait for it to finish", "warn");
+    return;
+  }
+  const cap = req.constraints.maxRecipesPerSource;
+  if (cap != null && cap > req.requestedCount) {
+    pushToast("400 — per-source cap can't exceed the total requested", "warn");
+    return;
+  }
+  const enabledKeys = new Set(
+    state.discovery.sources.filter((x) => x.enabled).map((x) => x.sourceKey),
+  );
+  const requested = req.sourceKeys ?? [...enabledKeys];
+  const unknown = requested.filter((k) => !enabledKeys.has(k));
+  if (requested.length === 0 || unknown.length > 0) {
+    pushToast(
+      `422 — no enabled source matched${unknown.length > 0 ? ` (${unknown.join(", ")})` : ""}`,
+      "warn",
+    );
+    return;
+  }
+  const jobId = `djob-run-${++discoveryJobSeq}`;
+  const job: DiscoveryJobDto = {
+    id: jobId,
+    userId: MOCK_USER_ID,
+    trigger: "USER_INITIATED",
+    requestedCount: req.requestedCount,
+    constraints: {
+      ...req.constraints,
+      mustExcludeIngredientMappingKeys:
+        req.constraints.mustExcludeIngredientMappingKeys ?? HARD_CONSTRAINT_KEYS,
+    },
+    sourcesRequested: requested,
+    status: "QUEUED",
+    queuedAt: nowIso(),
+    startedAt: null,
+    completedAt: null,
+    candidatesSeen: 0,
+    candidatesAfterFilter: 0,
+    recipesIngested: 0,
+    recipesSkippedDuplicate: 0,
+    sourcesSucceeded: [],
+    sourcesFailed: [],
+    errorSummary: null,
+    traceId: `trace-${jobId}`,
+    optimisticVersion: 1,
+  };
+  mutate((s) => ({
+    ...s,
+    discovery: {
+      ...s.discovery,
+      jobs: [job, ...s.discovery.jobs],
+      scrapeLog: { ...s.discovery.scrapeLog, [jobId]: [] },
+      openJobId: jobId,
+      cancelRequested: null,
+    },
+  }));
+  setTimeout(() => {
+    mutate((s) => {
+      const j = findJob(s, jobId);
+      if (!j || j.status !== "QUEUED") return s;
+      return replaceJob(s, {
+        ...j,
+        status: "RUNNING",
+        startedAt: nowIso(),
+        optimisticVersion: j.optimisticVersion + 1,
+      });
+    });
+    setTimeout(() => runDiscoveryStep(jobId, 0), 700);
+  }, 1200);
+}
+
+/**
+ * POST /discovery/jobs/{id}/cancel — three-state semantics (§4): QUEUED is
+ * atomically flipped to FAILED; RUNNING returns 200 with the still-RUNNING
+ * DTO and a runner flag; terminal → 422 discovery-job-already-terminal.
+ */
+export function cancelDiscoveryJob(jobId: string): void {
+  const job = findJob(state, jobId);
+  if (!job) {
+    pushToast("404 — job no longer exists", "warn");
+    return;
+  }
+  if (job.status === "QUEUED") {
+    mutate((s) => finalizeJob(s, jobId, "FAILED", "cancelled by user"));
+    return;
+  }
+  if (job.status === "RUNNING") {
+    mutate((s) => ({
+      ...s,
+      discovery: { ...s.discovery, cancelRequested: jobId },
+    }));
+    return;
+  }
+  pushToast("422 discovery-job-already-terminal — the job already finished", "warn");
 }
 
 /* ---- shared selectors --------------------------------------------------------------------------- */
