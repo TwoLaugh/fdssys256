@@ -53,6 +53,14 @@ DiscoveryConstraints:
       type: array
       items: { type: string, minLength: 1 }
       nullable: true
+      description: >-
+        Additive-only client exclusions (pre-normalised ingredient mapping keys: lowercase,
+        trimmed). On job creation the SERVER derives the caller's hard-constraint exclusion
+        snapshot (allergies including their derivative expansion, intolerances, medical diets,
+        dietary-identity base exclusions) and persists the union of that snapshot with any keys
+        supplied here — client keys can only narrow results further, never replace or weaken the
+        server snapshot. The persisted job (and its read-back constraints recap) carries the
+        effective union, frozen at enqueue.
     dietaryFlags:
       type: array
       items: { type: string, minLength: 1 }

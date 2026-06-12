@@ -7,9 +7,13 @@ import java.util.List;
  * 1 and is bumped when the shape changes non-additively (style-guide §JSONB §Required discipline).
  * Frozen at enqueue so a constraint change mid-job does not retroactively alter the search.
  *
- * <p>{@code mustExcludeIngredientMappingKeys} carries the hard-constraint snapshot computed by the
- * caller (planner / pipeline) — never softened, applied as a deterministic second-pass filter after
- * extraction.
+ * <p>{@code mustExcludeIngredientMappingKeys} carries the hard-constraint snapshot — never
+ * softened, applied as a deterministic second-pass filter after extraction. <b>Server-unioned at
+ * enqueue (ticket discovery-server-side-exclusions):</b> the caller's keys are additive only; the
+ * enqueue path derives the user's hard-constraint exclusion set via the preference module's
+ * published seam ({@code HardConstraintFilterService.exclusionKeySnapshot}, allergen derivatives
+ * included) and persists {@code serverSnapshot ∪ clientKeys}, normalised per core-03. A client
+ * omitting its user's allergens can therefore never widen results — only narrow them further.
  *
  * <p>Per LLD lines 244-254.
  */

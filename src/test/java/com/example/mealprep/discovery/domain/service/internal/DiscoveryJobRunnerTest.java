@@ -325,6 +325,82 @@ class DiscoveryJobRunnerTest {
     verify(transitions, never()).scrapeLogExistsSince(anyString(), any());
   }
 
+  // -------- frozen mustExclude snapshot (ticket discovery-server-side-exclusions) --------
+
+  @Test
+  void run_parsedKeyInMustExcludeSnapshot_writesHardConstraintRow_withoutLiveCheckOrPersist() {
+    // sampleJob's persisted constraints carry mustExcludeIngredientMappingKeys = ["peanuts"] (the
+    // server-unioned snapshot). A parsed recipe whose ingredient key hits that set must be
+    // rejected by the deterministic snapshot pass BEFORE the live preference check runs.
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
+    job.setId(jobId);
+    job.setRequestedCount(1);
+    job.setSourcesRequested(new ArrayList<>(List.of("src_a")));
+
+    DiscoverySource source = stubSource("src_a", Optional.empty());
+    when(transitions.claim(jobId)).thenReturn(Optional.of(job));
+    when(sourceRegistry.resolveEnabledByKey(anyList())).thenReturn(List.of(source));
+    when(sourceRegistry.isCircuitOpen(eq(source), any())).thenReturn(false);
+    when(rateLimiterRegistry.tryAcquire("src_a")).thenReturn(true);
+    DiscoveryCandidate candidate =
+        new DiscoveryCandidate("src_a", "https://example.test/r/1", "T", "D", Map.of());
+    when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
+    when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
+    when(source.fetchRecipe(candidate)).thenReturn(parsedRecipeWithIngredientKey("peanuts"));
+    lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+    runner.run(startedEvent(jobId));
+
+    verify(transitions, atLeastOnce())
+        .writeScrapeRow(
+            argThat(
+                r ->
+                    r.getStatus() == ScrapeOutcome.HARD_CONSTRAINT_VIOLATION
+                        && r.getSkipReason() == ScrapeSkipReason.HARD_CONSTRAINT
+                        && r.getErrorMessage() != null
+                        && r.getErrorMessage().contains("mustExcludeIngredientMappingKeys")));
+    // The deterministic snapshot pass rejected the candidate — the live check never ran and
+    // nothing was persisted.
+    verify(hardConstraintFilter, never()).check(any(), anyList(), any());
+    verify(recipeWriteApi, never()).saveImportedRecipe(any());
+  }
+
+  @Test
+  void run_messyCaseParsedKey_normalisedIntoSnapshotHit() {
+    // Parsed keys come from the wild — "  PeanutS " must normalise (core-03) into a membership
+    // hit against the persisted snapshot key "peanuts".
+    UUID jobId = UUID.randomUUID();
+    DiscoveryJob job = DiscoveryTestData.sampleJob(USER_ID);
+    job.setId(jobId);
+    job.setRequestedCount(1);
+    job.setSourcesRequested(new ArrayList<>(List.of("src_a")));
+
+    DiscoverySource source = stubSource("src_a", Optional.empty());
+    when(transitions.claim(jobId)).thenReturn(Optional.of(job));
+    when(sourceRegistry.resolveEnabledByKey(anyList())).thenReturn(List.of(source));
+    when(sourceRegistry.isCircuitOpen(eq(source), any())).thenReturn(false);
+    when(rateLimiterRegistry.tryAcquire("src_a")).thenReturn(true);
+    DiscoveryCandidate candidate =
+        new DiscoveryCandidate("src_a", "https://example.test/r/1", "T", "D", Map.of());
+    when(source.search(any(DiscoveryQuery.class))).thenReturn(List.of(candidate));
+    when(candidateAiFilter.filter(anyList(), any(), eq(USER_ID)))
+        .thenAnswer(inv -> CandidateFilterOutcome.keepAll(inv.getArgument(0)));
+    when(source.fetchRecipe(candidate)).thenReturn(parsedRecipeWithIngredientKey("  PeanutS "));
+    lenient().when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+    runner.run(startedEvent(jobId));
+
+    verify(transitions, atLeastOnce())
+        .writeScrapeRow(
+            argThat(
+                r ->
+                    r.getStatus() == ScrapeOutcome.HARD_CONSTRAINT_VIOLATION
+                        && r.getSkipReason() == ScrapeSkipReason.HARD_CONSTRAINT));
+    verify(recipeWriteApi, never()).saveImportedRecipe(any());
+  }
+
   // -------- low-confidence guard --------
 
   @Test
@@ -641,5 +717,19 @@ class DiscoveryJobRunnerTest {
         new ParsedRecipe.ParsedRecipeMetadata(2, 5, 10, 15, List.of(), "Asian", List.of("dinner")),
         "jsonld",
         confidence);
+  }
+
+  private ParsedRecipe parsedRecipeWithIngredientKey(String ingredientMappingKey) {
+    return new ParsedRecipe(
+        "https://example.test/r/x",
+        "Recipe X",
+        "desc",
+        List.of(
+            new ParsedRecipe.ParsedIngredient(
+                "Some Ingredient", ingredientMappingKey, BigDecimal.ONE, "g", null, false)),
+        List.of(new ParsedRecipe.ParsedMethodStep(1, "Mix.", null)),
+        new ParsedRecipe.ParsedRecipeMetadata(2, 5, 10, 15, List.of(), "Asian", List.of("dinner")),
+        "jsonld",
+        new BigDecimal("0.9"));
   }
 }

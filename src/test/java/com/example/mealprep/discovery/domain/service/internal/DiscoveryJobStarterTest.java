@@ -64,13 +64,27 @@ class DiscoveryJobStarterTest {
   @Mock private ApplicationEventPublisher eventPublisher;
   @Mock private DiscoveryJobRunner runner;
 
+  @Mock
+  private com.example.mealprep.preference.domain.service.HardConstraintFilterService
+      hardConstraintFilter;
+
   private DiscoveryJobStarter starter;
 
   @BeforeEach
   void setUp() {
+    // No hard constraints by default — the server snapshot union is a pass-through. Lenient: the
+    // guard-clause tests throw before the enqueue path reaches the assembler.
+    org.mockito.Mockito.lenient()
+        .when(hardConstraintFilter.exclusionKeySnapshot(any(), any()))
+        .thenReturn(java.util.Set.of());
     starter =
         new DiscoveryJobStarter(
-            jobRepository, sourceRepository, jobMapper, eventPublisher, new ObjectMapper());
+            jobRepository,
+            sourceRepository,
+            jobMapper,
+            eventPublisher,
+            new ObjectMapper(),
+            new HardConstraintSnapshotAssembler(hardConstraintFilter));
   }
 
   // ---------- DiscoveryJobStarter direct coverage ----------

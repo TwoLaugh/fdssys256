@@ -4,6 +4,7 @@ import com.example.mealprep.preference.api.dto.FilterContext;
 import com.example.mealprep.preference.api.dto.FilterResult;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -59,4 +60,26 @@ public interface HardConstraintFilterService {
    */
   FilterResult checkForHousehold(
       List<UUID> userIds, List<String> ingredientMappingKeys, FilterContext context);
+
+  /**
+   * The enumerable ingredient-mapping-key exclusion snapshot derived from one user's hard
+   * constraints in the given call {@code context}: direct allergies, their {@code
+   * preference_allergen_derivatives} expansion, intolerance substances, medical diet names plus
+   * their static rejected-key expansions, and dietary-identity base exclusions not widened by a
+   * plain (non-conditional) exception matching the context. The safety-critical
+   * hard-constraint→mapping-key translation lives ONCE, here, so callers that persist a frozen
+   * exclusion set (e.g. discovery's server-side {@code mustExcludeIngredientMappingKeys} union)
+   * derive it from the same index {@link #check} matches against.
+   *
+   * <p>Deliberately conservative: substances a conditional ("X-free") exception might relax are
+   * still included — exact set membership cannot express the free-of qualifier, and the recipe-pool
+   * semantics already treat that case as a violation (AMBIGUOUS). Prefix-style age restriction
+   * rules (e.g. {@code no_whole_nuts} → {@code whole_nut_*}) are NOT enumerable as exact keys and
+   * remain enforced only by the {@code check*} methods.
+   *
+   * <p>Returns an empty set when the user has no aggregate row (never throws on missing data).
+   * Values are the stored, pre-normalised keys — the same exact-string forms {@link #check}
+   * matches.
+   */
+  Set<String> exclusionKeySnapshot(UUID userId, FilterContext context);
 }

@@ -253,7 +253,7 @@ public record DiscoveryConstraints(
 ) {}
 ```
 
-`mustExcludeIngredientMappingKeys` is computed by the caller (planner / pipeline), populated from the user's hard constraints via `HardConstraintFilterService` and the recipe module's existing dedup hashes. Discovery applies it as a **second** hard-filter pass after extraction — the deterministic safety net per [technical-architecture.md §Hard Constraint Filter](../design/technical-architecture.md#hard-constraint-filter) — and never trusts the AI filter to enforce it.
+`mustExcludeIngredientMappingKeys` is **server-unioned at enqueue** (ticket `discovery-server-side-exclusions`): caller-supplied keys are additive-only; `startJobWithId` derives the caller's hard-constraint exclusion snapshot via the preference module's published seam (`HardConstraintFilterService.exclusionKeySnapshot` — allergies expanded through `preference_allergen_derivatives`, intolerances, medical diets, dietary base exclusions) and persists `serverSnapshot ∪ clientKeys`, normalised per core-03. A buggy or malicious client omitting the user's allergens can therefore never widen results. Discovery applies the persisted union as a **second** hard-filter pass after extraction — the deterministic safety net per [technical-architecture.md §Hard Constraint Filter](../design/technical-architecture.md#hard-constraint-filter) — and never trusts the AI filter to enforce it; a live `HardConstraintFilterService.check` follows as defence in depth (prefix-style age rules, free-of ambiguity, constraints added mid-job).
 
 ### Request shape
 
