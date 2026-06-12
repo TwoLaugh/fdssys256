@@ -113,6 +113,52 @@ class NotificationsControllerIT {
   }
 
   @Test
+  void list_contractValid_forStapleAndFeedbackConfirmationKinds() throws Exception {
+    // Guards the two kinds that previously drifted out of the OpenAPI enum
+    // (tickets/frontend-gaps/notification-kind-enum.md): a response carrying them
+    // must validate against the contract.
+    AuthedUser user = registerUser();
+    updateService.create(
+        new CreateNotificationRequest(
+            user.userId(),
+            null,
+            NotificationKind.STAPLE_REPLENISHMENT_NEEDED,
+            NotificationSeverity.ATTENTION,
+            "Staples running low",
+            "Rice is below your usual stock level",
+            new NotificationPayload.StapleReplenishmentPayload(
+                NotificationKind.STAPLE_REPLENISHMENT_NEEDED,
+                List.of(UUID.randomUUID()),
+                List.of("rice.short_grain"),
+                new java.math.BigDecimal("0.15")),
+            "/app/groceries",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            null));
+    updateService.create(
+        new CreateNotificationRequest(
+            user.userId(),
+            null,
+            NotificationKind.FEEDBACK_CONFIRMATION,
+            NotificationSeverity.INFO,
+            "Feedback applied",
+            "Your feedback updated 2 destinations",
+            new NotificationPayload.FeedbackConfirmationPayload(
+                NotificationKind.FEEDBACK_CONFIRMATION,
+                UUID.randomUUID(),
+                List.of("RECIPE", "PREFERENCE")),
+            "/app/activity",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            null));
+
+    mvc.perform(get("/api/v1/notifications").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.content.length()").value(2))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
   void list_returnsUsersNotifications() throws Exception {
     AuthedUser user = registerUser();
     seedNotification(user.userId());
