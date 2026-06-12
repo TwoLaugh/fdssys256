@@ -8,6 +8,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.auth.domain.service.AuthQueryService;
 import com.example.mealprep.household.api.dto.AddMemberRequest;
 import com.example.mealprep.household.api.dto.ChangeRoleRequest;
 import com.example.mealprep.household.api.dto.HouseholdMemberDto;
@@ -62,6 +63,7 @@ class HouseholdMembersServiceTest {
   @Mock private HouseholdSettingsAuditLogRepository householdSettingsAuditLogRepository;
   @Mock private HouseholdInviteRepository householdInviteRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private AuthQueryService authQueryService;
 
   private final HouseholdMapper mapper =
       new com.example.mealprep.household.api.mapper.HouseholdMapperImpl();
@@ -100,8 +102,8 @@ class HouseholdMembersServiceTest {
         eventPublisher,
         fixedClock,
         com.example.mealprep.household.testdata.SoftPreferencesReaderTestSupport.emptyProvider(),
-        new com.example.mealprep.household.domain.service.internal.SoftPreferenceMerger(
-            fixedClock));
+        new com.example.mealprep.household.domain.service.internal.SoftPreferenceMerger(fixedClock),
+        authQueryService);
   }
 
   // ---------------- addMember ----------------

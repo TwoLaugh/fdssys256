@@ -22,11 +22,14 @@ import com.example.mealprep.household.event.HouseholdInviteAcceptedEvent;
 import com.example.mealprep.household.event.HouseholdInviteCreatedEvent;
 import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.Cookie;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterEach;
@@ -82,7 +85,7 @@ class HouseholdInvitesFlowIT {
 
   // ---------------- helpers ----------------
 
-  private record AuthedUser(UUID userId, Cookie cookie) {}
+  private record AuthedUser(UUID userId, String username, Cookie cookie) {}
 
   private AuthedUser registerUser(String prefix) throws Exception {
     String username = prefix + "-" + AuthTestData.shortId();
@@ -97,7 +100,7 @@ class HouseholdInvitesFlowIT {
     Cookie cookie = result.getResponse().getCookie(authProperties.cookieName());
     String userIdJson =
         objectMapper.readTree(result.getResponse().getContentAsString()).get("userId").asText();
-    return new AuthedUser(UUID.fromString(userIdJson), cookie);
+    return new AuthedUser(UUID.fromString(userIdJson), username, cookie);
   }
 
   // ---------------- POST /current/invites ----------------
@@ -333,6 +336,10 @@ class HouseholdInvitesFlowIT {
         .andExpect(jsonPath("$.role").value("member"))
         .andExpect(jsonPath("$.priority").value(100))
         .andExpect(jsonPath("$.householdId").value(household.id().toString()))
+        // P2 display-names ticket: username joined from auth; displayName defaults to the
+        // accepter's username on accept (no UUID stub for a fresh member).
+        .andExpect(jsonPath("$.username").value(invitee.username()))
+        .andExpect(jsonPath("$.displayName").value(invitee.username()))
         .andExpect(openApi().isValid(openApiValidator));
 
     Long memberCount =
@@ -351,6 +358,50 @@ class HouseholdInvitesFlowIT {
 
     assertThat(eventCapture.accepted()).hasSize(1);
     assertThat(eventCapture.accepted().get(0).acceptedByUserId()).isEqualTo(invitee.userId());
+  }
+
+  @Test
+  void membersList_afterInviteAccept_carriesUsernamesForAllMembers() throws Exception {
+    AuthedUser primary = registerUser("primary");
+    AuthedUser invitee = registerUser("invitee");
+    householdUpdateService.createHousehold(primary.userId(), new CreateHouseholdRequest("X"));
+    Instant exp = Instant.now().plus(7, ChronoUnit.DAYS);
+    String body = "{\"intendedRole\":\"member\",\"expiresAt\":\"" + exp.toString() + "\"}";
+    MvcResult create =
+        mvc.perform(
+                post("/api/v1/households/current/invites")
+                    .cookie(primary.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+            .andExpect(status().isCreated())
+            .andReturn();
+    String code =
+        objectMapper.readTree(create.getResponse().getContentAsString()).get("inviteCode").asText();
+    mvc.perform(
+            post("/api/v1/invites/accept")
+                .cookie(invitee.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"inviteCode\":\"" + code + "\"}"))
+        .andExpect(status().isOk());
+
+    // P2 display-names ticket: the Settings members list (GET /households/current) joins every
+    // row's read-only username from auth (one batched read server-side) — no UUID stubs.
+    MvcResult list =
+        mvc.perform(get("/api/v1/households/current").cookie(primary.cookie()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.members.length()").value(2))
+            .andExpect(openApi().isValid(openApiValidator))
+            .andReturn();
+
+    JsonNode members =
+        objectMapper.readTree(list.getResponse().getContentAsString()).get("members");
+    Map<String, String> usernamesByUserId = new HashMap<>();
+    for (JsonNode m : members) {
+      usernamesByUserId.put(m.get("userId").asText(), m.get("username").asText(null));
+    }
+    assertThat(usernamesByUserId)
+        .containsEntry(primary.userId().toString(), primary.username())
+        .containsEntry(invitee.userId().toString(), invitee.username());
   }
 
   @Test

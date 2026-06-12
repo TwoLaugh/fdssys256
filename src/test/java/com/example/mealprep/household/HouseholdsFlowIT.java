@@ -84,7 +84,7 @@ class HouseholdsFlowIT {
 
   // ---------------- helpers ----------------
 
-  private record AuthedUser(UUID userId, Cookie cookie) {}
+  private record AuthedUser(UUID userId, String username, Cookie cookie) {}
 
   private AuthedUser registerUser() throws Exception {
     String username = "alice-" + AuthTestData.shortId();
@@ -99,7 +99,7 @@ class HouseholdsFlowIT {
     Cookie cookie = result.getResponse().getCookie(authProperties.cookieName());
     String userIdJson =
         objectMapper.readTree(result.getResponse().getContentAsString()).get("userId").asText();
-    return new AuthedUser(UUID.fromString(userIdJson), cookie);
+    return new AuthedUser(UUID.fromString(userIdJson), username, cookie);
   }
 
   // ---------------- POST /api/v1/households ----------------
@@ -131,6 +131,8 @@ class HouseholdsFlowIT {
             .andExpect(jsonPath("$.members[0].userId").value(user.userId().toString()))
             .andExpect(jsonPath("$.members[0].role").value("primary"))
             .andExpect(jsonPath("$.members[0].priority").value(100))
+            // P2 display-names ticket: read-only username joined from auth on every member row.
+            .andExpect(jsonPath("$.members[0].username").value(user.username()))
             .andExpect(jsonPath("$.version").value(0))
             .andExpect(openApi().isValid(openApiValidator))
             .andReturn();
@@ -251,6 +253,8 @@ class HouseholdsFlowIT {
         .andExpect(jsonPath("$.members.length()").value(1))
         .andExpect(jsonPath("$.members[0].userId").value(user.userId().toString()))
         .andExpect(jsonPath("$.members[0].role").value("primary"))
+        // P2 display-names ticket: read-only username joined from auth on every member row.
+        .andExpect(jsonPath("$.members[0].username").value(user.username()))
         .andExpect(openApi().isValid(openApiValidator));
   }
 

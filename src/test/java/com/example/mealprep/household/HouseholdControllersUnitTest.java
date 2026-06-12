@@ -83,6 +83,7 @@ class HouseholdControllersUnitTest {
             userId,
             HouseholdRole.primary,
             null,
+            null, // username (auth join; not exercised here)
             100,
             Instant.parse("2026-05-09T00:00:00Z"),
             0L);
@@ -102,6 +103,7 @@ class HouseholdControllersUnitTest {
         userId,
         HouseholdRole.member,
         null,
+        null, // username (auth join; not exercised here)
         100,
         Instant.parse("2026-05-09T00:00:00Z"),
         0L);

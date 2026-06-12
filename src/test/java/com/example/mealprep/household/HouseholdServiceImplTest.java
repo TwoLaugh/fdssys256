@@ -4,12 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.auth.api.dto.UserDto;
+import com.example.mealprep.auth.domain.service.AuthQueryService;
 import com.example.mealprep.household.api.dto.CreateHouseholdRequest;
 import com.example.mealprep.household.api.dto.HouseholdDto;
+import com.example.mealprep.household.api.dto.HouseholdMemberDto;
 import com.example.mealprep.household.api.mapper.HouseholdInviteMapper;
 import com.example.mealprep.household.api.mapper.HouseholdMapper;
 import com.example.mealprep.household.api.mapper.HouseholdMemberMapper;
@@ -34,6 +38,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -57,6 +63,7 @@ class HouseholdServiceImplTest {
   @Mock private HouseholdSettingsAuditLogRepository householdSettingsAuditLogRepository;
   @Mock private HouseholdInviteRepository householdInviteRepository;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private AuthQueryService authQueryService;
 
   private final HouseholdMapper mapper =
       new com.example.mealprep.household.api.mapper.HouseholdMapperImpl();
@@ -95,8 +102,8 @@ class HouseholdServiceImplTest {
         eventPublisher,
         fixedClock,
         com.example.mealprep.household.testdata.SoftPreferencesReaderTestSupport.emptyProvider(),
-        new com.example.mealprep.household.domain.service.internal.SoftPreferenceMerger(
-            fixedClock));
+        new com.example.mealprep.household.domain.service.internal.SoftPreferenceMerger(fixedClock),
+        authQueryService);
   }
 
   // ---------------- getById ----------------
@@ -122,6 +129,52 @@ class HouseholdServiceImplTest {
     assertThat(result.get().id()).isEqualTo(household.getId());
     assertThat(result.get().members()).hasSize(1);
     assertThat(result.get().members().get(0).role()).isEqualTo(HouseholdRole.primary);
+  }
+
+  @Test
+  void getById_joinsMemberUsernames_inOneBatchedAuthRead() {
+    UUID u1 = UUID.randomUUID();
+    UUID u2 = UUID.randomUUID();
+    UUID u3 = UUID.randomUUID();
+    Household household =
+        HouseholdTestData.household()
+            .withMember(
+                HouseholdTestData.member().withUserId(u1).withRole(HouseholdRole.primary).build())
+            .withMember(
+                HouseholdTestData.member().withUserId(u2).withRole(HouseholdRole.member).build())
+            .withMember(
+                HouseholdTestData.member().withUserId(u3).withRole(HouseholdRole.member).build())
+            .build();
+    when(householdRepository.findWithMembersById(household.getId()))
+        .thenReturn(Optional.of(household));
+    Instant created = Instant.parse("2026-01-01T00:00:00Z");
+    // u3 deliberately absent from the auth read (soft-deleted) — its username must map to null.
+    when(authQueryService.getUsersByIds(any()))
+        .thenReturn(List.of(new UserDto(u1, "alice", created), new UserDto(u2, "bob", created)));
+
+    Optional<HouseholdDto> result = service().getById(household.getId());
+
+    assertThat(result).isPresent();
+    List<HouseholdMemberDto> members = result.get().members();
+    assertThat(members).hasSize(3);
+    assertThat(usernameOf(members, u1)).isEqualTo("alice");
+    assertThat(usernameOf(members, u2)).isEqualTo("bob");
+    assertThat(usernameOf(members, u3)).isNull();
+
+    // The auth join is ONE batched read for all N members — never one lookup per member.
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Collection<UUID>> idsCaptor = ArgumentCaptor.forClass(Collection.class);
+    verify(authQueryService, times(1)).getUsersByIds(idsCaptor.capture());
+    assertThat(idsCaptor.getValue()).containsExactlyInAnyOrder(u1, u2, u3);
+    verify(authQueryService, never()).getUser(any());
+  }
+
+  private static String usernameOf(List<HouseholdMemberDto> members, UUID userId) {
+    return members.stream()
+        .filter(m -> userId.equals(m.userId()))
+        .findFirst()
+        .orElseThrow()
+        .username();
   }
 
   @Test

@@ -1,5 +1,7 @@
 package com.example.mealprep.household.domain.service.internal;
 
+import com.example.mealprep.auth.api.dto.UserDto;
+import com.example.mealprep.auth.domain.service.AuthQueryService;
 import com.example.mealprep.household.api.dto.AcceptInviteRequest;
 import com.example.mealprep.household.api.dto.AddMemberRequest;
 import com.example.mealprep.household.api.dto.ChangeRoleRequest;
@@ -138,6 +140,13 @@ public class HouseholdServiceImpl
 
   private final SoftPreferenceMerger softPreferenceMerger;
 
+  /**
+   * Cross-module read seam into auth (public query service — never the repositories): joins
+   * read-only {@code username} onto member DTOs. Members lists resolve all usernames in ONE {@link
+   * AuthQueryService#getUsersByIds} call (no per-member N+1).
+   */
+  private final AuthQueryService authQueryService;
+
   public HouseholdServiceImpl(
       HouseholdRepository householdRepository,
       HouseholdMemberRepository householdMemberRepository,
@@ -155,7 +164,8 @@ public class HouseholdServiceImpl
       ApplicationEventPublisher eventPublisher,
       Clock clock,
       ObjectProvider<SoftPreferencesReader> softPreferencesReaderProvider,
-      SoftPreferenceMerger softPreferenceMerger) {
+      SoftPreferenceMerger softPreferenceMerger,
+      AuthQueryService authQueryService) {
     this.householdRepository = householdRepository;
     this.householdMemberRepository = householdMemberRepository;
     this.householdSettingsRepository = householdSettingsRepository;
@@ -173,6 +183,7 @@ public class HouseholdServiceImpl
     this.clock = clock;
     this.softPreferencesReaderProvider = softPreferencesReaderProvider;
     this.softPreferenceMerger = softPreferenceMerger;
+    this.authQueryService = authQueryService;
   }
 
   // ---------------- Query ----------------
@@ -180,7 +191,7 @@ public class HouseholdServiceImpl
   @Override
   @Transactional(readOnly = true)
   public Optional<HouseholdDto> getById(UUID householdId) {
-    return householdRepository.findWithMembersById(householdId).map(mapper::toDto);
+    return householdRepository.findWithMembersById(householdId).map(this::toDtoWithUsernames);
   }
 
   @Override
@@ -191,7 +202,7 @@ public class HouseholdServiceImpl
       return Optional.empty();
     }
     UUID householdId = memberOpt.get().getHousehold().getId();
-    return householdRepository.findWithMembersById(householdId).map(mapper::toDto);
+    return householdRepository.findWithMembersById(householdId).map(this::toDtoWithUsernames);
   }
 
   @Override
@@ -362,7 +373,7 @@ public class HouseholdServiceImpl
         new HouseholdCreatedEvent(saved.getId(), creatorUserId, currentTraceId(), now));
 
     log.info("household created householdId={} createdByUserId={}", saved.getId(), creatorUserId);
-    return mapper.toDto(saved);
+    return toDtoWithUsernames(saved);
   }
 
   @Override
@@ -502,9 +513,17 @@ public class HouseholdServiceImpl
             .findWithMembersById(invite.getHouseholdId())
             .orElseThrow(() -> new HouseholdNotFoundException(invite.getHouseholdId()));
 
+    // P2 (household-member-display-names): default the new member's displayName to the accepter's
+    // login username so a fresh member never renders as a UUID stub. The accept request carries no
+    // explicit displayName in v1, so there is nothing to overwrite; if the username doesn't
+    // resolve (soft-deleted user — can't happen for an authenticated accepter, but be defensive)
+    // the displayName stays null and the UI falls back as before.
+    String accepterUsername = usernameOf(accepterUserId);
+
     // 01d refactor: share the member-insert helper with the direct-add path.
     HouseholdMember persistedMember =
-        addMemberInternal(household, accepterUserId, invite.getIntendedRole(), 100, null);
+        addMemberInternal(
+            household, accepterUserId, invite.getIntendedRole(), 100, accepterUsername);
 
     Instant now = Instant.now(clock);
     invite.setAcceptedAt(now);
@@ -533,13 +552,15 @@ public class HouseholdServiceImpl
             Instant.now(clock)));
 
     log.info(
-        "household invite accepted householdId={} inviteId={} accepterUserId={} grantedRole={}",
+        "household invite accepted householdId={} inviteId={} accepterUserId={} grantedRole={}"
+            + " displayNameDefaultedFromUsername={}",
         savedInvite.getHouseholdId(),
         savedInvite.getId(),
         accepterUserId,
-        savedInvite.getIntendedRole());
+        savedInvite.getIntendedRole(),
+        accepterUsername != null);
 
-    return memberMapper.toDto(persistedMember);
+    return memberMapper.toDto(persistedMember, accepterUsername);
   }
 
   @Override
@@ -636,7 +657,7 @@ public class HouseholdServiceImpl
         persisted.getUserId(),
         persisted.getRole(),
         actorUserId);
-    return memberMapper.toDto(persisted);
+    return memberMapper.toDto(persisted, usernameOf(persisted.getUserId()));
   }
 
   @Override
@@ -675,7 +696,7 @@ public class HouseholdServiceImpl
         request.displayName() != null && !request.displayName().equals(member.getDisplayName());
     if (!priorityChanges && !displayNameChanges) {
       // No-op: do not bump @Version, do not emit an event.
-      return memberMapper.toDto(member);
+      return memberMapper.toDto(member, usernameOf(member.getUserId()));
     }
 
     if (priorityChanges) {
@@ -695,7 +716,7 @@ public class HouseholdServiceImpl
         displayNameChanges);
     // No HouseholdMemberUpdatedEvent — LLD §Events 387-392 does not declare one; priority /
     // displayName changes don't materially affect downstream planner state.
-    return memberMapper.toDto(saved);
+    return memberMapper.toDto(saved, usernameOf(saved.getUserId()));
   }
 
   @Override
@@ -792,7 +813,7 @@ public class HouseholdServiceImpl
     HouseholdRole previousRole = member.getRole();
     if (previousRole == request.newRole()) {
       // No-op: do not bump @Version, do not emit an event.
-      return memberMapper.toDto(member);
+      return memberMapper.toDto(member, usernameOf(member.getUserId()));
     }
 
     // Demoting the last primary while others remain.
@@ -830,7 +851,7 @@ public class HouseholdServiceImpl
         previousRole,
         saved.getRole(),
         actorUserId);
-    return memberMapper.toDto(saved);
+    return memberMapper.toDto(saved, usernameOf(saved.getUserId()));
   }
 
   // ---------------- Merge (01e) ----------------
@@ -988,6 +1009,32 @@ public class HouseholdServiceImpl
     throw last == null
         ? new IllegalStateException("invite-code collision retry loop exited without exception")
         : last;
+  }
+
+  /**
+   * Map a household (with its loaded members) to DTO, joining each member's read-only {@code
+   * username} from auth in ONE batched {@link AuthQueryService#getUsersByIds} call — never one
+   * lookup per member. Soft-deleted users are absent from the auth result and map to a null
+   * username (the UI falls back to displayName / userId short-form).
+   */
+  private HouseholdDto toDtoWithUsernames(Household household) {
+    return mapper.toDto(household, usernamesByUserId(household.getMembers()));
+  }
+
+  /** One batched auth read for the given members' usernames; empty map for no members. */
+  private Map<UUID, String> usernamesByUserId(List<HouseholdMember> members) {
+    if (members == null || members.isEmpty()) {
+      return Map.of();
+    }
+    Set<UUID> userIds =
+        members.stream().map(HouseholdMember::getUserId).collect(Collectors.toUnmodifiableSet());
+    return authQueryService.getUsersByIds(userIds).stream()
+        .collect(Collectors.toMap(UserDto::userId, UserDto::username));
+  }
+
+  /** Single-member sibling of {@link #usernamesByUserId}; null when the user doesn't resolve. */
+  private String usernameOf(UUID userId) {
+    return authQueryService.getUser(userId).map(UserDto::username).orElse(null);
   }
 
   private boolean isMember(UUID householdId, UUID callerUserId) {
