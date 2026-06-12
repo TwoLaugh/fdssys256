@@ -247,21 +247,60 @@ public class PreferenceServiceImpl implements PreferenceQueryService, Preference
       // Idempotent — if already initialised, return the existing aggregate.
       return mapper.toDto(existing.get());
     }
-    HardConstraints aggregate =
-        HardConstraints.builder()
-            .id(UUID.randomUUID())
-            .userId(userId)
-            .allergies(new ArrayList<>())
-            .dietaryIdentityBase(DEFAULT_DIETARY_BASE)
-            .dietaryIdentityLabel(null)
-            .medicalDiets(new ArrayList<>())
-            .exceptions(new ArrayList<>())
-            .intolerances(new ArrayList<>())
-            .ageRestrictions(new ArrayList<>())
-            .build();
-    HardConstraints saved = hardConstraintsRepository.save(aggregate);
+    HardConstraints saved = hardConstraintsRepository.save(defaultAggregate(userId));
     log.info("hard constraints initialised userId={} hardConstraintsId={}", userId, saved.getId());
     return mapper.toDto(saved);
+  }
+
+  /**
+   * Omnivore-default empty aggregate — shared by {@link #initialiseHardConstraints} and the
+   * upsert-on-first-PUT create path.
+   */
+  private static HardConstraints defaultAggregate(UUID userId) {
+    return HardConstraints.builder()
+        .id(UUID.randomUUID())
+        .userId(userId)
+        .allergies(new ArrayList<>())
+        .dietaryIdentityBase(DEFAULT_DIETARY_BASE)
+        .dietaryIdentityLabel(null)
+        .medicalDiets(new ArrayList<>())
+        .exceptions(new ArrayList<>())
+        .intolerances(new ArrayList<>())
+        .ageRestrictions(new ArrayList<>())
+        .build();
+  }
+
+  /**
+   * Upsert-on-first-PUT (onboarding G1): a PUT with {@code expectedVersion = 0} against an absent
+   * aggregate is a create intent — initialise the omnivore-default aggregate and let the caller
+   * fall through to the ordinary apply path, all in the caller's transaction (no window where the
+   * defaults are visible alone). {@code expectedVersion > 0} against an absent aggregate is a stale
+   * client, not a create intent → 404 (unchanged contract).
+   *
+   * <p>{@code saveAndFlush} (not {@code save}) so a concurrent double-submit surfaces HERE: the
+   * {@code user_id} unique constraint rejects the loser's INSERT at flush, which we translate to
+   * the optimistic-lock 409 the client already handles (re-GET, retry with the fresh version).
+   *
+   * <p>GAP-04 cannot trigger on this path: the just-created defaults hold no Tier-1 constraint to
+   * remove (empty allergies/diets/intolerances; an omnivore base excludes nothing, so any base
+   * change is a tightening or lateral switch, never a relaxation).
+   */
+  private HardConstraints createOnFirstWrite(UUID userId, UpdateHardConstraintsRequest request) {
+    if (request.expectedVersion() != 0L) {
+      throw new HardConstraintsNotFoundException(userId);
+    }
+    try {
+      HardConstraints created = hardConstraintsRepository.saveAndFlush(defaultAggregate(userId));
+      log.info(
+          "hard constraints initialised on first PUT userId={} hardConstraintsId={}",
+          userId,
+          created.getId());
+      return created;
+    } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+      // Concurrent create double-submit: the competing PUT won the user_id unique race.
+      throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
+          HardConstraints.class, userId);
+    }
   }
 
   @Override
@@ -271,7 +310,7 @@ public class PreferenceServiceImpl implements PreferenceQueryService, Preference
     HardConstraints aggregate =
         hardConstraintsRepository
             .findWithChildrenByUserId(userId)
-            .orElseThrow(() -> new HardConstraintsNotFoundException(userId));
+            .orElseGet(() -> createOnFirstWrite(userId, request));
 
     // Optimistic-lock pre-check: surface the 409 immediately rather than waiting for Hibernate's
     // increment-on-flush, which only fires on actual writes (no-op PUTs would silently pass).

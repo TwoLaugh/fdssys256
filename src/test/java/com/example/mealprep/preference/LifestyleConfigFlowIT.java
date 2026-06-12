@@ -104,10 +104,13 @@ class LifestyleConfigFlowIT {
   }
 
   @Test
-  void put_returns404_whenAggregateNotInitialised() throws Exception {
+  void put_returns404_whenAggregateNotInitialised_andExpectedVersionIsStale() throws Exception {
     AuthedUser user = registerUser();
+    // expectedVersion > 0 against an absent aggregate is a stale client, not a create intent —
+    // expectedVersion 0 would now CREATE it (upsert-on-first-PUT, onboarding G1; see
+    // PreferenceOnboardingFirstWriteIT).
     UpdateLifestyleConfigRequest req =
-        LifestyleConfigTestData.updateRequest(LifestyleConfigTestData.fullDocument(), 0L);
+        LifestyleConfigTestData.updateRequest(LifestyleConfigTestData.fullDocument(), 3L);
 
     mvc.perform(
             put("/api/v1/preferences/lifestyle-config")
@@ -115,6 +118,8 @@ class LifestyleConfigFlowIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(req)))
         .andExpect(status().isNotFound());
+
+    assertThat(lifestyleConfigRepository.findByUserId(user.userId())).isEmpty();
   }
 
   @Test
