@@ -5,6 +5,7 @@
  * inventory with expiry dates, notifications.
  */
 
+import { createGrocerySeed, createPantrySeed } from "./groceryPantrySeed";
 import { createNutritionSeed, targetsSeed } from "./nutritionSeed";
 import { createPlannerSeed } from "./plannerSeed";
 import {
@@ -14,10 +15,8 @@ import {
 } from "./recipeSeed";
 import type {
   ActivityState,
-  GroceryState,
   HouseholdState,
   NotificationPrefs,
-  PantryState,
   PreferencesState,
   StoreState,
 } from "./types";
@@ -26,225 +25,6 @@ import type {
  *  coding and date labels deterministic. Defined with the nutrition seed,
  *  whose intake days are keyed on the same week. */
 export { MOCK_TODAY_ISO } from "./nutritionSeed";
-
-/* ---- grocery ----------------------------------------------------------------- */
-
-const grocerySeed: GroceryState = {
-  contextLine: "From this week's plan · recalculated after the Thursday fix",
-  projectedTotal: "£47.30 ± £3.10",
-  projectedConf: "83% confidence",
-  headroom: "£7.70",
-  headroomSub: "vs £55 weekly",
-  groups: [
-    {
-      name: "Produce",
-      items: [
-        { n: "Spinach", q: "300 g", price: "£1.80", state: "bought" },
-        { n: "Carrots", q: "1 kg", price: "£0.85", state: "bought" },
-        {
-          n: "Spring onions",
-          q: "1 bunch",
-          price: "£0.75",
-          state: "open",
-          stale: true,
-        },
-        {
-          n: "Fresh basil",
-          q: "1 bunch",
-          price: "£1.20",
-          state: "open",
-          stale: true,
-        },
-      ],
-    },
-    {
-      name: "Protein & dairy",
-      items: [
-        { n: "Firm tofu", q: "2 × 400 g", price: "£4.40", state: "open" },
-        {
-          n: "Tuna (tinned)",
-          q: "3 tins",
-          price: "£3.30",
-          state: "open",
-          note: "added by suggested fix",
-        },
-        { n: "Greek yoghurt", q: "1 kg", price: "£2.60", state: "bought" },
-        { n: "Eggs", q: "12", price: "£2.95", state: "open", stale: true },
-      ],
-    },
-    {
-      name: "Pantry",
-      items: [
-        { n: "Short-grain rice", q: "1 kg", price: "£2.10", state: "bought" },
-        {
-          n: "Soy sauce (low salt)",
-          q: "250 ml",
-          price: "£1.85",
-          state: "open",
-          note: "swapped after feedback",
-        },
-        {
-          n: "Chickpeas",
-          q: "2 tins",
-          price: "£1.30",
-          state: "open",
-          stale: true,
-        },
-        { n: "Gochujang paste", q: "200 g", price: "£2.80", state: "open" },
-      ],
-    },
-  ],
-  order: {
-    provider: "Tesco delivery",
-    state: "Confirmed",
-    eta: "Sat 13 June · 10–11am",
-    steps: ["Draft", "Quoted", "Placed", "Confirmed", "Delivered"],
-    at: 3,
-  },
-  substitution: {
-    from: "Gochujang paste 200 g",
-    to: "Red pepper paste 180 g",
-    reason: "out of stock at Tesco",
-    delta: "−£0.40",
-    targetItem: "Gochujang paste",
-    replacement: { n: "Red pepper paste", q: "180 g", price: "£2.40" },
-  },
-};
-
-/* ---- pantry -------------------------------------------------------------------- */
-
-const pantrySeed: PantryState = {
-  items: [
-    // fridge
-    {
-      id: "spinach",
-      name: "Spinach",
-      location: "fridge",
-      qty: 150,
-      unit: "g",
-      expiry: "2026-06-11",
-      estCost: 1.8,
-    },
-    {
-      id: "greek-yoghurt",
-      name: "Greek yoghurt",
-      location: "fridge",
-      qty: 1,
-      unit: "kg",
-      expiry: "2026-06-16",
-      estCost: 2.6,
-    },
-    {
-      id: "firm-tofu",
-      name: "Firm tofu",
-      location: "fridge",
-      qty: 2,
-      unit: "× 400 g",
-      expiry: "2026-06-15",
-      estCost: 4.4,
-    },
-    {
-      id: "eggs",
-      name: "Eggs",
-      location: "fridge",
-      qty: 9,
-      unit: "",
-      expiry: "2026-06-24",
-      estCost: 2.95,
-    },
-    {
-      id: "chicken-breast",
-      name: "Chicken breast",
-      location: "fridge",
-      qty: 0,
-      unit: "g",
-      expiry: "2026-06-09",
-      estCost: 3.1,
-      spoiled: true,
-    },
-    // freezer
-    {
-      id: "frozen-peas",
-      name: "Frozen peas",
-      location: "freezer",
-      qty: 900,
-      unit: "g",
-      expiry: "2026-09-01",
-      estCost: 1.2,
-    },
-    {
-      id: "batch-chilli",
-      name: "Batch chilli base",
-      location: "freezer",
-      qty: 3,
-      unit: "portions",
-      expiry: "2026-07-10",
-      estCost: 4.5,
-    },
-    {
-      id: "prawns",
-      name: "King prawns",
-      location: "freezer",
-      qty: 250,
-      unit: "g",
-      expiry: "2026-08-15",
-      estCost: 3.75,
-    },
-    // pantry
-    {
-      id: "rice",
-      name: "Short-grain rice",
-      location: "pantry",
-      qty: 1,
-      unit: "kg",
-      expiry: "2027-01-15",
-      estCost: 2.1,
-    },
-    {
-      id: "chickpeas",
-      name: "Chickpeas",
-      location: "pantry",
-      qty: 4,
-      unit: "tins",
-      expiry: "2026-12-30",
-      estCost: 2.6,
-    },
-    {
-      id: "soy-sauce",
-      name: "Soy sauce",
-      location: "pantry",
-      qty: 250,
-      unit: "ml",
-      expiry: "2026-11-20",
-      estCost: 1.85,
-    },
-    {
-      id: "gochujang",
-      name: "Gochujang",
-      location: "pantry",
-      qty: 1,
-      unit: "jar",
-      expiry: "2026-10-05",
-      estCost: 2.8,
-    },
-  ],
-  equipment: [
-    "Slow cooker",
-    "Air fryer",
-    "Stick blender",
-    "Rice cooker",
-    "Cast-iron pan",
-  ],
-  waste: {
-    monthTotal: 4.2,
-    entries: [
-      { name: "Chicken breast 500 g", cost: "£3.10", when: "Wed 10 June" },
-      { name: "Half cucumber", cost: "£0.45", when: "Sun 7 June" },
-      { name: "Coriander bunch", cost: "£0.65", when: "Tue 2 June" },
-    ],
-  },
-  budget: { spent: 38.2, total: 55, note: "On track · 3 days left" },
-};
 
 /* ---- preferences --------------------------------------------------------------------- */
 
@@ -411,8 +191,8 @@ export function createSeed(): StoreState {
     planner: createPlannerSeed(),
     adaptation: createAdaptationSeed(),
     ...createRecipeSeed(),
-    grocery: grocerySeed,
-    pantry: pantrySeed,
+    grocery: createGrocerySeed(),
+    pantry: createPantrySeed(),
     notifications: [
       {
         id: "n1",

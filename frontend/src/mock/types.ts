@@ -171,84 +171,131 @@ export interface RecipeDataState {
   nutritionByVersion: Record<string, RecipeNutritionResultDto>;
 }
 
-/* ---- grocery -------------------------------------------------------------- */
+/* ---- grocery: backend DTO mirrors -----------------------------------------------
+ * Contract shapes throughout (design/frontend/pages/groceries.md §2) —
+ * re-exported from the generated OpenAPI types so the mock validates the
+ * production field names, exactly like the nutrition/planner/recipe slices.
+ */
 
-export type GroceryItemState = "open" | "bought";
+type GrocerySchemas = components["schemas"];
 
-export interface GroceryItem {
-  n: string;
-  q: string;
-  price: string;
-  state: GroceryItemState;
-  stale?: boolean;
-  /** Provenance chip, e.g. "added by suggested fix". */
-  note?: string;
-}
+export type ShoppingListDto = GrocerySchemas["ShoppingListDto"];
+export type ShoppingListLineDto = GrocerySchemas["ShoppingListLineDto"];
+export type ShoppingListLineType = GrocerySchemas["ShoppingListLineType"];
+export type LineFulfilmentStatus = GrocerySchemas["LineFulfilmentStatus"];
+export type BoughtVia = NonNullable<ShoppingListLineDto["boughtVia"]>;
+export type ExportFormat = GrocerySchemas["ExportFormat"];
+export type ShoppingListExportDto = GrocerySchemas["ShoppingListExportDto"];
+export type RecalculateShoppingListRequest =
+  GrocerySchemas["RecalculateShoppingListRequest"];
+export type MarkBoughtRequest = GrocerySchemas["MarkBoughtRequest"];
+export type BoughtUnit = MarkBoughtRequest["boughtUnit"];
+export type BulkMarkBoughtRequest = GrocerySchemas["BulkMarkBoughtRequest"];
+export type MarkBoughtResultDto = GrocerySchemas["MarkBoughtResultDto"];
 
-export interface GroceryGroup {
-  name: string;
-  items: GroceryItem[];
-}
+export type GroceryOrderDto = GrocerySchemas["GroceryOrderDto"];
+export type GroceryOrderLineDto = GrocerySchemas["GroceryOrderLineDto"];
+export type GroceryOrderStatus = GrocerySchemas["GroceryOrderStatus"];
+export type OrderLineStatus = GrocerySchemas["OrderLineStatus"];
+export type GrocerySubstitutionProposalDto =
+  GrocerySchemas["GrocerySubstitutionProposalDto"];
+export type SubstitutionProposalStatus =
+  GrocerySchemas["SubstitutionProposalStatus"];
+export type ResolveSubstitutionRequest =
+  GrocerySchemas["ResolveSubstitutionRequest"];
+export type CancelOrderRequest = GrocerySchemas["CancelOrderRequest"];
+export type GroceryProviderStateDto = GrocerySchemas["GroceryProviderStateDto"];
 
-export interface GroceryOrder {
-  provider: string;
-  state: string;
-  eta: string;
-  steps: string[];
-  /** Index into steps of the current state. */
-  at: number;
-}
-
-export interface GrocerySubstitution {
-  from: string;
-  to: string;
-  reason: string;
-  delta: string;
-  /** Name of the list line the accepted swap replaces. */
-  targetItem: string;
-  /** Replacement line values applied on accept. */
-  replacement: { n: string; q: string; price: string };
-}
+export type PriceSource = GrocerySchemas["PriceSource"];
+export type PriceAggregateDto = GrocerySchemas["PriceAggregateDto"];
+export type PriceObservationDto = GrocerySchemas["PriceObservationDto"];
+export type RecordManualPriceRequest =
+  GrocerySchemas["RecordManualPriceRequest"];
+export type RefreshPricesRequest = GrocerySchemas["RefreshPricesRequest"];
+export type RefreshPricesResultDto = GrocerySchemas["RefreshPricesResultDto"];
 
 export interface GroceryState {
-  contextLine: string;
-  projectedTotal: string;
-  projectedConf: string;
-  headroom: string;
-  headroomSub: string;
-  groups: GroceryGroup[];
-  order: GroceryOrder | null;
-  substitution: GrocerySubstitution | null;
+  /**
+   * Every generation the mock knows, newest first; the current list (#1) is
+   * the first non-superseded row for the active plan. Older rows play the
+   * history drawer (#3) with retro mark-bought enabled.
+   */
+  lists: ShoppingListDto[];
+  /** Orders newest first (#9); ARCHIVED rows excluded from the default view. */
+  orders: GroceryOrderDto[];
+  /**
+   * orderId → ALL proposals (#18) including resolved ones; the order DTO's
+   * outstandingProposals[] carries only the unresolved subset.
+   */
+  proposalsByOrder: Record<string, GrocerySubstitutionProposalDto[]>;
+  /** GET providers/{key} (#20); null plays the 404 connect-CTA empty state. */
+  providerState: GroceryProviderStateDto | null;
+  /**
+   * ingredientMappingKey → per-store aggregate rows (#21/#22). store=null is
+   * the cross-store blend; absence of a key plays the 404 "no data yet".
+   */
+  aggregates: Record<string, PriceAggregateDto[]>;
+  /** Price observations, newest first (#23/#24). */
+  observations: PriceObservationDto[];
 }
 
-/* ---- pantry --------------------------------------------------------------- */
+/* ---- pantry: backend DTO mirrors --------------------------------------------------
+ * Provisions contract shapes throughout (design/frontend/pages/pantry.md §2).
+ */
 
-export type PantryLocation = "fridge" | "freezer" | "pantry";
+export type StorageLocation = GrocerySchemas["StorageLocation"];
+export type TrackingMode = GrocerySchemas["TrackingMode"];
+export type StapleStatus = GrocerySchemas["StapleStatus"];
+export type ItemSource = GrocerySchemas["ItemSource"];
+export type ItemLifecycleStatus = GrocerySchemas["ItemLifecycleStatus"];
+export type DefrostMethod = GrocerySchemas["DefrostMethod"];
+export type InventoryItemDto = GrocerySchemas["InventoryItemDto"];
+export type FreezerExtension = NonNullable<InventoryItemDto["freezerExtension"]>;
+export type CreateInventoryItemRequest =
+  GrocerySchemas["CreateInventoryItemRequest"];
+export type UpdateInventoryItemRequest =
+  GrocerySchemas["UpdateInventoryItemRequest"];
+export type AdjustInventoryQuantityRequest =
+  GrocerySchemas["AdjustInventoryQuantityRequest"];
+export type InventoryAuditEntryDto = GrocerySchemas["InventoryAuditEntryDto"];
+export type AuditActor = GrocerySchemas["AuditActor"];
+export type MealConsumptionCommand = GrocerySchemas["MealConsumptionCommand"];
+export type InventoryDeductionResultDto =
+  GrocerySchemas["InventoryDeductionResultDto"];
 
-export interface PantryItem {
-  id: string;
-  name: string;
-  location: PantryLocation;
-  qty: number;
-  unit: string;
-  /** ISO date, e.g. "2026-06-12". */
-  expiry: string;
-  /** Estimated value in £ — used for waste accounting when spoiled. */
-  estCost: number;
-  spoiled?: boolean;
-}
+export type WasteEntryDto = GrocerySchemas["WasteEntryDto"];
+export type WasteReason = GrocerySchemas["WasteReason"];
+export type WasteSummaryDto = GrocerySchemas["WasteSummaryDto"];
+export type TopWastedItemDto = GrocerySchemas["TopWastedItemDto"];
+export type LogWasteRequest = GrocerySchemas["LogWasteRequest"];
 
-export interface WasteEntry {
-  name: string;
-  cost: string;
-  when: string;
-}
+export type EquipmentDto = GrocerySchemas["EquipmentDto"];
+export type UpsertEquipmentRequest = GrocerySchemas["UpsertEquipmentRequest"];
+
+export type BudgetDto = GrocerySchemas["BudgetDto"];
+export type UpdateBudgetRequest = GrocerySchemas["UpdateBudgetRequest"];
+export type PriceSensitivity = GrocerySchemas["PriceSensitivity"];
+
+export type SupplierProductDto = GrocerySchemas["SupplierProductDto"];
+export type SubstitutionRecordDto = GrocerySchemas["SubstitutionRecordDto"];
 
 export interface PantryState {
-  items: PantryItem[];
-  equipment: string[];
-  waste: { monthTotal: number; entries: WasteEntry[] };
-  budget: { spent: number; total: number; note: string };
+  /**
+   * Every inventory row the mock knows, ALL lifecycle states; the list read
+   * (#1) filters to ACTIVE (the contract returns ACTIVE only — pantry.md §9
+   * Q2: spoiled/exhausted/wasted rows leave the list on mutation).
+   */
+  items: InventoryItemDto[];
+  /** itemId → audit entries newest first (#9, detail-drawer history tab). */
+  auditByItem: Record<string, InventoryAuditEntryDto[]>;
+  /** Waste entries newest first (#12); immutable — corrections append. */
+  waste: WasteEntryDto[];
+  /** Equipment rows (#14). */
+  equipment: EquipmentDto[];
+  /** Budget row (#17); null plays the GET 404 set-budget empty state. */
+  budget: BudgetDto | null;
+  /** Supplier-product price-book cache rows (#19), lastChecked DESC. */
+  supplierProducts: SupplierProductDto[];
 }
 
 /* ---- notifications --------------------------------------------------------- */

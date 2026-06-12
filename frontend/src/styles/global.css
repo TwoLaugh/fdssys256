@@ -3498,3 +3498,204 @@ button.rail-item.active {
 .source-disabled {
   opacity: 0.55;
 }
+
+/* ---- Groceries + Pantry contract rebuild (groceries.md / pantry.md) --------- */
+
+.mp-chip.red {
+  color: var(--mp-red);
+  border-color: var(--mp-red);
+}
+
+/* Caption row under the grocery stat band (refresh action + notes + nudge). */
+.grocery-caption-row {
+  display: flex;
+  gap: 10px 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.grocery-actions {
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 6px;
+  justify-content: flex-end;
+  min-width: 64px;
+}
+
+/* Sticky select-mode footer bar (bulk mark-bought, §4b). */
+.select-bar {
+  position: sticky;
+  bottom: 16px;
+  z-index: 30;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px 18px;
+  margin-top: 16px;
+  box-shadow: 0 10px 30px rgba(38, 32, 25, 0.16);
+}
+
+/* Order state banners — info / amber (time-sensitive) / red (danger only). */
+.order-banner {
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  margin-top: 10px;
+  line-height: 1.45;
+}
+
+.order-banner.info {
+  background: var(--mp-bg);
+  border: 1px solid var(--mp-line-hi);
+  color: var(--mp-ink);
+}
+
+.order-banner.amber {
+  background: #f5ead3;
+  border: 1px solid #e3cf9d;
+  color: #7a5416;
+}
+
+.order-banner.red {
+  background: #f7e1de;
+  border: 1px solid #e3b3ad;
+  color: #8c1d16;
+}
+
+.order-line-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--mp-line);
+  font-size: 13px;
+}
+
+.order-line-row:last-child {
+  border-bottom: none;
+}
+
+.order-line-meta {
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.order-line-price {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Substitution proposal card under a DELIVERED order (§5d). */
+.proposal-card {
+  border: 1px solid var(--mp-line-hi);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-top: 12px;
+  background: var(--mp-bg);
+}
+
+.proposal-consequences {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+/* Observation / aggregate rows in the price popover + activity drawer. */
+.obs-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--mp-line);
+  font-size: 13px;
+}
+
+.obs-row:last-child {
+  border-bottom: none;
+}
+
+/* History drawer rows (#3). */
+.history-row-btn {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--mp-line);
+  padding: 10px 2px;
+  cursor: pointer;
+  font-family: var(--mp-font-body);
+  font-size: 13.5px;
+  color: var(--mp-ink);
+}
+
+.history-row-btn:hover {
+  background: var(--mp-bg);
+}
+
+/* Pantry status-tracked chip tap target (≥32px floor). */
+.status-chip-btn {
+  background: transparent;
+  border: none;
+  padding: 4px;
+  min-height: 32px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Equipment rows (toggle + details + remove). */
+.equipment-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.equipment-row:last-child {
+  border-bottom: none;
+}
+
+.equipment-details {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 9px;
+  font-size: 12.5px;
+}
+
+/* Waste summary per-reason mini-bars. */
+.reason-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reason-bar {
+  height: 8px;
+  border-radius: 2px;
+  background: var(--mp-olive);
+  display: inline-block;
+}
+
+/* Two-row pantry item: controls on top, freezer detail as a full-width sub. */
+.pantry-row2 {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.pantry-row-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pantry-row-sub {
+  margin-top: 3px;
+}
