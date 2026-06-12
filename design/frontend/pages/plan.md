@@ -273,7 +273,7 @@ blocking call — Stage A→D server-side; no progress endpoint, v1 polls nothin
 
 The contract returns **one** composed `PlanDto` per generate call — Stage C's
 LLM picks from the internal top-5 server-side. The mock's five-candidate grid
-has no backing endpoint (§8 Q1 — the HLD's "user can override the LLM's pick"
+has no backing endpoint (§8 Q1 — RESOLVED 2026-06-12: HLD amended, auto-pick is v1 behaviour, candidate exposure deferred to v2 — see tickets/frontend-gaps/planner-candidate-pick-decision.md; the HLD's former "user can override the LLM's pick"
 is not reachable through the shipped contract). The review renders a single
 proposed-plan card; "Regenerate all" (new Idempotency-Key) is the only
 alternative-seeking control. Card mapping — the exact per-candidate shape:

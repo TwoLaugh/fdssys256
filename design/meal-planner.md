@@ -103,7 +103,7 @@ Two sub-stages:
 1. **Pick from N=5.** LLM (frontier tier — Sonnet/Opus) picks one candidate plan with reasoning. Reasoning is recorded in the decision log.
 2. **Creative augmentation.** The LLM may add or swap *plan-level* items the deterministic search couldn't produce: snacks, side dishes, drinks, ingredient swaps within a slot. See [Phase 2 Creative Augmentation](#phase-2-creative-augmentation).
 
-The user can override the LLM's pick — the UI presents all 5 candidates with the LLM's recommendation highlighted. Override is logged as `chosen.source = 'user'`.
+**v1 (amended 2026-06-12, product-owner ruling):** the LLM's pick is final within a generation — candidates are internal to Stage C and are not exposed to the UI. The user's control points are the generate → review → accept/reject loop (rejecting and regenerating produces a fresh candidate set) plus per-slot overrides on the accepted plan. Candidate exposure with a user pick (“the UI presents all 5 candidates with the LLM's recommendation highlighted; override logged as `chosen.source = 'user'`”) is **deferred to v2** — decision record: `tickets/frontend-gaps/planner-candidate-pick-decision.md`.
 
 ### Stage D — Refine-directives
 
