@@ -5,6 +5,7 @@ import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
 import com.example.mealprep.recipe.api.dto.RecipeDiffDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeImportDto;
+import com.example.mealprep.recipe.api.dto.RecipeSearchCriteriaDto;
 import com.example.mealprep.recipe.api.dto.RecipeSubstitutionDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -32,6 +33,22 @@ public interface RecipeQueryService {
    * soft-deleted.
    */
   Optional<RecipeDto> getById(UUID recipeId);
+
+  /**
+   * Library list/search read ({@code GET /api/v1/recipes} — recipe-list-search ticket). Returns the
+   * page of recipes visible to {@code userId} matching {@code criteria}: the caller's own {@code
+   * USER}-catalogue rows (another user's USER rows are never returned) plus the shared {@code
+   * SYSTEM} catalogue, soft-deleted rows excluded unconditionally and archived rows only when
+   * {@code criteria.includeArchived()}. See {@link
+   * com.example.mealprep.recipe.api.dto.RecipeSearchCriteriaDto} for the per-filter semantics.
+   *
+   * <p>Rows are the same hydrated {@link RecipeDto} shape {@link #getById} produces
+   * (current-version body + branches[]) <b>plus</b> the list-only {@code avgTaste} / {@code
+   * ratingCount} aggregate fields, computed by one batched query for the whole page (no per-card
+   * summary N+1). Sort is pinned {@code updatedAt DESC}; callers pass an unsorted {@link Pageable}
+   * (page/size only — size bounds are enforced at the controller boundary per infra-01b).
+   */
+  Page<RecipeDto> searchLibrary(UUID userId, RecipeSearchCriteriaDto criteria, Pageable pageable);
 
   /**
    * Planner pre-filter read (planner Stage A, per planner.md §BeamSearchEngine). Returns the

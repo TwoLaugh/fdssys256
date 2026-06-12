@@ -252,6 +252,20 @@ RecipeDto:
     branches:
       type: array
       items: { $ref: '#/RecipeBranchDto' }
+    avgTaste:
+      type: number
+      format: double
+      nullable: true
+      description: >-
+        Recipe-level average taste rating. Populated ONLY by the GET /api/v1/recipes list read
+        (one batched aggregate per page); null on every other read and on unrated list rows.
+    ratingCount:
+      type: integer
+      format: int64
+      nullable: true
+      description: >-
+        Recipe-level rating count. Populated ONLY by the GET /api/v1/recipes list read (0 on
+        unrated list rows); null on every other read.
 CreateIngredientRequest:
   type: object
   required: [lineOrder, ingredientMappingKey, displayName]
@@ -908,6 +922,22 @@ RecipeRatingDtoPage:
     content:
       type: array
       items: { $ref: '#/RecipeRatingDto' }
+    totalElements: { type: integer, format: int64 }
+    totalPages: { type: integer }
+    number: { type: integer }
+    size: { type: integer }
+    first: { type: boolean }
+    last: { type: boolean }
+    empty: { type: boolean }
+    numberOfElements: { type: integer }
+RecipeDtoPage:
+  type: object
+  additionalProperties: true
+  required: [content, totalElements, totalPages, number, size]
+  properties:
+    content:
+      type: array
+      items: { $ref: '#/RecipeDto' }
     totalElements: { type: integer, format: int64 }
     totalPages: { type: integer }
     number: { type: integer }

@@ -19,6 +19,20 @@ public class RecipeMapper {
    */
   public RecipeDto toDto(
       Recipe entity, RecipeVersionDto currentVersionBody, List<RecipeBranchDto> branches) {
+    return toDto(entity, currentVersionBody, branches, null, null);
+  }
+
+  /**
+   * List-read overload carrying the batched rating aggregate ({@code GET /api/v1/recipes}). {@code
+   * avgTaste} is null when the recipe has no ratings; the list service passes {@code ratingCount =
+   * 0} for unrated rows while non-list reads pass {@code null} for both (fields not populated).
+   */
+  public RecipeDto toDto(
+      Recipe entity,
+      RecipeVersionDto currentVersionBody,
+      List<RecipeBranchDto> branches,
+      Double avgTaste,
+      Long ratingCount) {
     if (entity == null) {
       return null;
     }
@@ -41,7 +55,9 @@ public class RecipeMapper {
         entity.getCreatedAt(),
         entity.getUpdatedAt(),
         currentVersionBody,
-        branches != null ? branches : Collections.emptyList());
+        branches != null ? branches : Collections.emptyList(),
+        avgTaste,
+        ratingCount);
   }
 
   /**

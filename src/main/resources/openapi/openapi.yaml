@@ -710,6 +710,7 @@ components:
     RecipeTagsDto: { $ref: 'schemas/recipe.yaml#/RecipeTagsDto' }
     RecipeVersionDto: { $ref: 'schemas/recipe.yaml#/RecipeVersionDto' }
     RecipeDto: { $ref: 'schemas/recipe.yaml#/RecipeDto' }
+    RecipeDtoPage: { $ref: 'schemas/recipe.yaml#/RecipeDtoPage' }
     CreateIngredientRequest: { $ref: 'schemas/recipe.yaml#/CreateIngredientRequest' }
     CreateMethodStepRequest: { $ref: 'schemas/recipe.yaml#/CreateMethodStepRequest' }
     CreateRecipeMetadataRequest: { $ref: 'schemas/recipe.yaml#/CreateRecipeMetadataRequest' }

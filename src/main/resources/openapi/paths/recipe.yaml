@@ -1,4 +1,76 @@
 recipes:
+  get:
+    tags: [Recipes]
+    operationId: listRecipes
+    summary: 'Paginated library list/search: caller-private USER rows + shared SYSTEM rows.'
+    description: >-
+      The recipes-page library read. Visibility: the caller's own USER-catalogue rows plus the
+      shared SYSTEM catalogue — another user's USER rows never appear. Soft-deleted rows are never
+      returned; archived rows only with includeArchived=true. minDataQuality is an ordinal floor,
+      not equality, over the pinned ordering USER_VERIFIED > IMPORTED ≈ AI_GENERATED >
+      WEB_DISCOVERED (IMPORTED and AI_GENERATED are tied — a floor at either admits both; only
+      WEB_DISCOVERED falls below them). Sort is pinned updatedAt DESC. Each row is the standard
+      RecipeDto plus the list-only avgTaste/ratingCount rating aggregate, computed by one batched
+      query per page (no per-card summary N+1); unrated rows carry avgTaste=null / ratingCount=0.
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: catalogue
+        required: false
+        description: 'Restrict to one catalogue; absent → the caller''s USER rows + all SYSTEM rows.'
+        schema: { $ref: '../schemas/recipe.yaml#/Catalogue' }
+      - in: query
+        name: namePattern
+        required: false
+        description: Case-insensitive substring match on name.
+        schema: { type: string, maxLength: 160 }
+      - in: query
+        name: cuisine
+        required: false
+        description: Exact match on the current version's metadata.cuisine.
+        schema: { type: string, maxLength: 64 }
+      - in: query
+        name: maxTotalTimeMins
+        required: false
+        description: Current version's metadata.totalTimeMins <= value.
+        schema: { type: integer, minimum: 0 }
+      - in: query
+        name: minDataQuality
+        required: false
+        description: >-
+          Ordinal data-quality floor (USER_VERIFIED > IMPORTED ≈ AI_GENERATED > WEB_DISCOVERED;
+          the IMPORTED/AI_GENERATED tie means a floor at either admits both).
+        schema: { $ref: '../schemas/recipe.yaml#/DataQuality' }
+      - in: query
+        name: includeArchived
+        required: false
+        description: Include archived (archivedAt non-null) rows; default false.
+        schema: { type: boolean, default: false }
+      - in: query
+        name: page
+        required: false
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: size
+        required: false
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    responses:
+      '200':
+        description: Page of library recipes, updatedAt DESC. Empty result is an empty page, not 404.
+        content:
+          application/json:
+            schema: { $ref: '../schemas/recipe.yaml#/RecipeDtoPage' }
+      '400':
+        description: Invalid enum value, negative maxTotalTimeMins, namePattern/cuisine too long, or size > 100.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
   post:
     tags: [Recipes]
     operationId: createRecipe

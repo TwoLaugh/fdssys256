@@ -101,6 +101,7 @@ class RecipeSubstitutionsServiceTest {
         importRepository,
         ingredientRepository,
         substitutionRepository,
+        null,
         recipeMapper,
         versionMapper,
         branchMapper,
