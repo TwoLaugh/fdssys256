@@ -33,10 +33,13 @@ import org.springframework.web.server.ResponseStatusException;
  * caller's {@code userId} server-side — the controller never accepts a {@code userId} from a path
  * or query, so user A cannot read or update user B's config.
  *
- * <p>The {@code initialise} flow is intentionally NOT exposed on the REST surface here — the
- * onboarding wizard ticket is responsible for calling {@link
- * LifestyleConfigUpdateService#initialise} during the wizard's submit step. PUT will return 404
- * until {@code initialise} has been called.
+ * <p><b>Upsert-on-first-PUT</b> (onboarding G1): PUT with {@code expectedVersion = 0} and no
+ * existing aggregate creates it with the inbound document (via the {@link
+ * LifestyleConfigUpdateService#initialise} internals) in one transaction, returning 200 — the
+ * onboarding wizard's step 4 needs no separate initialise call. GET keeps returning 404 until that
+ * first write (the wizard's resume probes and the /preferences empty states rely on
+ * absent-until-touched). PUT with {@code expectedVersion > 0} and no aggregate stays 404 (stale
+ * client, not a create intent).
  */
 @RestController
 @RequestMapping("/api/v1/preferences/lifestyle-config")
@@ -68,7 +71,10 @@ public class LifestyleConfigController {
   @PutMapping(
       consumes = MediaType.APPLICATION_JSON_VALUE,
       produces = MediaType.APPLICATION_JSON_VALUE)
-  @Operation(summary = "Replace the calling user's lifestyle config.")
+  @Operation(
+      summary =
+          "Replace the calling user's lifestyle config; a first write (expectedVersion 0, no config"
+              + " yet) creates it.")
   public LifestyleConfigDto update(@Valid @RequestBody UpdateLifestyleConfigRequest request) {
     UUID userId = requireCurrentUserId();
     return updateService.update(userId, request, userId);

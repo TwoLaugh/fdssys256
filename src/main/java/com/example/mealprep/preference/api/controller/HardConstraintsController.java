@@ -31,6 +31,13 @@ import org.springframework.web.server.ResponseStatusException;
  * AuthSecurityConfig}'s deny-by-default chain; the {@link CurrentUserResolver} resolves the
  * caller's {@code userId} server-side — the controller never accepts a {@code userId} from a path
  * or query param, so user A cannot read or update user B's aggregate.
+ *
+ * <p><b>Upsert-on-first-PUT</b> (onboarding G1): PUT with {@code expectedVersion = 0} and no
+ * existing aggregate initialises it (omnivore defaults) and applies the document in one
+ * transaction, returning 200 — the onboarding wizard's step 3 needs no separate initialise call.
+ * GET keeps returning 404 until that first write (the wizard's resume probes and the /preferences
+ * empty states rely on absent-until-touched). PUT with {@code expectedVersion > 0} and no aggregate
+ * stays 404 (stale client, not a create intent).
  */
 @RestController
 @RequestMapping("/api/v1/preferences/hard-constraints")
@@ -62,7 +69,10 @@ public class HardConstraintsController {
   @PutMapping(
       consumes = MediaType.APPLICATION_JSON_VALUE,
       produces = MediaType.APPLICATION_JSON_VALUE)
-  @Operation(summary = "Replace the calling user's hard-constraints aggregate.")
+  @Operation(
+      summary =
+          "Replace the calling user's hard-constraints aggregate; a first write (expectedVersion 0,"
+              + " no aggregate yet) creates it.")
   public HardConstraintsDto update(@Valid @RequestBody UpdateHardConstraintsRequest request) {
     UUID userId = requireCurrentUserId();
     return updateService.updateHardConstraints(userId, request, userId);

@@ -196,15 +196,77 @@ class HardConstraintsServiceImplTest {
   // ---------------- updateHardConstraints ----------------
 
   @Test
-  void updateHardConstraints_whenAggregateMissing_throwsNotFound() {
+  void updateHardConstraints_whenAggregateMissing_andExpectedVersionStale_throwsNotFound() {
     UUID userId = UUID.randomUUID();
     when(hardConstraintsRepository.findWithChildrenByUserId(userId)).thenReturn(Optional.empty());
 
+    // expectedVersion > 0 against an absent aggregate is a stale client, not a create intent.
     UpdateHardConstraintsRequest request =
-        HardConstraintsTestData.updateRequest().withExpectedVersion(0L).build();
+        HardConstraintsTestData.updateRequest().withExpectedVersion(2L).build();
 
     assertThatThrownBy(() -> service().updateHardConstraints(userId, request, userId))
         .isInstanceOf(HardConstraintsNotFoundException.class);
+
+    verifyNoInteractions(eventPublisher, auditLogRepository);
+    verify(hardConstraintsRepository, never()).saveAndFlush(any());
+  }
+
+  // ---------------- upsert-on-first-PUT (onboarding G1) ----------------
+
+  @Test
+  void updateHardConstraints_whenAggregateMissing_andExpectedVersionZero_createsThenApplies() {
+    UUID userId = UUID.randomUUID();
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId)).thenReturn(Optional.empty());
+    when(hardConstraintsRepository.saveAndFlush(any(HardConstraints.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    // Onboarding step-3 shaped payload: vegan base + an allergy. Even though the base changes from
+    // the initialised "omnivore" default, GAP-04 must NOT gate the create path (omnivore→vegan is a
+    // tightening, and the fresh defaults hold nothing removable).
+    UpdateHardConstraintsRequest request =
+        HardConstraintsTestData.updateRequest()
+            .withAllergies("peanuts")
+            .withDietaryIdentity(
+                new com.example.mealprep.preference.api.dto.DietaryIdentityDto(
+                    "vegan", null, List.of()))
+            .withExpectedVersion(0L)
+            .build();
+
+    HardConstraintsDto result = service().updateHardConstraints(userId, request, userId);
+
+    assertThat(result.userId()).isEqualTo(userId);
+    assertThat(result.allergies()).containsExactly("peanuts");
+    assertThat(result.dietaryIdentity().base()).isEqualTo("vegan");
+
+    // Created via saveAndFlush (so a concurrent winner's unique violation surfaces in the create
+    // path) and then applied via the ordinary path (audit rows + event, actor = the user).
+    ArgumentCaptor<HardConstraintsAuditLog> auditCaptor =
+        ArgumentCaptor.forClass(HardConstraintsAuditLog.class);
+    verify(auditLogRepository, times(2)).save(auditCaptor.capture());
+    assertThat(
+            auditCaptor.getAllValues().stream()
+                .map(HardConstraintsAuditLog::getFieldChanged)
+                .toList())
+        .containsExactlyInAnyOrder("allergies", "dietaryIdentityBase");
+    assertThat(auditCaptor.getAllValues().get(0).getActorUserId()).isEqualTo(userId);
+    verify(eventPublisher).publishEvent(any(HardConstraintsUpdatedEvent.class));
+  }
+
+  @Test
+  void updateHardConstraints_createRaceLoser_translatesUniqueViolationToOptimisticLock409() {
+    UUID userId = UUID.randomUUID();
+    when(hardConstraintsRepository.findWithChildrenByUserId(userId)).thenReturn(Optional.empty());
+    when(hardConstraintsRepository.saveAndFlush(any(HardConstraints.class)))
+        .thenThrow(new org.springframework.dao.DataIntegrityViolationException("user_id unique"));
+
+    UpdateHardConstraintsRequest request =
+        HardConstraintsTestData.updateRequest()
+            .withAllergies("peanuts")
+            .withExpectedVersion(0L)
+            .build();
+
+    assertThatThrownBy(() -> service().updateHardConstraints(userId, request, userId))
+        .isInstanceOf(ObjectOptimisticLockingFailureException.class);
 
     verifyNoInteractions(eventPublisher, auditLogRepository);
   }

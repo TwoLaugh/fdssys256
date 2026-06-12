@@ -134,15 +134,22 @@ public class PreferenceSteps {
   @When("they set an allergy on their hard constraints")
   public void theySetAnAllergyOnTheirHardConstraints() {
     // A full-replacement PUT with a single allergy at expectedVersion 0 (a freshly-seeded
-    // aggregate's @Version). Shared by two scenarios: the negative path (no seed → 404) and PREF-06
-    // (seeded first → 200 + audit). The seeding precondition decides which behaviour applies.
+    // aggregate's @Version). Used by PREF-06 (seeded first → 200 + audit); since the onboarding G1
+    // upsert, expectedVersion 0 against an ABSENT aggregate would create it rather than 404.
     context.setLastResponse(putHardConstraints(hardConstraintsBody(List.of(ALLERGEN), 0L)));
+  }
+
+  @When("they set an allergy on their hard constraints with a stale expected version")
+  public void theySetAnAllergyOnTheirHardConstraintsWithAStaleExpectedVersion() {
+    // expectedVersion > 0 against an absent aggregate is a stale client, not a create intent —
+    // the only remaining 404 shape on this PUT since the onboarding G1 upsert-on-first-PUT.
+    context.setLastResponse(putHardConstraints(hardConstraintsBody(List.of(ALLERGEN), 3L)));
   }
 
   @Then("the hard-constraints update is rejected as not found")
   public void theHardConstraintsUpdateIsRejectedAsNotFound() {
     assertNotFound(
-        "a hard-constraints PUT 404s when no aggregate exists (cannot create over HTTP)");
+        "a hard-constraints PUT with a stale expectedVersion 404s when no aggregate exists");
   }
 
   @Then("the allergy is stored and reflected on a read for this user")
@@ -394,20 +401,31 @@ public class PreferenceSteps {
   public void theyEditALifestyleConfigSetting() {
     // Full-replacement PUT that POPULATES one section (pantryTracking.enabled=true) so the
     // section-diff fires and an audit row is written — versus the seeded all-null document. Used by
-    // BOTH the negative-path scenario (no seed → 404) and PREF-26 (seeded → 200 + audit row);
-    // expectedVersion 0 matches a freshly-seeded config's @Version.
+    // PREF-26 (seeded → 200 + audit row); expectedVersion 0 matches a freshly-seeded config's
+    // @Version. Since the onboarding G1 upsert, expectedVersion 0 against an ABSENT config would
+    // create it rather than 404.
+    context.setLastResponse(putLifestyleConfigEdit(0L));
+  }
+
+  @When("they edit a lifestyle config setting with a stale expected version")
+  public void theyEditALifestyleConfigSettingWithAStaleExpectedVersion() {
+    // expectedVersion > 0 against an absent config is a stale client, not a create intent — the
+    // only remaining 404 shape on this PUT since the onboarding G1 upsert-on-first-PUT.
+    context.setLastResponse(putLifestyleConfigEdit(3L));
+  }
+
+  private Response putLifestyleConfigEdit(long expectedVersion) {
     Map<String, Object> document = lifestyleDocument();
     document.put("pantryTracking", new java.util.HashMap<>(Map.of("enabled", true)));
     Map<String, Object> body = new java.util.HashMap<>();
     body.put("document", document);
-    body.put("expectedVersion", 0L);
-    context.setLastResponse(context.api().request().body(body).when().put(LIFESTYLE_CONFIG));
+    body.put("expectedVersion", expectedVersion);
+    return context.api().request().body(body).when().put(LIFESTYLE_CONFIG);
   }
 
   @Then("the lifestyle-config update is rejected as not found")
   public void theLifestyleConfigUpdateIsRejectedAsNotFound() {
-    assertNotFound(
-        "a lifestyle PUT 404s until initialise has run (not exposed on the REST surface)");
+    assertNotFound("a lifestyle PUT with a stale expectedVersion 404s when no config exists");
   }
 
   @Then("the lifestyle setting is stored and reflected on a read for this user")

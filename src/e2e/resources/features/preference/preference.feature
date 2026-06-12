@@ -13,15 +13,14 @@ Feature: Preference — three-tier reads, not-found-before-seed errors, empty-co
   feature runs in both clean and soak mode.
 
   # ----- The load-bearing finding (drives the @pending set) -----
-  # A fresh, just-registered user has NO preference aggregates and there is NO
-  # HTTP path to create one. initialise() / initialiseHardConstraints() /
-  # LifestyleConfig.initialise() exist ONLY as in-process service calls
-  # (PreferenceServiceImpl / TasteProfileServiceImpl / LifestyleConfigServiceImpl);
-  # registration publishes UserRegisteredEvent but NO preference listener consumes
-  # it to seed, and the only e2e test-support endpoint is the AI stub (no seeder).
-  # So GET/PUT on each aggregate, refresh-now, and rollback all 404 for a fresh
-  # user (mirrors the Wave-1 nutrition "PUT 404s when no row exists" lesson). The
+  # A fresh, just-registered user has NO preference aggregates. GETs on each
+  # aggregate, refresh-now, and rollback all 404 for a fresh user; the
   # version/audit-log/archive LIST endpoints instead return an empty Page (200).
+  # Since the onboarding G1 ticket, hard-constraints and lifestyle-config PUTs
+  # UPSERT on first write (expectedVersion 0 + no row -> create, 200); a PUT with
+  # expectedVersion > 0 against an absent aggregate stays 404 (stale client, not
+  # a create intent). Taste-profile creation is still in-process only
+  # (TasteProfileServiceImpl.initialise; no HTTP path).
 
   @smoke
   # PREF-12: reading a taste profile before one is seeded is a clean not-found.
@@ -37,11 +36,12 @@ Feature: Preference — three-tier reads, not-found-before-seed errors, empty-co
     When they read their hard constraints
     Then the hard-constraints read is rejected as not found
 
-  # PREF-06 (error slice): a hard-constraints PUT 404s when no aggregate exists —
-  # the tier cannot be created over HTTP (initialise is in-process only).
+  # PREF-06 (error slice): a hard-constraints PUT with a STALE expectedVersion (> 0)
+  # 404s when no aggregate exists — only expectedVersion 0 is a create intent
+  # (upsert-on-first-PUT, onboarding G1).
   Scenario: Setting hard constraints before the aggregate exists is rejected as not found
     Given a fresh registered and logged-in user
-    When they set an allergy on their hard constraints
+    When they set an allergy on their hard constraints with a stale expected version
     Then the hard-constraints update is rejected as not found
 
   # PREF-26 (error slice): reading lifestyle config before initialise is not-found.
@@ -50,11 +50,12 @@ Feature: Preference — three-tier reads, not-found-before-seed errors, empty-co
     When they read their lifestyle config
     Then the lifestyle-config read is rejected as not found
 
-  # PREF-26 (error slice): a lifestyle PUT 404s until initialise has run (initialise
-  # is the onboarding-wizard's in-process call, never exposed on the REST surface).
+  # PREF-26 (error slice): a lifestyle PUT with a STALE expectedVersion (> 0) 404s
+  # when no config exists — only expectedVersion 0 is a create intent
+  # (upsert-on-first-PUT, onboarding G1).
   Scenario: Editing lifestyle config before it is initialised is rejected as not found
     Given a fresh registered and logged-in user
-    When they edit a lifestyle config setting
+    When they edit a lifestyle config setting with a stale expected version
     Then the lifestyle-config update is rejected as not found
 
   # PREF-15 (error slice): a manual refresh-now 404s with no profile to refresh.

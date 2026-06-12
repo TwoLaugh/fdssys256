@@ -152,6 +152,15 @@ public class LifestyleConfigServiceImpl
       // Idempotent — onboarding may be retried; return the existing aggregate unchanged.
       return mapper.toDto(existing.get());
     }
+    return createAggregate(userId, request);
+  }
+
+  /**
+   * Creation internals shared by {@link #initialise} and the upsert-on-first-PUT path in {@link
+   * #update}: save the aggregate with the inbound document, write the single {@code "*"} summary
+   * audit row, publish {@link LifestyleConfigInitialisedEvent}.
+   */
+  private LifestyleConfigDto createAggregate(UUID userId, UpdateLifestyleConfigRequest request) {
     Instant now = Instant.now(clock);
     LifestyleConfig aggregate =
         LifestyleConfig.builder()
@@ -160,7 +169,11 @@ public class LifestyleConfigServiceImpl
             .document(request.document())
             .lastReviewPromptAt(null)
             .build();
-    LifestyleConfig saved = repository.save(aggregate);
+    // saveAndFlush (not save) for two reasons: the @CreationTimestamp/@UpdateTimestamp columns are
+    // populated at flush, and the returned DTO must carry them (the response schema declares them
+    // non-null); and the upsert-on-first-PUT path needs the INSERT forced here so a concurrent
+    // create double-submit's user_id unique violation surfaces inside ITS try/catch.
+    LifestyleConfig saved = repository.saveAndFlush(aggregate);
 
     // Single summary audit row at fieldPath = "*". Per ticket §275 — picked the "or one summary
     // audit row" option for simplicity; the section filter on the audit-log endpoint naturally
@@ -183,14 +196,41 @@ public class LifestyleConfigServiceImpl
     return mapper.toDto(saved);
   }
 
+  /**
+   * Upsert-on-first-PUT (onboarding G1): a PUT with {@code expectedVersion = 0} against an absent
+   * aggregate is a create intent — delegate to the {@link #createAggregate} initialise internals
+   * with the inbound document (the full-replace document IS the created state, so no separate apply
+   * step is needed), in the caller's transaction. {@code expectedVersion > 0} against an absent
+   * aggregate is a stale client, not a create intent → 404 (unchanged contract).
+   *
+   * <p>{@code createAggregate}'s {@code saveAndFlush} forces the INSERT inside the try so a
+   * concurrent double-submit surfaces HERE: the {@code user_id} unique constraint rejects the
+   * loser, which we translate to the optimistic-lock 409 the client already handles (re-GET, retry
+   * with the fresh version).
+   */
+  private LifestyleConfigDto createOnFirstWrite(UUID userId, UpdateLifestyleConfigRequest request) {
+    if (request.expectedVersion() != 0L) {
+      throw new LifestyleConfigNotFoundException(userId);
+    }
+    try {
+      LifestyleConfigDto created = createAggregate(userId, request);
+      log.info("lifestyle config initialised on first PUT userId={}", userId);
+      return created;
+    } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+      // Concurrent create double-submit: the competing PUT won the user_id unique race.
+      throw new ObjectOptimisticLockingFailureException(LifestyleConfig.class, userId);
+    }
+  }
+
   @Override
   @Transactional
   public LifestyleConfigDto update(
       UUID userId, UpdateLifestyleConfigRequest request, UUID actorUserId) {
-    LifestyleConfig aggregate =
-        repository
-            .findByUserId(userId)
-            .orElseThrow(() -> new LifestyleConfigNotFoundException(userId));
+    Optional<LifestyleConfig> found = repository.findByUserId(userId);
+    if (found.isEmpty()) {
+      return createOnFirstWrite(userId, request);
+    }
+    LifestyleConfig aggregate = found.get();
 
     // Pre-check the version so a stale expectedVersion surfaces immediately as 409 — without this
     // a no-op PUT would silently accept the stale version (no dirty fields → no Hibernate flush).

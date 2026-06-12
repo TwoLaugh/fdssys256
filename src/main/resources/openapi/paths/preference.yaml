@@ -24,7 +24,15 @@ hardConstraints:
   put:
     tags: [Preferences]
     operationId: updateHardConstraints
-    summary: Replace the calling user's hard-constraints aggregate.
+    summary: >-
+      Replace the calling user's hard-constraints aggregate; a first write (expectedVersion 0, no
+      aggregate yet) creates it.
+    description: >-
+      Full-replace with optimistic locking. Upsert-on-first-PUT (onboarding G1): when no aggregate
+      exists and expectedVersion is 0, the aggregate is initialised (omnivore defaults) and the
+      document applied in one transaction — insert and update both return 200 (matching the
+      provisions budget upsert precedent). The first write is addition-only, so the GAP-04
+      Tier-1-removal interstitial never triggers on it.
     security:
       - cookieAuth: []
     requestBody:
@@ -34,7 +42,7 @@ hardConstraints:
           schema: { $ref: '../schemas/preference.yaml#/UpdateHardConstraintsRequest' }
     responses:
       '200':
-        description: The updated hard-constraints aggregate.
+        description: The updated (or, on first write, newly created) hard-constraints aggregate.
         content:
           application/json:
             schema: { $ref: '../schemas/preference.yaml#/HardConstraintsDto' }
@@ -49,16 +57,19 @@ hardConstraints:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '404':
-        description: Resource not found.
+        description: >-
+          No aggregate exists and expectedVersion is greater than 0 — a stale client, not a create
+          intent. A first write must send expectedVersion 0.
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '409':
         description: >-
-          Conflict. Either an optimistic-lock failure (stale expectedVersion) or — per GAP-04 —
-          the request would remove a Tier-1 hard constraint (allergy / medical diet / severe
-          intolerance / dietary-identity base) without confirmTier1Removals=true. The latter
-          carries reason=TIER1_REMOVAL_REQUIRES_CONFIRMATION and the removedConstraints the UI
+          Conflict. Either an optimistic-lock failure (stale expectedVersion, including the losing
+          side of a concurrent first-write double-submit) or — per GAP-04 — the request would
+          remove a Tier-1 hard constraint (allergy / medical diet / severe intolerance /
+          dietary-identity base) without confirmTier1Removals=true. The latter carries
+          reason=TIER1_REMOVAL_REQUIRES_CONFIRMATION and the removedConstraints the UI
           names in the confirmation interstitial.
         content:
           application/problem+json:
@@ -131,7 +142,14 @@ lifestyleConfig:
   put:
     tags: [Preferences]
     operationId: updateLifestyleConfig
-    summary: Replace the calling user's lifestyle config.
+    summary: >-
+      Replace the calling user's lifestyle config; a first write (expectedVersion 0, no config yet)
+      creates it.
+    description: >-
+      Full-replace with optimistic locking. Upsert-on-first-PUT (onboarding G1): when no config
+      exists and expectedVersion is 0, the aggregate is created with the inbound document via the
+      initialise internals — insert and update both return 200 (matching the provisions budget
+      upsert precedent).
     security:
       - cookieAuth: []
     requestBody:
@@ -141,7 +159,7 @@ lifestyleConfig:
           schema: { $ref: '../schemas/preference.yaml#/UpdateLifestyleConfigRequest' }
     responses:
       '200':
-        description: The updated lifestyle config.
+        description: The updated (or, on first write, newly created) lifestyle config.
         content:
           application/json:
             schema: { $ref: '../schemas/preference.yaml#/LifestyleConfigDto' }
@@ -156,12 +174,16 @@ lifestyleConfig:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '404':
-        description: Resource not found.
+        description: >-
+          No config exists and expectedVersion is greater than 0 — a stale client, not a create
+          intent. A first write must send expectedVersion 0.
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '409':
-        description: Conflict.
+        description: >-
+          Optimistic-lock conflict (stale expectedVersion, including the losing side of a
+          concurrent first-write double-submit).
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

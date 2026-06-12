@@ -642,7 +642,7 @@ All endpoints under `/api/v1/preferences/...`. `userId` resolved server-side fro
 
 `applyTasteProfileDeltas` (the AI-driven path) is **not** exposed via REST — it is invoked in-process by the feedback module via direct service injection. There is no client of this method outside the JVM.
 
-Hard constraints have no POST: they are seeded at user-creation by the auth module via `initialiseHardConstraints`; the public REST surface is read + update only.
+Hard constraints have no POST: the public REST surface is read + update only. The first PUT (`expectedVersion = 0`, no row yet) upserts — it initialises the aggregate via the `initialiseHardConstraints` internals and applies the document in one transaction (onboarding G1); `initialiseHardConstraints` itself stays in-process only (health-directive SPI, test-profile e2e seeder).
 
 ### Error responses
 
@@ -718,7 +718,7 @@ None. The preference module **does not consume** `FeedbackProcessedEvent`. **Loc
 
 ### Flow 1: Hard constraint update
 
-`PUT /api/v1/preferences/hard-constraints` → `updateHardConstraints(userId, request, actorUserId)`. Service impl method is `@Transactional`. Loads existing aggregate by `userId` (404 if missing — onboarding uses `initialise...`). `expectedVersion` mismatch → `OptimisticLockException` → 409.
+`PUT /api/v1/preferences/hard-constraints` → `updateHardConstraints(userId, request, actorUserId)`. Service impl method is `@Transactional`. Loads existing aggregate by `userId`; if missing and `expectedVersion = 0`, initialises the omnivore-default aggregate first and falls through to the ordinary apply (upsert-on-first-PUT, onboarding G1 — a concurrent create double-submit loses the `user_id` unique race → 409); if missing and `expectedVersion > 0` → 404 (stale client, not a create intent). `expectedVersion` mismatch → `OptimisticLockException` → 409.
 
 **Tier-1 removal safety gate (GAP-04).** After the lock pre-check and **before any mutation**, `Tier1RemovalDetector.detectRemovals(stored, request)` diffs the stored aggregate against the request to find any *removed* Tier-1 constraint: an allergy dropped from `allergies`, a medical diet dropped from `medical_diets`, a severe-intolerance *substance* dropped from `intolerances_hard`, or a **relaxation** of the dietary-identity `base` (the new base excludes a strict subset of the stored base's excluded foods — e.g. `vegan→vegetarian`; tightening like `omnivore→vegetarian` and lateral switches like `vegetarian→keto` are not gated). If ≥1 such removal is detected **and** `confirmTier1Removals` is not `true`, the method throws `Tier1RemovalRequiresConfirmationException` → **409** with `reason=TIER1_REMOVAL_REQUIRES_CONFIRMATION` and the `removedConstraints[]` the UI names in the confirmation interstitial — no audit row, no event, no version bump. The client re-submits the same payload with `confirmTier1Removals=true` to proceed. Additions, reorderings, label-only edits, and non-Tier-1 edits return an empty removal set, so they apply one-step unchanged. Age restrictions are not gated (auto-managed for child profiles). The detector is a pure function (no I/O) so the gate is unit-tested in isolation; the in-process directive-apply path (`PreferenceDirectiveApplyTarget`) passes `confirmTier1Removals=true` as an authoritative system actor (and only adds an intolerance anyway).
 
@@ -772,7 +772,7 @@ The AI prompt itself is **out of scope for this LLD** (deferred — see Out of S
 
 ### Flow 4: Lifestyle config update
 
-`PUT /api/v1/preferences/lifestyle-config`. Method is `@Transactional`. Loads existing config. Stale `expectedVersion` → 409. Validates the document (Jakarta + custom `@ValidNoveltyTolerance`). Section-level diff: walks top-level fields and writes one `LifestyleConfigAuditLog` row per changed section. Replaces `document`, persists. Publishes `PreferenceChangedEvent(tier=LIFESTYLE_CONFIG)`.
+`PUT /api/v1/preferences/lifestyle-config`. Method is `@Transactional`. Loads existing config; if missing and `expectedVersion = 0`, creates it with the inbound document via the `initialise` internals (upsert-on-first-PUT, onboarding G1 — a concurrent create double-submit loses the `user_id` unique race → 409); if missing and `expectedVersion > 0` → 404 (stale client, not a create intent). Stale `expectedVersion` → 409. Validates the document (Jakarta + custom `@ValidNoveltyTolerance`). Section-level diff: walks top-level fields and writes one `LifestyleConfigAuditLog` row per changed section. Replaces `document`, persists. Publishes `PreferenceChangedEvent(tier=LIFESTYLE_CONFIG)`.
 
 ### Flow 5: Soft preferences exposed to the planner
 
@@ -862,7 +862,7 @@ Deferred deliberately — these belong elsewhere or to a later phase:
 - **Cross-module orchestration.** Re-optimisation triggered by `PreferenceChangedEvent` is the planner's concern. The Optimiser's response to data-model changes is the optimiser module's concern. This LLD specifies what we publish, not what listeners do with it.
 - **Authentication.** Owned by the auth module — `userId` resolution from session/token, password hashing, household-admin role checks.
 - **Household merging logic.** The preference module exposes per-user data and a per-household filter check; the merge of soft preferences for shared meals (mean of taste vectors, weighted by per-person priority) belongs to the household LLD.
-- **Onboarding wizard flow.** Progressive-disclosure UX is product/UX. The preference module exposes the underlying init endpoints (`initialiseHardConstraints`, `initialiseLifestyleConfig`); the wizard composes them.
+- **Onboarding wizard flow.** Progressive-disclosure UX is product/UX. The wizard's steps 3–4 write through the ordinary PUT endpoints (upsert-on-first-PUT, onboarding G1); no separate init endpoints exist on the REST surface.
 - **Sensible defaults for unconfigured lifestyle fields.** The HLD says these will be defined "once all three data model designs are complete" — not specified here.
 - **Per-section feedback counts on the taste profile.** Reviewed and deferred per [preference-model-review-notes.md §A4](../design/preference-model-review-notes.md). Revisit if confidence weighting becomes a real problem.
 - **Weather-reactive preferences, supplement timing, defrost lead-time tolerance, fallback meals, activity-adjusted preferences.** Open questions in the HLD; revisit when the relevant adjacent designs land.

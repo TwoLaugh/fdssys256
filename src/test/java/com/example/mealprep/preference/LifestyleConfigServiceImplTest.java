@@ -101,7 +101,7 @@ class LifestyleConfigServiceImplTest {
   void initialise_whenAbsent_savesAndWritesSummaryAuditRow_andPublishesInitialisedEvent() {
     UUID userId = UUID.randomUUID();
     when(repository.findByUserId(userId)).thenReturn(Optional.empty());
-    when(repository.save(any(LifestyleConfig.class)))
+    when(repository.saveAndFlush(any(LifestyleConfig.class)))
         .thenAnswer(inv -> inv.getArgument(0, LifestyleConfig.class));
 
     UpdateLifestyleConfigRequest req =
@@ -135,14 +135,60 @@ class LifestyleConfigServiceImplTest {
   // ---------------- update ----------------
 
   @Test
-  void update_whenAggregateMissing_throwsNotFound() {
+  void update_whenAggregateMissing_andExpectedVersionStale_throwsNotFound() {
     UUID userId = UUID.randomUUID();
     when(repository.findByUserId(userId)).thenReturn(Optional.empty());
+    // expectedVersion > 0 against an absent aggregate is a stale client, not a create intent.
+    UpdateLifestyleConfigRequest req =
+        LifestyleConfigTestData.updateRequest(LifestyleConfigTestData.fullDocument(), 3L);
+
+    assertThatThrownBy(() -> service().update(userId, req, userId))
+        .isInstanceOf(LifestyleConfigNotFoundException.class);
+
+    verify(repository, never()).saveAndFlush(any());
+    verifyNoInteractions(auditRepository, eventPublisher);
+  }
+
+  // ---------------- upsert-on-first-PUT (onboarding G1) ----------------
+
+  @Test
+  void update_whenAggregateMissing_andExpectedVersionZero_createsViaInitialiseInternals() {
+    UUID userId = UUID.randomUUID();
+    when(repository.findByUserId(userId)).thenReturn(Optional.empty());
+    when(repository.saveAndFlush(any(LifestyleConfig.class)))
+        .thenAnswer(inv -> inv.getArgument(0, LifestyleConfig.class));
+
+    UpdateLifestyleConfigRequest req =
+        LifestyleConfigTestData.updateRequest(LifestyleConfigTestData.fullDocument(), 0L);
+    LifestyleConfigDto dto = service().update(userId, req, userId);
+
+    assertThat(dto.userId()).isEqualTo(userId);
+    assertThat(dto.document().pantryTracking().enabled()).isTrue();
+
+    // Same shape as a direct initialise: one "*" summary audit row + the initialised event.
+    ArgumentCaptor<LifestyleConfigAuditLog> rowCap =
+        ArgumentCaptor.forClass(LifestyleConfigAuditLog.class);
+    verify(auditRepository).save(rowCap.capture());
+    assertThat(rowCap.getValue().getFieldPath()).isEqualTo("*");
+    assertThat(rowCap.getValue().getActorUserId()).isEqualTo(userId);
+    verify(eventPublisher).publishEvent(any(LifestyleConfigInitialisedEvent.class));
+    verify(eventPublisher, never()).publishEvent(any(LifestyleConfigChangedEvent.class));
+  }
+
+  @Test
+  void update_createRaceLoser_translatesUniqueViolationToOptimisticLock409() {
+    UUID userId = UUID.randomUUID();
+    when(repository.findByUserId(userId)).thenReturn(Optional.empty());
+    when(repository.saveAndFlush(any(LifestyleConfig.class)))
+        .thenThrow(new org.springframework.dao.DataIntegrityViolationException("user_id unique"));
+
     UpdateLifestyleConfigRequest req =
         LifestyleConfigTestData.updateRequest(LifestyleConfigTestData.fullDocument(), 0L);
 
     assertThatThrownBy(() -> service().update(userId, req, userId))
-        .isInstanceOf(LifestyleConfigNotFoundException.class);
+        .isInstanceOf(ObjectOptimisticLockingFailureException.class);
+
+    verifyNoInteractions(auditRepository, eventPublisher);
   }
 
   @Test

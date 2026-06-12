@@ -15,17 +15,25 @@ import java.util.UUID;
 public interface PreferenceUpdateService {
 
   /**
-   * Create the hard-constraints aggregate for a freshly-registered user with sensible defaults
-   * ({@code base = "omnivore"}, empty children). Called from {@code auth} at user-creation; not
-   * exposed via REST.
+   * Create the hard-constraints aggregate for a user with sensible defaults ({@code base =
+   * "omnivore"}, empty children). Idempotent. Reached in-process only (health-directive SPI,
+   * test-profile e2e seeder); the REST surface creates via the upsert-on-first-PUT path in {@link
+   * #updateHardConstraints} instead.
    */
   HardConstraintsDto initialiseHardConstraints(UUID userId);
 
   /**
    * Replace the user's hard-constraints aggregate. Each field is diffed against the existing row;
-   * one audit-log entry is written per actually-changed field. Throws {@code
-   * HardConstraintsNotFoundException} if no row exists; bumps {@code @Version} (mismatch surfaces
-   * as {@code OptimisticLockingFailureException} → 409).
+   * one audit-log entry is written per actually-changed field; bumps {@code @Version} (mismatch
+   * surfaces as {@code OptimisticLockingFailureException} → 409).
+   *
+   * <p><b>Upsert-on-first-PUT</b> (onboarding G1): when no row exists and {@code expectedVersion ==
+   * 0}, the aggregate is initialised with the omnivore defaults and the request applied in the same
+   * transaction (the create is an addition-only diff, so the GAP-04 Tier-1 removal gate can never
+   * fire). When no row exists and {@code expectedVersion > 0} — a stale client, not a create intent
+   * — throws {@code HardConstraintsNotFoundException} (404, unchanged). A concurrent create
+   * double-submit loses the {@code user_id} unique race and surfaces as {@code
+   * OptimisticLockingFailureException} → 409.
    */
   HardConstraintsDto updateHardConstraints(
       UUID userId, UpdateHardConstraintsRequest request, UUID actorUserId);
