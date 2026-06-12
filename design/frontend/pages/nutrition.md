@@ -130,7 +130,7 @@ actual column | state chip + actions.
 |---|---|
 | PENDING | **Confirm** (primary, terra — #4, one tap, credits planned values) · **Log what I ate** (ghost — opens free-text popover, 1–512 chars → #5) · **Edit values** (ghost — structured form: `calories`*, `proteinG`*, `carbsG`*, `fatG`*, `fibreG`, advanced: `micros` map → #6) · **Skip** (ghost — #7) |
 | CONFIRMED / EDITED | result line only ("✓ 520 kcal logged") |
-| OVERRIDDEN | result + quoted free text; if `needsAiParse` → Edit CTA (the one exception: edit-after-override is a re-`POST /edit`? **No — backend forbids; route the user to log a snack correction instead** — see §8 open question) |
+| OVERRIDDEN | result + quoted free text; if `needsAiParse` → Edit CTA (**resolved — backend now allows `POST /edit` from OVERRIDDEN when `needsAiParse=true`**: repairs to EDITED, clears the flag, keeps the free text; parse-success OVERRIDDEN stays terminal, 422) |
 | SKIPPED | "— skipped · 0 kcal" |
 
 ### 3e. Snacks — reads `IntakeDayDto.snacks[]`, writes #8/#9
@@ -247,6 +247,10 @@ Reads `DailyAggregateDto.microsActualSoFar` (map) joined against
 1. OVERRIDDEN + `needsAiParse=true` has no legal repair transition (edit requires
    PENDING). Backend gap candidate: allow `edit` from OVERRIDDEN-unparsed, or the
    UI's only honest remedy is "log a corrective snack". → raise as backend ticket.
+   **Resolved (ticket `nutrition-intake-override-repair`)**: `POST /edit` is now
+   legal from OVERRIDDEN + `needsAiParse=true` → EDITED, `needsAiParse=false`,
+   `overrideFreeText` retained; any other decided state still 422s. The §3d Edit
+   CTA wires directly to #6 — drop the corrective-snack workaround.
 2. Micros visible in v1 deviates from HLD's "macros only in v1" — **accepted by
    product owner 2026-06-11** (collapsed panel).
 

@@ -250,6 +250,11 @@ intakeSlotEdit:
     tags: [Nutrition]
     operationId: editIntakeSlot
     summary: Manually set a slot's actual values.
+    description: >
+      Structured edit of a slot's actuals. Legal from PENDING, and — as the repair path —
+      from OVERRIDDEN when needsAiParse=true (parse-failed override). Transitions the slot
+      to EDITED and clears needsAiParse; overrideFreeText is retained for provenance. 422
+      from any other decided state.
     security: [{ cookieAuth: [] }]
     parameters:
       - { in: path, name: date, required: true, schema: { type: string, format: date } }
@@ -280,6 +285,14 @@ intakeSlotEdit:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: >
+          No legal edit transition — slot is already decided (CONFIRMED / EDITED / SKIPPED,
+          or OVERRIDDEN with a successful parse). Only PENDING and OVERRIDDEN with
+          needsAiParse=true accept an edit.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/nutrition.yaml#/IntakeSlotNotEditableProblem' }
 intakeSlotSkip:
   post:
     tags: [Nutrition]

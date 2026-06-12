@@ -296,6 +296,43 @@ IntakeEntryDto:
       type: object
       additionalProperties: { type: number, format: double }
       nullable: true
+IntakeSlotNotEditableProblem:
+  type: object
+  description: >-
+    RFC 9457 ProblemDetail returned by POST .../slots/{mealSlot}/edit (422) when the slot has
+    no legal edit transition (decided state other than OVERRIDDEN+needsAiParse=true). It is a
+    self-contained superset of ProblemDetail (not an allOf composition) because the contract
+    validator injects additionalProperties:false into every object schema and evaluates each
+    allOf branch independently — same convention as common.yaml#/RecipeImportFailure. Keep the
+    shared members in sync with ProblemDetail; the additions are the machine-readable
+    currentStatus + needsAiParse extension members so the UI can refresh the slot row.
+  required: [type, title, status, currentStatus, needsAiParse]
+  properties:
+    type:
+      type: string
+      format: uri
+      description: A URI identifying the problem type.
+      example: https://mealprep.example.com/problems/intake-slot-not-editable
+    title:
+      type: string
+      description: Short human-readable summary.
+      example: Intake slot not editable
+    status:
+      type: integer
+      description: HTTP status code.
+      example: 422
+    detail:
+      type: string
+      description: Human-readable explanation specific to this occurrence.
+    instance:
+      type: string
+      format: uri
+      description: A URI identifying the specific occurrence.
+    currentStatus:
+      $ref: '#/IntakeSlotStatus'
+    needsAiParse:
+      type: boolean
+      description: The slot's needsAiParse flag at rejection time (false for a parsed override).
 OverrideIntakeRequest:
   type: object
   required: [freeText]

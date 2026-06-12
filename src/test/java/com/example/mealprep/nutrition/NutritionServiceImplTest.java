@@ -344,4 +344,190 @@ class NutritionServiceImplTest {
     verifyNoInteractions(eventPublisher);
     verify(targetsRepository, never()).saveAndFlush(any());
   }
+
+  // ---------------- editIntakeManually (slot transition guard) ----------------
+  // nutrition-intake-override-repair: edit legal from PENDING and from OVERRIDDEN with
+  // needsAiParse=true (parse-failed override repair); every other decided state → 422.
+
+  private static com.example.mealprep.nutrition.domain.entity.IntakeSlot intakeSlot(
+      com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus status, boolean needsAiParse) {
+    return com.example.mealprep.nutrition.domain.entity.IntakeSlot.builder()
+        .id(UUID.randomUUID())
+        .mealSlot(com.example.mealprep.nutrition.domain.entity.MealSlot.LUNCH)
+        .plannedCalories(600)
+        .actualStatus(status)
+        .needsAiParse(needsAiParse)
+        .build();
+  }
+
+  private static com.example.mealprep.nutrition.domain.entity.IntakeDay intakeDayWith(
+      UUID userId,
+      java.time.LocalDate onDate,
+      com.example.mealprep.nutrition.domain.entity.IntakeSlot slot) {
+    com.example.mealprep.nutrition.domain.entity.IntakeDay day =
+        com.example.mealprep.nutrition.domain.entity.IntakeDay.builder()
+            .id(UUID.randomUUID())
+            .userId(userId)
+            .onDate(onDate)
+            .build();
+    day.addSlot(slot);
+    return day;
+  }
+
+  private static com.example.mealprep.nutrition.api.dto.IntakeEntryDto editEntry() {
+    return new com.example.mealprep.nutrition.api.dto.IntakeEntryDto(
+        420,
+        java.math.BigDecimal.valueOf(26.0),
+        java.math.BigDecimal.valueOf(52.0),
+        java.math.BigDecimal.valueOf(12.0),
+        java.math.BigDecimal.valueOf(6.0),
+        null);
+  }
+
+  @Test
+  void editIntake_fromPending_transitionsToEdited() {
+    UUID userId = UUID.randomUUID();
+    java.time.LocalDate onDate = java.time.LocalDate.of(2026, 5, 9);
+    com.example.mealprep.nutrition.domain.entity.IntakeSlot slot =
+        intakeSlot(com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus.PENDING, false);
+    com.example.mealprep.nutrition.domain.entity.IntakeDay day =
+        intakeDayWith(userId, onDate, slot);
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, onDate)).thenReturn(Optional.of(day));
+    when(intakeDayRepository.saveAndFlush(day)).thenReturn(day);
+
+    service()
+        .editIntakeManually(
+            userId,
+            onDate,
+            com.example.mealprep.nutrition.domain.entity.MealSlot.LUNCH,
+            editEntry());
+
+    assertThat(slot.getActualStatus())
+        .isEqualTo(com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus.EDITED);
+    assertThat(slot.getActualCalories()).isEqualTo(420);
+    assertThat(slot.isNeedsAiParse()).isFalse();
+    verify(intakeAuditRepository)
+        .save(any(com.example.mealprep.nutrition.domain.entity.IntakeAuditLog.class));
+    verify(eventPublisher)
+        .publishEvent(any(com.example.mealprep.nutrition.event.IntakeLoggedEvent.class));
+  }
+
+  @Test
+  void editIntake_fromOverriddenParseFailed_repairsToEdited_retainsFreeText() {
+    UUID userId = UUID.randomUUID();
+    java.time.LocalDate onDate = java.time.LocalDate.of(2026, 5, 9);
+    com.example.mealprep.nutrition.domain.entity.IntakeSlot slot =
+        intakeSlot(com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus.OVERRIDDEN, true);
+    slot.setOverrideFreeText("a cheese sandwich");
+    Instant overriddenAt = Instant.parse("2026-05-09T08:30:00Z");
+    slot.setOverriddenAt(overriddenAt);
+    slot.setActualCalories(0);
+    com.example.mealprep.nutrition.domain.entity.IntakeDay day =
+        intakeDayWith(userId, onDate, slot);
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, onDate)).thenReturn(Optional.of(day));
+    when(intakeDayRepository.saveAndFlush(day)).thenReturn(day);
+
+    service()
+        .editIntakeManually(
+            userId,
+            onDate,
+            com.example.mealprep.nutrition.domain.entity.MealSlot.LUNCH,
+            editEntry());
+
+    // Repaired: EDITED + values written + flag cleared; provenance retained.
+    assertThat(slot.getActualStatus())
+        .isEqualTo(com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus.EDITED);
+    assertThat(slot.getActualCalories()).isEqualTo(420);
+    assertThat(slot.isNeedsAiParse()).isFalse();
+    assertThat(slot.getOverrideFreeText()).isEqualTo("a cheese sandwich");
+    assertThat(slot.getOverriddenAt()).isEqualTo(overriddenAt);
+
+    // EDIT audit row snapshots the parse-failed OVERRIDDEN state it repaired.
+    ArgumentCaptor<com.example.mealprep.nutrition.domain.entity.IntakeAuditLog> auditCaptor =
+        ArgumentCaptor.forClass(com.example.mealprep.nutrition.domain.entity.IntakeAuditLog.class);
+    verify(intakeAuditRepository).save(auditCaptor.capture());
+    com.example.mealprep.nutrition.domain.entity.IntakeAuditLog audit = auditCaptor.getValue();
+    assertThat(audit.getAction())
+        .isEqualTo(com.example.mealprep.nutrition.domain.entity.IntakeAuditAction.EDIT);
+    assertThat(audit.getPreviousValueJson().get("status").asText()).isEqualTo("OVERRIDDEN");
+    assertThat(audit.getPreviousValueJson().get("needsAiParse").asBoolean()).isTrue();
+    assertThat(audit.getPreviousValueJson().get("freeText").asText())
+        .isEqualTo("a cheese sandwich");
+    assertThat(audit.getPreviousValueJson().get("calories").asInt()).isZero();
+    assertThat(audit.getNewValueJson().get("status").asText()).isEqualTo("EDITED");
+    assertThat(audit.getNewValueJson().get("calories").asInt()).isEqualTo(420);
+    assertThat(audit.getNewValueJson().get("needsAiParse").asBoolean()).isFalse();
+
+    verify(eventPublisher)
+        .publishEvent(any(com.example.mealprep.nutrition.event.IntakeLoggedEvent.class));
+  }
+
+  @Test
+  void editIntake_fromOverriddenParseSuccess_throwsNotEditable() {
+    UUID userId = UUID.randomUUID();
+    java.time.LocalDate onDate = java.time.LocalDate.of(2026, 5, 9);
+    com.example.mealprep.nutrition.domain.entity.IntakeSlot slot =
+        intakeSlot(com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus.OVERRIDDEN, false);
+    com.example.mealprep.nutrition.domain.entity.IntakeDay day =
+        intakeDayWith(userId, onDate, slot);
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, onDate)).thenReturn(Optional.of(day));
+
+    assertThatThrownBy(
+            () ->
+                service()
+                    .editIntakeManually(
+                        userId,
+                        onDate,
+                        com.example.mealprep.nutrition.domain.entity.MealSlot.LUNCH,
+                        editEntry()))
+        .isInstanceOf(com.example.mealprep.nutrition.exception.IntakeSlotNotEditableException.class)
+        .hasMessageContaining("successful parse")
+        .satisfies(
+            ex -> {
+              var notEditable =
+                  (com.example.mealprep.nutrition.exception.IntakeSlotNotEditableException) ex;
+              assertThat(notEditable.currentStatus())
+                  .isEqualTo(
+                      com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus.OVERRIDDEN);
+              assertThat(notEditable.needsAiParse()).isFalse();
+            });
+
+    // Slot untouched, nothing persisted, no audit, no event — the guard fires first.
+    assertThat(slot.getActualStatus())
+        .isEqualTo(com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus.OVERRIDDEN);
+    verify(intakeDayRepository, never()).saveAndFlush(any());
+    verifyNoInteractions(intakeAuditRepository, eventPublisher);
+  }
+
+  @Test
+  void editIntake_fromTerminalStates_throwsNotEditable() {
+    // CONFIRMED / EDITED / SKIPPED are terminal for edit — no backwards transitions.
+    for (com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus terminal :
+        java.util.List.of(
+            com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus.CONFIRMED,
+            com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus.EDITED,
+            com.example.mealprep.nutrition.domain.entity.IntakeSlotStatus.SKIPPED)) {
+      UUID userId = UUID.randomUUID();
+      java.time.LocalDate onDate = java.time.LocalDate.of(2026, 5, 9);
+      com.example.mealprep.nutrition.domain.entity.IntakeSlot slot = intakeSlot(terminal, false);
+      com.example.mealprep.nutrition.domain.entity.IntakeDay day =
+          intakeDayWith(userId, onDate, slot);
+      when(intakeDayRepository.findByUserIdAndOnDate(userId, onDate)).thenReturn(Optional.of(day));
+
+      assertThatThrownBy(
+              () ->
+                  service()
+                      .editIntakeManually(
+                          userId,
+                          onDate,
+                          com.example.mealprep.nutrition.domain.entity.MealSlot.LUNCH,
+                          editEntry()))
+          .isInstanceOf(
+              com.example.mealprep.nutrition.exception.IntakeSlotNotEditableException.class)
+          .hasMessageContaining(terminal.name());
+      assertThat(slot.getActualStatus()).isEqualTo(terminal);
+    }
+    verify(intakeDayRepository, never()).saveAndFlush(any());
+    verifyNoInteractions(intakeAuditRepository, eventPublisher);
+  }
 }
