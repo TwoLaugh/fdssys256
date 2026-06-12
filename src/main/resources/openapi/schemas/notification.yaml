@@ -9,6 +9,8 @@ NotificationKind:
     - PLANNER_PREP_REMINDER
     - PLANNER_REOPT_SUGGESTED
     - PLANNER_PLAN_GENERATED
+    - STAPLE_REPLENISHMENT_NEEDED
+    - FEEDBACK_CONFIRMATION
 
 NotificationSeverity:
   type: string
