@@ -7,12 +7,13 @@ inline "backend gap/ticket pending" notes, and nutrition's Amendments). Deduplic
 **Priorities:** **P1** blocks live wiring · **P2** DTO/field/endpoint gaps that degrade UX ·
 **P3** semantic clarifications / product calls (grouped into combined tickets per module).
 
-> **PROGRAMME LEDGER (closed 2026-06-13).** Every P1 ticket and 13 of 16 P2 tickets are resolved
-> by the PR named in their row (#242–#255); every P3 item carries its disposition below and a
-> dated annotation inside its grouped ticket file. **Three P2 tickets remain OPEN** (verified
-> against the code 2026-06-13, no resolving PR exists): planner-effective-meal-time,
-> adaptation-pending-change-list-dto, grocery-recalculate-pantry-drift — they survive the
-> programme close as ordinary backlog tickets.
+> **PROGRAMME LEDGER (closed 2026-06-13; all tickets resolved.)** Every P1 and all 16 P2 tickets
+> are resolved by the PR named in their row (#242–#259); every P3 item carries its disposition
+> below and a dated annotation inside its grouped ticket file, with the P3 close-out merged as
+> #256. The final three P2 tickets — planner-effective-meal-time (#258),
+> adaptation-pending-change-list-dto (#257), grocery-recalculate-pantry-drift (#259) — were built
+> and merged after the close-out commit was first written, so this ledger was updated to record
+> them. The backlog is empty.
 
 ## P1 — blocks live wiring (6) — all resolved
 
@@ -25,7 +26,7 @@ inline "backend gap/ticket pending" notes, and nutrition's Amendments). Deduplic
 | [discovery-server-side-exclusions](discovery-server-side-exclusions.md) | ⚠️ **SAFETY**: `mustExcludeIngredientMappingKeys` is client-trusted on user jobs — empty list ingests allergy-violating recipes; server must inject+union the snapshot | discover §3 / §9 Q3 | **#245** |
 | [planner-reopt-suggestion-detail](planner-reopt-suggestion-detail.md) | No GET-single re-opt suggestion with `proposedAssignments` — the HLD-mandated diff preview *before* accept cannot render | plan §3e / §8 Q2 | **#246** |
 
-## P2 — DTO/field/endpoint gaps, degrade UX (16) — 13 resolved, 3 open
+## P2 — DTO/field/endpoint gaps, degrade UX (16) — all 16 resolved
 
 ### nutrition
 | Ticket | Gap | Source spec | Resolved by |
@@ -36,8 +37,8 @@ inline "backend gap/ticket pending" notes, and nutrition's Amendments). Deduplic
 ### planner / adaptation
 | Ticket | Gap | Source spec | Resolved by |
 |---|---|---|---|
-| [planner-effective-meal-time](planner-effective-meal-time.md) | Serve-time resolution is server-internal — add resolved `effectiveMealTime` (+source) to `MealSlotDto` | plan §8 Q3, today §3b | **OPEN** — not built (verified 2026-06-13: no `effectiveMealTime` in main) |
-| [adaptation-pending-change-list-dto](adaptation-pending-change-list-dto.md) | `PendingChangeListItemDto` lacks `optimisticVersion` (forced expand-then-accept) + `status`/`resolvedAt` (history rows can't show outcomes) | today §8 Q6, recipe-detail §11 Q5, activity §8 Q1 | **OPEN** — not built (verified 2026-06-13: list DTO unchanged) |
+| [planner-effective-meal-time](planner-effective-meal-time.md) | Serve-time resolution is server-internal — add resolved `effectiveMealTime` (+source) to `MealSlotDto` | plan §8 Q3, today §3b | **#258** |
+| [adaptation-pending-change-list-dto](adaptation-pending-change-list-dto.md) | `PendingChangeListItemDto` lacks `optimisticVersion` (forced expand-then-accept) + `status`/`resolvedAt` (history rows can't show outcomes) | today §8 Q6, recipe-detail §11 Q5, activity §8 Q1 | **#257** |
 
 ### recipe
 | Ticket | Gap | Source spec | Resolved by |
@@ -56,7 +57,7 @@ inline "backend gap/ticket pending" notes, and nutrition's Amendments). Deduplic
 | Ticket | Gap | Source spec | Resolved by |
 |---|---|---|---|
 | [grocery-cost-variance](grocery-cost-variance.md) | No cost-variance field — the HLD's "£47 ± £8" band undeliverable; add min/max totals to `ShoppingListDto` (plan card shares the finding) | groceries §8 Q1, plan §3b/§4c | **#254** |
-| [grocery-recalculate-pantry-drift](grocery-recalculate-pantry-drift.md) | Recalculate idempotent per `(planId, planGeneration)` — can't pick up pantry drift; add `force` rebuild preserving bought marks | groceries §8 Q2 | **OPEN** — not built (verified 2026-06-13: no `force` param; #254 scoped it out) |
+| [grocery-recalculate-pantry-drift](grocery-recalculate-pantry-drift.md) | Recalculate idempotent per `(planId, planGeneration)` — can't pick up pantry drift; add `force` rebuild preserving bought marks | groceries §8 Q2 | **#259** |
 | [grocery-undo-pantry-reversal](grocery-undo-pantry-reversal.md) | Undo-mark-bought leaves the pantry add in place — add best-effort compensating reversal | groceries §8 Q4 | **#254** |
 
 ### provisions
