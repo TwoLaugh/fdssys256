@@ -68,7 +68,10 @@ public interface PendingChangeMapper {
         entity.getConfidence(),
         entity.getImpactScore(),
         entity.getCreatedAt(),
-        entity.getExpiresAt());
+        entity.getExpiresAt(),
+        entity.getStatus(),
+        entity.getResolvedAt(),
+        entity.getOptimisticVersion());
   }
 
   default List<PendingChangeListItemDto> toListItems(List<PendingChange> entities) {
