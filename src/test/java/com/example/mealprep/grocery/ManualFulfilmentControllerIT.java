@@ -325,7 +325,7 @@ class ManualFulfilmentControllerIT {
   // ---------------- undo-mark-bought ----------------
 
   @Test
-  void undoMarkBought_boughtLine_returns204_revertsStatus() throws Exception {
+  void undoMarkBought_boughtLine_returns204_revertsStatus_reversesPantryAdd() throws Exception {
     AuthedUser user = registerUser();
     UUID listId = seedList(user.userId());
     UUID lineId = seedLine(listId, "flour", "Flour", 200);
@@ -339,6 +339,13 @@ class ManualFulfilmentControllerIT {
                 .content(objectMapper.writeValueAsString(req)))
         .andExpect(status().isOk());
 
+    // The mark-bought import landed one inventory row and the link is persisted on the line.
+    assertThat(inventoryCount(user.userId())).isEqualTo(1L);
+    UUID inventoryItemId =
+        jdbcTemplate.queryForObject(
+            "SELECT inventory_item_id FROM shopping_list_lines WHERE id = ?", UUID.class, lineId);
+    assertThat(inventoryItemId).isNotNull();
+
     mvc.perform(
             post(BASE + "/" + listId + "/lines/" + lineId + "/undo-mark-bought")
                 .cookie(user.cookie()))
@@ -348,6 +355,33 @@ class ManualFulfilmentControllerIT {
         jdbcTemplate.queryForObject(
             "SELECT fulfilment_status FROM shopping_list_lines WHERE id = ?", String.class, lineId);
     assertThat(status).isEqualTo("UNFILLED");
+    UUID linkAfterUndo =
+        jdbcTemplate.queryForObject(
+            "SELECT inventory_item_id FROM shopping_list_lines WHERE id = ?", UUID.class, lineId);
+    assertThat(linkAfterUndo).isNull();
+
+    // The pantry add is reversed: quantity back to zero exactly (creation-only add → EXHAUSTED).
+    BigDecimal quantity =
+        jdbcTemplate.queryForObject(
+            "SELECT quantity FROM provision_inventory WHERE id = ?",
+            BigDecimal.class,
+            inventoryItemId);
+    assertThat(quantity).isEqualByComparingTo("0");
+    String itemStatus =
+        jdbcTemplate.queryForObject(
+            "SELECT item_status FROM provision_inventory WHERE id = ?",
+            String.class,
+            inventoryItemId);
+    assertThat(itemStatus).isEqualTo("EXHAUSTED");
+
+    // The reversal is visible in the pantry audit trail (actor GROCERY_IMPORT).
+    Long reversalAuditRows =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM provision_inventory_audit WHERE inventory_item_id = ?"
+                + " AND actor = 'GROCERY_IMPORT'"
+                + " AND new_value_json::text LIKE '%groceryLineReversal%'",
+            Long.class, inventoryItemId);
+    assertThat(reversalAuditRows).isEqualTo(1L);
 
     // The append-only observation is NOT deleted (the original + a compensating row remain).
     Long observations =

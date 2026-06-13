@@ -12,7 +12,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
@@ -121,6 +123,41 @@ class MarkBoughtInventoryBridge {
       return Optional.of(item.id());
     }
     return Optional.empty();
+  }
+
+  /**
+   * Map {@code ingredientMappingKey → inventory-item id} across the added + merged rows of an
+   * import result (first row per key wins). Used by bulk mark-bought to persist the per-line
+   * inventory link the undo reversal needs (grocery-undo-pantry-reversal).
+   */
+  static Map<String, UUID> inventoryItemIdsByKey(GroceryImportResultDto result) {
+    Map<String, UUID> byKey = new LinkedHashMap<>();
+    if (result == null) {
+      return byKey;
+    }
+    for (InventoryItemDto item : result.addedItems()) {
+      if (item.ingredientMappingKey() != null) {
+        byKey.putIfAbsent(item.ingredientMappingKey(), item.id());
+      }
+    }
+    for (InventoryItemDto item : result.mergedItems()) {
+      if (item.ingredientMappingKey() != null) {
+        byKey.putIfAbsent(item.ingredientMappingKey(), item.id());
+      }
+    }
+    return byKey;
+  }
+
+  /**
+   * Best-effort compensating reversal of one line's earlier inventory add — delegates to the
+   * provisions public surface ({@link ProvisionUpdateService#reverseGroceryLineAdd}); never touches
+   * provisions internals and never throws for a missing/changed item (the undo stays 204). Returns
+   * the updated inventory row when a decrement happened, empty otherwise.
+   */
+  Optional<InventoryItemDto> reverseSingle(
+      UUID actorUserId, UUID inventoryItemId, BigDecimal quantity, String unit) {
+    return provisionUpdateService.reverseGroceryLineAdd(
+        inventoryItemId, quantity, unit, actorUserId);
   }
 
   private GroceryOrderLine toOrderLine(BoughtLine bought) {

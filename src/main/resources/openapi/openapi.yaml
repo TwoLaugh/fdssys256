@@ -422,6 +422,8 @@ paths:
     $ref: 'paths/grocery.yaml#/groceryOrderQuote'
   /api/v1/grocery/orders/{orderId}/place:
     $ref: 'paths/grocery.yaml#/groceryOrderPlace'
+  /api/v1/grocery/orders/{orderId}/back-to-draft:
+    $ref: 'paths/grocery.yaml#/groceryOrderBackToDraft'
   /api/v1/grocery/orders/{orderId}/mark-user-confirmed:
     $ref: 'paths/grocery.yaml#/groceryOrderMarkUserConfirmed'
   /api/v1/grocery/orders/{orderId}/refresh-status:

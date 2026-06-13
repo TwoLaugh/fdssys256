@@ -110,6 +110,16 @@ public class GroceryOrderController {
     return groceryOrderService.placeOrder(userId, new PlaceOrderRequest(orderId));
   }
 
+  @PostMapping(path = "/{orderId}/back-to-draft", produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Revert a quoted order back to draft for re-editing (QUOTED → DRAFT); discards the stale"
+              + " quote. 422 when the order is not currently QUOTED.")
+  public GroceryOrderDto backToDraft(@PathVariable UUID orderId) {
+    UUID userId = requireCurrentUserId();
+    return groceryOrderService.backToDraft(userId, orderId);
+  }
+
   @PostMapping(path = "/{orderId}/mark-user-confirmed", produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "Mark an order user-confirmed (AWAITING_USER_CONFIRMATION → CONFIRMED).")
   public GroceryOrderDto markUserConfirmed(@PathVariable UUID orderId) {

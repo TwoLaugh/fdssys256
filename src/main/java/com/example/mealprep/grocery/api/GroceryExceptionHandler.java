@@ -10,6 +10,7 @@ import com.example.mealprep.grocery.exception.LineAlreadyBoughtException;
 import com.example.mealprep.grocery.exception.LineNotBoughtException;
 import com.example.mealprep.grocery.exception.OrderConcurrencyConflictException;
 import com.example.mealprep.grocery.exception.OrderHasOutstandingProposalsException;
+import com.example.mealprep.grocery.exception.OrderNotRevertibleException;
 import com.example.mealprep.grocery.exception.ProviderNotConfiguredException;
 import com.example.mealprep.grocery.exception.ProviderUnavailableException;
 import com.example.mealprep.grocery.exception.ShoppingListLineNotFoundException;
@@ -141,6 +142,29 @@ public class GroceryExceptionHandler {
     if (pd != null) {
       pd.setProperty("orderId", ex.orderId());
       pd.setProperty("outstandingCount", ex.outstandingCount());
+    }
+    return response;
+  }
+
+  /**
+   * Back-to-draft on an order that is not currently QUOTED — the request shape is fine, the order
+   * is just not in a revertible state, so 422 (not the transition-table 409: the endpoint exposes
+   * exactly one edge and "wrong state" is a semantic precondition failure).
+   */
+  @ExceptionHandler(OrderNotRevertibleException.class)
+  public ResponseEntity<ProblemDetail> handleOrderNotRevertible(
+      OrderNotRevertibleException ex, HttpServletRequest req) {
+    ResponseEntity<ProblemDetail> response =
+        problem(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            ex.getMessage(),
+            "order-not-revertible",
+            "Order not revertible to draft",
+            req);
+    ProblemDetail pd = response.getBody();
+    if (pd != null) {
+      pd.setProperty("orderId", ex.orderId());
+      pd.setProperty("currentStatus", ex.currentStatus());
     }
     return response;
   }

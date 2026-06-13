@@ -111,6 +111,14 @@ public class ShoppingListLine {
   @Column(name = "grocery_order_id")
   private UUID groceryOrderId;
 
+  /**
+   * Soft FK to the provisions inventory row added/merged by this line's mark-bought import; null
+   * when the import wrote no inventory (pantry tracking off) or after an undo. Undo-mark-bought
+   * uses it to drive the best-effort compensating reversal (grocery-undo-pantry-reversal).
+   */
+  @Column(name = "inventory_item_id")
+  private UUID inventoryItemId;
+
   @CreationTimestamp
   @Column(name = "created_at", updatable = false, nullable = false)
   private Instant createdAt;

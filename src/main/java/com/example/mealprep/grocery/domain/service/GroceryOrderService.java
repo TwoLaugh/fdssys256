@@ -34,6 +34,13 @@ public interface GroceryOrderService {
 
   GroceryOrderDto placeOrder(UUID userId, PlaceOrderRequest request);
 
+  /**
+   * Revert a {@code QUOTED} order back to {@code DRAFT} for re-editing, discarding the stale quote
+   * (grocery-provisions-p3-clarifications item 1 — {@code POST /orders/{id}/back-to-draft}). Only
+   * legal from {@code QUOTED}; any other state throws {@code OrderNotRevertibleException} (422).
+   */
+  GroceryOrderDto backToDraft(UUID userId, UUID orderId);
+
   GroceryOrderDto markUserConfirmed(UUID userId, UUID orderId);
 
   GroceryOrderDto refreshStatus(UUID userId, UUID orderId);

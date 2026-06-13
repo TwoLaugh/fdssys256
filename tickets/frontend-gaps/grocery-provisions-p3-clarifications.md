@@ -5,11 +5,16 @@ and [`pantry.md` §9](../../design/frontend/pages/pantry.md). Resolve item-by-it
 
 ## Items
 
-1. **QUOTED → DRAFT re-edit edge has no endpoint** (groceries §8 Q3). The `OrderStateMachine`
+1. ✅ **QUOTED → DRAFT re-edit edge has no endpoint** (groceries §8 Q3). The `OrderStateMachine`
    allows the edge; no REST method performs it, and re-quoting from QUOTED is illegal — a stale
    quote can only be re-priced by cancel + new draft. **Proposed:** add
    `POST /orders/{id}/back-to-draft` (or make `quote` legal from QUOTED) when Tier-3 usage shows
    the papercut matters; cancel+recreate is an acceptable v1 workaround.
+   **Decision (built, P2 grocery batch):** accepted for build as part of the groceries-page P2
+   batch — `POST /api/v1/grocery/orders/{orderId}/back-to-draft` (200 with the reverted order;
+   422 `order-not-revertible` when not currently QUOTED; 404 unknown). Discards the stale quote
+   (provider order id, quoted total, per-line quoted prices; line statuses → QUEUED); audited via
+   `status_reason = reverted_from_quoted` + `GroceryOrderRevertedToDraftEvent`.
 2. **No provider catalogue endpoint** (groceries §8 Q5). The page hardcodes `tesco` for
    `POST /orders` and the provider-state gate. **Proposed:** accept while exactly one provider
    exists; `GET /grocery/orders/providers` becomes a prerequisite of the second provider's ticket.

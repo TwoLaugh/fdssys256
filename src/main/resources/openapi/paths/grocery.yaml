@@ -247,7 +247,15 @@ undoMarkBought:
   post:
     tags: [Grocery — Manual Fulfilment]
     operationId: undoMarkBought
-    summary: 'Undo a Tier-2 mark-bought (line back to UNFILLED + compensating price note; inventory corrected manually).'
+    summary: 'Undo a Tier-2 mark-bought (line back to UNFILLED + compensating price note + best-effort pantry reversal).'
+    description: >-
+      Reverses the grocery-side state (line back to UNFILLED, bought-* cleared, compensating price
+      note appended — the original observation is never deleted) AND best-effort reverses the
+      pantry add the mark-bought made: the linked inventory item is decremented by the added
+      amount, floored at zero (never negative); an item consumed/spoiled/removed since is a no-op.
+      Every reversal branch is audited in the pantry item history (actor GROCERY_IMPORT). Lines
+      whose mark-bought wrote no inventory (pantry tracking off) skip the reversal. The reversal
+      outcome is observable in the provisions audit log; the response stays 204.
     security: [{ cookieAuth: [] }]
     parameters:
       - in: path
@@ -629,6 +637,45 @@ groceryOrderPlace:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '503':
         description: 'Provider unavailable, or AI features paused (reverts to DRAFT).'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+groceryOrderBackToDraft:
+  post:
+    tags: [Grocery — Order]
+    operationId: revertGroceryOrderToDraft
+    summary: 'Revert a quoted order back to draft for re-editing (QUOTED → DRAFT); discards the stale quote.'
+    description: >-
+      The re-edit edge of the order state machine (groceries §8 Q3). Only legal from QUOTED — any
+      other state returns 422. Clears the provider order id, the quoted total, and the per-line
+      quoted prices (line statuses reset to QUEUED) so a later re-quote starts clean; QUOTE price
+      observations already written are append-only history and remain. The transition is audited
+      (statusReason = reverted_from_quoted + a lifecycle event).
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'The reverted order (status DRAFT, quote fields cleared).'
+        content:
+          application/json:
+            schema: { $ref: '../schemas/grocery.yaml#/GroceryOrderDto' }
+      '401':
+        description: Unauthenticated.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No such order.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: 'Order is not currently QUOTED — nothing to revert.'
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
