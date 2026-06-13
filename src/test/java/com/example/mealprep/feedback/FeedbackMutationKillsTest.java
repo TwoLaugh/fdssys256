@@ -784,6 +784,7 @@ class FeedbackMutationKillsTest {
         new ClarificationQueryDto(
             queryId,
             UUID.randomUUID(),
+            "from the original feedback",
             "q?",
             List.of(new ClarificationOptionDto(Destination.RECIPE, "snip", "why")),
             ClarificationStatus.PENDING,

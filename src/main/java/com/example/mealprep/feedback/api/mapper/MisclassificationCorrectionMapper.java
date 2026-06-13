@@ -15,6 +15,7 @@ public interface MisclassificationCorrectionMapper {
     return new MisclassificationCorrectionDto(
         entity.getId(),
         entity.getFeedbackEntry() != null ? entity.getFeedbackEntry().getId() : null,
+        TextExcerpts.fromEntry(entity.getFeedbackEntry()),
         entity.getOriginalRoutingId(),
         entity.getCorrectedDestination(),
         entity.getOriginalDestination(),

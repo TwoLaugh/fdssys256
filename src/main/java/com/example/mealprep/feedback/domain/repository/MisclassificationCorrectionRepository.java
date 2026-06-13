@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 /**
@@ -17,6 +18,12 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface MisclassificationCorrectionRepository
     extends JpaRepository<MisclassificationCorrection, UUID> {
 
+  /**
+   * The user-facing corrections log. {@code @EntityGraph} joins the parent entry in the same query
+   * so the mapper's {@code textExcerpt} denormalisation (frontend-gaps:
+   * feedback-clarification-text-excerpt) adds no per-row lazy fetch.
+   */
+  @EntityGraph(attributePaths = "feedbackEntry")
   Page<MisclassificationCorrection> findByFeedbackEntryUserIdOrderByOccurredAtDesc(
       UUID userId, Pageable pageable);
 

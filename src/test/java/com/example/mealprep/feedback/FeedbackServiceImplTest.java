@@ -1069,6 +1069,7 @@ class FeedbackServiceImplTest {
         new com.example.mealprep.feedback.api.dto.ClarificationQueryDto(
             q.getId(),
             parent.getId(),
+            "x",
             "Did you mean recipe or preference?",
             List.of(),
             q.getStatus(),
@@ -1097,6 +1098,7 @@ class FeedbackServiceImplTest {
         new com.example.mealprep.feedback.api.dto.ClarificationQueryDto(
             q.getId(),
             parent.getId(),
+            "x",
             "q?",
             List.of(),
             ClarificationStatus.PENDING,
@@ -1138,6 +1140,7 @@ class FeedbackServiceImplTest {
         new com.example.mealprep.feedback.api.dto.ClarificationQueryDto(
             queryId,
             parent.getId(),
+            "x",
             "q",
             List.of(),
             com.example.mealprep.feedback.domain.entity.ClarificationStatus.PENDING,
@@ -1168,6 +1171,7 @@ class FeedbackServiceImplTest {
         new com.example.mealprep.feedback.api.dto.MisclassificationCorrectionDto(
             correction.getId(),
             parent.getId(),
+            "x",
             correction.getOriginalRoutingId(),
             correction.getCorrectedDestination(),
             correction.getOriginalDestination(),

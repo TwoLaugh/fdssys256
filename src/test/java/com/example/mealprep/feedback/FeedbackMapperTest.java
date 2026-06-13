@@ -121,6 +121,49 @@ class FeedbackMapperTest {
     assertThat(first.destination()).isEqualTo(Destination.RECIPE);
     assertThat(first.snippet()).isEqualTo("make the lasagne lighter");
     assertThat(dto.feedbackEntryId()).isEqualTo(parent.getId());
+    assertThat(dto.textExcerpt()).isEqualTo("ambiguous");
+  }
+
+  // ---------------- textExcerpt (frontend-gaps: feedback-clarification-text-excerpt) ------------
+
+  @Test
+  void textExcerpt_atOrUnderCap_isVerbatim_andOverCap_isPlainTruncatedTo160() {
+    String exactly160 = "x".repeat(160);
+    ClarificationQuery atCap =
+        FeedbackTestData.clarificationQuery(
+            FeedbackTestData.feedbackEntry(UUID.randomUUID(), exactly160));
+    assertThat(clarificationQueryMapper.toDto(atCap).textExcerpt()).isEqualTo(exactly160);
+
+    ClarificationQuery overCap =
+        FeedbackTestData.clarificationQuery(
+            FeedbackTestData.feedbackEntry(UUID.randomUUID(), "y".repeat(161)));
+    // Plain truncation, no ellipsis marker — pinned; keeps the value within maxLength: 160.
+    assertThat(clarificationQueryMapper.toDto(overCap).textExcerpt()).isEqualTo("y".repeat(160));
+  }
+
+  @Test
+  void textExcerpt_truncationCountsCodePoints_neverSplitsSurrogatePairs() {
+    // 159 BMP chars + 2 supplementary-plane emoji (2 UTF-16 chars each) = 161 code points.
+    String text = "a".repeat(159) + "🍕🍕";
+    FeedbackEntry parent = FeedbackTestData.feedbackEntry(UUID.randomUUID(), text);
+    MisclassificationCorrection entity =
+        FeedbackTestData.misclassificationCorrection(parent, UUID.randomUUID(), parent.getUserId());
+
+    String excerpt = correctionMapper.toDto(entity).textExcerpt();
+
+    // 160 code points: 159 'a' + one whole emoji — no dangling surrogate half at the cut.
+    assertThat(excerpt).isEqualTo("a".repeat(159) + "🍕");
+    assertThat(excerpt.codePointCount(0, excerpt.length())).isEqualTo(160);
+  }
+
+  @Test
+  void textExcerpt_missingParentEntry_defensivelyEmpty_notAFailure() {
+    ClarificationQuery orphanQuery = FeedbackTestData.clarificationQuery(null);
+    assertThat(clarificationQueryMapper.toDto(orphanQuery).textExcerpt()).isEmpty();
+
+    MisclassificationCorrection orphanCorrection =
+        FeedbackTestData.misclassificationCorrection(null, UUID.randomUUID(), UUID.randomUUID());
+    assertThat(correctionMapper.toDto(orphanCorrection).textExcerpt()).isEmpty();
   }
 
   @Test
@@ -137,5 +180,6 @@ class FeedbackMapperTest {
     assertThat(dto.originalDestination()).isEqualTo(Destination.RECIPE);
     assertThat(dto.replayStatus()).isEqualTo(entity.getReplayStatus());
     assertThat(dto.feedbackEntryId()).isEqualTo(parent.getId());
+    assertThat(dto.textExcerpt()).isEqualTo("wrong dest");
   }
 }

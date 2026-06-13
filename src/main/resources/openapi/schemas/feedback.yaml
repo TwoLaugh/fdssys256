@@ -135,10 +135,14 @@ ClarificationOptionDto:
     classifierJustification: { type: string, nullable: true }
 ClarificationQueryDto:
   type: object
-  required: [id, feedbackEntryId, questionText, options, status, expiresAt, createdAt]
+  required: [id, feedbackEntryId, textExcerpt, questionText, options, status, expiresAt, createdAt]
   properties:
     id: { type: string, format: uuid }
     feedbackEntryId: { type: string, format: uuid }
+    textExcerpt:
+      type: string
+      maxLength: 160
+      description: 'Leading excerpt of the originating feedback text (display context).'
     questionText: { type: string, maxLength: 512 }
     options:
       type: array
@@ -184,10 +188,14 @@ CorrectionRequest:
     userCorrectionNote: { type: string, maxLength: 512, nullable: true }
 MisclassificationCorrectionDto:
   type: object
-  required: [id, feedbackEntryId, originalRoutingId, correctedDestination, originalDestination, originalConfidence, actorUserId, replayStatus, occurredAt, createdAt]
+  required: [id, feedbackEntryId, textExcerpt, originalRoutingId, correctedDestination, originalDestination, originalConfidence, actorUserId, replayStatus, occurredAt, createdAt]
   properties:
     id: { type: string, format: uuid }
     feedbackEntryId: { type: string, format: uuid }
+    textExcerpt:
+      type: string
+      maxLength: 160
+      description: 'Leading excerpt of the originating feedback text (display context).'
     originalRoutingId: { type: string, format: uuid }
     correctedDestination: { $ref: '#/Destination' }
     originalDestination: { $ref: '#/Destination' }
