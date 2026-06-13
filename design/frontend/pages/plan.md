@@ -371,14 +371,26 @@ handled via 409 (§8) if raced.
 4. **Resolution options are informational.** `ResolutionOptionDto.key` has no
    apply endpoint; v1 deep-links to the owning settings page. Acceptable for
    v1? (HLD wording implies one-tap application.)
+   **Resolved (2026-06-13, frontend-gaps P3):** deep-links accepted for v1;
+   `key` pinned display-only in `lld/planner.md` (clients must not parse it).
+   A one-tap apply verb is a v2 candidate.
 5. **Stage C reasoning not user-visible.** The mock's "Why this plan" advisor
    card has no contract source (reasoning is decision-log/admin only). Either
    drop the card or expose a user-grade reasoning string on `PlanDto`.
+   **Resolved (2026-06-13, frontend-gaps P3):** drop the card for v1 (default
+   taken — reasoning stays decision-log/admin-grade). A nullable user-grade
+   `reasoningSummary` written at compose time is the v2 shape if product wants
+   the card back.
 6. **`POST /generate` against a week with an ACTIVE plan** — semantics of
    `forceRegenerateIfActive=false` + feasible set (does it 409, supersede, or
    create a parallel GENERATED gen?) are not pinned in the contract docs; the
    UI assumes a new GENERATED generation that supersedes only on accept.
    Verify with backend before wiring.
+   **Resolved (2026-06-13, frontend-gaps P3):** verified against the shipped
+   composer — exactly the UI's assumption (parallel GENERATED gen,
+   `replacesPlanId` set, supersede on accept; never 409). Pinned in
+   `paths/planner.yaml` + `schemas/planner.yaml`; `forceRegenerateIfActive` is
+   reserved/UNREAD in v1.
 
 ## 9. Mock deltas (to make the mock match this spec)
 

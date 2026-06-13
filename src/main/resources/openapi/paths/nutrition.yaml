@@ -66,7 +66,10 @@ targetsInitialise:
     description: >-
       Creates the targets aggregate from the onboarding-computed request and DRI-seeds any
       micronutrient the request omits (from the nutrition_dri_defaults seed table). 409 if a
-      targets row already exists for the user.
+      targets row already exists for the user. The body reuses UpdateTargetsRequest (onboarding
+      G2, accepted as a cosmetic reuse): `expectedVersion` is meaningless on this create
+      operation and is ignored server-side — send 0 (the shared schema still requires the field);
+      it must not be treated as load-bearing here.
     security:
       - cookieAuth: []
     requestBody:

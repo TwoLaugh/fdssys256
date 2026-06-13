@@ -61,6 +61,8 @@ class NotificationKindResolverTest {
     assertThat(draft.kind()).isEqualTo(NotificationKind.PROVISION_ITEM_NEAR_EXPIRY);
     assertThat(draft.severity()).isEqualTo(NotificationSeverity.ATTENTION);
     assertThat(draft.userId()).isEqualTo(user);
+    // Deep links are IA routes (notifications page spec §8 Q2) — pantry owns provisions alerts.
+    assertThat(draft.actionTargetUri()).isEqualTo("/pantry");
   }
 
   @Test
@@ -74,6 +76,7 @@ class NotificationKindResolverTest {
 
     assertThat(draft.kind()).isEqualTo(NotificationKind.PROVISION_ITEM_SPOILED);
     assertThat(draft.severity()).isEqualTo(NotificationSeverity.ATTENTION);
+    assertThat(draft.actionTargetUri()).isEqualTo("/pantry");
   }
 
   @Test
@@ -88,6 +91,7 @@ class NotificationKindResolverTest {
 
     assertThat(draft.kind()).isEqualTo(NotificationKind.PROVISION_DEFROST_REMINDER);
     assertThat(draft.bundlingKey()).isEqualTo(slot.toString());
+    assertThat(draft.actionTargetUri()).isEqualTo("/pantry");
   }
 
   @Test
@@ -105,6 +109,8 @@ class NotificationKindResolverTest {
     NotificationDraft draft = resolver().resolve(event);
 
     assertThat(draft.severity()).isEqualTo(NotificationSeverity.INFO);
+    // IA route, no date suffix — the onDate context rides the typed payload.
+    assertThat(draft.actionTargetUri()).isEqualTo("/nutrition");
   }
 
   @Test
@@ -141,6 +147,7 @@ class NotificationKindResolverTest {
 
     assertThat(draft.kind()).isEqualTo(NotificationKind.HEALTH_DIRECTIVE_RECEIVED);
     assertThat(draft.severity()).isEqualTo(NotificationSeverity.URGENT);
+    assertThat(draft.actionTargetUri()).isEqualTo("/nutrition");
   }
 
   @Test
@@ -161,6 +168,8 @@ class NotificationKindResolverTest {
 
     assertThat(draft.kind()).isEqualTo(NotificationKind.PLANNER_PREP_REMINDER);
     assertThat(draft.bundlingKey()).isEqualTo(slot.toString());
+    // IA route — the slot id rides the typed payload, not the URI.
+    assertThat(draft.actionTargetUri()).isEqualTo("/plan");
   }
 
   @Test
@@ -186,6 +195,7 @@ class NotificationKindResolverTest {
     assertThat(draft.kind()).isEqualTo(NotificationKind.PLANNER_REOPT_SUGGESTED);
     assertThat(draft.userId()).isEqualTo(primaryUser);
     assertThat(draft.householdId()).isEqualTo(household);
+    assertThat(draft.actionTargetUri()).isEqualTo("/plan");
   }
 
   @Test
@@ -213,6 +223,7 @@ class NotificationKindResolverTest {
     assertThat(draft.kind()).isEqualTo(NotificationKind.PLANNER_PLAN_GENERATED);
     assertThat(draft.severity()).isEqualTo(NotificationSeverity.INFO);
     assertThat(draft.userId()).isEqualTo(primaryUser);
+    assertThat(draft.actionTargetUri()).isEqualTo("/plan");
   }
 
   @Test
@@ -242,7 +253,9 @@ class NotificationKindResolverTest {
     assertThat(draft.bundlingKey()).isEqualTo(feedbackId.toString());
     assertThat(draft.sourceEventId()).isEqualTo(feedbackId);
     assertThat(draft.traceId()).isEqualTo(traceId);
-    assertThat(draft.actionTargetUri()).isEqualTo("/app/feedback/" + feedbackId);
+    // IA route (notifications page spec §8 Q2) — feedback history lives on /activity; the
+    // feedbackId rides the typed payload.
+    assertThat(draft.actionTargetUri()).isEqualTo("/activity");
     assertThat(draft.metricTag()).isEqualTo(NotificationKind.FEEDBACK_CONFIRMATION.name());
     assertThat(draft.payload()).isInstanceOf(NotificationPayload.FeedbackConfirmationPayload.class);
     var payload = (NotificationPayload.FeedbackConfirmationPayload) draft.payload();

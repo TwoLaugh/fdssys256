@@ -11,9 +11,11 @@ import org.springframework.format.annotation.DateTimeFormat;
  * cross-checks household membership via {@code PlannerAuth}. {@code householdId} + {@code
  * weekStartDate} pin the (household, week) the composer plans for.
  *
- * <p>{@code forceRegenerateIfActive} mirrors LLD §Flow 1 step 4 — when {@code false} and the
- * feasibility check fails the composer still produces a draft flagged {@code qualityWarning}; the
- * flag is surfaced here so a future UI can opt into a force path.
+ * <p>{@code forceRegenerateIfActive} is <b>reserved and UNREAD by the v1 composer</b> (verified +
+ * pinned in the contract, frontend-gaps P3 / plan page spec §8 Q6): generating against an ACTIVE
+ * week always yields a parallel GENERATED generation ({@code replacesPlanId} set) that supersedes
+ * the ACTIVE plan only on accept — never a 409, never an in-place mutation. The flag stays on the
+ * wire so a future force path (LLD §Flow 1 step 4's feasibility override) is non-breaking.
  */
 public record GeneratePlanRequest(
     @NotNull UUID householdId,

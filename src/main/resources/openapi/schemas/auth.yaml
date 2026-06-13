@@ -39,3 +39,15 @@ UserDto:
     userId: { type: string, format: uuid }
     username: { type: string }
     createdAt: { type: string, format: date-time }
+CurrentUserDto:
+  type: object
+  description: >-
+    Session-probe projection (`GET /auth/me`): UserDto plus `isAdmin` — whether the caller is on
+    the project-wide admin allowlist. Display-only signal for admin-nav visibility; every admin
+    endpoint still enforces the allowlist server-side (403).
+  required: [userId, username, createdAt, isAdmin]
+  properties:
+    userId: { type: string, format: uuid }
+    username: { type: string }
+    createdAt: { type: string, format: date-time }
+    isAdmin: { type: boolean }

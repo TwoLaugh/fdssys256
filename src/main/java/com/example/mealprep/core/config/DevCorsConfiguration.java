@@ -66,9 +66,13 @@ public class DevCorsConfiguration {
   /**
    * Response headers the browser is allowed to expose to JS. {@code X-Trace-Id} powers support-link
    * telemetry on the frontend; {@code Location} is read for create-then-redirect flows; {@code
-   * Content-Disposition} for download endpoints.
+   * Content-Disposition} for download endpoints; {@code Retry-After} drives the login page's
+   * 423-lockout / 429-throttle countdowns (login page spec §7 Q2 — without exposure the browser
+   * hides the header from JS and the countdown cannot render).
    */
-  private static final String[] EXPOSED_HEADERS = {"X-Trace-Id", "Location", "Content-Disposition"};
+  private static final String[] EXPOSED_HEADERS = {
+    "X-Trace-Id", "Location", "Content-Disposition", "Retry-After"
+  };
 
   /**
    * Single bean: a {@link WebMvcConfigurer} that registers the CORS mapping. Implemented as a

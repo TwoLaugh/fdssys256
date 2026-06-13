@@ -236,6 +236,9 @@ promotion isn't tracked per job (§10.6).
    mock's SEARCHING/FILTERING phases don't exist. v1 derives liveness from
    scrape-log row arrival while polling. SSE/push job progress is the known
    v1.5 item — until then the timeline collapses to 3 visual steps.
+   **Resolved (2026-06-13, frontend-gaps P3):** accepted for v1 as written —
+   job-progress push rides the SSE channel (backlog task #172); no bespoke
+   progress endpoint.
 2. **Cancel is reported as FAILED.** No CANCELLED status; the UI distinguishes
    a cancel only by `errorSummary == "cancelled by user"` — a string contract.
    The OpenAPI cancel description is also stale ("in-flight 422, 01b
@@ -256,10 +259,18 @@ promotion isn't tracked per job (§10.6).
 5. **Skip is semantically empty.** A skipped result remains a live
    system-catalogue recipe the planner can schedule. Product ruling needed:
    local-dismiss only (specced default) vs archive-on-skip.
+   **Resolved (2026-06-13, frontend-gaps P3):** ruled — local dismissal only
+   (the specced default stands); "keep it out of my plans" is the recipe
+   card's archive action, one tap away. Pinned in `design/recipe-system.md`
+   §entry points.
 6. **Per-job "kept" count not derivable** — promotion isn't linked back to the
    discovery job (the scrape row's `recipeId` is, but catalogue state requires
    N× s1 joins). Acceptable v1 cost on the open card; history rows drop the
    stat.
+   **Resolved (2026-06-13, frontend-gaps P3):** accepted for v1 (open-card
+   joins; history rows drop the stat). If wanted later: stamp promotion
+   provenance or count server-side via the scrape-log `recipeId` → catalogue
+   join.
 
 ## 10. Mock deltas (to make the mock match this spec)
 

@@ -328,7 +328,13 @@ GeneratePlanRequest:
   properties:
     householdId: { type: string, format: uuid }
     weekStartDate: { type: string, format: date }
-    forceRegenerateIfActive: { type: boolean, default: false }
+    forceRegenerateIfActive:
+      type: boolean
+      default: false
+      description: >-
+        Reserved — UNREAD by the v1 composer (either value behaves identically). Generation
+        against an ACTIVE week always produces a parallel GENERATED generation that supersedes
+        only on accept; see the generatePlan operation description.
 
 RejectPlanRequest:
   type: object

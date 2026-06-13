@@ -93,7 +93,17 @@ PendingChangeDto:
     proposedDiff:
       type: object
       additionalProperties: true
-      description: 'Opaque diff JSON; shape governed by the adaptation pipeline.'
+      description: >-
+        Diff JSON (published shape, frontend-gaps P3 / recipe-detail page spec §11 Q6): the
+        canonical shape is the RecipeDiffDto change-array family from schemas/recipe.yaml —
+        `ingredientChanges[]` / `methodChanges[]` / `metadataChanges[]` / `tagChanges[]`, each
+        entry an object with `changeType` (ADDED|REMOVED|MODIFIED) and `from`/`to` snapshots
+        (ingredient entries carry `to.ingredientMappingKey`). The pipeline's LLM leg may extend
+        entries with extra annotation keys (e.g. quantity refinements from `refinedDiff`);
+        renderers MUST tolerate unknown keys and unknown top-level arrays by falling back to raw
+        display. The server's safety filter reads only `ingredientChanges[].to.ingredientMappingKey`
+        (plus the legacy op-entry forms), so that path is the stable, load-bearing part of the
+        shape.
     reasoning: { type: string }
     nutritionalNotes:
       type: string
@@ -114,7 +124,9 @@ PendingChangeDto:
       type: object
       additionalProperties: true
       nullable: true
-      description: 'Optional user-supplied diff overlay applied at accept time.'
+      description: >-
+        Optional user-supplied diff overlay applied at accept time. Same change-array shape as
+        proposedDiff (RecipeDiffDto family); entries here win over the proposal's on conflict.
     createdAt: { type: string, format: date-time }
     expiresAt: { type: string, format: date-time }
     resolvedAt:

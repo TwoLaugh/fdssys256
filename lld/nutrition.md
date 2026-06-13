@@ -977,6 +977,20 @@ The override path **does not** trigger pantry deduction — the user already ate
   - **Transition guard** (nutrition-intake-override-repair): edit is legal from `PENDING`, and — as the repair path for a parse-failed override (Flow 4 step 3's `unparseable` outcome) — from `OVERRIDDEN` with `needsAiParse = true`. The repair replaces the zeroed actuals with the user's structured values, transitions the slot to `EDITED`, clears `needsAiParse`, and **retains** `overrideFreeText` / `overriddenAt` for provenance; the `EDIT` audit row's `previous_value_json` records the parse-failed `OVERRIDDEN` state (status, `needsAiParse`, free text). Any other decided state (`CONFIRMED` / `EDITED` / `SKIPPED`, or `OVERRIDDEN` whose parse succeeded) throws `IntakeSlotNotEditableException` (422) — no backwards transitions.
 - `POST .../skip` → sets `actualStatus = SKIPPED`, zeroes the actual columns, audits, runs divergence detection (skip is a strong divergence signal — almost always trips the threshold for that macro), publishes `IntakeLoggedEvent(action=SKIP)`.
 
+> **Skip across the two state machines** (pinned 2026-06-13, frontend-gaps P3 / today page spec
+> §8 Q2): planner `SKIPPED` (terminal slot state) and nutrition intake skip (zeroed contribution)
+> are independent — neither write propagates to the other. **The Today page's paired Skip (planner
+> PATCH + nutrition skip, planner first) is the sanctioned user path**; skipping only on
+> /nutrition deliberately leaves the planner slot `PLANNED` (the food may still be cooked for
+> other household members). Clients must not infer one machine's state from the other.
+
+> **Planner CUSTOM / SNACK slot join rule** (pinned 2026-06-13, frontend-gaps P3 / today page
+> spec §8 Q3): plan pre-fill creates intake rows for `breakfast | lunch | dinner` slots only.
+> Planner `SNACK` slots join the day's cumulative `snacks` bucket (logged via Flow 7, not
+> confirmed per-slot); planner `CUSTOM` slots have **no intake counterpart and no confirm/skip
+> target** — Today renders planner actions only for them. Revisit if CUSTOM slots become
+> nutrition-relevant.
+
 ### Flow 6: USDA ingredient mapping cache hit/miss
 
 Used by every recipe save (via `NutritionCalculationService`), every free-text override, and every snack log. `IngredientMappingPipeline.resolve(line)`:

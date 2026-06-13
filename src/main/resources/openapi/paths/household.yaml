@@ -154,6 +154,10 @@ householdInvitesCurrent:
     tags: [Households]
     operationId: createHouseholdInvite
     summary: Create an invite for the calling user's household (PRIMARY only).
+    description: >-
+      A requested `expiresAt` beyond now+30 days is SILENTLY CAPPED to now+30 days (settings page
+      spec §8 Q5 — pinned): the response's `expiresAt` is authoritative and may be earlier than
+      requested; clients must echo the returned value, not the requested one.
     security: [{ cookieAuth: [] }]
     requestBody:
       required: true
@@ -286,6 +290,10 @@ householdMemberRole:
     tags: [Households]
     operationId: changeHouseholdMemberRole
     summary: Change a member's role (PRIMARY only).
+    description: >-
+      Deliberately a POST verb, not an idempotent resource PUT (settings page spec §8 Q3 —
+      pinned): callers must NOT blind-retry on failure; the request's `expectedVersion` guards
+      the retry (a replayed request against a moved row 409s). The operation name stays as-is.
     security: [{ cookieAuth: [] }]
     parameters:
       - in: path

@@ -83,7 +83,11 @@ class DevCorsConfigurationTest {
               assertThat(corsConfig.getAllowedHeaders()).doesNotContain("*");
 
               assertThat(corsConfig.getExposedHeaders())
-                  .containsExactlyInAnyOrder("X-Trace-Id", "Location", "Content-Disposition");
+                  .as(
+                      "Retry-After must be exposed so the login page can render the 423/429"
+                          + " countdowns (login page spec §7 Q2)")
+                  .containsExactlyInAnyOrder(
+                      "X-Trace-Id", "Location", "Content-Disposition", "Retry-After");
 
               assertThat(corsConfig.getAllowCredentials()).isTrue();
               assertThat(corsConfig.getMaxAge()).isEqualTo(3600L);

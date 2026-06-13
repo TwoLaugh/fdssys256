@@ -140,6 +140,13 @@ plansGenerate:
     tags: [Plans]
     operationId: generatePlan
     summary: 'Compose + persist a new plan (Stage A->D). 201 + Location; 200 + cached body on an Idempotency-Key replay.'
+    description: >-
+      Generating against a week that already has an ACTIVE plan never 409s and never mutates the
+      ACTIVE plan: the new plan lands as a parallel GENERATED generation (generation = count+1,
+      `replacesPlanId` pointing at the current ACTIVE plan) and supersedes it only when the user
+      accepts it (the accept transition moves the old plan to SUPERSEDED in the same transaction).
+      `forceRegenerateIfActive` is accepted but UNREAD in v1 — reserved for a future force path;
+      sending either value does not change behaviour (frontend-gaps P3, plan page spec §8 Q6).
     security:
       - cookieAuth: []
     parameters:

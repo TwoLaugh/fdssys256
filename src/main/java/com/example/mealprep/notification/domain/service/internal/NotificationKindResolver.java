@@ -35,9 +35,28 @@ import org.springframework.stereotype.Component;
  * <p>Household routing (v1): when an event is household-scoped, the target user is the household's
  * primary member (per §Household routing); {@code householdId} is still stored on the row so a
  * future "all members" mode is a query change.
+ *
+ * <p><b>{@code actionTargetUri} namespace</b> (frontend-gaps P3, notifications page spec §8 Q2):
+ * deep links are emitted directly in the frontend IA's route namespace — {@code /pantry}, {@code
+ * /nutrition}, {@code /plan}, {@code /activity} — so every client stays dumb (no client-side {@code
+ * /app/*}-to-route map). Entity context (item ids, plan id, date, feedback id) rides the typed
+ * {@code payload}, not the URI. Rows persisted before this change keep their {@code /app/...} URIs
+ * (audit history; nothing live-wired had consumed them).
  */
 @Component
 public class NotificationKindResolver {
+
+  /** IA route of the pantry page — provisions expiry/spoilage/defrost/staple notifications. */
+  static final String ROUTE_PANTRY = "/pantry";
+
+  /** IA route of the nutrition page — intake divergence + health directives land here. */
+  static final String ROUTE_NUTRITION = "/nutrition";
+
+  /** IA route of the plan page — plan generated / re-opt suggested / prep reminders land here. */
+  static final String ROUTE_PLAN = "/plan";
+
+  /** IA route of the activity page — feedback confirmations land here. */
+  static final String ROUTE_ACTIVITY = "/activity";
 
   /** Severity threshold for {@code NUTRITION_INTAKE_DIVERGED}: >= this is ATTENTION, else INFO. */
   static final BigDecimal DIVERGENCE_ATTENTION_THRESHOLD = new BigDecimal("0.40");
@@ -63,7 +82,7 @@ public class NotificationKindResolver {
         "Items nearing expiry",
         itemIds.size() + " item(s) are nearing expiry.",
         payload,
-        "/app/provisions/inventory",
+        ROUTE_PANTRY,
         event.traceId(),
         event.traceId(),
         null,
@@ -84,7 +103,7 @@ public class NotificationKindResolver {
         "Items spoiled",
         itemIds.size() + " item(s) have spoiled.",
         payload,
-        "/app/provisions/inventory",
+        ROUTE_PANTRY,
         event.traceId(),
         event.traceId(),
         null,
@@ -107,7 +126,7 @@ public class NotificationKindResolver {
         "Defrost reminder",
         "An item needs defrosting for an upcoming meal.",
         payload,
-        "/app/provisions/inventory",
+        ROUTE_PANTRY,
         event.traceId(),
         event.traceId(),
         keyOf(event.mealSlotId()),
@@ -140,7 +159,7 @@ public class NotificationKindResolver {
         "Nutrition target diverged",
         "Your intake diverged from your target.",
         payload,
-        "/app/nutrition/intake/" + event.onDate(),
+        ROUTE_NUTRITION,
         event.traceId(),
         event.traceId(),
         keyOf(event.onDate()),
@@ -162,7 +181,7 @@ public class NotificationKindResolver {
         "Health directive received",
         "A new health directive needs your review.",
         payload,
-        "/app/nutrition/health-directives/" + event.directiveId(),
+        ROUTE_NUTRITION,
         event.traceId(),
         event.traceId(),
         keyOf(event.directiveId()),
@@ -184,7 +203,7 @@ public class NotificationKindResolver {
         "Prep reminder",
         "An upcoming meal needs advance prep.",
         payload,
-        "/app/planner/slots/" + event.plannedMealSlotId(),
+        ROUTE_PLAN,
         event.traceId(),
         event.traceId(),
         keyOf(event.plannedMealSlotId()),
@@ -208,7 +227,7 @@ public class NotificationKindResolver {
         "Re-optimisation suggested",
         "A re-optimisation is suggested for your plan.",
         payload,
-        "/app/plans/" + event.planId(),
+        ROUTE_PLAN,
         event.traceId(),
         event.traceId(),
         keyOf(event.planId()),
@@ -230,7 +249,7 @@ public class NotificationKindResolver {
         "Plan generated",
         "Your plan is ready.",
         payload,
-        "/app/plans/" + event.planId(),
+        ROUTE_PLAN,
         event.traceId(),
         event.traceId(),
         keyOf(event.planId()),
@@ -255,7 +274,7 @@ public class NotificationKindResolver {
         "Staples running low",
         itemIds.size() + " staple item(s) need replenishing.",
         payload,
-        "/app/provisions/inventory",
+        ROUTE_PANTRY,
         event.traceId(),
         event.traceId(),
         null,
@@ -295,7 +314,7 @@ public class NotificationKindResolver {
         "Feedback applied",
         body,
         payload,
-        "/app/feedback/" + event.feedbackId(),
+        ROUTE_ACTIVITY,
         event.feedbackId(),
         event.traceId(),
         event.feedbackId().toString(),

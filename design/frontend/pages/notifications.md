@@ -228,10 +228,18 @@ Empty states: #1 empty page → "You're all caught up" illustration; filtered-em
    `/app/plans/{id}`, `/app/feedback/{id}`, etc.; the IA routes are `/pantry`,
    `/plan`, `/activity`. Either the resolver copy is updated to IA routes
    (backend gap candidate) or the client ships a static `/app/*`→route map.
+   **Resolved (2026-06-13, frontend-gaps P3):** server-side — the
+   `NotificationKindResolver` now emits IA routes directly (`/pantry`,
+   `/nutrition`, `/plan`, `/activity`); entity context rides the typed
+   `payload`. No client map needed. Pre-change rows keep legacy `/app/*` URIs
+   (client falls back to opening /notifications for unknown URIs).
 3. **Single-valued filters.** `status` and `kind` accept one value each; the
    "All except dismissed" inbox default the mocks show needs either client-side
    filtering of a status-less query or a multi-status param (backend gap
    candidate, low).
+   **Resolved (2026-06-13, frontend-gaps P3):** client-side filtering accepted
+   for v1 (page sizes are small); a multi-status param only if real usage
+   hurts.
 4. **`payload` is unused by this page.** All copy is denormalised into
    title/body. If richer rows are ever wanted (e.g. divergence % chip from
    `NutritionDivergedPayload`), the polymorphic payload is already on the wire —
@@ -240,8 +248,16 @@ Empty states: #1 empty page → "You're all caught up" illustration; filtered-em
    `[enabledKinds, timezone]`; Java binds 3 more as primitives, and
    `expectedVersion` is effectively mandatory. Align the contract (backend gap
    candidate, doc-level).
+   **Resolved (2026-06-13, frontend-gaps P3):** contract aligned —
+   `schemas/notification.yaml#UpdateNotificationPreferenceRequest` now requires
+   `enabledKinds, quietHoursEnabled, timezone, debounceWindowMinutes,
+   expectedVersion` (full-replace document; only the quiet-hours times stay
+   nullable).
 6. **Bell poll cadence** is unspecified anywhere. Suggest 60s + on-focus refetch;
    needs a product nod (battery/load trade-off until SSE lands).
+   **Resolved (2026-06-13, frontend-gaps P3):** product nod recorded — 60 s
+   interval + on-focus refetch is the v1 cadence until SSE lands (backlog task
+   #172).
 
 ## 9. Mock deltas (to make the mock match this spec)
 

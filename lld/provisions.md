@@ -596,6 +596,20 @@ The originally-designed event-listener seams (`MealCookedEvent`, `MealConsumedEv
 
 The dormant `CookEventListener` / `GroceryOrderConfirmedListener` stubs that anticipated these seams were removed in the provisions conformance sweep to avoid a latent "the event path works" trap. If an event-driven cook seam is wanted later (incl. the Nutrition-Logger auto-confirm-on-cook leg), it is a tracked follow-up, not a v1 capability.
 
+> **`POST /provisions/meal-consumption` is a sanctioned user surface** (confirmed 2026-06-13,
+> frontend-gaps P3 / pantry page spec §9 Q5): although this LLD originally framed the consumption
+> REST endpoints as operator/test seams, the pantry page legitimately fronts the single-tap "ate a
+> portion" flow on BATCH_COOK rows with it (the HLD's one-tap consumption). Auth/rate posture
+> unchanged (standard authenticated-user endpoints). It does NOT nudge nutrition logging in v1 —
+> the cross-ref stays manual until the auto-confirm-on-cook leg lands.
+
+> **Manual-add mapping-key inference — v1 answer** (pinned 2026-06-13, frontend-gaps P3 / pantry
+> page spec §9 Q6): provisions ships no inference endpoint. The blessed v1 assist is the
+> nutrition module's ingredient-lookup surface — the pantry page calls it to suggest a normalised
+> `ingredientMappingKey` which the user confirms before the add (HLD: "the system infers the
+> mapping or the user confirms it"). A provisions-owned infer endpoint is a v2 candidate only if
+> the borrowed assist proves inadequate.
+
 ---
 
 ## Business Logic Flows
