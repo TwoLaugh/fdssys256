@@ -221,7 +221,9 @@ class ShoppingListCalculatorIT {
         null,
         null,
         null,
-        scheduled);
+        scheduled,
+        null,
+        null);
   }
 
   private static PlanDto planWith(int generation, MealSlotDto... slots) {

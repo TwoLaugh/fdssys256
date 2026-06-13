@@ -553,7 +553,9 @@ class ShoppingListCalculatorTest {
         null,
         null,
         null,
-        scheduled);
+        scheduled,
+        null,
+        null);
   }
 
   private static PlanDto planWith(MealSlotDto... slots) {
@@ -723,7 +725,9 @@ class ShoppingListCalculatorTest {
             null,
             null,
             null,
-            null); // null scheduledRecipe
+            null, // null scheduledRecipe
+            null,
+            null);
     PlanDto plan = planWith(emptySlot);
 
     ShoppingList list = calculator.calculate(USER, plan, 1);
@@ -748,7 +752,9 @@ class ShoppingListCalculatorTest {
             null,
             null,
             null,
-            unscheduled);
+            unscheduled,
+            null,
+            null);
     PlanDto plan = planWith(slot);
 
     ShoppingList list = calculator.calculate(USER, plan, 1);
@@ -1206,7 +1212,9 @@ class ShoppingListCalculatorTest {
             null,
             null,
             null,
-            scheduled);
+            scheduled,
+            null,
+            null);
     PlanDto plan = planWith(slot);
     when(recipeQueryService.getById(rid)).thenReturn(Optional.empty());
 

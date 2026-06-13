@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
@@ -25,6 +26,7 @@ import com.example.mealprep.planner.domain.repository.ReoptSuggestionRepository;
 import com.example.mealprep.planner.domain.service.internal.PlannerServiceImpl;
 import com.example.mealprep.planner.testdata.PlanTestData;
 import com.example.mealprep.preference.domain.service.LifestyleConfigQueryService;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.Collections;
@@ -99,12 +101,38 @@ class PlanQueryServiceImplTest {
     when(planRepository.findFirstByHouseholdIdAndWeekStartDateAndStatus(
             householdId, week, PlanStatus.ACTIVE))
         .thenReturn(Optional.of(plan));
-    when(planMapper.toDto(any(Plan.class))).thenReturn(expected);
+    when(planMapper.toDto(any(Plan.class), any())).thenReturn(expected);
 
     Optional<PlanDto> result = service.getActivePlan(householdId, week);
 
     assertThat(result).hasValue(expected);
-    verify(planMapper).toDto(plan);
+    verify(planMapper).toDto(eq(plan), any());
+  }
+
+  @Test
+  void getActivePlan_readsLifestyleConfigOncePerPlan_notPerSlot() {
+    // frontend-gaps: planner-effective-meal-time §N+1. The household owner's lifestyle-config
+    // meal_timing is read ONCE in hydrateAndMap and the resolved map is threaded down the mapper
+    // chain; the mappers hold no preference-service reference, so a multi-day, multi-slot plan
+    // still incurs exactly one getLifestyleConfig read. Guards against regressing the read into a
+    // per-slot loop.
+    UUID householdId = UUID.randomUUID();
+    UUID ownerId = UUID.randomUUID();
+    LocalDate week = LocalDate.of(2026, 5, 11);
+    Plan plan = PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.ACTIVE, 3, 3);
+    when(planRepository.findFirstByHouseholdIdAndWeekStartDateAndStatus(
+            householdId, week, PlanStatus.ACTIVE))
+        .thenReturn(Optional.of(plan));
+    when(householdQueryService.getById(householdId))
+        .thenReturn(
+            Optional.of(new HouseholdDto(householdId, "h", ownerId, List.of(), Instant.now(), 0)));
+    when(lifestyleConfigQueryService.getLifestyleConfig(ownerId)).thenReturn(Optional.empty());
+    when(planMapper.toDto(eq(plan), any())).thenReturn(Mockito.mock(PlanDto.class));
+
+    service.getActivePlan(householdId, week);
+
+    verify(lifestyleConfigQueryService, times(1)).getLifestyleConfig(ownerId);
+    verify(householdQueryService, times(1)).getById(householdId);
   }
 
   // ---------------- getPlanHistory ----------------
@@ -153,9 +181,9 @@ class PlanQueryServiceImplTest {
     PlanDto dto3 = Mockito.mock(PlanDto.class);
     PlanDto dto2 = Mockito.mock(PlanDto.class);
     PlanDto dto1 = Mockito.mock(PlanDto.class);
-    when(planMapper.toDto(gen3)).thenReturn(dto3);
-    when(planMapper.toDto(gen2)).thenReturn(dto2);
-    when(planMapper.toDto(gen1)).thenReturn(dto1);
+    when(planMapper.toDto(eq(gen3), any())).thenReturn(dto3);
+    when(planMapper.toDto(eq(gen2), any())).thenReturn(dto2);
+    when(planMapper.toDto(eq(gen1), any())).thenReturn(dto1);
 
     List<PlanDto> result = service.getPlanHistory(householdId, week);
 
@@ -206,7 +234,7 @@ class PlanQueryServiceImplTest {
             .findByHouseholdIdAndWeekStartDateBetweenOrderByWeekStartDateDescGenerationDesc(
                 householdId, from, to, pageable))
         .thenReturn(new PageImpl<>(List.of(plan), pageable, 7L));
-    when(planMapper.toDto(plan)).thenReturn(dto);
+    when(planMapper.toDto(eq(plan), any())).thenReturn(dto);
 
     Page<PlanDto> result = service.getPlansBetween(householdId, from, to, pageable);
 
@@ -261,8 +289,8 @@ class PlanQueryServiceImplTest {
     UUID unknown = UUID.randomUUID();
     List<UUID> input = List.of(p1.getId(), unknown, p2.getId());
     when(planRepository.findByIdIn(input)).thenReturn(List.of(p1, p2));
-    when(planMapper.toDto(p1)).thenReturn(d1);
-    when(planMapper.toDto(p2)).thenReturn(d2);
+    when(planMapper.toDto(eq(p1), any())).thenReturn(d1);
+    when(planMapper.toDto(eq(p2), any())).thenReturn(d2);
 
     List<PlanDto> result = service.getPlansByIds(input);
 

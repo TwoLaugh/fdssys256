@@ -155,7 +155,7 @@ ScheduledRecipeDto:
 
 MealSlotDto:
   type: object
-  required: [id, slotIndex, kind, label, timeBudgetMin, shared, eaters, state]
+  required: [id, slotIndex, kind, label, timeBudgetMin, shared, eaters, state, effectiveMealTime, mealTimeSource]
   properties:
     id: { type: string, format: uuid }
     slotIndex: { type: integer }
@@ -203,6 +203,19 @@ MealSlotDto:
           enum: [LLM, USER]
           nullable: true
         phase2Addition: { type: boolean }
+    effectiveMealTime:
+      # Server-resolved serve time (frontend-gaps: planner-effective-meal-time): the three-level
+      # coalesce of slot override -> lifestyle-config meal_timing schedule -> slot-kind default.
+      # NEVER null, so the Plan grid / Today timeline render serve times + "start by" lead-time
+      # hints without re-reading the preference module client-side.
+      type: string
+      format: time
+    mealTimeSource:
+      # Which coalesce level produced effectiveMealTime, so the UI can caption a default vs an
+      # override ("default time"). SLOT_OVERRIDE = raw mealTime was set; LIFESTYLE_SCHEDULE = the
+      # owner's lifestyle-config schedule supplied it; KIND_DEFAULT = slot-kind floor.
+      type: string
+      enum: [SLOT_OVERRIDE, LIFESTYLE_SCHEDULE, KIND_DEFAULT]
 
 DayDto:
   type: object

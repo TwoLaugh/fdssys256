@@ -2,10 +2,12 @@ package com.example.mealprep.planner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.api.dto.PlanReoptSuggestionDto;
 import com.example.mealprep.planner.api.mapper.PlanMapper;
@@ -18,6 +20,7 @@ import com.example.mealprep.planner.domain.repository.MealPrepPlanReoptSuggestio
 import com.example.mealprep.planner.domain.repository.PlanRepository;
 import com.example.mealprep.planner.domain.service.internal.PlannerServiceImpl;
 import com.example.mealprep.planner.testdata.PlanTestData;
+import com.example.mealprep.preference.domain.service.LifestyleConfigQueryService;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Optional;
@@ -41,6 +44,11 @@ class PlannerServiceImplTest {
   @Mock private MealPrepPlanReoptSuggestionRepository planReoptSuggestionRepository;
   @Mock private PlanMapper planMapper;
   @Mock private ReoptSuggestionMapper reoptSuggestionMapper;
+  // hydrateAndMap loads the household owner's lifestyle-config meal_timing once per plan
+  // (effectiveMealTime resolution); @InjectMocks needs these wired so the read returns empty
+  // rather than NPE-ing on a null collaborator.
+  @Mock private HouseholdQueryService householdQueryService;
+  @Mock private LifestyleConfigQueryService lifestyleConfigQueryService;
 
   @InjectMocks private PlannerServiceImpl service;
 
@@ -60,12 +68,12 @@ class PlannerServiceImplTest {
     Plan plan = PlanTestData.newPlanGraph(LocalDate.of(2026, 5, 11), 1, 1);
     PlanDto expectedDto = Mockito.mock(PlanDto.class);
     when(planRepository.findById(plan.getId())).thenReturn(Optional.of(plan));
-    when(planMapper.toDto(any(Plan.class))).thenReturn(expectedDto);
+    when(planMapper.toDto(any(Plan.class), any())).thenReturn(expectedDto);
 
     Optional<PlanDto> result = service.getPlanById(plan.getId());
 
     assertThat(result).hasValue(expectedDto);
-    verify(planMapper).toDto(plan);
+    verify(planMapper).toDto(eq(plan), any());
   }
 
   // ============================================================================================
