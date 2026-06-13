@@ -19,8 +19,13 @@ PendingChangeStatus:
   enum: [PENDING, ACCEPTED, MODIFIED, REJECTED, EXPIRED, SUPERSEDED]
 PendingChangeListItemDto:
   type: object
-  description: 'List-row projection of a pending change.'
-  required: [id, recipeId, changeDimension, reasoningPreview, confidence, impactScore, createdAt, expiresAt]
+  description: >
+    List-row projection of a pending change. `status`, `resolvedAt`, and `optimisticVersion` ride on
+    the row so both the top-3 surface and the pending-history surface render lifecycle without a
+    follow-up single-row read per card. The top-3 read returns only PENDING rows (`resolvedAt` null);
+    the pending-history read spans the full lifecycle including EXPIRED/SUPERSEDED. `optimisticVersion`
+    lets an accept/reject call carry `expectedVersion` straight from the list.
+  required: [id, recipeId, changeDimension, reasoningPreview, confidence, impactScore, createdAt, expiresAt, status, optimisticVersion]
   properties:
     id: { type: string, format: uuid }
     recipeId: { type: string, format: uuid }
@@ -33,6 +38,9 @@ PendingChangeListItemDto:
     impactScore: { type: number, format: float, minimum: 0, maximum: 1 }
     createdAt: { type: string, format: date-time }
     expiresAt: { type: string, format: date-time }
+    status: { $ref: '#/PendingChangeStatus' }
+    resolvedAt: { type: string, format: date-time, nullable: true }
+    optimisticVersion: { type: integer, format: int64 }
 PendingChangeListItemDtoPage:
   type: object
   description: 'Paged response of PendingChangeListItemDto rows.'

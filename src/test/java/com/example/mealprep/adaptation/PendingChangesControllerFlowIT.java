@@ -128,6 +128,11 @@ class PendingChangesControllerFlowIT {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.length()", is(1)))
         .andExpect(jsonPath("$[0].id", is(mine.getId().toString())))
+        // List row carries lifecycle (frontend-gaps: adaptation-pending-change-list-dto) so the
+        // inbox renders without a per-card single-row read. Top-3 read is PENDING-only.
+        .andExpect(jsonPath("$[0].status", is("PENDING")))
+        .andExpect(jsonPath("$[0].resolvedAt").isEmpty())
+        .andExpect(jsonPath("$[0].optimisticVersion", is((int) mine.getOptimisticVersion())))
         .andExpect(openApi().isValid(openApiValidator));
   }
 
@@ -258,6 +263,30 @@ class PendingChangesControllerFlowIT {
                 .param("size", "20"))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.totalElements", is(1)))
+        .andExpect(jsonPath("$.content[0].status", is("PENDING")))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void pendingHistory_resolvedRow_carriesStatusAndResolvedAt() throws Exception {
+    // The history surface (unlike the top-3 read) spans the full lifecycle, so a resolved row must
+    // carry its terminal status and resolvedAt onto the list row
+    // (frontend-gaps: adaptation-pending-change-list-dto).
+    AuthedUser user = registerUser();
+    Instant resolvedAt = Instant.now().minus(30, ChronoUnit.MINUTES);
+    PendingChange resolved =
+        seedResolved(user.userId(), PendingChangeStatus.REJECTED, resolvedAt, plusDays(5));
+
+    mvc.perform(
+            get("/api/v1/adaptation/recipes/{recipeId}/pending-history", resolved.getRecipeId())
+                .cookie(user.cookie())
+                .param("page", "0")
+                .param("size", "20"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.totalElements", is(1)))
+        .andExpect(jsonPath("$.content[0].status", is("REJECTED")))
+        .andExpect(jsonPath("$.content[0].resolvedAt").isNotEmpty())
+        .andExpect(jsonPath("$.content[0].optimisticVersion").exists())
         .andExpect(openApi().isValid(openApiValidator));
   }
 
@@ -326,6 +355,14 @@ class PendingChangesControllerFlowIT {
             .createdAt(Instant.now().minus(1, ChronoUnit.HOURS))
             .expiresAt(expiresAt)
             .build());
+  }
+
+  /** Seeds a row already moved to a terminal status with {@code resolvedAt} set. */
+  private PendingChange seedResolved(
+      UUID userId, PendingChangeStatus status, Instant resolvedAt, Instant expiresAt) {
+    PendingChange pc = seedPending(userId, status, expiresAt);
+    pc.setResolvedAt(resolvedAt);
+    return pendingChangeRepository.saveAndFlush(pc);
   }
 
   private static RecipeVersionDto versionDto(UUID branchId) {

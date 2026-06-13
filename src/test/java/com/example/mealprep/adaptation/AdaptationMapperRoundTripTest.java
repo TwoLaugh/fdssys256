@@ -125,6 +125,22 @@ class AdaptationMapperRoundTripTest {
   }
 
   @Test
+  void pending_change_list_item_carries_status_resolvedAt_optimisticVersion() {
+    // frontend-gaps: adaptation-pending-change-list-dto — lifecycle fields must ride the list row.
+    PendingChange entity = pendingChangeWithReasoning("short");
+    Instant resolvedAt = Instant.now();
+    entity.setStatus(PendingChangeStatus.REJECTED);
+    entity.setResolvedAt(resolvedAt);
+    entity.setOptimisticVersion(4L);
+
+    PendingChangeListItemDto dto = pendingMapper.toListItem(entity);
+
+    assertThat(dto.status()).isEqualTo(PendingChangeStatus.REJECTED);
+    assertThat(dto.resolvedAt()).isEqualTo(resolvedAt);
+    assertThat(dto.optimisticVersion()).isEqualTo(4L);
+  }
+
+  @Test
   void pending_change_full_dto_keeps_full_reasoning() {
     String longReasoning = "y".repeat(500);
     PendingChange entity = pendingChangeWithReasoning(longReasoning);
