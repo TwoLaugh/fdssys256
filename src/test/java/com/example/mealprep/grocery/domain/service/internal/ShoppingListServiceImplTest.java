@@ -15,13 +15,17 @@ import com.example.mealprep.grocery.api.dto.ShoppingListDto;
 import com.example.mealprep.grocery.api.mapper.PriceObservationMapper;
 import com.example.mealprep.grocery.api.mapper.ShoppingListMapper;
 import com.example.mealprep.grocery.config.GroceryConfig;
+import com.example.mealprep.grocery.domain.entity.LineFulfilmentStatus;
 import com.example.mealprep.grocery.domain.entity.ShoppingList;
+import com.example.mealprep.grocery.domain.entity.ShoppingListLine;
+import com.example.mealprep.grocery.domain.entity.ShoppingListLineType;
 import com.example.mealprep.grocery.event.ShoppingListGeneratedEvent;
 import com.example.mealprep.grocery.exception.ShoppingListNotFoundException;
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.domain.entity.PlanStatus;
 import com.example.mealprep.planner.domain.entity.TriggerKind;
 import com.example.mealprep.planner.domain.service.PlanQueryService;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -201,6 +205,79 @@ class ShoppingListServiceImplTest {
     verify(shoppingListCalculator).calculate(USER, plan, 7);
   }
 
+  @Test
+  void recalculate_forceTrue_rebuildsInPlace_preservingBoughtMarks_andPickingUpDrift() {
+    // frontend-gaps: grocery-recalculate-pantry-drift — the full carry-rule matrix in one pass.
+    // Existing generation-3 list: a BOUGHT flour line, an UNFILLED sugar line, a BOUGHT rice line.
+    PlanDto plan = plan(3);
+    ShoppingList existing = listEntity(3);
+    ShoppingListLine flour =
+        line("flour", ShoppingListLineType.PLANNED_DEMAND, LineFulfilmentStatus.BOUGHT, "500");
+    flour.setBoughtQuantity(new BigDecimal("500"));
+    flour.setBoughtPricePence(120);
+    flour.setGroceryOrderId(UUID.randomUUID());
+    ShoppingListLine sugar =
+        line("sugar", ShoppingListLineType.PLANNED_DEMAND, LineFulfilmentStatus.UNFILLED, "200");
+    ShoppingListLine rice =
+        line("rice", ShoppingListLineType.PLANNED_DEMAND, LineFulfilmentStatus.BOUGHT, "1000");
+    existing.getLines().add(flour);
+    existing.getLines().add(sugar);
+    existing.getLines().add(rice);
+
+    // Fresh demand after pantry drift: flour now needs 750 (rose); butter is brand-new demand;
+    // sugar + rice no longer have any demand.
+    ShoppingList fresh = listEntity(3);
+    fresh
+        .getLines()
+        .add(
+            line(
+                "flour",
+                ShoppingListLineType.PLANNED_DEMAND,
+                LineFulfilmentStatus.UNFILLED,
+                "750"));
+    fresh
+        .getLines()
+        .add(
+            line(
+                "butter",
+                ShoppingListLineType.PLANNED_DEMAND,
+                LineFulfilmentStatus.UNFILLED,
+                "250"));
+    fresh.setEstimatedTotalPence(999);
+
+    when(planQueryService.getPlanById(PLAN)).thenReturn(Optional.of(plan));
+    when(shoppingListDataGateway.findByPlanIdAndPlanGeneration(PLAN, 3))
+        .thenReturn(Optional.of(existing));
+    when(shoppingListDataGateway.findWithLinesById(existing.getId()))
+        .thenReturn(Optional.of(existing));
+    when(shoppingListCalculator.calculate(USER, plan, 3)).thenReturn(fresh);
+    when(shoppingListDataGateway.saveAndFlush(existing)).thenReturn(existing);
+
+    service.recalculate(USER, new RecalculateShoppingListRequest(PLAN, 3, true));
+
+    // flour: BOUGHT carried (qty/price/orderId untouched), demand refreshed 500 -> 750.
+    ShoppingListLine flourAfter = byKey(existing, "flour");
+    assertThat(flourAfter.getFulfilmentStatus()).isEqualTo(LineFulfilmentStatus.BOUGHT);
+    assertThat(flourAfter.getBoughtQuantity()).isEqualByComparingTo("500");
+    assertThat(flourAfter.getBoughtPricePence()).isEqualTo(120);
+    assertThat(flourAfter.getRequestedQuantity()).isEqualByComparingTo("750");
+    // rice: decided line with no new demand -> kept as a purchase record.
+    assertThat(byKey(existing, "rice").getFulfilmentStatus())
+        .isEqualTo(LineFulfilmentStatus.BOUGHT);
+    // butter: new demand -> added UNFILLED. sugar: UNFILLED with no demand -> dropped.
+    assertThat(byKey(existing, "butter").getFulfilmentStatus())
+        .isEqualTo(LineFulfilmentStatus.UNFILLED);
+    assertThat(existing.getLines())
+        .extracting(ShoppingListLine::getIngredientMappingKey)
+        .containsExactlyInAnyOrder("flour", "rice", "butter");
+    // Row identity preserved (same list id, no supersede), snapshot + generatedAt refreshed.
+    assertThat(existing.getSupersededAt()).isNull();
+    assertThat(existing.getEstimatedTotalPence()).isEqualTo(999);
+    assertThat(existing.getGeneratedAt()).isEqualTo(NOW);
+    verify(shoppingListDataGateway, times(1)).saveAndFlush(existing);
+    verify(eventPublisher, times(1)).publishEvent(any(ShoppingListGeneratedEvent.class));
+  }
+
   // ---- fixtures ----
 
   private static PlanDto plan(int generation) {
@@ -245,6 +322,26 @@ class ShoppingListServiceImplTest {
         .version(0L)
         .lines(new java.util.ArrayList<>())
         .build();
+  }
+
+  private static ShoppingListLine line(
+      String key, ShoppingListLineType type, LineFulfilmentStatus status, String requestedQty) {
+    return ShoppingListLine.builder()
+        .id(UUID.randomUUID())
+        .ingredientMappingKey(key)
+        .displayName(key)
+        .lineType(type)
+        .fulfilmentStatus(status)
+        .requestedQuantity(new BigDecimal(requestedQty))
+        .requestedUnit("g")
+        .build();
+  }
+
+  private static ShoppingListLine byKey(ShoppingList list, String key) {
+    return list.getLines().stream()
+        .filter(l -> key.equals(l.getIngredientMappingKey()))
+        .findFirst()
+        .orElseThrow();
   }
 
   private static ShoppingListDto dto() {

@@ -225,7 +225,12 @@ public class GroceryServiceImpl
     Optional<ShoppingList> existing =
         shoppingListDataGateway.findByPlanIdAndPlanGeneration(request.planId(), generation);
     if (existing.isPresent()) {
-      return shoppingListMapper.toDto(loadWithLines(existing.get())); // idempotent
+      if (!request.force()) {
+        return shoppingListMapper.toDto(loadWithLines(existing.get())); // idempotent
+      }
+      // force=true: rebuild lines in place for the same (planId, planGeneration) to pick up
+      // pantry/provisions drift, preserving decided fulfilment (bought-marks) by mapping key.
+      return forceRebuildInPlace(userId, plan, generation, loadWithLines(existing.get()));
     }
 
     try {
@@ -277,6 +282,112 @@ public class GroceryServiceImpl
   /** Re-read with the lines entity-graph so the mapper sees the full aggregate (no N+1). */
   private ShoppingList loadWithLines(ShoppingList list) {
     return shoppingListDataGateway.findWithLinesById(list.getId()).orElse(list);
+  }
+
+  /**
+   * Force-recalculate (frontend-gaps: grocery-recalculate-pantry-drift). Re-runs the calculator for
+   * the same {@code (planId, planGeneration)} and merges the fresh demand onto the <b>existing
+   * list's lines in place</b> — preserving row identity and the {@code UNIQUE (plan_id,
+   * plan_generation)} constraint rather than superseding into a new row.
+   *
+   * <p>Bought-mark preservation, matching old↔new by normalised {@code ingredientMappingKey +
+   * lineType}:
+   *
+   * <ul>
+   *   <li>matched line, any status → demand fields (quantities, pack suggestion, estimates, quality
+   *       notes, display name) refresh from the fresh calculation; a decided line's fulfilment
+   *       block ({@code BOUGHT}/{@code SUBSTITUTED}/{@code DROPPED} + the {@code bought_*} / {@code
+   *       boughtVia} / {@code groceryOrderId} / {@code inventoryItemId} fields) is carried
+   *       untouched, an {@code UNFILLED} line is simply refreshed;
+   *   <li>old decided line with no new demand (drift removed the need) → kept as-is (it records a
+   *       real purchase);
+   *   <li>old {@code UNFILLED} line with no new demand → dropped (orphanRemoval);
+   *   <li>new demand with no old line → new {@code UNFILLED} line.
+   * </ul>
+   *
+   * <p>{@code generatedAt} updates and the aggregate cost snapshot refreshes from the new
+   * calculation; {@code supersededAt} is untouched; the parent {@code @Version} bumps on flush, so
+   * a concurrent mark-bought collides on optimistic lock (one side gets a 409). After commit
+   * publishes {@link ShoppingListGeneratedEvent}.
+   */
+  private ShoppingListDto forceRebuildInPlace(
+      UUID userId, PlanDto plan, int generation, ShoppingList existing) {
+    ShoppingList fresh = shoppingListCalculator.calculate(userId, plan, generation);
+
+    Map<String, ShoppingListLine> oldByKey = new LinkedHashMap<>();
+    for (ShoppingListLine old : existing.getLines()) {
+      oldByKey.put(lineKey(old), old);
+    }
+    Map<String, ShoppingListLine> freshByKey = new LinkedHashMap<>();
+    for (ShoppingListLine f : fresh.getLines()) {
+      freshByKey.put(lineKey(f), f);
+    }
+
+    // Apply fresh demand: refresh matched lines (demand only — decided fulfilment survives),
+    // re-parent brand-new demand as UNFILLED lines on the existing list.
+    for (Map.Entry<String, ShoppingListLine> entry : freshByKey.entrySet()) {
+      ShoppingListLine old = oldByKey.get(entry.getKey());
+      ShoppingListLine f = entry.getValue();
+      if (old != null) {
+        refreshDemandFields(old, f);
+      } else {
+        f.setShoppingList(existing);
+        existing.getLines().add(f);
+      }
+    }
+    // Drop only UNFILLED old lines whose demand is gone; decided lines stay (purchase record).
+    existing
+        .getLines()
+        .removeIf(
+            old ->
+                old.getFulfilmentStatus() == LineFulfilmentStatus.UNFILLED
+                    && !freshByKey.containsKey(lineKey(old)));
+
+    // Refresh the aggregate cost snapshot from the new calculation; bump generatedAt. supersededAt
+    // untouched. The @Version bump happens on flush (collection + scalar mutations are dirty).
+    existing.setEstimatedTotalPence(fresh.getEstimatedTotalPence());
+    existing.setEstimatedTotalMinPence(fresh.getEstimatedTotalMinPence());
+    existing.setEstimatedTotalMaxPence(fresh.getEstimatedTotalMaxPence());
+    existing.setEstimatedTotalCurrency(fresh.getEstimatedTotalCurrency());
+    existing.setCostConfidence(fresh.getCostConfidence());
+    existing.setStaleIngredientCount(fresh.getStaleIngredientCount());
+    existing.setGeneratedAt(clock.instant());
+
+    ShoppingList saved = shoppingListDataGateway.saveAndFlush(existing);
+    eventPublisher.publishEvent(
+        new ShoppingListGeneratedEvent(
+            saved.getUserId(),
+            saved.getHouseholdId(),
+            saved.getId(),
+            saved.getPlanId(),
+            saved.getPlanGeneration(),
+            saved.getLines() == null ? 0 : saved.getLines().size(),
+            saved.getEstimatedTotalPence(),
+            clock.instant()));
+    return shoppingListMapper.toDto(loadWithLines(saved));
+  }
+
+  /** Merge key for force-rebuild: normalised ingredient mapping key + line type. */
+  private static String lineKey(ShoppingListLine line) {
+    return line.getIngredientMappingKey() + " " + line.getLineType();
+  }
+
+  /**
+   * Copy the demand-side fields from a freshly-calculated line onto an existing line, leaving its
+   * fulfilment block (status + bought_* + boughtVia + groceryOrderId + inventoryItemId) untouched.
+   */
+  private static void refreshDemandFields(ShoppingListLine target, ShoppingListLine source) {
+    target.setDisplayName(source.getDisplayName());
+    target.setRequestedQuantity(source.getRequestedQuantity());
+    target.setRequestedUnit(source.getRequestedUnit());
+    target.setSuggestedPackSizeG(source.getSuggestedPackSizeG());
+    target.setSuggestedPackCount(source.getSuggestedPackCount());
+    target.setSuggestedPackUnit(source.getSuggestedPackUnit());
+    target.setQualityNotes(source.getQualityNotes());
+    target.setEstimatedUnitPence(source.getEstimatedUnitPence());
+    target.setEstimatedLinePence(source.getEstimatedLinePence());
+    target.setEstimatedConfidence(source.getEstimatedConfidence());
+    target.setStaleEstimate(source.isStaleEstimate());
   }
 
   // ---------------------------------------------------------------------------------------------

@@ -135,7 +135,11 @@ class ShoppingListRecalcListener {
   /**
    * Drain elapsed debounce windows. Runs every second; recalculates each {@code (userId, planId)}
    * whose window has passed. Each recalculate runs in its own transaction via the {@link
-   * ShoppingListService} proxy. Idempotent: a same-generation recalculate returns the existing row.
+   * ShoppingListService} proxy. These windows are armed by inventory-drift events ({@code
+   * ItemSpoiled} / {@code ItemRanOut}), so the recalculate is sent with {@code force=true}: this
+   * listener exists precisely to react to pantry drift within a generation, and a plain
+   * (idempotent) recalculate would no-op against the cached list (frontend-gaps:
+   * grocery-recalculate-pantry-drift).
    */
   @Scheduled(fixedDelayString = "${mealprep.grocery.recalc-debounce-sweep-ms:1000}")
   void drainDebouncedRecalculations() {
@@ -154,7 +158,7 @@ class ShoppingListRecalcListener {
       }
       try {
         shoppingListService.recalculate(
-            key.userId(), new RecalculateShoppingListRequest(key.planId(), null));
+            key.userId(), new RecalculateShoppingListRequest(key.planId(), null, true));
         log.info("debounced recalculate fired for user={} plan={}", key.userId(), key.planId());
       } catch (RuntimeException ex) {
         log.warn(
