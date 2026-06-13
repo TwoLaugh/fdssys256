@@ -103,10 +103,10 @@ me:
       - cookieAuth: []
     responses:
       '200':
-        description: Authenticated user details.
+        description: Authenticated user details, including the admin-allowlist flag.
         content:
           application/json:
-            schema: { $ref: '../schemas/auth.yaml#/UserDto' }
+            schema: { $ref: '../schemas/auth.yaml#/CurrentUserDto' }
       '401':
         description: Missing or invalid authentication.
         content:

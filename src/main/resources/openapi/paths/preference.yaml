@@ -283,6 +283,14 @@ tasteProfile:
     tags: [Preferences]
     operationId: updateTasteProfile
     summary: Replace the calling user's taste profile document (manual override).
+    description: >-
+      Full-document replace. Server-managed scalars inside the document are RE-STAMPED server-side
+      and any client-supplied values for them are ignored: `version` and `lastUpdated` are bumped
+      in lock-step with the entity's `documentVersion`, and `basedOnFeedbackCount` /
+      `feedbackCursor` are copied from the server's own state (the delta-pipeline bookkeeping a
+      manual override must not be able to drift). The ~2500-token document budget is enforced on
+      this path exactly as on the AI delta path — an oversized pasted document is rejected 422
+      with no write.
     security:
       - cookieAuth: []
     requestBody:
@@ -313,6 +321,11 @@ tasteProfile:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '409':
         description: Stale expectedVersion.
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '422':
+        description: Document exceeds the ~2500-token taste-profile budget; nothing was written.
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }

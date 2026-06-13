@@ -1,10 +1,12 @@
 package com.example.mealprep.auth.api.controller;
 
+import com.example.mealprep.auth.api.dto.CurrentUserDto;
 import com.example.mealprep.auth.api.dto.LoginRequest;
 import com.example.mealprep.auth.api.dto.LoginResponse;
 import com.example.mealprep.auth.api.dto.PasswordChangeRequest;
 import com.example.mealprep.auth.api.dto.RegisterRequest;
 import com.example.mealprep.auth.api.dto.UserDto;
+import com.example.mealprep.auth.config.AdminAccessProperties;
 import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.service.AuthQueryService;
 import com.example.mealprep.auth.domain.service.AuthUpdateService;
@@ -47,16 +49,19 @@ public class AuthController {
   private final AuthQueryService authQueryService;
   private final CurrentUserResolver currentUserResolver;
   private final AuthProperties authProperties;
+  private final AdminAccessProperties adminAccessProperties;
 
   public AuthController(
       AuthUpdateService authUpdateService,
       AuthQueryService authQueryService,
       CurrentUserResolver currentUserResolver,
-      AuthProperties authProperties) {
+      AuthProperties authProperties,
+      AdminAccessProperties adminAccessProperties) {
     this.authUpdateService = authUpdateService;
     this.authQueryService = authQueryService;
     this.currentUserResolver = currentUserResolver;
     this.authProperties = authProperties;
+    this.adminAccessProperties = adminAccessProperties;
   }
 
   @PostMapping(
@@ -99,7 +104,7 @@ public class AuthController {
 
   @GetMapping(path = "/me", produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(summary = "Probe authentication state.")
-  public UserDto me() {
+  public CurrentUserDto me() {
     UUID userId =
         currentUserResolver
             .currentUserId()
@@ -107,10 +112,18 @@ public class AuthController {
                 () ->
                     new ResponseStatusException(
                         HttpStatus.UNAUTHORIZED, "Authentication required."));
-    return authQueryService
-        .getUser(userId)
-        .orElseThrow(
-            () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required."));
+    UserDto user =
+        authQueryService
+            .getUser(userId)
+            .orElseThrow(
+                () ->
+                    new ResponseStatusException(
+                        HttpStatus.UNAUTHORIZED, "Authentication required."));
+    // isAdmin rides the session probe (admin page spec §5) so the shell needs no /admin/status
+    // round trip to decide admin-nav visibility. Same allowlist the AdminAccessGuard enforces —
+    // a stale-positive here still 403s at the admin endpoints (display-only signal).
+    return new CurrentUserDto(
+        user.userId(), user.username(), user.createdAt(), adminAccessProperties.isAdmin(userId));
   }
 
   @PutMapping(

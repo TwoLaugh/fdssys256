@@ -243,18 +243,34 @@ The composite discipline: surface the glanceable figure, deep-link the rest.
    `POST /provisions/cook-event` (pantry deduction + underflow handling) from
    Today, or is cooking logged only from the recipe/cook surface? Backend gap
    candidate: a composed "slot eaten" operation or the event fan-out leg.
+   **Resolved (2026-06-13, frontend-gaps P3):** dual-write accepted for v1 as
+   documented (planner first; /nutrition repairs the gap); the composed
+   operation / event fan-out leg is the v1.5 item. "Mark cooked" stays a
+   planner-only state change from Today — `POST /provisions/cook-event` wiring
+   is deferred to the cook-mode surface (v1.5) so pantry deduction has a single
+   deliberate trigger.
 2. **Skip semantics across the two machines.** Planner SKIPPED is terminal;
    intake skip zeroes the slot's contribution. If the user skips on /nutrition
    only, the planner slot stays PLANNED and is *pinned to original* in past
    days (re-opt rules) — divergent representations of "didn't happen." Needs a
    product ruling on whether Today's Skip is the only sanctioned path.
+   **Resolved (2026-06-13, frontend-gaps P3):** ruled — Today's paired Skip is
+   the sanctioned path; the /nutrition-only skip intentionally leaves the
+   planner slot PLANNED. Divergence pinned in `lld/planner.md` (§enums) and
+   `lld/nutrition.md` (Flow 5).
 3. **Planner CUSTOM/SNACK slots have no intake row.** Nutrition pre-fill covers
    BREAKFAST/LUNCH/DINNER/SNACKS; a CUSTOM planner slot ("post-gym shake") gets
    planner-state buttons but no confirm target — and nutrition SNACKS is a
    day-level bucket, not slot-shaped. Confirm the join rule for non-core kinds.
+   **Resolved (2026-06-13, frontend-gaps P3):** join rule pinned in
+   `lld/nutrition.md` (Flow 5): CUSTOM → planner actions only, no intake
+   target; planner SNACK ↔ the day's cumulative SNACKS bucket.
 4. **Batch portion progress ("portion 3 of 5") not derivable.** The contract
    links slots by `batchCookSessionId` but exposes no cooked/consumed counter
    per session. Mock copy must degrade to a "batch-cooked" tag, or backend gap.
+   **Resolved (2026-06-13, frontend-gaps P3):** "batch-cooked" tag accepted for
+   v1; a per-session portion counter (provisions portions row is the natural
+   source) is a v1.5 enrichment.
 5. **Budget spent-so-far is null in v1.** `BudgetDto.spendTracking` ships null
    until grocery order history wires it (01f/01h); the card is target-only.
    Mock's spent bar stays behind a flag. (Alternative interim source: grocery

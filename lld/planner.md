@@ -346,6 +346,12 @@ Module-local enums:
 
 `SlotKind` and `MealKind` belong in `core.types` per [style-guide §core](style-guide.md#module-package-structure); the planner imports them.
 
+> **`SKIPPED` vs nutrition's intake skip** (pinned 2026-06-13, frontend-gaps P3 / today page spec
+> §8 Q2): planner `SKIPPED` is a terminal slot state and does NOT write nutrition intake; the
+> nutrition skip zeroes that day-slot's contribution and does NOT touch the planner slot. The
+> Today page's paired Skip (planner first, then nutrition) is the sanctioned user path; the
+> /nutrition-only skip intentionally leaves the slot `PLANNED`. See `lld/nutrition.md` Flow 5.
+
 ---
 
 ## DTOs
@@ -467,6 +473,15 @@ public record ResolutionOptionDto(
     String description,
     int slotsRecovered,
     BigDecimal scoreRecovered) {}
+```
+
+> **`ResolutionOptionDto.key` is display-only in v1** (pinned 2026-06-13, frontend-gaps P3 /
+> plan page spec §8 Q4): no apply endpoint consumes it. The UI deep-links each option to the
+> page that owns the underlying setting (slot config → /settings, nutrition floor → /nutrition,
+> budget → /pantry, preference → /preferences). A one-tap apply verb keyed on `key` is a v2
+> candidate; until then the key must not be parsed or round-tripped by clients.
+
+```java
 
 public enum ConflictType {
     HOUSEHOLD_HARD_COLLISION, NUTRITION_VS_BUDGET, PROVISIONS_BOTTLENECK, OVER_SPECIFIED_PREFERENCES

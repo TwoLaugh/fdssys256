@@ -81,6 +81,9 @@ class SessionLifecycleIT {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.username").value(fixture.username))
         .andExpect(jsonPath("$.userId").value(fixture.userId.toString()))
+        // Not on the (empty-by-default) admin allowlist — the session probe says so explicitly
+        // (CurrentUserDto.isAdmin; the allowlisted=true branch is unit-tested on the controller).
+        .andExpect(jsonPath("$.isAdmin").value(false))
         .andExpect(openApi().isValid(openApiValidator));
   }
 

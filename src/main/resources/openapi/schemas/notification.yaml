@@ -67,7 +67,14 @@ NotificationDto:
     body: { type: string, maxLength: 1000 }
     payload: { $ref: '#/NotificationPayload' }
     status: { $ref: '#/NotificationStatus' }
-    actionTargetUri: { type: string, maxLength: 512, nullable: true }
+    actionTargetUri:
+      type: string
+      maxLength: 512
+      nullable: true
+      description: >-
+        Frontend deep link in the IA route namespace (/pantry, /nutrition, /plan, /activity);
+        entity context (item ids, plan id, date, feedback id) rides the typed payload. Rows
+        created before 2026-06 may still carry legacy /app/* URIs.
     bundleCount: { type: integer }
     bundleKeys:
       type: array
@@ -132,7 +139,18 @@ NotificationPreferenceDto:
 
 UpdateNotificationPreferenceRequest:
   type: object
-  required: [enabledKinds, timezone]
+  description: >-
+    Full-replace document — always send every field. quietHoursEnabled, debounceWindowMinutes and
+    expectedVersion bind to Java primitives: omitting them silently defaults false/0/0, and an
+    omitted expectedVersion 409s against any previously-edited row, so they are contractually
+    required (notifications page spec §8 Q5 contract alignment). Only the quiet-hours window
+    times stay optional (nullable; required as a pair when quietHoursEnabled=true).
+  required:
+    - enabledKinds
+    - quietHoursEnabled
+    - timezone
+    - debounceWindowMinutes
+    - expectedVersion
   properties:
     enabledKinds:
       type: object

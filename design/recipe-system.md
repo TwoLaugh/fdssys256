@@ -241,6 +241,12 @@ Branch selection at plan-time is a planner concern. The Recipe System exposes br
 
 Over time a branch may drift so far from its parent that linking them is misleading. The system tracks divergence per branch (proportion of shared ingredients, method similarity). If divergence crosses a threshold, the system surfaces: *"this branch has become its own dish — promote to a standalone recipe?"* Promotion copies the branch out as a new recipe with a `forked_from` reference preserved for history.
 
+> **v1 status (recorded 2026-06-13, frontend-gaps P3 / recipe-detail page spec §11 Q4):** the
+> promote-to-standalone *action* is deferred to v1.1 as its own feature ticket
+> (`POST /recipes/{id}/branches/{branchId}/promote-to-recipe`). The divergence nudge renders
+> informational-only in v1; `forkedFromRecipeId` exists on the entity but no user action writes
+> it yet.
+
 ---
 
 ## Substitutions
@@ -465,7 +471,7 @@ Four entry points, one common pipeline:
 - **Manual entry** — user fills a form; simplest path.
 - **URL import** — AI extraction from a web page (mid-tier model, tool-use structured output).
 - **AI generation** — pipeline-triggered when the planner identifies a gap; generates a recipe against a constraint brief.
-- **Online discovery** — weekly, or gap-triggered. AI searches the web, filters by constraints, runs top results through URL import.
+- **Online discovery** — weekly, or gap-triggered. AI searches the web, filters by constraints, runs top results through URL import. *Skip semantics (ruled 2026-06-13, frontend-gaps P3 / discover page spec §9 Q5): skipping a discovery result is a **local dismissal only** — the recipe remains a live system-catalogue entry the planner may draw on. "Keep it out of my plans" is the recipe card's archive action (one tap away), not a skip side-effect.*
 
 All four converge on:
 
@@ -654,11 +660,11 @@ The shipped state machine is four states (`recipe.api.dto.SubstitutionState`), r
 PROPOSED (created by user or pipeline)
     │
     ├── user/pipeline accepts → ACCEPTED (overlay is live; applied in plans, applicationCount bumps)
-    ├── user rejects          → REJECTED   (terminal; retained in history)
+    ├── user rejects          → REJECTED   (re-acceptable; retained in history)
     └── (from ACCEPTED) applied / promoted → SUPERSEDED (overlay converted to a version; terminal)
 ```
 
-`PROPOSED → ACCEPTED | REJECTED`; `ACCEPTED → SUPERSEDED` on promote-to-version. `REJECTED` and `SUPERSEDED` are terminal.
+`PROPOSED → ACCEPTED | REJECTED`; `REJECTED → ACCEPTED` (a changed mind is one tap — the shipped service allows re-accept); `ACCEPTED → SUPERSEDED` on promote-to-version. **Only `SUPERSEDED` is hard-terminal** — amended 2026-06-13 (frontend-gaps P3 / recipe-detail page spec §11 Q3) to match the shipped service, which guards 422 on `SUPERSEDED` alone; the earlier "REJECTED is terminal" wording predated the build. Rejecting is reversible because the substitution row is retained intact; superseding is not because the overlay has been baked into a new version.
 
 **Lifecycle reconciliation (recipe-6).** The original sketch had a distinct `INACTIVE` ("constraint lifted / user reverts") state separate from a user rejection. The shipped four-state machine collapses both "user rejected it" and "constraint no longer applies" into **`REJECTED`** — there is no separate `INACTIVE`, and the original `deactivate` action was dropped in favour of explicit `accept` / `reject`. **Accepted v1 contract:** the planner does not currently need to distinguish "rejected by user" from "constraint no longer applies" — a substitution that is not `ACCEPTED` is simply not part of the active overlay set, which is all the overlay applier and planner read. If a future planner requirement needs that distinction (e.g. to auto-re-propose a constraint-lifted substitution when the constraint returns), a fifth state would be added then rather than pre-emptively in v1.
 

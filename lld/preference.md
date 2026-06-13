@@ -636,9 +636,16 @@ All endpoints under `/api/v1/preferences/...`. `userId` resolved server-side fro
 | GET    | `/api/v1/preferences/lifestyle-config` | — | `LifestyleConfigDto` | 200 / 404 |
 | PUT    | `/api/v1/preferences/lifestyle-config` | `UpdateLifestyleConfigRequest` | `LifestyleConfigDto` | 200 / 400 / 404 / 409 |
 | POST   | `/api/v1/preferences/lifestyle-config/mark-reviewed` | — | `LifestyleConfigDto` | 200 |
-| GET    | `/api/v1/preferences/profile-metadata` | — | `ProfileMetadataDto` | 200 / 404 |
-| PUT    | `/api/v1/preferences/profile-metadata` | `ProfileMetadataDto` | `ProfileMetadataDto` | 200 / 400 |
-| GET    | `/api/v1/preferences/soft-bundle` | — | `SoftPreferenceBundleDto` | 200 / 404 |
+| ~~GET~~    | ~~`/api/v1/preferences/profile-metadata`~~ | — | — | **never shipped** |
+| ~~PUT~~    | ~~`/api/v1/preferences/profile-metadata`~~ | — | — | **never shipped** |
+| ~~GET~~    | ~~`/api/v1/preferences/soft-bundle`~~ | — | — | **never shipped** (in-process reader only) |
+
+> **REST-table reconcile (2026-06-13, frontend-gaps P3 / preferences page spec §8 Q4):** the
+> profile-metadata pair (age group, portion scale) and the soft-bundle GET were planned here but
+> never built; the preferences page spec dropped the portion-scale control, confirming the drop
+> for v1. The soft-preference bundle is consumed in-process (planner / discovery read it via the
+> household soft-preferences reader), not over HTTP. Ship the endpoints only if product brings
+> the control back.
 
 `applyTasteProfileDeltas` (the AI-driven path) is **not** exposed via REST — it is invoked in-process by the feedback module via direct service injection. There is no client of this method outside the JVM.
 

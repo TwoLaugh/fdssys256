@@ -244,13 +244,18 @@ public class TasteProfileServiceImpl
     // bump in lock-step on every successful write — clients reading the document JSONB and the
     // entity's
     // documentVersion must see the same integer.
+    //
+    // ALL server-managed scalars are re-stamped (frontend-gaps P3, preferences page spec §8 Q1):
+    // basedOnFeedbackCount and feedbackCursor are copied from the entity — the server-side truth —
+    // never trusted from the client document, so a manual override cannot drift the JSONB copy
+    // away from the entity columns the delta pipeline reads.
     TasteProfileDocument inboundDocument = request.document();
     TasteProfileDocument stampedDocument =
         new TasteProfileDocument(
             today,
             newVersion,
-            inboundDocument.basedOnFeedbackCount(),
-            inboundDocument.feedbackCursor(),
+            profile.getBasedOnFeedbackCount(),
+            profile.getFeedbackCursor(),
             inboundDocument.softConstraints(),
             inboundDocument.flavourPreferences(),
             inboundDocument.texturePreferences(),
@@ -264,8 +269,14 @@ public class TasteProfileServiceImpl
             inboundDocument.activeExperiments(),
             inboundDocument.learnedInsights());
 
+    // The 2500-token budget applies to user-pasted documents exactly as it does to AI deltas
+    // (frontend-gaps P3, preferences page spec §8 Q3): an oversized override is rejected 422
+    // before any write, and the estimate is stamped like the delta path does.
+    int tokenEstimate = budgetGuard.enforce(stampedDocument);
+
     profile.setDocument(stampedDocument);
     profile.setDocumentVersion(newVersion);
+    profile.setLastTokenEstimate(tokenEstimate);
     // Manual overrides invalidate the embedded vector — flag for re-embed.
     profile.setTasteVectorStatus(TasteVectorStatus.PENDING);
     // saveAndFlush so the @Version bump materialises before we map to DTO (the controller assert on

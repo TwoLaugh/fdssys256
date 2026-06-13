@@ -104,7 +104,14 @@ class AuthMutationKillsTest {
       AuthQueryService queryService,
       CurrentUserResolver resolver,
       AuthProperties props) {
-    return new AuthController(updateService, queryService, resolver, props);
+    // Empty allowlist (the fail-closed default) — the isAdmin branches are pinned in
+    // AuthControllerMeTest; these mutation tests exercise the HTTP shape only.
+    return new AuthController(
+        updateService,
+        queryService,
+        resolver,
+        props,
+        new com.example.mealprep.auth.config.AdminAccessProperties(java.util.List.of()));
   }
 
   private static HttpServletRequest mockRequest(String ip, String ua) {
@@ -248,9 +255,13 @@ class AuthMutationKillsTest {
     when(resolver.currentUserId()).thenReturn(Optional.of(userId));
     when(queryService.getUser(userId)).thenReturn(Optional.of(dto));
 
-    UserDto result = controller(updateService, queryService, resolver, properties()).me();
+    var result = controller(updateService, queryService, resolver, properties()).me();
 
-    assertThat(result).isSameAs(dto);
+    // CurrentUserDto mirrors the UserDto projection + isAdmin (false: empty allowlist).
+    assertThat(result.userId()).isEqualTo(userId);
+    assertThat(result.username()).isEqualTo("alice");
+    assertThat(result.createdAt()).isEqualTo(dto.createdAt());
+    assertThat(result.isAdmin()).isFalse();
   }
 
   @Test

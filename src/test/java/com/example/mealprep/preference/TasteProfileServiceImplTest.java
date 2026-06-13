@@ -330,6 +330,66 @@ class TasteProfileServiceImplTest {
     assertThat(dto.document().version()).isEqualTo(2);
   }
 
+  @Test
+  void applyManualOverride_reStampsServerManagedScalars_fromEntityNotClient() {
+    UUID userId = UUID.randomUUID();
+    TasteProfile aggregate = TasteProfileTestData.aggregate(userId);
+    when(tasteProfileRepository.findByUserId(userId)).thenReturn(Optional.of(aggregate));
+    when(tasteProfileRepository.saveAndFlush(any(TasteProfile.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    // The inbound document claims basedOnFeedbackCount=7 / feedbackCursor="f-42" (the test-data
+    // defaults); the entity's truth is 0 / null. The server must re-stamp from the entity
+    // (preferences page spec §8 Q1) — client values for server-managed scalars are ignored.
+    UpdateTasteProfileRequest request = TasteProfileTestData.updateRequest(0L);
+
+    TasteProfileDto dto = service().applyManualOverride(userId, request, userId);
+
+    assertThat(dto.document().basedOnFeedbackCount()).isZero();
+    assertThat(dto.document().feedbackCursor()).isNull();
+    assertThat(dto.document().version()).isEqualTo(2);
+    assertThat(dto.document().lastUpdated()).isEqualTo(java.time.LocalDate.parse("2026-05-20"));
+    // The budget guard ran and stamped the estimate (same contract as the delta path).
+    assertThat(aggregate.getLastTokenEstimate()).isNotNull().isPositive();
+  }
+
+  @Test
+  void applyManualOverride_oversizedDocument_throwsBudgetExceeded_andWritesNothing() {
+    UUID userId = UUID.randomUUID();
+    TasteProfile aggregate = TasteProfileTestData.aggregate(userId);
+    when(tasteProfileRepository.findByUserId(userId)).thenReturn(Optional.of(aggregate));
+
+    // > 2500 tokens at ~4 chars/token — a user-pasted oversized document (preferences §8 Q3).
+    TasteProfileDocument base = TasteProfileTestData.populatedDocument(0);
+    TasteProfileDocument oversized =
+        new TasteProfileDocument(
+            base.lastUpdated(),
+            base.version(),
+            base.basedOnFeedbackCount(),
+            base.feedbackCursor(),
+            base.softConstraints(),
+            base.flavourPreferences(),
+            base.texturePreferences(),
+            base.ingredientPreferences(),
+            base.cuisinePreferences(),
+            base.cookingPreferences(),
+            base.portionStyle(),
+            base.householdContext(),
+            base.recipesToRepeat(),
+            base.recipesToAvoid(),
+            base.activeExperiments(),
+            List.of("x".repeat(12_000)));
+    UpdateTasteProfileRequest request =
+        TasteProfileTestData.updateRequestWithDocument(oversized, 0L);
+
+    assertThatThrownBy(() -> service().applyManualOverride(userId, request, userId))
+        .isInstanceOf(
+            com.example.mealprep.preference.exception.TasteProfileBudgetExceededException.class);
+    // Guard fires before any write: no flush, no audit, no version snapshot, no event.
+    verify(tasteProfileRepository, never()).saveAndFlush(any());
+    verifyNoInteractions(eventPublisher, auditLogRepository, versionRepository);
+  }
+
   // ---------------- applyDeltas ----------------
 
   @Test
