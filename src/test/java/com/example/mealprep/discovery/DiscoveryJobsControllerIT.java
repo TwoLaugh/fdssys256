@@ -187,6 +187,68 @@ class DiscoveryJobsControllerIT {
   }
 
   @Test
+  void start_userDisabledRequestedSource_returns422_distinctMessage() throws Exception {
+    // Naming a user-disabled source → 422 like an admin-disabled one, but with the distinct
+    // "disabled by you" vocabulary (ticket discovery-user-source-disable).
+    AuthedUser user = registerUser();
+    DiscoverySource src = seedSource("src_ud", true);
+    src.setUserDisabled(true);
+    sourceRepository.saveAndFlush(src);
+
+    StartDiscoveryJobRequest req =
+        new StartDiscoveryJobRequest(
+            DiscoveryJobTrigger.USER_INITIATED,
+            5,
+            DiscoveryTestData.sampleConstraints(),
+            List.of("src_ud"),
+            null);
+
+    MvcResult result =
+        mvc.perform(
+                post("/api/v1/discovery/jobs")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(req)))
+            .andExpect(status().isUnprocessableEntity())
+            .andExpect(
+                jsonPath("$.type")
+                    .value("https://mealprep.example.com/problems/discovery-constraint-invalid"))
+            .andReturn();
+    String detail =
+        objectMapper.readTree(result.getResponse().getContentAsString()).get("detail").asText();
+    assertThat(detail).contains("disabled by you").contains("src_ud");
+    assertThat(detail).doesNotContain("unknown or disabled source keys");
+  }
+
+  @Test
+  void start_defaultSourceSet_excludesUserDisabled_zeroLeft_returns422() throws Exception {
+    // The default "all enabled sources" resolution applies enabled && !userDisabled: with the
+    // only enabled source user-disabled, a null-sourceKeys start fails the zero-source guard.
+    AuthedUser user = registerUser();
+    DiscoverySource src = seedSource("src_only", true);
+    src.setUserDisabled(true);
+    sourceRepository.saveAndFlush(src);
+
+    StartDiscoveryJobRequest req =
+        new StartDiscoveryJobRequest(
+            DiscoveryJobTrigger.USER_INITIATED,
+            5,
+            DiscoveryTestData.sampleConstraints(),
+            null,
+            null);
+
+    mvc.perform(
+            post("/api/v1/discovery/jobs")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/discovery-constraint-invalid"));
+  }
+
+  @Test
   void start_requestedCountTooLow_returns400() throws Exception {
     AuthedUser user = registerUser();
     seedSource("src_a", true);
@@ -318,17 +380,20 @@ class DiscoveryJobsControllerIT {
   // ---------------- cancel ----------------
 
   @Test
-  void cancel_queuedJob_flipsToFailed_returns200() throws Exception {
+  void cancel_queuedJob_flipsToCancelled_returns200() throws Exception {
     AuthedUser user = registerUser();
     seedSource("src_a", true);
     // Seed directly as QUEUED — POSTing would trigger the async runner which moves it to RUNNING
     // before cancel reads it (then cancel takes the RUNNING branch and the job stays RUNNING).
     UUID jobId = seedJobRow(user, DiscoveryJobStatus.QUEUED);
 
+    // Status is the contract (CANCELLED, ticket discovery-cancelled-status); errorSummary keeps
+    // "cancelled by user" for one release for consumers still string-matching.
     mvc.perform(post("/api/v1/discovery/jobs/" + jobId + "/cancel").cookie(user.cookie()))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.status").value("FAILED"))
-        .andExpect(jsonPath("$.errorSummary").value("cancelled by user"));
+        .andExpect(jsonPath("$.status").value("CANCELLED"))
+        .andExpect(jsonPath("$.errorSummary").value("cancelled by user"))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 
   @Test
@@ -346,6 +411,21 @@ class DiscoveryJobsControllerIT {
     // Seed directly as terminal — POSTing would trigger the async runner which races the
     // jdbcTemplate UPDATE (runner can overwrite SUCCEEDED back to RUNNING before cancel reads).
     UUID jobId = seedJobRow(user, DiscoveryJobStatus.SUCCEEDED);
+
+    mvc.perform(post("/api/v1/discovery/jobs/" + jobId + "/cancel").cookie(user.cookie()))
+        .andExpect(status().isUnprocessableEntity())
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/discovery-job-already-terminal"));
+  }
+
+  @Test
+  void cancel_cancelledJob_returns422_cancelledIsTerminal() throws Exception {
+    // Double cancel after the first one finalised: CANCELLED is terminal, so the 422
+    // already-terminal contract holds (ticket discovery-cancelled-status).
+    AuthedUser user = registerUser();
+    seedSource("src_a", true);
+    UUID jobId = seedJobRow(user, DiscoveryJobStatus.CANCELLED);
 
     mvc.perform(post("/api/v1/discovery/jobs/" + jobId + "/cancel").cookie(user.cookie()))
         .andExpect(status().isUnprocessableEntity())

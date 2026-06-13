@@ -644,13 +644,19 @@ public class DiscoveryJobRunner {
 
     int ingested = 0;
     for (DiscoveryCandidate candidate : candidates) {
-      // Cancellation check (per-iteration) per ticket invariant 17.
+      // Cancellation check (per-iteration) per ticket invariant 17. Finalises CANCELLED (ticket
+      // discovery-cancelled-status) keeping all counters and the already-ingested harvest;
+      // errorSummary keeps "cancelled by user" for one release for string-matching consumers.
       AtomicBoolean cancelFlag = cancellationRequests.get(jobId);
       if (cancelFlag != null && cancelFlag.get()) {
-        log.info("discovery job {} cancelled by user; finalising FAILED", jobId);
+        log.info("discovery job {} cancelled by user; finalising CANCELLED", jobId);
         transitions.finaliseTo(
-            jobId, DiscoveryJobStatus.FAILED, "cancelled by user", sourcesSucceeded, sourcesFailed);
-        completeSyncWaiter(jobId, DiscoveryJobStatus.FAILED);
+            jobId,
+            DiscoveryJobStatus.CANCELLED,
+            "cancelled by user",
+            sourcesSucceeded,
+            sourcesFailed);
+        completeSyncWaiter(jobId, DiscoveryJobStatus.CANCELLED);
         publishJobCompleted(jobId, userId, traceId);
         return;
       }

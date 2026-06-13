@@ -617,7 +617,7 @@ class DiscoveryJobRunnerTest {
   // -------- cancellation flag short-circuits the loop --------
 
   @Test
-  void run_cancellationFlagSet_finalisesFailedCancelled() {
+  void run_cancellationFlagSet_finalisesCancelled() {
     // Bug fix verification: prior to the terminal-state guard in DiscoveryJobTransitions.finaliseTo
     // (+ the Optional-return gating in DiscoveryJobRunner.finalise/finaliseCrashed), a cancelled
     // job was finalised TWICE — once with "cancelled by user" from the fetchPhase fast-path, then
@@ -663,11 +663,12 @@ class DiscoveryJobRunnerTest {
 
     verify(source, never()).fetchRecipe(any());
 
-    // The cancellation fast-path's finaliseTo MUST have been invoked with "cancelled by user".
+    // The cancellation fast-path's finaliseTo MUST have been invoked with CANCELLED +
+    // "cancelled by user" (status is the contract; the errorSummary stays one more release).
     verify(transitions)
         .finaliseTo(
             eq(jobId),
-            eq(DiscoveryJobStatus.FAILED),
+            eq(DiscoveryJobStatus.CANCELLED),
             eq("cancelled by user"),
             anyList(),
             anyList());

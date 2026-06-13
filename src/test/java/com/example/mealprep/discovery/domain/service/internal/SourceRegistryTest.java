@@ -82,6 +82,23 @@ class SourceRegistryTest {
   }
 
   @Test
+  void resolveEnabledByKeyExcludesUserDisabledRows() {
+    // Effective availability is enabled && !userDisabled (ticket discovery-user-source-disable):
+    // an enabled-but-user-disabled row must not resolve to its bean even when requested.
+    StubSource a = new StubSource("src_a");
+    StubSource b = new StubSource("src_b");
+    DiscoverySource rowA = DiscoveryTestData.sampleSource("src_a");
+    rowA.setUserDisabled(true);
+    DiscoverySource rowB = DiscoveryTestData.sampleSource("src_b");
+    DiscoverySourceRepository repo = Mockito.mock(DiscoverySourceRepository.class);
+    when(repo.findByEnabledTrue()).thenReturn(List.of(rowA, rowB));
+    SourceRegistry registry = new SourceRegistry(List.of(a, b), repo, fixedClock);
+    registry.index();
+
+    assertThat(registry.resolveEnabledByKey(List.of("src_a", "src_b"))).containsExactly(b);
+  }
+
+  @Test
   void isCircuitOpenTrueWhenStreakAtThresholdAndRecent() {
     StubSource a = new StubSource("src_a");
     DiscoverySource row = DiscoveryTestData.sampleSource("src_a");

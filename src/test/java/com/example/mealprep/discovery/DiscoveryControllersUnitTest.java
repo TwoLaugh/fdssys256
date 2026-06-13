@@ -181,7 +181,8 @@ class DiscoveryControllersUnitTest {
   @Test
   void sourcesController_list_authedUser_returnsList() {
     DiscoverySourcesController controller =
-        new DiscoverySourcesController(discoveryQueryService, currentUserResolver);
+        new DiscoverySourcesController(
+            discoveryQueryService, discoveryService, currentUserResolver);
     when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
     DiscoverySourceDto dto = sampleSourceDto("src_a");
     when(discoveryQueryService.listSources()).thenReturn(List.of(dto));
@@ -194,7 +195,8 @@ class DiscoveryControllersUnitTest {
   @Test
   void sourcesController_list_anonymous_throws401() {
     DiscoverySourcesController controller =
-        new DiscoverySourcesController(discoveryQueryService, currentUserResolver);
+        new DiscoverySourcesController(
+            discoveryQueryService, discoveryService, currentUserResolver);
     when(currentUserResolver.currentUserId()).thenReturn(Optional.empty());
 
     assertThatThrownBy(controller::list).isInstanceOf(ResponseStatusException.class);
@@ -204,7 +206,8 @@ class DiscoveryControllersUnitTest {
   @Test
   void sourcesController_getByKey_unknown_throws404() {
     DiscoverySourcesController controller =
-        new DiscoverySourcesController(discoveryQueryService, currentUserResolver);
+        new DiscoverySourcesController(
+            discoveryQueryService, discoveryService, currentUserResolver);
     when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
     when(discoveryQueryService.getSource("nope")).thenReturn(Optional.empty());
 
@@ -215,12 +218,63 @@ class DiscoveryControllersUnitTest {
   @Test
   void sourcesController_getByKey_known_returnsDto() {
     DiscoverySourcesController controller =
-        new DiscoverySourcesController(discoveryQueryService, currentUserResolver);
+        new DiscoverySourcesController(
+            discoveryQueryService, discoveryService, currentUserResolver);
     when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
     DiscoverySourceDto dto = sampleSourceDto("src_a");
     when(discoveryQueryService.getSource("src_a")).thenReturn(Optional.of(dto));
 
     assertThat(controller.getByKey("src_a")).isSameAs(dto);
+  }
+
+  @Test
+  void sourcesController_userDisable_authedUser_delegates() {
+    DiscoverySourcesController controller =
+        new DiscoverySourcesController(
+            discoveryQueryService, discoveryService, currentUserResolver);
+    when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
+    DiscoverySourceDto dto = sampleSourceDto("src_a");
+    when(discoveryService.userDisableSource("src_a")).thenReturn(dto);
+
+    assertThat(controller.userDisable("src_a")).isSameAs(dto);
+    verify(discoveryService, times(1)).userDisableSource("src_a");
+  }
+
+  @Test
+  void sourcesController_userDisable_anonymous_throws401() {
+    DiscoverySourcesController controller =
+        new DiscoverySourcesController(
+            discoveryQueryService, discoveryService, currentUserResolver);
+    when(currentUserResolver.currentUserId()).thenReturn(Optional.empty());
+
+    assertThatThrownBy(() -> controller.userDisable("src_a"))
+        .isInstanceOf(ResponseStatusException.class);
+    verify(discoveryService, never()).userDisableSource(any());
+  }
+
+  @Test
+  void sourcesController_userEnable_authedUser_delegates() {
+    DiscoverySourcesController controller =
+        new DiscoverySourcesController(
+            discoveryQueryService, discoveryService, currentUserResolver);
+    when(currentUserResolver.currentUserId()).thenReturn(Optional.of(USER_ID));
+    DiscoverySourceDto dto = sampleSourceDto("src_a");
+    when(discoveryService.userEnableSource("src_a")).thenReturn(dto);
+
+    assertThat(controller.userEnable("src_a")).isSameAs(dto);
+    verify(discoveryService, times(1)).userEnableSource("src_a");
+  }
+
+  @Test
+  void sourcesController_userEnable_anonymous_throws401() {
+    DiscoverySourcesController controller =
+        new DiscoverySourcesController(
+            discoveryQueryService, discoveryService, currentUserResolver);
+    when(currentUserResolver.currentUserId()).thenReturn(Optional.empty());
+
+    assertThatThrownBy(() -> controller.userEnable("src_a"))
+        .isInstanceOf(ResponseStatusException.class);
+    verify(discoveryService, never()).userEnableSource(any());
   }
 
   // ============================ DiscoveryAdminController ============================
@@ -446,6 +500,7 @@ class DiscoveryControllersUnitTest {
         DiscoverySourceKind.SITEMAP,
         "https://x.test",
         true,
+        false,
         6,
         500,
         true,

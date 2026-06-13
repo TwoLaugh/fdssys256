@@ -47,7 +47,7 @@ public interface DiscoveryJobRepository extends JpaRepository<DiscoveryJob, UUID
   List<DiscoveryJob> findOrphanRunning(@Param("threshold") Instant threshold);
 
   /**
-   * Native UPDATE for the QUEUED→FAILED cancellation flip. Bypasses Hibernate's full-entity
+   * Native UPDATE for the QUEUED→CANCELLED cancellation flip. Bypasses Hibernate's full-entity
    * dirty-check + {@code @Version} optimistic locking, which races with the async {@code
    * DiscoveryJobRunner}'s persistence context when the runner picks the job up between the
    * controller's read and write (round-8 retro: StaleObjectStateException pattern). Bumps
@@ -57,14 +57,14 @@ public interface DiscoveryJobRepository extends JpaRepository<DiscoveryJob, UUID
    * clause makes the flip atomic against a concurrent runner claim: if the async runner already
    * transitioned the row QUEUED→RUNNING (via {@code DiscoveryJobTransitions.claim}) in the window
    * between the controller's read and this UPDATE, the guarded UPDATE affects 0 rows rather than
-   * clobbering the now-RUNNING job back to FAILED. {@code cancelJob} treats {@code rows == 0} as
+   * clobbering the now-RUNNING job back to CANCELLED. {@code cancelJob} treats {@code rows == 0} as
    * "already claimed/terminal" and falls through to the in-memory cancellation-flag path so the
    * running job still stops cleanly.
    */
   // clearAutomatically + flushAutomatically: the cancel flow loads the job via
   // findByIdAndUserId (managed, QUEUED) before this bulk UPDATE. Without clearing, the controller's
   // post-cancel re-read returns the stale first-level-cached QUEUED entity instead of the
-  // freshly-UPDATEd FAILED row (textbook @Modifying stale-persistence-context trap).
+  // freshly-UPDATEd CANCELLED row (textbook @Modifying stale-persistence-context trap).
   @Modifying(clearAutomatically = true, flushAutomatically = true)
   @Query(
       "UPDATE DiscoveryJob j SET j.status = :status, j.completedAt = :completedAt,"

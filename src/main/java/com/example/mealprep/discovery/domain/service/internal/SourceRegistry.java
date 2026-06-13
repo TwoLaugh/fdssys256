@@ -62,15 +62,18 @@ class SourceRegistry {
   }
 
   /**
-   * Enabled DB rows whose {@code source_key} matches both a registered bean and one of {@code
-   * requestedKeys}. DB rows without a bean are logged at WARN and skipped — silent skipping would
-   * mask a deploy-time wiring bug. This is the runner's single resolution entry point (the runner
-   * always supplies the job's requested-source list); a no-arg resolve-all variant was removed as
-   * dead code (discovery-8).
+   * Effectively-available DB rows ({@code enabled && !userDisabled}, ticket
+   * discovery-user-source-disable) whose {@code source_key} matches both a registered bean and one
+   * of {@code requestedKeys}. DB rows without a bean are logged at WARN and skipped — silent
+   * skipping would mask a deploy-time wiring bug. This is the runner's single resolution entry
+   * point (the runner always supplies the job's requested-source list); a no-arg resolve-all
+   * variant was removed as dead code (discovery-8). Resolution happens once at claim time —
+   * mid-flight toggles do not affect a running job (sources frozen at enqueue, unchanged).
    */
   List<DiscoverySource> resolveEnabledByKey(Collection<String> requestedKeys) {
     Set<String> requested = new HashSet<>(requestedKeys);
     return repository.findByEnabledTrue().stream()
+        .filter(row -> !row.isUserDisabled())
         .filter(row -> requested.contains(row.getSourceKey()))
         .map(this::beanForRowOrWarn)
         .filter(Objects::nonNull)

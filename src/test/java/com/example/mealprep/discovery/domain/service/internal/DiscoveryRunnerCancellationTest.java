@@ -163,11 +163,12 @@ class DiscoveryRunnerCancellationTest {
 
     // finally runs after run() completes
     assertThat(cancellationMap()).doesNotContainKey(jobId);
-    // Cancel flag interruption should produce a "cancelled by user" finalise.
+    // Cancel flag interruption finalises CANCELLED (ticket discovery-cancelled-status) with the
+    // belt-and-braces "cancelled by user" errorSummary kept for one release.
     verify(transitions)
         .finaliseTo(
             eq(jobId),
-            eq(DiscoveryJobStatus.FAILED),
+            eq(DiscoveryJobStatus.CANCELLED),
             eq("cancelled by user"),
             anyList(),
             anyList());

@@ -98,18 +98,25 @@ class DiscoveryAdminControllerIT {
   }
 
   @Test
-  void enable_disabledSource_flipsTrue_returns200() throws Exception {
+  void enable_disabledSource_flipsTrue_clearsUserDisabled_returns200() throws Exception {
     AuthedUser user = registerUser();
     DiscoverySource src = seedSource("src_a", false);
+    // Admin enable also clears userDisabled (documented behaviour — "so a re-enabled source is
+    // visible again"); pin it here per the user-source-disable ticket's edge-case checklist.
+    src.setUserDisabled(true);
+    sourceRepository.saveAndFlush(src);
 
     mvc.perform(
             post("/api/v1/discovery/admin/sources/" + src.getSourceKey() + "/enable")
                 .cookie(user.cookie()))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.enabled").value(true))
+        .andExpect(jsonPath("$.userDisabled").value(false))
         .andExpect(openApi().isValid(openApiValidator));
 
-    assertThat(sourceRepository.findBySourceKey("src_a").orElseThrow().isEnabled()).isTrue();
+    DiscoverySource reloaded = sourceRepository.findBySourceKey("src_a").orElseThrow();
+    assertThat(reloaded.isEnabled()).isTrue();
+    assertThat(reloaded.isUserDisabled()).isFalse();
   }
 
   @Test

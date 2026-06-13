@@ -7,7 +7,9 @@ import java.util.UUID;
 /**
  * Cross-module read shape for {@code DiscoverySource}. Mirrors LLD lines 206-213; only operational
  * fields needed by admin / debug callers are exposed (no {@code crawlConfig} JSONB, no {@code
- * qualityScore} until v2).
+ * qualityScore} until v2). {@code userDisabled} (ticket discovery-user-source-disable) sits next to
+ * the admin {@code enabled} flag so the sources panel can caption "disabled by you" vs "unavailable
+ * (admin)".
  */
 public record DiscoverySourceDto(
     UUID id,
@@ -16,6 +18,7 @@ public record DiscoverySourceDto(
     DiscoverySourceKind kind,
     String baseUrl,
     boolean enabled,
+    boolean userDisabled,
     int requestsPerMinute,
     int requestsPerDay,
     boolean respectRobotsTxt,

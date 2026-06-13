@@ -1,6 +1,7 @@
 package com.example.mealprep.discovery;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -127,5 +128,97 @@ class DiscoverySourcesControllerIT {
         .andExpect(
             jsonPath("$.type")
                 .value("https://mealprep.example.com/problems/discovery-source-not-found"));
+  }
+
+  // ---------------- user-disable / user-enable (ticket discovery-user-source-disable) ----------
+
+  @Test
+  void userDisable_setsUserDisabled_keepsEnabled_returns200() throws Exception {
+    AuthedUser user = registerUser();
+    seedSource("src_a");
+
+    mvc.perform(post("/api/v1/discovery/sources/src_a/user-disable").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.sourceKey").value("src_a"))
+        .andExpect(jsonPath("$.userDisabled").value(true))
+        .andExpect(jsonPath("$.enabled").value(true)) // admin flag untouched
+        .andExpect(openApi().isValid(openApiValidator));
+
+    assertThat(sourceRepository.findBySourceKey("src_a").orElseThrow().isUserDisabled()).isTrue();
+  }
+
+  @Test
+  void userDisable_idempotent_secondCallReturns200Unchanged() throws Exception {
+    AuthedUser user = registerUser();
+    seedSource("src_a");
+
+    mvc.perform(post("/api/v1/discovery/sources/src_a/user-disable").cookie(user.cookie()))
+        .andExpect(status().isOk());
+    mvc.perform(post("/api/v1/discovery/sources/src_a/user-disable").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.userDisabled").value(true));
+  }
+
+  @Test
+  void userEnable_clearsUserDisabled_returns200_idempotent() throws Exception {
+    AuthedUser user = registerUser();
+    DiscoverySource src = seedSource("src_a");
+    src.setUserDisabled(true);
+    sourceRepository.saveAndFlush(src);
+
+    mvc.perform(post("/api/v1/discovery/sources/src_a/user-enable").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.userDisabled").value(false))
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // Idempotent re-tap.
+    mvc.perform(post("/api/v1/discovery/sources/src_a/user-enable").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.userDisabled").value(false));
+  }
+
+  @Test
+  void userEnable_adminDisabledSource_staysUnavailable_enabledWins() throws Exception {
+    // Admin-disabled + user-enabled → still unavailable; the DTO carries both flags so the
+    // panel can caption "unavailable (admin)" vs "disabled by you".
+    AuthedUser user = registerUser();
+    DiscoverySource src = seedSource("src_a");
+    src.setEnabled(false); // admin-disabled
+    src.setUserDisabled(true);
+    sourceRepository.saveAndFlush(src);
+
+    mvc.perform(post("/api/v1/discovery/sources/src_a/user-enable").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.userDisabled").value(false))
+        .andExpect(jsonPath("$.enabled").value(false)); // enabled wins — untouched by user verb
+  }
+
+  @Test
+  void userDisable_unknownSource_returns404() throws Exception {
+    AuthedUser user = registerUser();
+    mvc.perform(post("/api/v1/discovery/sources/nope/user-disable").cookie(user.cookie()))
+        .andExpect(status().isNotFound())
+        .andExpect(
+            jsonPath("$.type")
+                .value("https://mealprep.example.com/problems/discovery-source-not-found"));
+  }
+
+  @Test
+  void userDisable_anonymous_returns401() throws Exception {
+    mvc.perform(post("/api/v1/discovery/sources/src_a/user-disable"))
+        .andExpect(status().isUnauthorized());
+  }
+
+  @Test
+  void list_surfacesUserDisabledFlag() throws Exception {
+    AuthedUser user = registerUser();
+    DiscoverySource src = seedSource("src_a");
+    src.setUserDisabled(true);
+    sourceRepository.saveAndFlush(src);
+
+    mvc.perform(get("/api/v1/discovery/sources").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[0].userDisabled").value(true))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 }

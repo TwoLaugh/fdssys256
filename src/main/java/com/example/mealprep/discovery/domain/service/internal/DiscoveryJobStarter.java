@@ -121,7 +121,15 @@ public class DiscoveryJobStarter {
 
   private List<DiscoverySource> resolveSources(List<String> requestedKeys) {
     if (requestedKeys == null) {
-      return sourceRepository.findByEnabledTrue();
+      // Effective availability is enabled && !userDisabled (ticket discovery-user-source-disable):
+      // the default "all enabled sources" set excludes user-disabled rows.
+      List<DiscoverySource> available = new ArrayList<>();
+      for (DiscoverySource s : sourceRepository.findByEnabledTrue()) {
+        if (!s.isUserDisabled()) {
+          available.add(s);
+        }
+      }
+      return available;
     }
     if (requestedKeys.isEmpty()) {
       // Caller explicitly sent an empty array — treat as "match nothing" to fail fast at the
@@ -133,19 +141,33 @@ public class DiscoveryJobStarter {
     for (DiscoverySource s : found) {
       byKey.put(s.getSourceKey(), s);
     }
-    List<String> errors = new ArrayList<>();
+    // Two distinct 422 vocabularies per the ticket: unknown/admin-disabled keys keep the
+    // historical "unknown or disabled" wording ("unavailable (admin)"); user-disabled keys get
+    // "disabled by you" so the UI can caption the difference.
+    List<String> unavailable = new ArrayList<>();
+    List<String> userDisabled = new ArrayList<>();
     List<DiscoverySource> resolved = new ArrayList<>();
     for (String requested : requestedKeys) {
       DiscoverySource match = byKey.get(requested);
       if (match == null || !match.isEnabled()) {
-        errors.add(requested);
+        unavailable.add(requested);
+      } else if (match.isUserDisabled()) {
+        userDisabled.add(requested);
       } else {
         resolved.add(match);
       }
     }
-    if (!errors.isEmpty()) {
-      throw new DiscoveryConstraintInvalidException(
-          "unknown or disabled source keys: " + String.join(", ", errors), errors);
+    if (!unavailable.isEmpty() || !userDisabled.isEmpty()) {
+      List<String> parts = new ArrayList<>(2);
+      if (!unavailable.isEmpty()) {
+        parts.add("unknown or disabled source keys: " + String.join(", ", unavailable));
+      }
+      if (!userDisabled.isEmpty()) {
+        parts.add("source keys disabled by you: " + String.join(", ", userDisabled));
+      }
+      List<String> errors = new ArrayList<>(unavailable);
+      errors.addAll(userDisabled);
+      throw new DiscoveryConstraintInvalidException(String.join("; ", parts), errors);
     }
     return resolved;
   }

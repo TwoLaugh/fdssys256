@@ -287,7 +287,7 @@ class DiscoveryRunnerParallelSourcesTest {
     verify(transitions)
         .finaliseTo(
             eq(jobId),
-            eq(DiscoveryJobStatus.FAILED),
+            eq(DiscoveryJobStatus.CANCELLED),
             eq("cancelled by user"),
             anyList(),
             anyList());

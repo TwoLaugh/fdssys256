@@ -905,7 +905,7 @@ class DiscoveryRunnerMutationKillsTest {
     runner.run(startedEvent(jobId));
 
     DiscoveryJobStatus status = waiter.get(1, TimeUnit.SECONDS);
-    assertThat(status).isEqualTo(DiscoveryJobStatus.FAILED);
+    assertThat(status).isEqualTo(DiscoveryJobStatus.CANCELLED);
   }
 
   // ===================== executeJob bookkeeping (recordCandidatesAfterFilter @ L276)

@@ -94,8 +94,9 @@ public class DiscoveryJobsController {
   @PostMapping(path = "/{jobId}/cancel", produces = MediaType.APPLICATION_JSON_VALUE)
   @Operation(
       summary =
-          "Cancel a queued discovery job. Returns the updated DTO. 422 for terminal /"
-              + " in-flight states (01b limitation).")
+          "Cancel a discovery job. QUEUED flips atomically to CANCELLED; RUNNING returns 200 with"
+              + " the still-RUNNING DTO and the runner finalises CANCELLED between candidates;"
+              + " terminal states return 422.")
   public DiscoveryJobDto cancel(@PathVariable UUID jobId) {
     UUID userId = requireCurrentUserId();
     discoveryService.cancelJob(userId, jobId);
