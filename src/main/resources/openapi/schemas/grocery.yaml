@@ -149,6 +149,14 @@ RecalculateShoppingListRequest:
     planGeneration:
       type: integer
       nullable: true
+    force:
+      type: boolean
+      default: false
+      description: >
+        Rebuild lines for the existing (planId, planGeneration) list, picking up pantry/provisions
+        drift within the generation. Decided lines (bought/substituted/dropped) are preserved by
+        mapping key; only UNFILLED lines without new demand are dropped. Default false keeps the
+        idempotent cached-list behaviour.
 
 ShoppingListExportDto:
   type: object
