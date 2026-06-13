@@ -240,9 +240,11 @@ class AdaptationServiceContractTest {
     assertThat(AdaptationResultDto.class.getDeclaredFields()).isNotEmpty();
     assertThat(AdaptationJobDto.class.getDeclaredFields()).isNotEmpty();
     // Count only real declared fields. Under Pitest/JaCoCo the class is instrumented with
-    // synthetic probe fields ($jacocoData, $$$pitXXX), so a raw getDeclaredFields().hasSize(8)
-    // fails the Pitest baseline green-suite check even though the DTO genuinely has 8 fields.
-    assertThat(realFieldCount(PendingChangeListItemDto.class)).isEqualTo(8);
+    // synthetic probe fields ($jacocoData, $$$pitXXX), so a raw getDeclaredFields().hasSize(11)
+    // fails the Pitest baseline green-suite check even though the DTO genuinely has 11 fields.
+    // 8 original + status/resolvedAt/optimisticVersion (frontend-gaps:
+    // adaptation-pending-change-list-dto).
+    assertThat(realFieldCount(PendingChangeListItemDto.class)).isEqualTo(11);
     assertThat(AdaptationTraceDto.class.getDeclaredFields()).isNotEmpty();
   }
 
