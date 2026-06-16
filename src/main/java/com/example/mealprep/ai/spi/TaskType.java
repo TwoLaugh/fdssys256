@@ -19,6 +19,10 @@ public enum TaskType {
   DISCOVERY_FILTERING,
   NUTRITION_INGREDIENT_PARSE,
   NUTRITION_INGREDIENT_MATCH,
+  // Estimate micronutrients a data source could not supply (no USDA/recipe value), from the
+  // recipe's name + ingredients. Low-trust by design — the result is tagged source="estimated"
+  // + a confidence, never blended with measured/derived data without that flag.
+  NUTRIENT_ESTIMATION,
   PLANNER_STAGE_C,
   PLANNER_PHASE2_AUGMENTATION,
   // Embedding sources — one per EmbeddingTaskType. Stored on ai_call_log.task_type so 01b's
