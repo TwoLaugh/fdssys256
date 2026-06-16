@@ -132,3 +132,37 @@ composition-timing constraint from the in-meal-sides design.
 3. **Decision engine**: deterministic-only (cheap, no tokens) or deterministic + LLM
    appropriateness (better pairings, uses gpt-5.4-mini, adds latency)?
 4. Cap on additions/meal (default 3) and whether the snack slot should prefer additions vs a recipe.
+
+---
+
+## Build status (implemented)
+
+**Phase 1 — portion scaling** ✅ (commit `165dba7`). `PortionScaler` + `DailyMacroAggregator`
+scale each per-person serving toward the slot's per-meal calorie target (clamp 0.5–3.0, step
+0.25). Verified e2e: day kcal **2,610 → ~3,196**. Calorie binding is calorie-only for v1 (the
+protein-OR-calorie option in open-decision #1 is not built); persisting `portionFactor` onto
+`ScheduledRecipe` for grocery/UI (Phase 1b) is **not** built — scaling lives in the
+aggregator/coverage only so far.
+
+**Phase 2 — additions** ✅ backend (commits `43f9bbe`, `e5a32f5`, `74fd1a4`). Both kinds modelled;
+the **INGREDIENT** path is fully wired:
+- `Addition`/`AdditionKind` carry their own `NutritionPerServingDto` (macros + micros + provenance);
+  `SlotAssignment` rider + `ScheduledRecipe` jsonb column (migration `V20260616110200`); the
+  aggregator sums each addition verbatim (not portion-scaled).
+- `AdditionCandidateCatalogue` (curated whole foods + portion + micro affinity) → `AdditionNutrition
+  Resolver` resolves nutrition, **preferring the live USDA ingredient-mapping cache
+  (`NutritionQueryService.lookupIngredient`) and falling back to the catalogue's USDA-sourced
+  per-100g values**. *Finding:* the e2e `nutrition_ingredient_mapping` table is empty (imported
+  recipes carry baked per-serving nutrition, never exercising the USDA ingredient pipeline), so the
+  catalogue fallback is what serves additions in e2e; production uses the live cache.
+- `IngredientAdditionPlanner` reads the chosen rollup's residual calories + SHORT micros, greedily
+  picks ≤3 allergy-safe candidates (`HardConstraintFilterService`), attaches one carrier slot/day.
+- `PlanComposer` runs it after Stage-D and **rebuilds the rollup from the mutated plan** before
+  persist (`persistAndPublish` had been persisting the pre-Phase-2 Stage-B rollup as-is, so additions
+  AND Stage-D substitutions now both reach coverage).
+
+Verified by unit tests (engine gap-rank/attach, resolver scaling, aggregator summing) + all
+module-boundary/ArchUnit tests green. **Pending:** live e2e verify that a generated plan's coverage
+residual closes (blocked by a mid-session Docker outage); **SIDE_RECIPE** additions; the LLM
+`ADDITION_PAIRING` appropriateness gate (gpt-5.4-mini) — deterministic notes stand in; grocery
+extra-lines + `Plan.tsx` rendering.
