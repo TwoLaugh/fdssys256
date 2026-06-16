@@ -160,6 +160,7 @@ class PlanPersister {
                 .recipeBranchId(a.recipeBranchId() != null ? a.recipeBranchId() : a.recipeId())
                 .servings(a.servings() > 0 ? a.servings() : 1)
                 .phase2Addition(false)
+                .additions(new ArrayList<>(a.additions()))
                 .build();
         slot.setScheduledRecipe(sr);
       }

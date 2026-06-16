@@ -1,5 +1,7 @@
 package com.example.mealprep.planner.domain.entity;
 
+import com.example.mealprep.planner.api.dto.Addition;
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -9,6 +11,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -16,6 +20,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.Type;
 
 /**
  * Recipe chosen for a {@link MealSlot}. Cross-module IDs ({@code recipeId}, {@code
@@ -64,4 +69,14 @@ public class ScheduledRecipe {
 
   @Column(name = "phase2_addition", nullable = false)
   private boolean phase2Addition;
+
+  /**
+   * In-meal additions bolted onto this slot's main recipe in Phase 2 (portion-scaling + additions
+   * design) — a JSONB list, soft refs to recipe/USDA like the id columns above. Defaults to an empty
+   * list so pre-additions plans and the {@code NOT NULL DEFAULT '[]'} column agree.
+   */
+  @Type(JsonBinaryType.class)
+  @Column(name = "additions", nullable = false, columnDefinition = "jsonb")
+  @Builder.Default
+  private List<Addition> additions = new ArrayList<>();
 }

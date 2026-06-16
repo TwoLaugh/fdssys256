@@ -2,6 +2,7 @@ package com.example.mealprep.planner.domain.service.internal.rollup;
 
 import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
+import com.example.mealprep.planner.api.dto.Addition;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
@@ -13,6 +14,7 @@ import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -67,6 +69,12 @@ public class DailyMacroAggregator {
       // Every day with an assignment gets a bucket even if the recipe / nutrition is missing,
       // so the day still appears in the daily rollup list (ticket edge-case checklist).
       DailyMacroTotals.Builder b = builders.computeIfAbsent(date, DailyMacroTotals::builder);
+
+      // Phase-2 in-meal additions ride on the assignment and carry their OWN per-portion nutrition
+      // (USDA-derived for ingredients, the side's figures for side recipes). They are pre-sized to
+      // the residual, so they are summed verbatim (NOT portion-scaled like the main) and counted
+      // even when the slot's main recipe is missing/unresolved.
+      addAdditions(b, a.additions());
 
       RecipeDto recipe = byRecipeId.get(a.recipeId());
       if (recipe == null) {
@@ -126,6 +134,45 @@ public class DailyMacroAggregator {
       out.put(e.getKey(), e.getValue().build());
     }
     return out;
+  }
+
+  /**
+   * Sum each in-meal addition's own per-portion nutrition into the day bucket. Additions are
+   * pre-sized to the day's residual, so (unlike the main recipe) they are NOT portion-scaled.
+   * Macros + micros + per-micro provenance flow through verbatim, mirroring the main-recipe walk.
+   */
+  private void addAdditions(DailyMacroTotals.Builder b, List<Addition> additions) {
+    if (additions == null) {
+      return;
+    }
+    for (Addition add : additions) {
+      if (add == null || add.nutrition() == null) {
+        continue;
+      }
+      NutritionPerServingDto n = add.nutrition();
+      b.addKcal(n.calories());
+      if (n.proteinG() != null) {
+        b.addProtein(n.proteinG());
+      }
+      if (n.carbsG() != null) {
+        b.addCarbs(n.carbsG());
+      }
+      if (n.fatG() != null) {
+        b.addFat(n.fatG());
+      }
+      if (n.fibreG() != null) {
+        b.addFibre(n.fibreG());
+      }
+      if (n.micros() != null) {
+        Map<String, String> microSrc = n.microSources() == null ? Map.of() : n.microSources();
+        for (Map.Entry<String, BigDecimal> micro : n.micros().entrySet()) {
+          if (micro.getKey() != null && micro.getValue() != null) {
+            b.addMicro(micro.getKey(), micro.getValue());
+            b.addMicroSource(micro.getKey(), microSrc.get(micro.getKey()));
+          }
+        }
+      }
+    }
   }
 
   /**
