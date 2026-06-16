@@ -15,7 +15,11 @@ import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -261,5 +265,120 @@ public class NutritionTargets {
       replacement.setTarget(this);
     }
     this.eatingWindow = replacement;
+  }
+
+  // ---------------- Merge (update-leg) ----------------
+  //
+  // The {@code replaceX} methods above clear-and-readd: every child is orphan-removed and a fresh
+  // child (new UUID) is re-inserted. That is correct for the create/initialise legs (a brand-new
+  // aggregate with no DB rows yet — the flush is all INSERTs). It is NOT safe when an existing row
+  // is PUT-updated: Hibernate orders the INSERTs of the new-UUID children BEFORE the DELETEs of the
+  // orphaned old children within a single flush, so any child whose natural key is unchanged (or a
+  // new child reusing a key being removed) collides with the not-yet-deleted old row on the child
+  // table's UNIQUE(targets_id, <natural key>) — SQLState 23505. The {@code mergeX} methods below
+  // reconcile by natural key instead: matched keys are UPDATEd in place (no delete/insert), removed
+  // keys are DELETEd (orphanRemoval), and genuinely new keys are INSERTed. A surviving key is never
+  // delete+inserted in the same flush, and INSERTed keys are disjoint from DELETEd keys, so no
+  // unique collision is possible. Used by the PUT update-leg; create/initialise keep {@code
+  // replaceX}.
+
+  /** Reconcile the per-meal distribution against {@code desired} by {@code mealSlot}, in place. */
+  public void mergePerMealDistribution(List<PerMealDistributionEntry> desired) {
+    Map<MealSlot, PerMealDistributionEntry> existing = new HashMap<>();
+    for (PerMealDistributionEntry e : this.perMealDistribution) {
+      existing.put(e.getMealSlot(), e);
+    }
+    Set<MealSlot> desiredKeys = new HashSet<>();
+    List<PerMealDistributionEntry> toAdd = new ArrayList<>();
+    if (desired != null) {
+      for (PerMealDistributionEntry d : desired) {
+        desiredKeys.add(d.getMealSlot());
+        PerMealDistributionEntry match = existing.get(d.getMealSlot());
+        if (match != null) {
+          match.setCalorieTarget(d.getCalorieTarget());
+          match.setProteinTargetG(d.getProteinTargetG());
+        } else {
+          d.setTarget(this);
+          toAdd.add(d);
+        }
+      }
+    }
+    this.perMealDistribution.removeIf(e -> !desiredKeys.contains(e.getMealSlot()));
+    this.perMealDistribution.addAll(toAdd);
+  }
+
+  /** Reconcile the micro-targets against {@code desired} by {@code nutrientKey}, in place. */
+  public void mergeMicroTargets(List<MicroTarget> desired) {
+    Map<String, MicroTarget> existing = new HashMap<>();
+    for (MicroTarget m : this.microTargets) {
+      existing.put(m.getNutrientKey(), m);
+    }
+    Set<String> desiredKeys = new HashSet<>();
+    List<MicroTarget> toAdd = new ArrayList<>();
+    if (desired != null) {
+      for (MicroTarget d : desired) {
+        desiredKeys.add(d.getNutrientKey());
+        MicroTarget match = existing.get(d.getNutrientKey());
+        if (match != null) {
+          match.setTargetValue(d.getTargetValue());
+          match.setUpperLimit(d.getUpperLimit());
+          match.setSourcePreference(d.getSourcePreference());
+          match.setNotes(d.getNotes());
+          match.setHardFloor(d.isHardFloor());
+        } else {
+          d.setTarget(this);
+          toAdd.add(d);
+        }
+      }
+    }
+    this.microTargets.removeIf(m -> !desiredKeys.contains(m.getNutrientKey()));
+    this.microTargets.addAll(toAdd);
+  }
+
+  /** Reconcile the activity adjustments against {@code desired} by {@code activityLevel}, in place. */
+  public void mergeActivityAdjustments(List<ActivityAdjustment> desired) {
+    Map<ActivityLevel, ActivityAdjustment> existing = new HashMap<>();
+    for (ActivityAdjustment a : this.activityAdjustments) {
+      existing.put(a.getActivityLevel(), a);
+    }
+    Set<ActivityLevel> desiredKeys = new HashSet<>();
+    List<ActivityAdjustment> toAdd = new ArrayList<>();
+    if (desired != null) {
+      for (ActivityAdjustment d : desired) {
+        desiredKeys.add(d.getActivityLevel());
+        ActivityAdjustment match = existing.get(d.getActivityLevel());
+        if (match != null) {
+          match.setCalorieModifier(d.getCalorieModifier());
+          match.setCarbModifierG(d.getCarbModifierG());
+        } else {
+          d.setTarget(this);
+          toAdd.add(d);
+        }
+      }
+    }
+    this.activityAdjustments.removeIf(a -> !desiredKeys.contains(a.getActivityLevel()));
+    this.activityAdjustments.addAll(toAdd);
+  }
+
+  /**
+   * Reconcile the {@code @OneToOne} eating window against {@code desired} in place: update the
+   * existing row's columns when both are present (no delete/insert, so the {@code
+   * UNIQUE(targets_id)} on the window table is never transiently violated), create when none
+   * exists, and orphan-remove when {@code desired} is {@code null}.
+   */
+  public void mergeEatingWindow(EatingWindow desired) {
+    if (desired == null) {
+      replaceEatingWindow(null);
+      return;
+    }
+    if (this.eatingWindow == null) {
+      desired.setTarget(this);
+      this.eatingWindow = desired;
+      return;
+    }
+    this.eatingWindow.setEnabled(desired.isEnabled());
+    this.eatingWindow.setWindowStart(desired.getWindowStart());
+    this.eatingWindow.setWindowEnd(desired.getWindowEnd());
+    this.eatingWindow.setNotes(desired.getNotes());
   }
 }

@@ -1,14 +1,16 @@
 package com.example.mealprep.planner.domain.service.internal.scoring;
 
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
+import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
-import com.example.mealprep.planner.api.dto.SlotAssignment;
-import com.example.mealprep.recipe.api.dto.RecipeDto;
+import com.example.mealprep.planner.domain.service.internal.rollup.DailyMacroAggregator;
+import com.example.mealprep.planner.domain.service.internal.rollup.DailyMacroTotals;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -16,7 +18,8 @@ import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 /**
- * Nutrition-fit sub-score. Algorithm LOCKED per LLD §NutritionSubScore (2026-05-07):
+ * Nutrition-fit sub-score. Direction-aware deviation penalty mapped to a {@code [0,1]} fit, scored
+ * <b>per day against the daily targets</b> and averaged over the days the candidate fills.
  *
  * <pre>
  *   direction_score(actual, target, direction):
@@ -26,28 +29,46 @@ import org.springframework.stereotype.Component;
  *     LOWER_FLOOR:  penalty = max(0, -deviation)
  *     BOTH_BOUNDED: penalty = abs(deviation)
  *     return max(0, 1 - penalty)
- *   NutritionSubScore = mean(direction_score over each configured macro)
+ *   day_score   = MACRO_WEIGHT·mean(macro fits) + MICRO_WEIGHT·mean(micro fits)   (whichever configured)
+ *   sub_score   = mean(day_score over filled days)
  * </pre>
  *
- * <p>Mean over zero configured macros (no targets row) is vacuously {@code 1.0} — documented
- * convention per ticket edge-case checklist.
+ * <p><b>Per-serving, per-person.</b> Per-day totals come from the shared {@link
+ * DailyMacroAggregator}, which sums one serving per slot for the household's primary user (targets
+ * are that user's daily intake). Scoring weekly actuals against daily targets — the pre-wiring
+ * behaviour — compared a week's intake to a day's target; scoring per day fixes that.
  *
- * <p><b>Household-default aggregation (ticket item 17, worth user review)</b>: macros are summed
- * against the household's primary user only ({@link ScoringSupport#primaryUserId}); the per-eater
- * average is deferred to a calibration pass.
+ * <p><b>Macro vs micro blend.</b> The handful of macros (calories + protein carry the most weight in
+ * practice) and the ~30 micro targets are blended {@link #MACRO_WEIGHT}/{@link #MICRO_WEIGHT} so a
+ * long micro list cannot drown out calories/protein. A micro {@code targetValue} is a daily floor
+ * (want ≥), an {@code upperLimit} a cap (want ≤); both set ⇒ the day must satisfy both.
  *
- * <p><b>01e codebase divergence — recipe nutrition not exposed</b>: per ticket item 18, missing
- * recipe nutrition data is treated as {@code 0} for that macro (NOT {@code 0.5} neutral) so
- * cold-start nutrition surfaces as a lower score and nudges the planner toward recipes with
- * computed nutrition. {@code RecipeVersionDto} carries NO {@code nutritionPerServing} field on this
- * branch (the recipe-01h read DTO does not surface it), so weekly actuals are deterministically
- * {@code 0} until that contract ships; {@link WeeklyNutritionAccumulator} is the seam to plug it
- * in. Targets are read from the planner-01e {@code PlanCompositionContext.nutritionByUserId}
- * extension ({@code TargetsDto} — the canonical nutrition read shape; the ticket's {@code
- * NutritionForPlannerBundleDto} does not exist in this codebase).
+ * <p><b>Key-alignment dependency.</b> A micro absent from the day's totals scores as a shortfall
+ * (actual 0). That is only correct once recipe micro keys (verbatim from the USDA/OFF source) are
+ * normalised to the target {@code nutrientKey}s — otherwise a key mismatch reads as a false
+ * shortfall. That normalisation is the Stage-4 data-path work.
+ *
+ * <p>Aggregation is against the household's primary user only ({@link ScoringSupport#primaryUserId})
+ * — the per-eater average is deferred to a calibration pass. A plan with no targets row, or no
+ * configured macro/micro targets, scores a vacuous {@code 1.0}.
  */
 @Component
 class NutritionSubScore implements SubScoreCalculator {
+
+  /**
+   * Within-nutrition blend of the daily macro-fit and micro-coverage terms. Macros dominate; micros
+   * are a meaningful secondary nudge. Tunable — promote to {@code PlannerProperties} during weight
+   * calibration if the split needs per-environment control.
+   */
+  private static final BigDecimal MACRO_WEIGHT = new BigDecimal("0.60");
+
+  private static final BigDecimal MICRO_WEIGHT = new BigDecimal("0.40");
+
+  private final DailyMacroAggregator macroAggregator;
+
+  NutritionSubScore(DailyMacroAggregator macroAggregator) {
+    this.macroAggregator = macroAggregator;
+  }
 
   @Override
   public String name() {
@@ -59,48 +80,96 @@ class NutritionSubScore implements SubScoreCalculator {
     UUID primary = ScoringSupport.primaryUserId(ctx);
     TargetsDto targets = primary == null ? null : ctx.nutritionByUserId().get(primary);
     if (targets == null) {
-      return BigDecimal.ONE; // no targets configured → vacuous mean = 1.0
+      return BigDecimal.ONE; // no targets configured → vacuous fit = 1.0
     }
 
-    Map<UUID, RecipeDto> recipes = ScoringSupport.recipeIndex(ctx);
-    WeeklyNutritionAccumulator weekly = new WeeklyNutritionAccumulator();
-    if (plan.assignments() != null) {
-      for (SlotAssignment a : plan.assignments()) {
-        RecipeDto recipe = ScoringSupport.findRecipe(recipes, a.recipeId()).orElse(null);
-        weekly.add(recipe, a.servings());
+    Map<LocalDate, DailyMacroTotals> byDate = macroAggregator.aggregateByDate(plan, ctx);
+    if (byDate.isEmpty()) {
+      return BigDecimal.ONE; // nothing to score
+    }
+
+    List<BigDecimal> dayScores = new ArrayList<>();
+    for (DailyMacroTotals day : byDate.values()) {
+      BigDecimal macroFit = macroFitScore(day, targets); // null if no macro target configured
+      BigDecimal microFit = microFitScore(day, targets); // null if no micro target configured
+      BigDecimal blended = blend(macroFit, microFit);
+      if (blended != null) {
+        dayScores.add(blended);
       }
     }
+    if (dayScores.isEmpty()) {
+      return BigDecimal.ONE; // neither macros nor micros configured → vacuous 1.0
+    }
+    return mean(dayScores);
+  }
 
+  /** Mean direction-fit over calories + each configured macro for one day; {@code null} if none. */
+  private static BigDecimal macroFitScore(DailyMacroTotals day, TargetsDto targets) {
     List<BigDecimal> scores = new ArrayList<>();
-    // calories: targets.calories() is a CalorieTargetDto (int dailyTarget + direction)
     if (targets.calories() != null && targets.calories().dailyTarget() > 0) {
       scores.add(
           directionScore(
-              weekly.calories(),
+              BigDecimal.valueOf(day.kcal()),
               BigDecimal.valueOf(targets.calories().dailyTarget()),
               targets.calories().direction()));
     }
-    addMacro(scores, weekly.protein(), targets.protein());
-    addMacro(scores, weekly.carbs(), targets.carbs());
-    addMacro(scores, weekly.fat(), targets.fat());
-    addMacro(scores, weekly.fibre(), targets.fibre());
-    addMacro(scores, weekly.saturatedFat(), targets.satFat());
+    addMacro(scores, day.proteinG(), targets.protein());
+    addMacro(scores, day.carbsG(), targets.carbs());
+    addMacro(scores, day.fatG(), targets.fat());
+    addMacro(scores, day.fibreG(), targets.fibre());
+    addMacro(scores, day.saturatedFatG(), targets.satFat());
+    return scores.isEmpty() ? null : mean(scores);
+  }
 
-    if (scores.isEmpty()) {
-      return BigDecimal.ONE; // mean over zero configured macros is vacuously 1.0
+  /** Mean coverage over each configured micro target for one day; {@code null} if none configured. */
+  private static BigDecimal microFitScore(DailyMacroTotals day, TargetsDto targets) {
+    List<MicroTargetDto> micros = targets.microTargets();
+    if (micros == null || micros.isEmpty()) {
+      return null;
     }
-    BigDecimal sum = BigDecimal.ZERO;
-    for (BigDecimal s : scores) {
-      sum = sum.add(s);
+    Map<String, BigDecimal> actuals = day.micros() == null ? Map.of() : day.micros();
+    List<BigDecimal> scores = new ArrayList<>();
+    for (MicroTargetDto micro : micros) {
+      if (micro == null || micro.nutrientKey() == null) {
+        continue;
+      }
+      boolean hasFloor = micro.targetValue() != null;
+      boolean hasCap = micro.upperLimit() != null;
+      if (!hasFloor && !hasCap) {
+        continue; // advisory entry with no bound → nothing to score
+      }
+      BigDecimal actual = actuals.getOrDefault(micro.nutrientKey(), BigDecimal.ZERO);
+      BigDecimal score;
+      if (hasFloor && hasCap) {
+        // Must clear the floor AND stay under the cap → the worse of the two sub-scores.
+        score =
+            directionScore(actual, micro.targetValue(), EnforcementDirection.LOWER_FLOOR)
+                .min(directionScore(actual, micro.upperLimit(), EnforcementDirection.UPPER_LIMIT));
+      } else if (hasFloor) {
+        score = directionScore(actual, micro.targetValue(), EnforcementDirection.LOWER_FLOOR);
+      } else {
+        score = directionScore(actual, micro.upperLimit(), EnforcementDirection.UPPER_LIMIT);
+      }
+      scores.add(score);
     }
-    return sum.divide(BigDecimal.valueOf(scores.size()), 6, RoundingMode.HALF_UP);
+    return scores.isEmpty() ? null : mean(scores);
+  }
+
+  private static BigDecimal blend(BigDecimal macroFit, BigDecimal microFit) {
+    if (macroFit != null && microFit != null) {
+      return macroFit.multiply(MACRO_WEIGHT).add(microFit.multiply(MICRO_WEIGHT));
+    }
+    if (macroFit != null) {
+      return macroFit;
+    }
+    return microFit; // may be null → caller skips the day
   }
 
   private static void addMacro(List<BigDecimal> scores, BigDecimal actual, MacroTargetDto target) {
     if (target == null || target.targetG() == null) {
-      return; // macro not configured → excluded from the mean (no contribution)
+      return; // macro not configured → excluded from the mean
     }
-    scores.add(directionScore(actual, target.targetG(), target.direction()));
+    scores.add(directionScore(nz(actual), target.targetG(), target.direction()));
   }
 
   /** LOCKED direction-aware deviation penalty mapped to a {@code [0,1]} fit score. */
@@ -109,7 +178,7 @@ class NutritionSubScore implements SubScoreCalculator {
     if (target == null || target.compareTo(BigDecimal.ZERO) == 0) {
       return BigDecimal.ONE;
     }
-    BigDecimal deviation = actual.subtract(target).divide(target, 6, RoundingMode.HALF_UP);
+    BigDecimal deviation = nz(actual).subtract(target).divide(target, 6, RoundingMode.HALF_UP);
     BigDecimal penalty;
     switch (direction) {
       case UPPER_LIMIT -> penalty = deviation.max(BigDecimal.ZERO);
@@ -120,47 +189,15 @@ class NutritionSubScore implements SubScoreCalculator {
     return BigDecimal.ONE.subtract(penalty).max(BigDecimal.ZERO);
   }
 
-  /**
-   * Walks {@code plan.assignments}, multiplying each recipe's per-serving macros by servings and
-   * summing per macro. {@code RecipeVersionDto} exposes no {@code nutritionPerServing} on this
-   * branch, so every contribution is {@code 0} (ticket item 18 — missing nutrition → 0). This is
-   * the single seam to wire real recipe nutrition once the contract ships.
-   */
-  static final class WeeklyNutritionAccumulator {
-    private BigDecimal calories = BigDecimal.ZERO;
-    private BigDecimal protein = BigDecimal.ZERO;
-    private BigDecimal carbs = BigDecimal.ZERO;
-    private BigDecimal fat = BigDecimal.ZERO;
-    private BigDecimal fibre = BigDecimal.ZERO;
-    private BigDecimal saturatedFat = BigDecimal.ZERO;
-
-    void add(RecipeDto recipe, int servings) {
-      // No nutritionPerServing on RecipeVersionDto in this codebase — every macro stays 0 until
-      // the recipe-nutrition read contract is surfaced. Kept as the wiring seam.
+  private static BigDecimal mean(List<BigDecimal> scores) {
+    BigDecimal sum = BigDecimal.ZERO;
+    for (BigDecimal s : scores) {
+      sum = sum.add(s);
     }
+    return sum.divide(BigDecimal.valueOf(scores.size()), 6, RoundingMode.HALF_UP);
+  }
 
-    BigDecimal calories() {
-      return calories;
-    }
-
-    BigDecimal protein() {
-      return protein;
-    }
-
-    BigDecimal carbs() {
-      return carbs;
-    }
-
-    BigDecimal fat() {
-      return fat;
-    }
-
-    BigDecimal fibre() {
-      return fibre;
-    }
-
-    BigDecimal saturatedFat() {
-      return saturatedFat;
-    }
+  private static BigDecimal nz(BigDecimal v) {
+    return v == null ? BigDecimal.ZERO : v;
   }
 }

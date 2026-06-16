@@ -195,6 +195,13 @@ public interface RecipeRepository extends JpaRepository<Recipe, UUID> {
   long countByCatalogue(com.example.mealprep.recipe.domain.entity.Catalogue catalogue);
 
   /**
+   * List every recipe in a catalogue (any state). E2E test-support only ({@code
+   * E2eNutritionSeedController} iterates the SYSTEM pool to seed per-serving nutrition); no
+   * production caller. Accessible only within the recipe module per {@code RecipeBoundaryTest}.
+   */
+  List<Recipe> findByCatalogue(com.example.mealprep.recipe.domain.entity.Catalogue catalogue);
+
+  /**
    * Hard-delete EVERY SYSTEM-catalogue recipe row. Used ONLY by the {@code e2e}-profile
    * test-support cleanup ({@code E2eRecipeCatalogueController}) to reset the global, cross-scenario
    * SYSTEM catalogue that the cold-start discovery fill populates — there is no production caller

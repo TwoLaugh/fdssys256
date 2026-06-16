@@ -14,9 +14,13 @@ import { PageHeader } from "../components/PageHeader";
 import { StatStrip } from "../components/StatStrip";
 import type { StatStripCell } from "../components/StatStrip";
 import { StatusMark } from "../components/StatusMark";
+import { SegmentBar } from "../components/SegmentBar";
 import { SwapLine } from "../components/SwapLine";
-import { MOCK_TODAY_ISO } from "../mock/nutritionSeed";
-import { CURRENT_WEEK_START, KNOWN_WEEKS } from "../mock/plannerSeed";
+import { microLabel } from "./nutrition/shared";
+import { KNOWN_WEEKS } from "../mock/plannerSeed";
+// Live-aware date anchors (real clock in live mode) — so the week nav defaults
+// to the week the backend's live plan is in. See src/live/dates.ts.
+import { CURRENT_WEEK_START, MOCK_TODAY_ISO } from "../live/dates";
 import {
   abandonPlan,
   acceptPlan,
@@ -45,6 +49,154 @@ import {
   shortDayLabel,
   weekRangeLabel,
 } from "./plan/shared";
+
+/* ---- plan vs targets: projected nutrition coverage (nutrition-driven planning) ---- */
+
+/** One target's projected coverage in the generated plan. Mirrors the backend
+ *  `NutritionTargetCoverageDocument`; read off `rollupSummary.nutritionCoverage`. */
+type PlanTargetCoverage = {
+  key: string;
+  unit: string;
+  target: number;
+  projectedDailyAvg: number;
+  direction: string;
+  met: boolean;
+};
+
+type PlanNutritionCoverage = {
+  macros: PlanTargetCoverage[];
+  micros: PlanTargetCoverage[];
+  macrosMet: number;
+  macrosTotal: number;
+  microsMet: number;
+  microsTotal: number;
+};
+
+const MACRO_COVERAGE_LABEL: Record<string, string> = {
+  calories: "Calories",
+  protein: "Protein",
+  carbs: "Carbs",
+  fat: "Fat",
+  fibre: "Fibre",
+};
+
+const fmtCoverageNum = (n: number): string =>
+  n >= 100
+    ? Math.round(n).toLocaleString("en-GB")
+    : String(Math.round(n * 10) / 10);
+
+function CoverageRow({
+  row,
+  label,
+}: {
+  row: PlanTargetCoverage;
+  label: string;
+}) {
+  const denom = row.target > 0 ? row.target : 1;
+  const targetNote =
+    row.direction === "UPPER_LIMIT"
+      ? `≤ ${fmtCoverageNum(row.target)}`
+      : `/ ${fmtCoverageNum(row.target)}`;
+  return (
+    <div className="micro-row">
+      <span>
+        {label}
+        {!row.met && (
+          <span
+            className="hard-floor-mark"
+            style={{ color: "var(--mp-amber)" }}
+            title="short of target"
+          >
+            ▪
+          </span>
+        )}
+      </span>
+      <span
+        style={{
+          fontVariantNumeric: "tabular-nums",
+          color: row.met ? undefined : "var(--mp-amber)",
+          fontWeight: row.met ? 400 : 600,
+        }}
+      >
+        {fmtCoverageNum(row.projectedDailyAvg)} {row.unit} {targetNote}
+      </span>
+      <SegmentBar
+        pct={row.projectedDailyAvg / denom}
+        segments={12}
+        tone={row.met ? "olive" : "amber"}
+      />
+    </div>
+  );
+}
+
+/** "Plan vs your targets" — the generated plan's projected daily nutrition for the
+ *  primary eater against each macro + micro target, so a real user can see whether
+ *  the plan actually hits 3.6k kcal / 150 g protein / their micros. */
+function PlanNutritionPanel({
+  coverage,
+}: {
+  coverage: PlanNutritionCoverage;
+}) {
+  const [showAllMicros, setShowAllMicros] = useState(false);
+  const short = coverage.micros.filter((m) => !m.met);
+  const visibleMicros =
+    showAllMicros || short.length === 0 ? coverage.micros : short;
+  const allMet =
+    coverage.macrosMet === coverage.macrosTotal &&
+    coverage.microsMet === coverage.microsTotal;
+
+  return (
+    <details className="mp-card micros-details" open style={{ marginTop: 18 }}>
+      <summary>
+        <span className="mp-label" style={{ color: "var(--mp-ink)" }}>
+          Plan vs your targets
+        </span>
+        <span className="inline-note">
+          {coverage.macrosMet}/{coverage.macrosTotal} macros ·{" "}
+          {coverage.microsMet}/{coverage.microsTotal} micros met
+          {allMet ? " — all hit ✓" : ""}
+        </span>
+      </summary>
+
+      {coverage.macros.map((row) => (
+        <CoverageRow
+          key={row.key}
+          row={row}
+          label={MACRO_COVERAGE_LABEL[row.key] ?? row.key}
+        />
+      ))}
+
+      {coverage.micros.length > 0 && (
+        <div
+          style={{ height: 1, background: "var(--mp-line)", margin: "10px 0" }}
+        />
+      )}
+
+      {visibleMicros.map((row) => (
+        <CoverageRow key={row.key} row={row} label={microLabel(row.key)} />
+      ))}
+
+      {short.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAllMicros((v) => !v)}
+          style={{
+            background: "none",
+            border: "none",
+            color: "var(--mp-terra)",
+            cursor: "pointer",
+            font: "inherit",
+            padding: "6px 0 0",
+          }}
+        >
+          {showAllMicros
+            ? `show only the ${short.length} short`
+            : `show all ${coverage.micros.length} micros`}
+        </button>
+      )}
+    </details>
+  );
+}
 
 /* ---- reason popover (reject #8 / abandon #9, ≤255 chars) ------------------------- */
 
@@ -628,6 +780,11 @@ export function Plan() {
 
   /* ---- header machinery (§3a + §5) ---- */
   const weekly = viewed.rollupSummary.weekly;
+  const nutritionCoverage = (
+    viewed.rollupSummary as unknown as {
+      nutritionCoverage?: PlanNutritionCoverage | null;
+    }
+  ).nutritionCoverage;
   const metaLine = [
     `generation ${viewed.generation}`,
     TRIGGER_LABEL[viewed.triggerKind],
@@ -742,6 +899,8 @@ export function Plan() {
       <div style={{ marginTop: 22 }}>
         <StatStrip cells={stats} />
       </div>
+
+      {nutritionCoverage && <PlanNutritionPanel coverage={nutritionCoverage} />}
 
       {reoptOutcome && (
         <AdvisorPanel

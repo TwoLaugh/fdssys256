@@ -3,9 +3,11 @@ package com.example.mealprep.planner.domain.service.internal.stagec;
 import com.example.mealprep.ai.domain.service.AiService;
 import com.example.mealprep.ai.exception.AiInvalidResponseException;
 import com.example.mealprep.ai.exception.AiUnavailableException;
+import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
 import com.example.mealprep.nutrition.api.dto.CandidateDailyRollupDto;
 import com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto;
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
+import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
 import com.example.mealprep.planner.api.dto.AugmentationResult;
@@ -185,10 +187,12 @@ class Phase2AugmenterImpl implements Phase2Augmenter {
   }
 
   /**
-   * Minimal per-day gap detection: walk the rollup's macros against the primary user's {@code
-   * TargetsDto} and flag any macro below a {@code LOWER_FLOOR} target or above an {@code
-   * UPPER_LIMIT} target ({@code BOTH_BOUNDED} flags either side). Emits {@code {date, macro,
-   * target, actual, direction}} entries the LLM uses to know what to fix.
+   * Per-day gap detection: walk each day's calories, macros, and micronutrients against the primary
+   * user's {@code TargetsDto} and flag any that breach a {@code LOWER_FLOOR} / {@code UPPER_LIMIT} /
+   * {@code BOTH_BOUNDED} target. Emits {@code {date, macro|micro, target, actual, direction}}
+   * entries the Stage-D LLM uses to know which slot to augment toward. Micros read the day's
+   * per-serving micro totals (now that recipe nutrition is wired); a micro missing from the day →
+   * actual {@code 0} → flagged as a floor breach.
    */
   private List<Map<String, Object>> computeNutritionGaps(
       CandidatePlanRollupDto rollup, PlanCompositionContext ctx, UUID primaryUserId) {
@@ -202,10 +206,12 @@ class Phase2AugmenterImpl implements Phase2Augmenter {
       return gaps;
     }
     for (CandidateDailyRollupDto day : rollup.perDay()) {
+      addCalorieGap(gaps, day, targets.calories());
       addGapIfBreached(gaps, day.date(), "protein", targets.protein(), day.proteinG());
       addGapIfBreached(gaps, day.date(), "carbs", targets.carbs(), day.carbsG());
       addGapIfBreached(gaps, day.date(), "fat", targets.fat(), day.fatG());
       addGapIfBreached(gaps, day.date(), "fibre", targets.fibre(), day.fibreG());
+      addMicroGaps(gaps, day, targets.microTargets());
     }
     return gaps;
   }
@@ -237,5 +243,66 @@ class Phase2AugmenterImpl implements Phase2Augmenter {
     gap.put("actual", actual);
     gap.put("direction", direction.name());
     gaps.add(gap);
+  }
+
+  /** Flag the day's calorie total against the daily calorie target (the scenario's 3.6k headline). */
+  private void addCalorieGap(
+      List<Map<String, Object>> gaps, CandidateDailyRollupDto day, CalorieTargetDto cal) {
+    if (cal == null || cal.dailyTarget() <= 0) {
+      return;
+    }
+    BigDecimal target = BigDecimal.valueOf(cal.dailyTarget());
+    BigDecimal actual = BigDecimal.valueOf(day.calories());
+    int cmp = actual.compareTo(target);
+    boolean breached =
+        switch (cal.direction()) {
+          case LOWER_FLOOR -> cmp < 0;
+          case UPPER_LIMIT -> cmp > 0;
+          case BOTH_BOUNDED -> cmp != 0;
+        };
+    if (!breached) {
+      return;
+    }
+    Map<String, Object> gap = new LinkedHashMap<>();
+    gap.put("date", String.valueOf(day.date()));
+    gap.put("macro", "calories");
+    gap.put("target", target);
+    gap.put("actual", actual);
+    gap.put("direction", cal.direction().name());
+    gaps.add(gap);
+  }
+
+  /**
+   * Flag each configured micro that breaches its floor ({@code targetValue}) or cap ({@code
+   * upperLimit}) on this day. A micro absent from the day's totals reads as actual {@code 0} → a
+   * floor breach (correct once recipe micro keys align with the target {@code nutrientKey}s — the
+   * Stage-4 data path; with seeded fixtures the keys match by construction).
+   */
+  private void addMicroGaps(
+      List<Map<String, Object>> gaps, CandidateDailyRollupDto day, List<MicroTargetDto> micros) {
+    if (micros == null || micros.isEmpty()) {
+      return;
+    }
+    Map<String, BigDecimal> actuals = day.micros() == null ? Map.of() : day.micros();
+    for (MicroTargetDto micro : micros) {
+      if (micro == null || micro.nutrientKey() == null) {
+        continue;
+      }
+      BigDecimal actual = actuals.getOrDefault(micro.nutrientKey(), BigDecimal.ZERO);
+      BigDecimal floor = micro.targetValue();
+      BigDecimal cap = micro.upperLimit();
+      boolean belowFloor = floor != null && actual.compareTo(floor) < 0;
+      boolean aboveCap = cap != null && actual.compareTo(cap) > 0;
+      if (!belowFloor && !aboveCap) {
+        continue;
+      }
+      Map<String, Object> gap = new LinkedHashMap<>();
+      gap.put("date", String.valueOf(day.date()));
+      gap.put("micro", micro.nutrientKey());
+      gap.put("target", belowFloor ? floor : cap);
+      gap.put("actual", actual);
+      gap.put("direction", belowFloor ? "LOWER_FLOOR" : "UPPER_LIMIT");
+      gaps.add(gap);
+    }
   }
 }

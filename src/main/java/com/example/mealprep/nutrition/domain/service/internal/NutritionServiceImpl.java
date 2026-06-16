@@ -108,6 +108,9 @@ import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.PersistenceContext;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
@@ -191,6 +194,22 @@ public class NutritionServiceImpl
   static final String FIELD_EATING_WINDOW = "eatingWindow";
   static final String FIELD_ACTIVITY_ADJUSTMENTS = "activityAdjustments";
 
+  /**
+   * The four field paths backed by owned child relations (the three list children + the {@code
+   * @OneToOne} eating window). Used to decide whether an update changed ONLY children: Hibernate
+   * does not dirty the aggregate root when only an owned child collection mutates, so its {@code
+   * @Version} UPDATE never fires and the root version would go stale. When the change set is a
+   * subset of these, we force-increment the root version (mirrors {@code
+   * PreferenceServiceImpl.updateHardConstraints}); when a parent-owned scalar also changed,
+   * Hibernate already bumps once and a forced increment would double-bump.
+   */
+  private static final Set<String> CHILD_FIELDS =
+      Set.of(
+          FIELD_PER_MEAL_DISTRIBUTION,
+          FIELD_MICRO_TARGETS,
+          FIELD_EATING_WINDOW,
+          FIELD_ACTIVITY_ADJUSTMENTS);
+
   private static final int RANGE_MAX_DAYS = 35;
 
   private final NutritionTargetsRepository targetsRepository;
@@ -218,6 +237,16 @@ public class NutritionServiceImpl
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
+
+  /**
+   * Field-injected so the existing constructor (and the pure unit tests {@code
+   * NutritionServiceImplTest} / {@code NutritionTargetsDiffMutationTest}, which mock the repository
+   * layer and never really flush) stay unchanged. Mirrors the {@code @PersistenceContext
+   * EntityManager} idiom in {@code PreferenceServiceImpl}. Used to force-increment the targets
+   * root's {@code @Version} when an update touched only owned child relations. Null in the pure unit
+   * tests, where there is no real flush to protect.
+   */
+  @PersistenceContext private EntityManager entityManager;
 
   public NutritionServiceImpl(
       NutritionTargetsRepository targetsRepository,
@@ -538,14 +567,30 @@ public class NutritionServiceImpl
     aggregate.setSatFatDirection(request.satFat().direction());
     aggregate.setNotes(request.notes());
 
-    // Replace child collections — cascade + orphanRemoval handle delete + insert.
-    aggregate.replacePerMealDistribution(toPerMealEntities(request.perMealDistribution()));
-    aggregate.replaceMicroTargets(toMicroTargetEntities(request.microTargets()));
-    aggregate.replaceActivityAdjustments(toActivityEntities(request.activityAdjustments()));
-    aggregate.replaceEatingWindow(toEatingWindowEntity(request.eatingWindow()));
+    // Reconcile child collections by natural key (update-in-place / delete-removed / insert-new)
+    // rather than clear-and-readd. Clear-and-readd orphan-removes every child and re-inserts a
+    // fresh-UUID copy; Hibernate flushes those INSERTs before the orphan DELETEs, so any child
+    // whose natural key is unchanged collides with the not-yet-deleted old row on the child table's
+    // UNIQUE(targets_id, <natural key>) (SQLState 23505). Merge never delete+inserts a surviving
+    // key, so no collision is possible. (Create/initialise still use replaceX — a fresh aggregate
+    // has no DB rows, so its flush is all INSERTs.)
+    aggregate.mergePerMealDistribution(toPerMealEntities(request.perMealDistribution()));
+    aggregate.mergeMicroTargets(toMicroTargetEntities(request.microTargets()));
+    aggregate.mergeActivityAdjustments(toActivityEntities(request.activityAdjustments()));
+    aggregate.mergeEatingWindow(toEatingWindowEntity(request.eatingWindow()));
 
     Instant now = Instant.now(clock);
     writeAuditRows(aggregate.getId(), actorUserId, changedFields, before, after, now);
+
+    // Force-increment the root @Version when ONLY owned child relations changed. Hibernate does not
+    // dirty the aggregate root on a child-collection-only mutation (now reachable since the merge
+    // above lets such PUTs succeed instead of colliding), so without this the root version would go
+    // stale and the optimistic-locking contract (response/GET version advances on every real edit)
+    // would break for child-only edits. When a parent-owned scalar also changed, Hibernate already
+    // bumps once, so we must NOT force again (double-bump). Mirrors PreferenceServiceImpl.
+    if (CHILD_FIELDS.containsAll(changedFields)) {
+      forceIncrementRootVersion(aggregate);
+    }
 
     // saveAndFlush so the @Version bump materialises before we map to DTO; otherwise the response
     // carries the stale version. Same trick as PreferenceServiceImpl.updateHardConstraints and
@@ -560,6 +605,19 @@ public class NutritionServiceImpl
         changedFields,
         saved.getVersion());
     return mapper.toDto(saved);
+  }
+
+  /**
+   * Force Hibernate to bump the targets root's {@code @Version} even when only an owned child
+   * relation changed. {@code OPTIMISTIC_FORCE_INCREMENT} schedules a version UPDATE on the root at
+   * flush time; without it a child-only mutation leaves the parent clean and the version stale.
+   * Guarded for the pure unit tests where the {@link EntityManager} is not injected (repositories
+   * are mocked, nothing is really flushed, so there is no real version to protect).
+   */
+  private void forceIncrementRootVersion(NutritionTargets aggregate) {
+    if (entityManager != null) {
+      entityManager.lock(aggregate, LockModeType.OPTIMISTIC_FORCE_INCREMENT);
+    }
   }
 
   @Override

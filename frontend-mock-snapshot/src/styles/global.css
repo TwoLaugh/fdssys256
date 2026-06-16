@@ -1,0 +1,3844 @@
+/* Global rules for the D6 Hybrid design language. */
+@import "./tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100vh;
+}
+
+body {
+  background: var(--mp-bg);
+  color: var(--mp-ink);
+  font-family: var(--mp-font-body);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Type primitives ---------------------------------------------------- */
+
+.mp-label {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--mp-muted);
+}
+
+.mp-serif {
+  font-family: var(--mp-font-advisor);
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1.15;
+}
+
+.mp-num {
+  font-family: var(--mp-font-display);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Buttons ------------------------------------------------------------ */
+
+.btn {
+  font-family: var(--mp-font-body);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 18px;
+  cursor: pointer;
+  border-radius: var(--mp-radius);
+  background: transparent;
+  color: var(--mp-ink);
+  border: 1px solid var(--mp-line-hi);
+}
+
+.btn:hover {
+  border-color: var(--mp-muted);
+}
+
+.btn-primary {
+  background: var(--mp-terra);
+  color: var(--mp-on-terra);
+  border-color: var(--mp-terra);
+}
+
+.btn-primary:hover {
+  background: var(--mp-terra-dark);
+  border-color: var(--mp-terra-dark);
+}
+
+.btn-small {
+  font-size: 12px;
+  padding: 6px 13px;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn:disabled:hover {
+  border-color: var(--mp-line-hi);
+}
+
+/* ---- Chip --------------------------------------------------------------- */
+
+.mp-chip {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--mp-olive);
+  border: 1px solid var(--mp-olive);
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+/* ---- App shell ---------------------------------------------------------- */
+
+.app {
+  display: flex;
+  min-height: 100vh;
+  /* No overflow rule here: the rail's position:sticky needs the viewport to
+     stay the scroll container. Below the app-main min-width floor the ROOT
+     scroller takes over horizontally — worst case is page scrolling, never
+     overlap/clipping. */
+}
+
+.app-main {
+  flex: 1;
+  /* Floor for graceful degradation on very narrow windows. */
+  min-width: 360px;
+  /* Bottom padding clears the floating feedback button (~36px + 24px inset). */
+  padding: 44px 56px 96px;
+  max-width: 1180px;
+}
+
+/* ---- Icon rail ---------------------------------------------------------- */
+
+.rail {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 18px 10px;
+  border-right: 1px solid var(--mp-line);
+  flex-shrink: 0;
+}
+
+.rail-item {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mp-muted);
+}
+
+.rail-item:hover {
+  color: var(--mp-ink);
+  background: var(--mp-card);
+}
+
+.rail-item.active {
+  background: var(--mp-terra-tint);
+  color: var(--mp-terra-dark);
+}
+
+.rail-spacer {
+  flex: 1;
+}
+
+.rail-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--mp-terra);
+  color: var(--mp-on-terra);
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---- Cards -------------------------------------------------------------- */
+
+.mp-card {
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line);
+  border-radius: var(--mp-radius-card);
+}
+
+/* ---- Segment bar -------------------------------------------------------- */
+
+.segbar {
+  display: flex;
+  gap: 2px;
+  max-width: 100%;
+}
+
+.segbar span {
+  flex: 1;
+  height: 8px;
+  border-radius: 1px;
+  background: var(--mp-line);
+}
+
+.segbar span.filled {
+  background: var(--mp-olive);
+}
+
+.segbar.amber span.filled {
+  background: var(--mp-amber);
+}
+
+/* ---- Status mark -------------------------------------------------------- */
+
+.status-mark {
+  font-size: 12px;
+  width: 16px;
+  flex-shrink: 0;
+  text-align: center;
+  font-weight: 700;
+}
+
+.status-mark.eaten {
+  color: var(--mp-olive);
+}
+
+.status-mark.cooked {
+  color: var(--mp-amber);
+}
+
+.status-mark.planned {
+  color: var(--mp-mark-planned);
+}
+
+.status-mark.cooking {
+  color: var(--mp-amber);
+}
+
+.status-mark.affected {
+  color: var(--mp-red);
+}
+
+/* ---- Today page --------------------------------------------------------- */
+
+.today-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  border-bottom: 2px solid var(--mp-ink);
+  padding-bottom: 22px;
+}
+
+.today-greeting {
+  font-size: 42px;
+  margin-top: 10px;
+}
+
+.meal-row {
+  display: grid;
+  grid-template-columns: 104px 1fr auto;
+  gap: 22px;
+  align-items: center;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.meal-row .meal-time {
+  font-size: 21px;
+}
+
+.meal-row .meal-name {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.meal-row .meal-meta {
+  font-size: 13.5px;
+  color: var(--mp-muted);
+  margin-top: 4px;
+}
+
+.meal-row .meal-alert {
+  font-size: 13px;
+  color: var(--mp-amber);
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+.meal-row .meal-status {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.batch-tag {
+  font-size: 11px; /* design-language floor: labels ≥11px */
+  letter-spacing: 0.08em;
+  color: var(--mp-olive);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.stat-band {
+  display: grid;
+  /* Cells reflow onto extra rows instead of crushing on narrow windows. */
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 22px;
+  margin-top: 28px;
+  padding: 20px 26px;
+}
+
+.stat-cell .stat-value {
+  margin: 8px 0 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  /* Never wrap inside a numeral+unit pair ("1,410 / 2,000", "120 g"). */
+  white-space: nowrap;
+}
+
+.stat-cell .stat-target {
+  font-size: 13px;
+  color: var(--mp-muted);
+  white-space: nowrap;
+}
+
+.today-lower {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 40px;
+  margin-top: 28px;
+}
+
+.attention-list {
+  margin-top: 12px;
+  display: grid;
+  gap: 11px;
+}
+
+.attention-item {
+  display: flex;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  align-items: baseline;
+}
+
+.attention-item .mp-num {
+  font-size: 13px;
+}
+
+.attention-item.expiry .mp-num {
+  color: var(--mp-red);
+}
+
+.attention-item.defrost .mp-num {
+  color: var(--mp-amber);
+}
+
+.attention-item.ai .mp-num {
+  color: var(--mp-terra);
+}
+
+.budget-note {
+  font-size: 12.5px;
+  color: var(--mp-olive);
+  margin-top: 7px;
+  font-weight: 600;
+}
+
+/* ---- Advisor card ------------------------------------------------------- */
+
+.advisor-card {
+  margin-top: 28px;
+  padding: 18px 26px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px 24px;
+  flex-wrap: wrap;
+}
+
+.advisor-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mp-terra);
+  flex-shrink: 0;
+}
+
+.advisor-title {
+  font-size: 21px;
+  margin-top: 7px;
+  display: block;
+}
+
+.advisor-sub {
+  font-size: 13px;
+  color: var(--mp-muted);
+  margin-top: 4px;
+}
+
+/* ---- Stub pages --------------------------------------------------------- */
+
+.stub-page .stub-title {
+  font-family: var(--mp-font-display);
+  font-weight: 700;
+  font-size: 32px;
+  letter-spacing: -0.015em;
+  margin: 8px 0 0;
+}
+
+.stub-page .stub-body {
+  color: var(--mp-muted);
+  margin-top: 14px;
+}
+
+/* ---- Feedback button + modal -------------------------------------------- */
+
+.feedback-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  background: var(--mp-card);
+  z-index: 20;
+}
+
+.feedback-fab .fab-icon {
+  display: none;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(38, 32, 25, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+}
+
+.modal-card {
+  width: min(440px, calc(100vw - 48px));
+  padding: 24px 28px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+
+/* ---- Page header ---------------------------------------------------------- */
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px 24px;
+  flex-wrap: wrap;
+}
+
+.page-title {
+  font-family: var(--mp-font-display);
+  font-weight: 700;
+  font-size: 32px;
+  letter-spacing: -0.015em;
+  margin: 0;
+  line-height: 1.1;
+}
+
+.page-meta {
+  font-size: 13.5px;
+  color: var(--mp-muted);
+  margin-top: 6px;
+}
+
+/* ---- Stat strip (label / numeral / sub cells) ------------------------------ */
+
+.stat-strip {
+  display: grid;
+  /* Equal cells at full width; reflow onto extra rows when narrow rather
+     than crushing (was an inline repeat(N, 1fr) per cell count). */
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  overflow: hidden;
+}
+
+/* Strips living inside narrow containers (Discover job card, onboarding):
+   a lower floor so the desktop cell count is preserved there. */
+.stat-strip.compact {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.stat-strip-cell {
+  padding: 16px 22px;
+}
+
+.stat-strip-cell .mp-num {
+  white-space: nowrap;
+}
+
+/* Hairlines between cells as shadows so they also separate wrapped rows;
+   outer edges are clipped by the strip's overflow:hidden, so a single row
+   renders exactly like the old border-left rule. */
+.stat-strip-cell {
+  box-shadow:
+    -1px 0 0 var(--mp-line),
+    0 -1px 0 var(--mp-line);
+}
+
+.stat-strip-sub {
+  font-size: 12px;
+  color: var(--mp-muted);
+  margin-top: 4px;
+}
+
+/* ---- Advisor panel (footer-action advisor card) ----------------------------- */
+
+.advisor-panel {
+  margin-top: 26px;
+  padding: 20px 26px;
+}
+
+.advisor-panel.small {
+  margin-top: 0;
+  padding: 18px 22px;
+}
+
+.advisor-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+}
+
+.advisor-panel-note {
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.advisor-panel-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  border-top: 1px solid var(--mp-line);
+  padding-top: 14px;
+}
+
+.advisor-panel-impact {
+  font-size: 13px;
+  color: var(--mp-muted);
+}
+
+/* ---- Swap line + tint chips --------------------------------------------------- */
+
+.swap-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 14.5px;
+  flex-wrap: wrap;
+}
+
+.swap-prefix {
+  width: 80px;
+  color: var(--mp-muted);
+  font-size: 12.5px;
+  flex-shrink: 0;
+}
+
+.swap-from {
+  text-decoration: line-through;
+  color: var(--mp-muted);
+}
+
+.swap-arrow {
+  color: var(--mp-line-hi);
+}
+
+.swap-to {
+  font-weight: 600;
+}
+
+.swap-delta {
+  font-size: 12px;
+  color: var(--mp-olive);
+  font-weight: 700;
+}
+
+.tint-chip {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+
+.tint-chip.olive {
+  color: var(--mp-olive-deep);
+  background: var(--mp-olive-tint);
+}
+
+.tint-chip.terra {
+  color: var(--mp-terra-dark);
+  background: var(--mp-terra-tint);
+}
+
+/* ---- Plan page ------------------------------------------------------------------ */
+
+/* Horizontal-scroll wrapper for the week grid: rows keep a sensible
+   min-width and the wrapper scrolls instead of crushing cells. The negative
+   margin + padding keeps the today row's -13px inset bar unclipped. */
+.plan-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-left: -13px;
+  padding-left: 13px;
+}
+
+.plan-scroll .plan-grid {
+  min-width: 860px;
+}
+
+.plan-grid {
+  display: grid;
+  grid-template-columns: 118px 1fr 1fr 1fr;
+  gap: 0 24px;
+  align-items: baseline;
+}
+
+.plan-grid-head {
+  padding-bottom: 9px;
+  border-bottom: 2px solid var(--mp-ink);
+}
+
+.plan-row {
+  padding: 13px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.plan-row.today {
+  background: var(--mp-card);
+  box-shadow: inset 3px 0 0 var(--mp-terra);
+  padding-left: 13px;
+  margin-left: -13px;
+}
+
+.plan-day {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.plan-today-tag {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--mp-terra);
+  font-weight: 700;
+}
+
+.plan-cell {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.plan-cell-name {
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-cell-name.eaten {
+  color: var(--mp-muted);
+}
+
+.plan-cell-name.planned,
+.plan-cell-name.cooking {
+  font-weight: 500;
+}
+
+.plan-cell-name.affected {
+  font-weight: 500;
+  color: var(--mp-red);
+  text-decoration: line-through;
+}
+
+.plan-legend {
+  display: flex;
+  gap: 22px;
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--mp-muted);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---- Generation flow --------------------------------------------------------------- */
+
+.feasibility-band {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  background: var(--mp-olive-tint);
+  border: 1px solid var(--mp-olive-line);
+  border-radius: 10px;
+  padding: 12px 18px;
+  font-size: 13.5px;
+  color: var(--mp-olive-deep);
+}
+
+.candidate-grid {
+  display: grid;
+  /* Cards reflow onto extra rows on narrow windows instead of crushing. */
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.candidate-card {
+  font-family: var(--mp-font-body);
+  text-align: left;
+  background: var(--mp-card);
+  border-radius: var(--mp-radius-card);
+  padding: 16px 16px 14px;
+  position: relative;
+  border: 1px solid var(--mp-line);
+  cursor: pointer;
+  color: var(--mp-ink);
+}
+
+.candidate-card.recommended {
+  border: 2px solid var(--mp-terra);
+}
+
+.candidate-card.selected:not(.recommended) {
+  border-color: var(--mp-line-hi);
+  box-shadow: 0 0 0 1px var(--mp-line-hi);
+}
+
+.candidate-tag {
+  position: absolute;
+  top: -11px;
+  left: 14px;
+  background: var(--mp-terra);
+  color: var(--mp-on-terra);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.candidate-fit {
+  margin: 10px 0 2px;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.candidate-fit-max {
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.candidate-fit-sub {
+  font-size: 11.5px;
+  color: var(--mp-muted);
+  margin-bottom: 12px;
+}
+
+.candidate-rows {
+  display: grid;
+  gap: 7px;
+  font-size: 12.5px;
+  border-top: 1px solid var(--mp-line);
+  padding-top: 11px;
+}
+
+.candidate-key {
+  color: var(--mp-muted);
+}
+
+.candidate-conf {
+  font-size: 11px;
+  color: var(--mp-muted);
+}
+
+.warn-pill {
+  margin-top: 11px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mp-amber);
+  border: 1px solid var(--mp-amber);
+  border-radius: 999px;
+  padding: 3px 9px;
+  display: inline-block;
+}
+
+.candidate-skeleton {
+  height: 240px;
+  border-radius: var(--mp-radius-card);
+  border: 1px solid var(--mp-line);
+  background: var(--mp-card);
+  animation: mp-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mp-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.gen-wait {
+  margin-top: 22px;
+  padding: 20px 26px;
+}
+
+.gen-wait-sub {
+  font-size: 13px;
+  color: var(--mp-muted);
+  margin-top: 8px;
+}
+
+.reasoning-card {
+  margin-top: 22px;
+  padding: 20px 26px;
+}
+
+.reasoning-lineup {
+  margin-top: 16px;
+  border-top: 1px solid var(--mp-line);
+  padding-top: 14px;
+}
+
+.lineup-chips {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.lineup-chip {
+  font-size: 12.5px;
+  border: 1px solid var(--mp-line-hi);
+  border-radius: 999px;
+  padding: 5px 13px;
+  background: var(--mp-bg);
+}
+
+.reasoning-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+/* ---- Recipes library ------------------------------------------------------------------ */
+
+.recipe-filters {
+  margin-top: 22px;
+  display: grid;
+  gap: 12px;
+}
+
+.recipe-search {
+  font-family: var(--mp-font-body);
+  font-size: 14px;
+  color: var(--mp-ink);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line-hi);
+  border-radius: var(--mp-radius);
+  padding: 9px 14px;
+  width: min(360px, 100%);
+}
+
+.recipe-search::placeholder {
+  color: var(--mp-muted);
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-chip {
+  font-family: var(--mp-font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--mp-ink);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line-hi);
+  border-radius: 999px;
+  padding: 5px 13px;
+  cursor: pointer;
+  min-height: 32px;
+}
+
+.filter-chip:hover {
+  border-color: var(--mp-muted);
+}
+
+.filter-chip.active {
+  background: var(--mp-terra-tint);
+  border-color: var(--mp-terra);
+  color: var(--mp-terra-dark);
+  font-weight: 600;
+}
+
+.recipe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.recipe-card {
+  display: block;
+  text-decoration: none;
+  color: var(--mp-ink);
+  overflow: hidden;
+}
+
+.recipe-card:hover {
+  border-color: var(--mp-line-hi);
+}
+
+.recipe-photo {
+  height: 132px;
+  background: var(--mp-photo-fallback);
+}
+
+.recipe-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.recipe-card-body {
+  padding: 13px 16px 14px;
+}
+
+.recipe-card-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.recipe-card-meta {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  margin-top: 3px;
+}
+
+.recipe-card-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-top: 12px;
+}
+
+.recipe-card-taste {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.recipe-card-taste-label {
+  font-size: 11px;
+  color: var(--mp-muted);
+}
+
+.tier-badge {
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--mp-line-hi);
+  border-radius: 999px;
+  padding: 2px 9px;
+  color: var(--mp-muted);
+  white-space: nowrap;
+}
+
+/* ---- Recipe detail ----------------------------------------------------------------------- */
+
+.detail-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.back-link {
+  font-size: 13.5px;
+  color: var(--mp-muted);
+  text-decoration: none;
+}
+
+.back-link:hover {
+  color: var(--mp-ink);
+}
+
+.detail-hero {
+  display: grid;
+  grid-template-columns: 400px minmax(0, 1fr);
+  gap: 26px;
+  align-items: start;
+}
+
+.detail-photo {
+  height: 280px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--mp-photo-fallback);
+}
+
+.detail-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.detail-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  align-items: center;
+}
+
+.detail-chip {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--mp-line-hi);
+  color: var(--mp-ink);
+  white-space: nowrap;
+}
+
+.detail-ratings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.detail-pills {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.nutrition-pill {
+  font-size: 12.5px;
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line);
+  color: var(--mp-muted);
+}
+
+.nutrition-pill-note {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+}
+
+.detail-columns {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 24px;
+  margin-top: 24px;
+}
+
+.detail-card {
+  padding: 18px 22px;
+}
+
+.detail-card-head {
+  border-bottom: 2px solid var(--mp-ink);
+  padding-bottom: 7px;
+  margin-bottom: 4px;
+}
+
+.ingredient-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.ingredient-qty {
+  font-size: 13px;
+  color: var(--mp-muted);
+  white-space: nowrap;
+}
+
+.detail-more {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  margin-top: 10px;
+}
+
+.method-step {
+  display: flex;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.versions-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+  margin-top: 22px;
+  font-size: 12.5px;
+}
+
+.version-current {
+  font-weight: 700;
+  color: var(--mp-olive-deep);
+  background: var(--mp-olive-tint);
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 12px;
+}
+
+/* ---- Groceries ------------------------------------------------------------------------------- */
+
+.grocery-layout {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 24px;
+  margin-top: 24px;
+  align-items: start;
+}
+
+.group-head {
+  border-bottom: 2px solid var(--mp-ink);
+  padding-bottom: 7px;
+}
+
+.grocery-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.bought-box {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1.5px solid var(--mp-line-hi);
+  background: transparent;
+  color: transparent;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.bought-box.bought {
+  background: var(--mp-olive);
+  border-color: var(--mp-olive);
+  color: #f3f5e8;
+}
+
+.grocery-name {
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--mp-ink);
+}
+
+.grocery-name.bought {
+  color: var(--mp-muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.grocery-qty {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  width: 78px;
+  flex-shrink: 0;
+}
+
+.grocery-price {
+  font-size: 13.5px;
+  font-weight: 600;
+  width: 60px;
+  text-align: right;
+  color: var(--mp-ink);
+  flex-shrink: 0;
+}
+
+.grocery-stale {
+  width: 58px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.stale-tag {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--mp-amber);
+}
+
+.grocery-footnote {
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.order-card {
+  padding: 18px 22px;
+}
+
+.order-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.order-provider {
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 10px;
+}
+
+.order-eta {
+  font-size: 13px;
+  color: var(--mp-muted);
+  margin-top: 3px;
+}
+
+.order-empty {
+  font-size: 13.5px;
+  color: var(--mp-muted);
+  margin-top: 10px;
+}
+
+.order-dots {
+  display: flex;
+  align-items: center;
+}
+
+.order-dot-seg {
+  display: flex;
+  align-items: center;
+}
+
+.order-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1.5px solid var(--mp-line-hi);
+  box-sizing: border-box;
+}
+
+.order-dot.done {
+  background: var(--mp-olive);
+  border-color: var(--mp-olive);
+}
+
+.order-rule {
+  flex: 1;
+  height: 1.5px;
+  background: var(--mp-line);
+}
+
+.order-rule.done {
+  background: var(--mp-olive);
+}
+
+.order-step-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 7px;
+  font-size: 11px;
+  color: var(--mp-muted);
+}
+
+.order-step-labels .current {
+  font-weight: 700;
+  color: var(--mp-olive);
+}
+
+/* ---- Pantry -------------------------------------------------------------------------------------- */
+
+.pantry-layout {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 24px;
+  margin-top: 24px;
+  align-items: start;
+}
+
+.pantry-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.pantry-name {
+  font-size: 14.5px;
+  font-weight: 500;
+}
+
+.pantry-name.spoiled {
+  color: var(--mp-muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.spoiled-tag {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--mp-red);
+  margin-left: 9px;
+}
+
+.pantry-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.stepper-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--mp-radius);
+  border: 1px solid var(--mp-line-hi);
+  background: transparent;
+  color: var(--mp-ink);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stepper-btn:hover {
+  border-color: var(--mp-muted);
+}
+
+.stepper-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pantry-qty {
+  font-size: 13px;
+  color: var(--mp-ink);
+  min-width: 86px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.pantry-expiry {
+  font-size: 12.5px;
+  font-weight: 600;
+  width: 64px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.pantry-action {
+  width: 118px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.side-card {
+  padding: 18px 22px;
+}
+
+.budget-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.waste-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13.5px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.waste-row:last-child {
+  border-bottom: none;
+}
+
+.waste-meta {
+  color: var(--mp-muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.equipment-list {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+/* ---- Today extras ----------------------------------------------------------------------------------- */
+
+.snack-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+/* ---- Misc --------------------------------------------------------------- */
+
+.page-loading {
+  color: var(--mp-muted);
+  padding: 44px 0;
+}
+
+/* ---- Shared inputs + buttons (part B) ------------------------------------- */
+
+.text-input {
+  font-family: var(--mp-font-body);
+  font-size: 14px;
+  color: var(--mp-ink);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line-hi);
+  border-radius: var(--mp-radius);
+  padding: 9px 14px;
+}
+
+.text-input::placeholder {
+  color: var(--mp-muted);
+}
+
+.btn-danger {
+  background: var(--mp-red);
+  color: #fdf2f1;
+  border-color: var(--mp-red);
+}
+
+.btn-danger:hover {
+  background: #962017;
+  border-color: #962017;
+}
+
+.btn-danger:disabled:hover {
+  background: var(--mp-red);
+  border-color: var(--mp-red);
+}
+
+.time-select {
+  font-family: var(--mp-font-body);
+  font-size: 13.5px;
+  color: var(--mp-ink);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line-hi);
+  border-radius: var(--mp-radius);
+  padding: 7px 10px;
+  min-height: 32px;
+}
+
+.modal-card.wide {
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+}
+
+.dialog-title {
+  font-family: var(--mp-font-display);
+  font-weight: 700;
+  font-size: 21px;
+  letter-spacing: -0.01em;
+  margin: 12px 0 0;
+}
+
+.dialog-body {
+  font-size: 14px;
+  color: var(--mp-muted);
+  margin: 10px 0 14px;
+  line-height: 1.5;
+}
+
+.unread-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mp-terra);
+  flex-shrink: 0;
+}
+
+/* ---- Bell dropdown -------------------------------------------------------- */
+
+button.rail-item {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+button.rail-item:hover {
+  background: var(--mp-card);
+}
+
+button.rail-item.active {
+  background: var(--mp-terra-tint);
+}
+
+.bell-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+}
+
+.bell-pop {
+  position: absolute;
+  left: 52px;
+  bottom: 0;
+  width: min(360px, calc(100vw - 76px));
+  z-index: 25;
+  padding: 14px 0 10px;
+  box-shadow: 0 18px 44px rgba(38, 32, 25, 0.18);
+}
+
+.bell-pop-head {
+  padding: 0 18px 10px;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.bell-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--mp-line);
+  padding: 10px 18px;
+  cursor: pointer;
+  font-family: var(--mp-font-body);
+  color: var(--mp-ink);
+}
+
+.bell-row:hover {
+  background: var(--mp-bg);
+}
+
+.bell-row-title {
+  display: block;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.bell-row-time {
+  display: block;
+  font-size: 11.5px;
+  color: var(--mp-muted);
+  margin-top: 2px;
+}
+
+.bell-row .unread-dot {
+  margin-top: 5px;
+}
+
+.bell-empty {
+  padding: 14px 18px;
+  font-size: 13px;
+  color: var(--mp-muted);
+}
+
+.bell-pop-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 18px 4px;
+}
+
+.notif-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* ---- Nutrition page -------------------------------------------------------- */
+
+.week-strip {
+  display: grid;
+  /* One equal column per day cell (any count — was an inline repeat(8, 1fr)
+     on the nutrition overview). Below the 72px/cell floor the strip scrolls
+     horizontally instead of crushing the cells. */
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(72px, 1fr);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 16px 22px;
+}
+
+.week-cell {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.week-cell.today {
+  box-shadow: inset 3px 0 0 var(--mp-terra);
+  padding-left: 10px;
+  margin-left: -10px;
+}
+
+.week-kcal {
+  min-height: 16px;
+}
+
+.nutrition-layout {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 24px;
+  margin-top: 26px;
+  align-items: start;
+}
+
+.intake-row {
+  display: grid;
+  grid-template-columns: 88px 1fr auto;
+  gap: 18px;
+  align-items: center;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.intake-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.intake-meta {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  margin-top: 3px;
+}
+
+.intake-state {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.intake-state.confirmed {
+  color: var(--mp-olive);
+}
+
+.intake-state.skipped {
+  color: var(--mp-muted);
+}
+
+.kcal-input {
+  width: 90px;
+  padding: 6px 10px;
+}
+
+.snack-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--mp-line);
+  font-size: 14px;
+}
+
+.snack-kcal {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  white-space: nowrap;
+}
+
+.target-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.target-row:last-child {
+  border-bottom: none;
+}
+
+.target-label {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.target-value {
+  min-width: 84px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.journal-row {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.journal-row:last-child {
+  border-bottom: none;
+}
+
+.journal-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--mp-muted);
+}
+
+.journal-text {
+  font-size: 13.5px;
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
+/* ---- Nutrition page (contract rebuild) ------------------------------------- */
+
+.nutri-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.stat-band.cells-6 {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 16px;
+  padding: 18px 22px;
+}
+
+.stat-remaining {
+  font-size: 12px;
+  color: var(--mp-muted);
+  margin: -4px 0 8px;
+}
+
+.hard-floor-mark {
+  cursor: help;
+  color: var(--mp-ink);
+  font-size: 10px;
+  margin-left: 4px;
+}
+
+.tint-chip.red {
+  color: #8c1d16;
+  background: #f7e1de;
+}
+
+.tint-chip.amber {
+  color: #7a5416;
+  background: #f5ead3;
+}
+
+.week-total-cell {
+  border-left: 1px solid var(--mp-line);
+  padding-left: 14px;
+}
+
+.week-activity {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mp-muted);
+  letter-spacing: 0.06em;
+}
+
+.violation-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+/* Horizontal-scroll wrapper for the slots table: rows keep a min-width and
+   the wrapper scrolls instead of crushing the four columns. 540px sits just
+   under the table's two-column desktop slot (~626px), so full width never
+   scrolls. */
+.slots-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.slots-scroll .slot-grid-head,
+.slots-scroll .slot-row2 {
+  min-width: 540px;
+}
+
+.slot-grid-head,
+.slot-row2 {
+  display: grid;
+  /* Last column capped at 1fr (not auto): with four action buttons in a
+     PENDING row, auto blew out to the buttons' single-line max-content and
+     starved the name columns into one-word-per-line soup. At 1fr the column
+     resolves to its 150px floor on typical rows (same as before) and the
+     action buttons wrap instead. */
+  grid-template-columns: 86px 1.1fr 1.3fr minmax(150px, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.slot-grid-head {
+  padding: 0 0 8px;
+  border-bottom: 2px solid var(--mp-ink);
+}
+
+.slot-row2 {
+  padding: 15px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.slot-name {
+  font-size: 15.5px;
+  font-weight: 600;
+}
+
+.macro-line {
+  font-size: 12px;
+  color: var(--mp-muted);
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.delta-pill {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mp-amber);
+  border: 1px solid var(--mp-amber);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.override-quote {
+  font-style: italic;
+  font-size: 13px;
+  color: var(--mp-muted);
+  margin-top: 4px;
+}
+
+.parse-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: #f5ead3;
+  border: 1px solid #e3cf9d;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: #7a5416;
+  margin-top: 8px;
+}
+
+.actions-wrap {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.activity-anchor {
+  position: relative;
+}
+
+.activity-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(300px, calc(100vw - 120px));
+  z-index: 25;
+  padding: 16px 18px;
+  box-shadow: 0 18px 44px rgba(38, 32, 25, 0.18);
+}
+
+.suggest-anchor {
+  position: relative;
+}
+
+.suggest-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 25;
+  padding: 4px 0;
+  box-shadow: 0 14px 34px rgba(38, 32, 25, 0.16);
+}
+
+.suggest-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-family: var(--mp-font-body);
+  font-size: 13px;
+  color: var(--mp-ink);
+}
+
+.suggest-row:hover {
+  background: var(--mp-bg);
+}
+
+.field-label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--mp-muted);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.num-input {
+  width: 86px;
+  padding: 6px 10px;
+}
+
+.nv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.nv-table th {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--mp-muted);
+  text-align: left;
+  padding: 6px 10px 6px 0;
+  border-bottom: 2px solid var(--mp-ink);
+}
+
+.nv-table td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--mp-line);
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+
+.verdict-pill {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 3px 11px;
+  white-space: nowrap;
+}
+
+.verdict-pill.olive {
+  color: var(--mp-olive-deep);
+  background: var(--mp-olive-tint);
+}
+
+.verdict-pill.amber {
+  color: #7a5416;
+  background: #f5ead3;
+}
+
+.verdict-pill.red {
+  color: #8c1d16;
+  background: #f7e1de;
+}
+
+.finding-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.finding-row:last-child {
+  border-bottom: none;
+}
+
+.severity-mark {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  flex-shrink: 0;
+  width: 44px;
+}
+
+.severity-mark.BLOCK {
+  color: var(--mp-red);
+}
+
+.severity-mark.WARN {
+  color: var(--mp-amber);
+}
+
+.severity-mark.INFO {
+  color: var(--mp-muted);
+}
+
+.section-card {
+  padding: 18px 22px;
+  margin-top: 18px;
+}
+
+.micros-details {
+  margin-top: 18px;
+  padding: 0;
+}
+
+.micros-details summary {
+  cursor: pointer;
+  padding: 14px 22px;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.micros-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.micros-details[open] summary {
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.micro-row {
+  display: grid;
+  grid-template-columns: 1.1fr auto 130px;
+  gap: 14px;
+  align-items: center;
+  padding: 7px 22px;
+  border-bottom: 1px solid var(--mp-line);
+  font-size: 13px;
+}
+
+/* Value column ("120 g / 200") never wraps mid-pair. */
+.micro-row > :nth-child(2) {
+  white-space: nowrap;
+}
+
+.micro-row:last-child {
+  border-bottom: none;
+}
+
+.inline-note {
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.targets-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.targets-row:last-child {
+  border-bottom: none;
+}
+
+.day-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-top: 22px;
+  flex-wrap: wrap;
+}
+
+.day-title {
+  font-family: var(--mp-font-display);
+  font-weight: 700;
+  font-size: 21px;
+  letter-spacing: -0.01em;
+  min-width: 230px;
+}
+
+/* ---- Preferences page --------------------------------------------------------- */
+
+.version-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+
+.version-old {
+  font-size: 12px;
+  color: var(--mp-muted);
+  border: 1px solid var(--mp-line-hi);
+  border-radius: 999px;
+  padding: 3px 11px;
+}
+
+.version-note {
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.pref-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.pref-chip-block {
+  margin-top: 14px;
+}
+
+.pref-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.pref-bottom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 18px;
+  align-items: start;
+}
+
+.constraint-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid var(--mp-line-hi);
+  border-radius: 999px;
+  padding: 5px 7px 5px 13px;
+  background: var(--mp-card);
+}
+
+.chip-x {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: var(--mp-bg);
+  color: var(--mp-muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chip-x:hover {
+  background: var(--mp-red);
+  color: #fdf2f1;
+}
+
+/* ---- Activity page --------------------------------------------------------------- */
+
+.activity-layout {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 24px;
+  margin-top: 30px;
+  align-items: start;
+}
+
+.feedback-card {
+  padding: 16px 20px;
+}
+
+.feedback-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.feedback-quote {
+  font-size: 14.5px;
+  margin-top: 9px;
+  line-height: 1.45;
+}
+
+.tier-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--mp-bg);
+  border: 1.5px solid;
+  font-weight: 700;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.route-line {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border-top: 1px solid var(--mp-line);
+  padding-top: 10px;
+}
+
+.route-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.route-dest {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.route-conf {
+  font-size: 11.5px;
+  color: var(--mp-muted);
+}
+
+.route-tier {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.route-action {
+  font-size: 13.5px;
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
+.route-answered {
+  font-size: 12.5px;
+  color: var(--mp-olive);
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.clar-context {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  margin-top: 7px;
+}
+
+.clar-options {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* ---- Feedback modal ------------------------------------------------------------------ */
+
+.feedback-textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.classify-pulse {
+  height: 54px;
+  border-radius: 10px;
+  border: 1px solid var(--mp-line);
+  background: var(--mp-bg);
+  margin-top: 18px;
+  animation: mp-pulse 1.2s ease-in-out infinite;
+}
+
+.feedback-echo {
+  margin-top: 12px;
+  padding: 14px 18px;
+  font-size: 15px;
+  border-radius: 10px;
+}
+
+.route-row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px 18px;
+}
+
+.route-corrected {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mp-olive);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.feedback-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+/* ---- Notifications page ------------------------------------------------------------------ */
+
+.notif-layout {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 24px;
+  margin-top: 24px;
+  align-items: start;
+}
+
+.notif-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--mp-line);
+  cursor: pointer;
+}
+
+.notif-row:hover {
+  background: var(--mp-card);
+}
+
+.notif-title {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.notif-time {
+  font-size: 12px;
+  color: var(--mp-muted);
+  margin-top: 2px;
+}
+
+.mute-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.mute-row:last-child {
+  border-bottom: none;
+}
+
+.switch {
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--mp-line-hi);
+  background: var(--mp-bg);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+
+.switch-knob {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--mp-line-hi);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.switch.on {
+  background: var(--mp-olive);
+  border-color: var(--mp-olive);
+}
+
+.switch.on .switch-knob {
+  background: #f3f5e8;
+  transform: translateX(14px);
+}
+
+/* ---- Settings page -------------------------------------------------------------------------- */
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 24px;
+  align-items: start;
+}
+
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.member-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.member-dot.pending {
+  background: transparent;
+  border: 1.5px dashed var(--mp-line-hi);
+  box-sizing: border-box;
+}
+
+.member-name {
+  font-size: 14px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-row.pending .member-name {
+  flex: none;
+}
+
+.invite-sent {
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.slot-config-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.slot-config-row .slot-config-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.slot-config-row .filter-chip {
+  flex: none;
+}
+
+.slot-config-name {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.account-email {
+  margin-top: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.pw-success {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--mp-olive);
+}
+
+/* ---- Discover page ----------------------------------------------------------------------------- */
+
+.discover-controls {
+  margin-top: 22px;
+  display: grid;
+  gap: 12px;
+}
+
+.discover-layout {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 24px;
+  margin-top: 22px;
+  align-items: start;
+}
+
+.job-query {
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 10px;
+}
+
+.job-constraints {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--mp-muted);
+}
+
+.result-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.result-card {
+  padding: 14px 16px;
+}
+
+.result-card.resolved {
+  opacity: 0.72;
+}
+
+.result-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.result-meta {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  margin-top: 3px;
+}
+
+.result-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.conf-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.conf-pill .tier-mark {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+}
+
+.result-kept {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--mp-olive);
+}
+
+.result-skipped {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+}
+
+.history-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.history-row:last-child {
+  border-bottom: none;
+}
+
+.history-query {
+  font-size: 13.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-meta {
+  font-size: 11.5px;
+  color: var(--mp-muted);
+  margin-top: 2px;
+}
+
+.history-counts {
+  font-size: 12px;
+  color: var(--mp-muted);
+  white-space: nowrap;
+}
+
+/* ---- Auth + onboarding ---------------------------------------------------------------------------- */
+
+.auth-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+}
+
+.auth-card {
+  width: min(440px, calc(100vw - 48px));
+  padding: 30px 34px;
+  box-shadow: 0 24px 60px rgba(38, 32, 25, 0.14);
+}
+
+/* ---- Admin ------------------------------------------------------------------------------------------ */
+
+.admin-status-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.admin-status-row:last-child {
+  border-bottom: none;
+}
+
+/* ---- Graceful degradation (narrow desktop windows) ------------------------ */
+
+/* Wide editing tables (targets macros/micros) scroll instead of crushing. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-scroll > .nv-table {
+  min-width: 560px;
+}
+
+@media (max-width: 1100px) {
+  /* Two-column page layouts collapse to a single column; rail content
+     flows after the main content. */
+  .today-lower,
+  .nutrition-layout,
+  .grocery-layout,
+  .pantry-layout,
+  .activity-layout,
+  .notif-layout,
+  .discover-layout,
+  .settings-grid,
+  .pref-grid,
+  .pref-bottom,
+  .detail-hero,
+  .detail-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .app-main {
+    padding: 28px 20px 96px;
+  }
+
+  .meal-row {
+    grid-template-columns: 76px 1fr auto;
+    gap: 12px;
+  }
+
+  .result-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Floating feedback button shrinks to icon-only so it covers less. */
+  .feedback-fab {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .feedback-fab .fab-label {
+    display: none;
+  }
+
+  .feedback-fab .fab-icon {
+    display: inline;
+  }
+}
+
+/* ---- Plan + Today contract rebuild (plan.md / today.md) -------------------- */
+
+/* Status-chip tones beside the olive default (§3a status map). */
+.mp-chip.amber {
+  color: var(--mp-amber);
+  border-color: var(--mp-amber);
+}
+
+.mp-chip.muted {
+  color: var(--mp-muted);
+  border-color: var(--mp-line-hi);
+}
+
+.tint-chip.muted-chip {
+  color: var(--mp-muted);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line);
+}
+
+/* Toast stack — info card / amber 409-guard variant (never red). */
+.toast-stack {
+  position: fixed;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  z-index: 80;
+  max-width: min(560px, calc(100vw - 40px));
+}
+
+.toast {
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line-hi);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(38, 32, 25, 0.14);
+  padding: 11px 16px;
+  font-size: 13.5px;
+}
+
+.toast.warn {
+  border-color: var(--mp-amber);
+  color: var(--mp-amber);
+  font-weight: 600;
+}
+
+/* Week grid additions (§3d). */
+.plan-cell-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  align-items: baseline;
+}
+
+.plan-cell-btn:hover .plan-cell-name {
+  text-decoration: underline;
+  text-decoration-color: var(--mp-line-hi);
+}
+
+.plan-cell-btn:hover .plan-cell-name.affected {
+  text-decoration: line-through;
+}
+
+.plan-cell-time {
+  display: block;
+  font-size: 11.5px;
+  color: var(--mp-muted);
+  margin-top: 2px;
+}
+
+.plan-day-notes {
+  font-size: 12px;
+  color: var(--mp-muted);
+  font-style: italic;
+  margin-top: 3px;
+  white-space: normal;
+}
+
+.plan-cell-name.skipped {
+  color: var(--mp-muted);
+  text-decoration: line-through;
+}
+
+.plan-cell-name.empty-warn {
+  color: var(--mp-amber);
+  font-weight: 600;
+}
+
+.status-mark.skipped {
+  color: var(--mp-muted);
+}
+
+/* Quality-warnings banner + drill-in (§3c). */
+.quality-banner {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--mp-amber);
+  border-radius: 10px;
+  padding: 11px 16px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--mp-amber);
+  cursor: pointer;
+}
+
+.qw-panel {
+  margin-top: 12px;
+  padding: 18px 20px;
+}
+
+.qw-section {
+  margin-top: 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.qw-row {
+  display: flex;
+  gap: 10px;
+  font-size: 13.5px;
+  align-items: baseline;
+}
+
+.qw-day {
+  flex-shrink: 0;
+  width: 58px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.qw-table-scroll {
+  overflow-x: auto;
+}
+
+.qw-table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.qw-table th {
+  text-align: right;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mp-muted);
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.qw-table td {
+  text-align: right;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.qw-table td:first-child,
+.qw-table th:first-child {
+  text-align: left;
+  padding-left: 0;
+}
+
+/* Sub-score bars (§3c / §4c). */
+.score-bars {
+  display: grid;
+  gap: 6px;
+  max-width: 360px;
+}
+
+.score-bar-row {
+  display: grid;
+  grid-template-columns: 86px 1fr 42px;
+  gap: 10px;
+  align-items: center;
+}
+
+.score-bar-row .mp-num {
+  text-align: right;
+}
+
+/* History drawer (§3f). */
+.history-drawer {
+  margin-top: 18px;
+  padding: 16px 20px;
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--mp-line);
+  flex-wrap: wrap;
+}
+
+.history-row:last-child {
+  border-bottom: none;
+}
+
+.history-row.viewed {
+  box-shadow: inset 3px 0 0 var(--mp-terra);
+  padding-left: 10px;
+  margin-left: -10px;
+}
+
+.history-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  flex: 1;
+  min-width: 280px;
+  text-align: left;
+}
+
+.history-meta {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+}
+
+.history-chain {
+  color: var(--mp-muted);
+}
+
+.history-flags {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.history-outcome {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  min-width: 180px;
+}
+
+/* Generation flow (§4a/§4c). */
+.conflict-card {
+  margin-top: 18px;
+  padding: 16px 20px;
+  border-color: var(--mp-amber);
+}
+
+.resolution-card {
+  margin-top: 12px;
+  padding: 16px 20px;
+}
+
+.resolution-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  flex-wrap: wrap;
+}
+
+.consent-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 16px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.consent-row input {
+  margin-top: 3px;
+  accent-color: var(--mp-terra);
+}
+
+.review-card {
+  margin-top: 22px;
+  padding: 22px 26px;
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 360px) 1fr;
+  gap: 18px 40px;
+  margin-top: 16px;
+}
+
+@media (max-width: 760px) {
+  .review-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.review-lines {
+  display: grid;
+  gap: 9px;
+  font-size: 14.5px;
+  align-content: start;
+}
+
+/* Slot detail modal rows (§3d popover). */
+.slot-detail-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 12px;
+  font-size: 13.5px;
+  align-items: baseline;
+}
+
+/* Today composite (§3a/§3d). */
+.meal-time-unset {
+  font-size: 21px;
+  color: var(--mp-line-hi);
+}
+
+.attention-count {
+  color: var(--mp-muted);
+  letter-spacing: 0;
+}
+
+.attention-link {
+  background: transparent;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+
+.attention-link:hover span:last-child {
+  text-decoration: underline;
+  text-decoration-color: var(--mp-line-hi);
+}
+
+/* ---- Recipes library rebuild (recipes.md) -------------------------------------- */
+
+.recipe-card-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.recipe-card.archived {
+  opacity: 0.62;
+}
+
+.recipe-card-captions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+  min-height: 0;
+}
+
+.pool-caption {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--mp-muted);
+  text-transform: uppercase;
+}
+
+.version-tag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mp-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.recipe-card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 14px 12px;
+}
+
+.nutri-note {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.nutri-note.pending {
+  color: var(--mp-muted);
+}
+
+.nutri-note.partial {
+  color: var(--mp-amber);
+}
+
+.import-source-line {
+  font-size: 13.5px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.import-warnings {
+  background: rgba(154, 106, 28, 0.08);
+  border: 1px solid rgba(154, 106, 28, 0.35);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--mp-amber);
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.dedup-prewarn {
+  background: var(--mp-terra-tint, #f6e3d9);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--mp-terra-dark);
+  margin-top: 10px;
+}
+
+.dedup-candidate {
+  padding: 14px 16px;
+  margin-top: 12px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--mp-terra-dark);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.rf-errors {
+  background: rgba(179, 38, 30, 0.07);
+  border: 1px solid rgba(179, 38, 30, 0.4);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mp-red);
+  display: grid;
+  gap: 4px;
+}
+
+/* ---- §4d recipe form ------------------------------------------------------------ */
+
+.recipe-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.rf-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.rf-section {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--mp-line);
+  padding-top: 12px;
+}
+
+.rf-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.rf-ing-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.4fr) 70px 76px minmax(90px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.rf-ing-row .rf-key {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.rf-opt {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.rf-step-row {
+  display: grid;
+  grid-template-columns: 26px 1fr 70px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.rf-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+/* ---- recipe detail rebuild (recipe-detail.md) ------------------------------------ */
+
+.catalogue-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--mp-terra-tint, #f6e3d9);
+  border-radius: 12px;
+  padding: 12px 18px;
+  margin-top: 16px;
+  font-size: 13.5px;
+  color: var(--mp-terra-dark);
+  font-weight: 500;
+}
+
+.catalogue-banner.archived {
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line-hi, #cfc4a9);
+  color: var(--mp-muted);
+}
+
+.photo-dropzone {
+  width: 100%;
+  border: 1.5px dashed var(--mp-line-hi, #cfc4a9);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--mp-muted);
+  font-family: var(--mp-font-body);
+  font-size: 12.5px;
+  padding: 14px 12px;
+  cursor: pointer;
+}
+
+.photo-dropzone:hover {
+  border-color: var(--mp-terra);
+  color: var(--mp-terra-dark);
+}
+
+.ingredient-prep {
+  color: var(--mp-muted);
+  font-style: italic;
+  font-size: 13px;
+}
+
+.needs-review-dot {
+  color: var(--mp-amber);
+  margin-left: 7px;
+  font-size: 11px;
+  cursor: help;
+}
+
+.version-row {
+  border-top: 1px solid var(--mp-line);
+  padding: 10px 0;
+}
+
+.version-row:first-of-type {
+  border-top: none;
+}
+
+.version-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.version-pill {
+  font-family: var(--mp-font-display);
+  font-weight: 700;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border: 1px solid var(--mp-line-hi, #cfc4a9);
+  border-radius: 999px;
+  padding: 3px 12px;
+  cursor: pointer;
+  color: var(--mp-ink);
+}
+
+.version-pill.current {
+  background: var(--mp-ink);
+  color: var(--mp-card);
+  border-color: var(--mp-ink);
+}
+
+.version-meta {
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.sub-row {
+  border-top: 1px solid var(--mp-line);
+  padding: 12px 0;
+}
+
+.sub-row:first-of-type {
+  border-top: none;
+}
+
+.sub-meta {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+}
+
+.sub-constraint {
+  font-variant-numeric: tabular-nums;
+}
+
+.sub-overlay {
+  font-size: 13px;
+  margin-top: 4px;
+  padding-left: 12px;
+  border-left: 2px solid var(--mp-line-hi, #cfc4a9);
+}
+
+.sub-notes {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--mp-muted);
+  margin-top: 4px;
+}
+
+.diff-view {
+  display: grid;
+  gap: 6px;
+  background: var(--mp-bg);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.diff-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.diff-mark {
+  font-weight: 700;
+  width: 14px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.diff-mark.added {
+  color: var(--mp-olive);
+}
+
+.diff-mark.removed {
+  color: var(--mp-red);
+}
+
+.diff-mark.modified {
+  color: var(--mp-amber);
+}
+
+.diff-from {
+  text-decoration: line-through;
+  color: var(--mp-muted);
+}
+
+/* ---- discover rebuild (discover.md) ----------------------------------------------- */
+
+.source-chip {
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--mp-line-hi, #cfc4a9);
+  border-radius: 999px;
+  padding: 3px 11px;
+  color: var(--mp-muted);
+}
+
+.source-chip.ok {
+  border-color: var(--mp-olive);
+  color: var(--mp-olive);
+}
+
+.source-chip.failed {
+  border-color: var(--mp-red);
+  color: var(--mp-red);
+}
+
+.scrape-url {
+  font-size: 12.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scrape-outcome {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.scrape-outcome.olive {
+  color: var(--mp-olive);
+}
+
+.scrape-outcome.red {
+  color: var(--mp-red);
+}
+
+.scrape-outcome.muted {
+  color: var(--mp-muted);
+}
+
+.history-btn {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--mp-line);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--mp-font-body);
+  color: var(--mp-ink);
+}
+
+.history-btn:hover {
+  background: var(--mp-bg);
+}
+
+.source-disabled {
+  opacity: 0.55;
+}
+
+/* ---- Groceries + Pantry contract rebuild (groceries.md / pantry.md) --------- */
+
+.mp-chip.red {
+  color: var(--mp-red);
+  border-color: var(--mp-red);
+}
+
+/* Caption row under the grocery stat band (refresh action + notes + nudge). */
+.grocery-caption-row {
+  display: flex;
+  gap: 10px 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.grocery-actions {
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 6px;
+  justify-content: flex-end;
+  min-width: 64px;
+}
+
+/* Sticky select-mode footer bar (bulk mark-bought, §4b). */
+.select-bar {
+  position: sticky;
+  bottom: 16px;
+  z-index: 30;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px 18px;
+  margin-top: 16px;
+  box-shadow: 0 10px 30px rgba(38, 32, 25, 0.16);
+}
+
+/* Order state banners — info / amber (time-sensitive) / red (danger only). */
+.order-banner {
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  margin-top: 10px;
+  line-height: 1.45;
+}
+
+.order-banner.info {
+  background: var(--mp-bg);
+  border: 1px solid var(--mp-line-hi);
+  color: var(--mp-ink);
+}
+
+.order-banner.amber {
+  background: #f5ead3;
+  border: 1px solid #e3cf9d;
+  color: #7a5416;
+}
+
+.order-banner.red {
+  background: #f7e1de;
+  border: 1px solid #e3b3ad;
+  color: #8c1d16;
+}
+
+.order-line-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--mp-line);
+  font-size: 13px;
+}
+
+.order-line-row:last-child {
+  border-bottom: none;
+}
+
+.order-line-meta {
+  font-size: 12px;
+  color: var(--mp-muted);
+}
+
+.order-line-price {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Substitution proposal card under a DELIVERED order (§5d). */
+.proposal-card {
+  border: 1px solid var(--mp-line-hi);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-top: 12px;
+  background: var(--mp-bg);
+}
+
+.proposal-consequences {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+/* Observation / aggregate rows in the price popover + activity drawer. */
+.obs-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--mp-line);
+  font-size: 13px;
+}
+
+.obs-row:last-child {
+  border-bottom: none;
+}
+
+/* History drawer rows (#3). */
+.history-row-btn {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--mp-line);
+  padding: 10px 2px;
+  cursor: pointer;
+  font-family: var(--mp-font-body);
+  font-size: 13.5px;
+  color: var(--mp-ink);
+}
+
+.history-row-btn:hover {
+  background: var(--mp-bg);
+}
+
+/* Pantry status-tracked chip tap target (≥32px floor). */
+.status-chip-btn {
+  background: transparent;
+  border: none;
+  padding: 4px;
+  min-height: 32px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Equipment rows (toggle + details + remove). */
+.equipment-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.equipment-row:last-child {
+  border-bottom: none;
+}
+
+.equipment-details {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 9px;
+  font-size: 12.5px;
+}
+
+/* Waste summary per-reason mini-bars. */
+.reason-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reason-bar {
+  height: 8px;
+  border-radius: 2px;
+  background: var(--mp-olive);
+  display: inline-block;
+}
+
+/* Two-row pantry item: controls on top, freezer detail as a full-width sub. */
+.pantry-row2 {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.pantry-row-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pantry-row-sub {
+  margin-top: 3px;
+}
+
+/* ---- Preferences (contract rebuild) ----------------------------------------------- */
+
+/* Red accent strip — danger semantics: safety-critical, never decoration. */
+.constraints-card {
+  border-left: 3px solid var(--mp-red);
+}
+
+.exception-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.exception-row .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.constraint-chip.tinted {
+  background: var(--mp-olive-tint);
+  border-color: transparent;
+  color: var(--mp-olive-deep);
+}
+
+.ingredient-pref-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 7px;
+  flex-wrap: wrap;
+}
+
+.evidence-count {
+  font-family: var(--mp-font-display, inherit);
+  font-weight: 700;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--mp-ink);
+}
+
+.source-badge {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mp-muted);
+  border: 1px solid var(--mp-line-hi);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.tier1-removal-line {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--mp-red);
+}
+
+.drawer-snapshot {
+  margin-top: 10px;
+}
+
+.drawer-snapshot .pref-grid {
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-top: 0;
+}
+
+.raw-json {
+  font-size: 11.5px;
+  line-height: 1.5;
+  background: var(--mp-bg);
+  border: 1px solid var(--mp-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 6px 0 0;
+  overflow-x: auto;
+  max-height: 220px;
+}
+
+/* ---- Activity (contract rebuild) --------------------------------------------------- */
+
+.impact-meter {
+  display: inline-block;
+  width: 52px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--mp-line);
+  vertical-align: middle;
+  overflow: hidden;
+}
+
+.impact-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--mp-terra);
+}
+
+.route-fragment {
+  font-size: 12.5px;
+  color: var(--mp-muted);
+  margin-top: 3px;
+}
+
+.route-flag-caption {
+  font-family: var(--mp-font-advisor);
+  font-style: italic;
+  font-size: 14.5px;
+  color: var(--mp-amber);
+  margin-top: 4px;
+}
+
+.route-failure {
+  font-size: 13px;
+  color: var(--mp-red);
+  margin-top: 4px;
+}
+
+.clar-option-snippet {
+  font-weight: 400;
+  color: var(--mp-muted);
+}
+
+/* ---- Notifications: delivery-log drawer (notifications.md §3d) -------------- */
+
+.delivery-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.delivery-row:last-child {
+  border-bottom: none;
+}

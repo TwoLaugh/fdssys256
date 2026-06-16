@@ -7,8 +7,11 @@
  * upload, nutrition recalculation, and the per-recipe adaptation slice.
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { LIVE } from "../live/flag";
+import { hydrateRecipeDetail } from "../live/hydrate";
+import { MOCK_NOW_MS } from "../live/dates";
 import { Modal } from "../components/Modal";
 import { SegmentBar } from "../components/SegmentBar";
 import { TintChip } from "../components/TintChip";
@@ -62,7 +65,7 @@ import {
   shortWhen,
 } from "./recipes/shared";
 
-const MOCK_TODAY_MS = Date.parse("2026-06-10T18:00:00Z");
+const MOCK_TODAY_MS = MOCK_NOW_MS;
 
 const TRIGGER_LABEL: Record<RecipeVersionDto["trigger"], string> = {
   MANUAL_CREATE: "created",
@@ -984,6 +987,11 @@ function ForkModal({
 export function RecipeDetail() {
   const { id } = useParams<{ id: string }>();
   const recipe = useStore((s) => s.recipes.find((r) => r.id === id));
+  // Live mode leaves per-recipe detail (versions/subs/ratings) unhydrated at
+  // boot; fetch it for this :id on mount and whenever the route id changes.
+  useEffect(() => {
+    if (LIVE && id) void hydrateRecipeDetail(id);
+  }, [id]);
   if (!recipe) {
     return (
       <div>

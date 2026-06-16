@@ -27,8 +27,8 @@ import type {
 } from "../mock/types";
 import { DiffView, shortWhen } from "./recipes/shared";
 
-/** The mock's fixed "now" — Wednesday 10 June 2026, evening. */
-const MOCK_NOW_MS = Date.parse("2026-06-10T18:00:00Z");
+// "Now" in epoch-ms — real clock in live mode (see src/live/dates.ts).
+import { MOCK_NOW_MS } from "../live/dates";
 
 const DIMENSION_LABEL: Record<string, string> = {
   SALT_LEVEL: "Salt level",

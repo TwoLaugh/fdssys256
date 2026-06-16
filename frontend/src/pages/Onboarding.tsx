@@ -32,7 +32,7 @@ import {
 } from "../mock/store";
 import type { AcceptInviteOutcome } from "../mock/store";
 import type { MealSlotKey } from "../mock/types";
-import { MOCK_NOW_MS } from "../mock/settingsAdminSeed";
+import { MOCK_NOW_MS } from "../live/dates";
 
 const STEPS = ["Household", "Invite", "Allergies", "Lifestyle", "Targets"];
 const SLOT_KEYS: MealSlotKey[] = ["breakfast", "lunch", "dinner"];

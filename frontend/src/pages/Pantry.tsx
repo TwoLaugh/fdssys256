@@ -10,7 +10,7 @@ import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import { StatStrip } from "../components/StatStrip";
 import { TintChip } from "../components/TintChip";
-import { MOCK_TODAY_ISO } from "../mock/seed";
+import { MOCK_TODAY_ISO } from "../live/dates";
 import {
   adjustItemQuantity,
   consumePortions,

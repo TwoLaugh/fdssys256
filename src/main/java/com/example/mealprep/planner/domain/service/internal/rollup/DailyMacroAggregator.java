@@ -3,7 +3,10 @@ package com.example.mealprep.planner.domain.service.internal.rollup;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
+import com.example.mealprep.recipe.api.dto.NutritionPerServingDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
+import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -20,13 +23,14 @@ import org.springframework.stereotype.Component;
  * in this codebase; there is no {@code slotId -> onDate} skeleton indirection the ticket's verbatim
  * snippet assumed — that would also break for unfilled / pinned slots whose skeleton may differ).
  *
- * <p><b>01f codebase divergence — recipe nutrition not exposed</b>: {@code RecipeVersionDto} has no
- * {@code nutritionPerServing} JsonNode in this codebase. 01e established every macro total is
- * {@code 0}; 01f keeps that exactly (so the refactored gate is byte-identical against 01e's
- * fixtures). The per-slot multiply-by-{@code servings} seam lives here — when recipe-01h's
- * nutrition pipeline exposes per-serving macros, read them here and feed the {@link
- * DailyMacroTotals.Builder}. Every date with at least one assignment still gets a (zeroed) bucket
- * so the daily rollup lists the day.
+ * <p><b>Recipe nutrition is now wired</b> (nutrition-driven planning): {@code
+ * RecipeVersionDto.nutritionPerServing} surfaces the per-serving figures the nutrition module
+ * persisted, so this walk reads {@code recipe.currentVersionBody().nutritionPerServing()} and sums
+ * macros + micros per day. Each slot contributes exactly ONE serving — nutrition targets are
+ * per-person (the primary eater's daily intake), so this deliberately does NOT scale by {@code
+ * a.servings()} (the household head-count, which cost/provisions scale by). Recipes with no
+ * computed nutrition ({@code nutritionPerServing == null}, status pending) contribute 0, but every
+ * date with at least one assignment still gets a bucket so the daily rollup lists the day.
  */
 @Component
 public class DailyMacroAggregator {
@@ -59,12 +63,40 @@ public class DailyMacroAggregator {
       if (recipe == null) {
         continue; // unfilled / unresolvable slot → 0-macro contribution
       }
-      // Recipe nutrition is not exposed on RecipeVersionDto in this codebase → 0 macros.
-      // The multiply-by-servings seam to plug real per-serving macros in is exactly here:
-      //   int servings = a.servings();
-      //   b.addKcal(perServingKcal * servings)
-      //    .addProtein(perServingProtein.multiply(BigDecimal.valueOf(servings)))
-      //    ... fat / carbs / fibre / saturatedFat / micros similarly.
+      RecipeVersionDto versionBody = recipe.currentVersionBody();
+      NutritionPerServingDto n = versionBody == null ? null : versionBody.nutritionPerServing();
+      if (n == null) {
+        // Nutrition not yet computed for this recipe (status pending / nothing persisted) → 0
+        // contribution. The day still has its bucket so it appears in the rollup list.
+        continue;
+      }
+      // PER-PERSON nutrition: targets (e.g. 3600 kcal / 150 g protein) are the primary eater's
+      // DAILY intake, so each scheduled slot contributes exactly ONE serving — deliberately NOT
+      // a.servings() (= skel.eaters().size(), the household head-count that DailyCostAggregator and
+      // ProvisionsSubScore scale by). Multiplying nutrition by the head-count would overstate a
+      // multi-eater household's per-person intake by that factor and wreck target comparison.
+      b.addKcal(n.calories());
+      if (n.proteinG() != null) {
+        b.addProtein(n.proteinG());
+      }
+      if (n.carbsG() != null) {
+        b.addCarbs(n.carbsG());
+      }
+      if (n.fatG() != null) {
+        b.addFat(n.fatG());
+      }
+      if (n.fibreG() != null) {
+        b.addFibre(n.fibreG());
+      }
+      // NutritionPerServingDto carries no saturatedFat field → satFat stays 0 (its target is an
+      // upper limit, so a 0 actual never penalises). Micros flow through verbatim by source key.
+      if (n.micros() != null) {
+        for (Map.Entry<String, BigDecimal> micro : n.micros().entrySet()) {
+          if (micro.getKey() != null && micro.getValue() != null) {
+            b.addMicro(micro.getKey(), micro.getValue());
+          }
+        }
+      }
     }
 
     Map<LocalDate, DailyMacroTotals> out = new LinkedHashMap<>();

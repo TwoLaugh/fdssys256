@@ -12,12 +12,10 @@ import java.util.Map;
  * public} only so the refactored gate (in the sibling {@code scoring} package) can iterate the
  * returned map; the {@link Builder} stays package-private.
  *
- * <p><b>01f codebase divergence — recipe nutrition not exposed</b>: {@code RecipeVersionDto}
- * carries no {@code nutritionPerServing} JsonNode in this codebase (the ticket's verbatim snippet
- * assumed an idealised LLD shape). 01e established that every per-day macro total is therefore
- * {@code 0}; 01f preserves that exactly so {@code NutritionFloorGateTest} stays byte-identical. The
- * {@code DailyMacroAggregator} is still the single seam to plug real per-serving macros into when
- * recipe-01h's nutrition pipeline exposes them — see {@code DailyMacroAggregator}.
+ * <p>Per-day macro + micro totals are summed by {@link DailyMacroAggregator} from each recipe's
+ * {@code RecipeVersionDto.nutritionPerServing} (one serving per slot, per the primary eater). A
+ * recipe with no computed nutrition contributes 0. The {@code micros} map carries the per-serving
+ * micronutrient totals keyed by source nutrient key.
  *
  * <p>Built via the static nested mutable {@link Builder} (Lombok's {@code @Builder} does not work
  * on records; the ticket gotcha #7 calls for a hand-rolled builder).

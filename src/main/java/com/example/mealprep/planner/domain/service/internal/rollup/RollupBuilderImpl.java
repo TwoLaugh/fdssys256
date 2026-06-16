@@ -1,7 +1,14 @@
 package com.example.mealprep.planner.domain.service.internal.rollup;
 
+import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
+import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
+import com.example.mealprep.nutrition.api.dto.TargetsDto;
+import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.DailyRollupDocument;
+import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
+import com.example.mealprep.planner.api.dto.NutritionCoverageDocument;
+import com.example.mealprep.planner.api.dto.NutritionTargetCoverageDocument;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.RollupSummaryDocument;
 import com.example.mealprep.planner.api.dto.ScoreResult;
@@ -14,6 +21,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -93,7 +101,8 @@ class RollupBuilderImpl implements RollupBuilder {
             .toList();
 
     WeeklyRollupDocument weekly = buildWeekly(plan, ctx, daily);
-    return new RollupSummaryDocument(daily, weekly);
+    NutritionCoverageDocument coverage = computeNutritionCoverage(dailyMacros, ctx);
+    return new RollupSummaryDocument(daily, weekly, coverage);
   }
 
   private WeeklyRollupDocument buildWeekly(
@@ -137,6 +146,168 @@ class RollupBuilderImpl implements RollupBuilder {
         .map(field)
         .reduce(BigDecimal.ZERO, BigDecimal::add)
         .divide(BigDecimal.valueOf(n), 1, RoundingMode.HALF_UP);
+  }
+
+  // ---- nutrition coverage (plan projected vs the primary user's targets) ----------------------
+
+  private static final BigDecimal TEN_PERCENT = new BigDecimal("0.10");
+
+  /**
+   * Project the plan's per-person daily-average nutrition and compare each configured target. Daily
+   * averages over the plan's days; per-person (one serving/slot, per {@link DailyMacroAggregator}).
+   * {@code null} when the primary user has no targets row.
+   */
+  private NutritionCoverageDocument computeNutritionCoverage(
+      Map<LocalDate, DailyMacroTotals> dailyMacros, PlanCompositionContext ctx) {
+    UUID primary = primaryUserId(ctx);
+    TargetsDto targets = primary == null ? null : ctx.nutritionByUserId().get(primary);
+    if (targets == null || dailyMacros.isEmpty()) {
+      return null;
+    }
+    Collection<DailyMacroTotals> days = dailyMacros.values();
+    BigDecimal n = BigDecimal.valueOf(days.size());
+
+    BigDecimal kcalAvg = sumInt(days, DailyMacroTotals::kcal).divide(n, 0, RoundingMode.HALF_UP);
+    BigDecimal proteinAvg = sumBd(days, DailyMacroTotals::proteinG).divide(n, 1, RoundingMode.HALF_UP);
+    BigDecimal carbsAvg = sumBd(days, DailyMacroTotals::carbsG).divide(n, 1, RoundingMode.HALF_UP);
+    BigDecimal fatAvg = sumBd(days, DailyMacroTotals::fatG).divide(n, 1, RoundingMode.HALF_UP);
+    BigDecimal fibreAvg = sumBd(days, DailyMacroTotals::fibreG).divide(n, 1, RoundingMode.HALF_UP);
+
+    Map<String, BigDecimal> microAvg = new LinkedHashMap<>();
+    for (DailyMacroTotals d : days) {
+      if (d.micros() == null) {
+        continue;
+      }
+      for (Map.Entry<String, BigDecimal> e : d.micros().entrySet()) {
+        microAvg.merge(e.getKey(), e.getValue(), BigDecimal::add);
+      }
+    }
+    microAvg.replaceAll((k, v) -> v.divide(n, 3, RoundingMode.HALF_UP));
+
+    List<NutritionTargetCoverageDocument> macros = new ArrayList<>();
+    if (targets.calories() != null && targets.calories().dailyTarget() > 0) {
+      macros.add(
+          macroCoverage(
+              "calories",
+              "kcal",
+              BigDecimal.valueOf(targets.calories().dailyTarget()),
+              kcalAvg,
+              targets.calories().direction()));
+    }
+    addMacroCoverage(macros, "protein", targets.protein(), proteinAvg);
+    addMacroCoverage(macros, "carbs", targets.carbs(), carbsAvg);
+    addMacroCoverage(macros, "fat", targets.fat(), fatAvg);
+    addMacroCoverage(macros, "fibre", targets.fibre(), fibreAvg);
+
+    List<NutritionTargetCoverageDocument> micros = new ArrayList<>();
+    if (targets.microTargets() != null) {
+      for (MicroTargetDto m : targets.microTargets()) {
+        if (m == null || m.nutrientKey() == null) {
+          continue;
+        }
+        boolean hasFloor = m.targetValue() != null;
+        boolean hasCap = m.upperLimit() != null;
+        if (!hasFloor && !hasCap) {
+          continue;
+        }
+        BigDecimal actual = microAvg.getOrDefault(m.nutrientKey(), BigDecimal.ZERO);
+        boolean met =
+            (!hasFloor || actual.compareTo(m.targetValue()) >= 0)
+                && (!hasCap || actual.compareTo(m.upperLimit()) <= 0);
+        micros.add(
+            new NutritionTargetCoverageDocument(
+                m.nutrientKey(),
+                microUnit(m.nutrientKey()),
+                hasFloor ? m.targetValue() : m.upperLimit(),
+                actual,
+                hasFloor ? "LOWER_FLOOR" : "UPPER_LIMIT",
+                met));
+      }
+    }
+    int macrosMet = (int) macros.stream().filter(NutritionTargetCoverageDocument::met).count();
+    int microsMet = (int) micros.stream().filter(NutritionTargetCoverageDocument::met).count();
+    return new NutritionCoverageDocument(
+        macros, micros, macrosMet, macros.size(), microsMet, micros.size());
+  }
+
+  /** First eater of the first slot skeleton, preferring one that actually has a targets row. */
+  private UUID primaryUserId(PlanCompositionContext ctx) {
+    UUID firstEater =
+        ctx.slotSkeletons() == null
+            ? null
+            : ctx.slotSkeletons().stream()
+                .map(MealSlotSkeleton::eaters)
+                .filter(e -> e != null && !e.isEmpty())
+                .map(e -> e.get(0))
+                .findFirst()
+                .orElse(null);
+    if (firstEater != null && ctx.nutritionByUserId().containsKey(firstEater)) {
+      return firstEater;
+    }
+    return ctx.nutritionByUserId().keySet().stream().findFirst().orElse(firstEater);
+  }
+
+  private static void addMacroCoverage(
+      List<NutritionTargetCoverageDocument> out,
+      String key,
+      MacroTargetDto target,
+      BigDecimal actual) {
+    if (target == null || target.targetG() == null) {
+      return;
+    }
+    out.add(macroCoverage(key, "g", target.targetG(), actual, target.direction()));
+  }
+
+  private static NutritionTargetCoverageDocument macroCoverage(
+      String key, String unit, BigDecimal target, BigDecimal actual, EnforcementDirection dir) {
+    EnforcementDirection d = dir == null ? EnforcementDirection.BOTH_BOUNDED : dir;
+    return new NutritionTargetCoverageDocument(
+        key, unit, target, actual, d.name(), macroMet(d, actual, target));
+  }
+
+  private static boolean macroMet(
+      EnforcementDirection dir, BigDecimal actual, BigDecimal target) {
+    if (target == null || target.signum() == 0) {
+      return true;
+    }
+    return switch (dir) {
+      case LOWER_FLOOR -> actual.compareTo(target) >= 0;
+      case UPPER_LIMIT -> actual.compareTo(target) <= 0;
+      case BOTH_BOUNDED ->
+          actual.subtract(target).abs().compareTo(target.multiply(TEN_PERCENT)) <= 0;
+    };
+  }
+
+  private static String microUnit(String key) {
+    if (key.endsWith("_mcg")) {
+      return "mcg";
+    }
+    if (key.endsWith("_mg")) {
+      return "mg";
+    }
+    return "";
+  }
+
+  private static BigDecimal sumInt(
+      Collection<DailyMacroTotals> vals, java.util.function.ToIntFunction<DailyMacroTotals> f) {
+    int sum = 0;
+    for (DailyMacroTotals d : vals) {
+      sum += f.applyAsInt(d);
+    }
+    return BigDecimal.valueOf(sum);
+  }
+
+  private static BigDecimal sumBd(
+      Collection<DailyMacroTotals> vals,
+      java.util.function.Function<DailyMacroTotals, BigDecimal> f) {
+    BigDecimal sum = BigDecimal.ZERO;
+    for (DailyMacroTotals d : vals) {
+      BigDecimal v = f.apply(d);
+      if (v != null) {
+        sum = sum.add(v);
+      }
+    }
+    return sum;
   }
 
   private Map<LocalDate, Integer> aggregateTotalTime(

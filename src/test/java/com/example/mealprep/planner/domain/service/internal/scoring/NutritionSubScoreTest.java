@@ -10,6 +10,7 @@ import com.example.mealprep.nutrition.domain.entity.Goal;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
+import com.example.mealprep.planner.domain.service.internal.rollup.DailyMacroAggregator;
 import com.example.mealprep.planner.testdata.PlanTestData;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -26,7 +27,7 @@ import org.junit.jupiter.api.Test;
  */
 class NutritionSubScoreTest {
 
-  private final NutritionSubScore calc = new NutritionSubScore();
+  private final NutritionSubScore calc = new NutritionSubScore(new DailyMacroAggregator());
 
   private static MacroTargetDto macro(String targetG, EnforcementDirection dir) {
     return new MacroTargetDto(new BigDecimal(targetG), null, "daily", dir, true);

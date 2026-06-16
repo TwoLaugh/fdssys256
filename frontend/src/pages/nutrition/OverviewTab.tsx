@@ -10,14 +10,15 @@ import { useNavigate } from "react-router-dom";
 import { AdvisorCard } from "../../components/AdvisorCard";
 import { Modal } from "../../components/Modal";
 import { SegmentBar } from "../../components/SegmentBar";
+import { QUICK_SNACKS } from "../../mock/nutritionSeed";
+// Live-aware date anchors (real clock in live mode) — see src/live/dates.ts.
 import {
+  CURRENT_WEEK_START,
   MOCK_TODAY_ISO,
-  QUICK_SNACKS,
   TODAY_INDEX,
   WEEK_DATES,
   WEEK_DAY_LABELS,
-} from "../../mock/nutritionSeed";
-import { CURRENT_WEEK_START } from "../../mock/plannerSeed";
+} from "../../live/dates";
 import {
   activePlanForWeek,
   addJournalEntry,
@@ -1410,10 +1411,10 @@ export function OverviewTab() {
       </div>
       {week.floorViolations.length > 0 && (
         <div className="violation-chips">
-          {week.floorViolations.flatMap((key) =>
-            floorViolationDayIndices(nutrition, targets, key).map((i) => (
-              <span key={`${key}-${i}`} className="tint-chip red">
-                {key} floor missed · {WEEK_DAY_LABELS[i]}
+          {week.floorViolations.flatMap((v) =>
+            floorViolationDayIndices(nutrition, targets, v.macroOrMicro).map((i) => (
+              <span key={`${v.macroOrMicro}-${i}`} className="tint-chip red">
+                {v.macroOrMicro} floor missed · {WEEK_DAY_LABELS[i]}
               </span>
             )),
           )}
