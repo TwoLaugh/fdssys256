@@ -55,14 +55,19 @@ class CatalogueRecipePoolSource implements RecipePoolSource {
    * even a kind-skewed catalogue surfaces enough variety. Bounded by {@link #MAX_POOL_SIZE} so a
    * large catalogue never floods the in-memory beam search.
    */
-  // EXPERIMENT (branch experiment/dataset-recipe-pool): raised 50->2000 to feed the beam a large
-  // candidate set from a big catalogue, so a deep pool can actually change the plan (the query is
-  // createdAt-ordered, so this widens the prefix the optimizer sees). Stress-tests beam scoring at
-  // scale. Revert to 50 for production bounded-read hygiene.
-  private static final int CANDIDATES_PER_KIND = 2000;
+  // SCALE NOTE (branch experiment/dataset-recipe-pool): generation latency rises with the candidate
+  // count — cap=2000 (≈4000 candidates) timed out a 120s client; cap=150 still ran ~90s+. The
+  // dominant cost was NOT cleanly isolated (beam scoring vs the per-recipe embedding scoring vs AI),
+  // so this is a conservative tune, not a proven cliff. Separately: the candidate QUERY is
+  // createdAt-ordered, so a bigger catalogue never improves the plan regardless of this cap — it
+  // just feeds the same oldest prefix. The real scale lever is a smarter candidate SELECTION
+  // (rank/sample by nutrition-fit or embedding similarity), not a bigger number here. 150/kind
+  // (≈600 over 4 meal kinds) is a 3x lift over the original 50 for more variety while staying
+  // tractable; revert to 50 for production bounded-read hygiene.
+  private static final int CANDIDATES_PER_KIND = 150;
 
-  /** Hard ceiling on the fetched pool size. EXPERIMENT: raised 500->4000 (see above). */
-  private static final int MAX_POOL_SIZE = 4000;
+  /** Hard ceiling on the fetched pool size. */
+  private static final int MAX_POOL_SIZE = 750;
 
   private final HouseholdQueryService householdQueryService;
   private final RecipeQueryService recipeQueryService;
