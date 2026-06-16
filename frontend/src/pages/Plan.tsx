@@ -58,9 +58,13 @@ type PlanTargetCoverage = {
   key: string;
   unit: string;
   target: number;
-  projectedDailyAvg: number;
+  projectedDailyAvg: number | null;
   direction: string;
   met: boolean;
+  // MET | SHORT | NO_DATA — NO_DATA = intake unknown (no recipe carried it), not zero.
+  status?: string;
+  // provenance backing the projection: measured | derived | estimated (null when NO_DATA).
+  source?: string | null;
 };
 
 type PlanNutritionCoverage = {
@@ -70,7 +74,35 @@ type PlanNutritionCoverage = {
   macrosTotal: number;
   microsMet: number;
   microsTotal: number;
+  microsNoData?: number;
 };
+
+/** Short provenance badge — only shown for non-measured (lossy) sources so the user knows a
+ *  number is USDA-derived or an AI estimate rather than hard recipe data. */
+function SourceBadge({ source }: { source?: string | null }) {
+  if (!source || source === "measured") return null;
+  const label = source === "estimated" ? "est" : "USDA";
+  const title =
+    source === "estimated"
+      ? "AI estimate (low confidence) — no measured or USDA value available"
+      : "derived from USDA by matching ingredients (approximate)";
+  return (
+    <span
+      title={title}
+      style={{
+        marginLeft: 6,
+        fontSize: "0.7em",
+        padding: "0 4px",
+        borderRadius: 3,
+        border: "1px solid var(--mp-line)",
+        color: source === "estimated" ? "var(--mp-amber)" : "var(--mp-ink-soft, #888)",
+        verticalAlign: "middle",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
 
 const MACRO_COVERAGE_LABEL: Record<string, string> = {
   calories: "Calories",
@@ -97,6 +129,21 @@ function CoverageRow({
     row.direction === "UPPER_LIMIT"
       ? `≤ ${fmtCoverageNum(row.target)}`
       : `/ ${fmtCoverageNum(row.target)}`;
+
+  // NO_DATA: intake is UNKNOWN (no recipe carried this nutrient) — render it muted as "no data",
+  // never as a 0 bar or a "short" amber, so an absent data source is not read as a measured zero.
+  if (row.status === "NO_DATA" || row.projectedDailyAvg == null) {
+    return (
+      <div className="micro-row">
+        <span style={{ color: "var(--mp-ink-soft, #999)" }}>{label}</span>
+        <span style={{ color: "var(--mp-ink-soft, #999)", fontStyle: "italic" }}>
+          no data {targetNote}
+        </span>
+        <SegmentBar pct={0} segments={12} />
+      </div>
+    );
+  }
+
   return (
     <div className="micro-row">
       <span>
@@ -119,6 +166,7 @@ function CoverageRow({
         }}
       >
         {fmtCoverageNum(row.projectedDailyAvg)} {row.unit} {targetNote}
+        <SourceBadge source={row.source} />
       </span>
       <SegmentBar
         pct={row.projectedDailyAvg / denom}
@@ -138,12 +186,16 @@ function PlanNutritionPanel({
   coverage: PlanNutritionCoverage;
 }) {
   const [showAllMicros, setShowAllMicros] = useState(false);
-  const short = coverage.micros.filter((m) => !m.met);
+  const isNoData = (m: PlanTargetCoverage) =>
+    m.status === "NO_DATA" || m.projectedDailyAvg == null;
+  // "Short" excludes no-data — an unknown nutrient is not a failed target, it's unmeasured.
+  const short = coverage.micros.filter((m) => !isNoData(m) && !m.met);
+  const noData = coverage.microsNoData ?? coverage.micros.filter(isNoData).length;
+  const assessed = coverage.microsTotal - noData;
   const visibleMicros =
     showAllMicros || short.length === 0 ? coverage.micros : short;
   const allMet =
-    coverage.macrosMet === coverage.macrosTotal &&
-    coverage.microsMet === coverage.microsTotal;
+    coverage.macrosMet === coverage.macrosTotal && coverage.microsMet === assessed;
 
   return (
     <details className="mp-card micros-details" open style={{ marginTop: 18 }}>
@@ -153,7 +205,8 @@ function PlanNutritionPanel({
         </span>
         <span className="inline-note">
           {coverage.macrosMet}/{coverage.macrosTotal} macros ·{" "}
-          {coverage.microsMet}/{coverage.microsTotal} micros met
+          {coverage.microsMet}/{assessed} micros met
+          {noData > 0 ? ` · ${noData} no data` : ""}
           {allMet ? " — all hit ✓" : ""}
         </span>
       </summary>
