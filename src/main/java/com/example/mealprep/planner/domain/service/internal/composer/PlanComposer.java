@@ -125,6 +125,8 @@ public class PlanComposer {
   private final RollupBuilder rollupBuilder;
   private final StageCInvoker stageCInvoker;
   private final Phase2Augmenter phase2Augmenter;
+  private final com.example.mealprep.planner.domain.service.internal.additions.IngredientAdditionPlanner
+      additionPlanner;
   private final PlanPersister planPersister;
   private final RefineDirectiveMapper refineDirectiveMapper;
   private final AdaptationService adaptationService;
@@ -147,6 +149,8 @@ public class PlanComposer {
       RollupBuilder rollupBuilder,
       StageCInvoker stageCInvoker,
       Phase2Augmenter phase2Augmenter,
+      com.example.mealprep.planner.domain.service.internal.additions.IngredientAdditionPlanner
+              additionPlanner,
       PlanPersister planPersister,
       RefineDirectiveMapper refineDirectiveMapper,
       AdaptationService adaptationService,
@@ -163,6 +167,7 @@ public class PlanComposer {
     this.rollupBuilder = rollupBuilder;
     this.stageCInvoker = stageCInvoker;
     this.phase2Augmenter = phase2Augmenter;
+    this.additionPlanner = additionPlanner;
     this.planPersister = planPersister;
     this.refineDirectiveMapper = refineDirectiveMapper;
     this.adaptationService = adaptationService;
@@ -484,9 +489,18 @@ public class PlanComposer {
       }
     }
 
+    // Phase 2b — in-meal additions: attach USDA-derived ingredient additions to close the residual
+    // calories + short micros that portion scaling alone leaves. Runs after Stage-D so it sees the
+    // final recipe set; the rollup is rebuilt below so coverage reflects both Stage-D substitutions
+    // AND these additions (chosenRollup was the pre-Phase-2 Stage-B rollup, persisted as-is before).
+    List<SlotAssignment> finalAssignments =
+        additionPlanner.attach(mutatedAssignments, chosenRollup, context);
+
     CandidatePlan mutated =
         new CandidatePlan(
-            chosen.candidateId(), chosen.weekStartDate(), mutatedAssignments, chosen.scoreResult());
+            chosen.candidateId(), chosen.weekStartDate(), finalAssignments, chosen.scoreResult());
+
+    RollupSummaryDocument finalRollup = rollupBuilder.build(mutated, context);
 
     return self.persistAndPublish(
         new PersistInputs(
@@ -494,7 +508,7 @@ public class PlanComposer {
             request,
             context,
             planId,
-            chosenRollup,
+            finalRollup,
             aiAugmented,
             qualityWarning,
             coldStart,

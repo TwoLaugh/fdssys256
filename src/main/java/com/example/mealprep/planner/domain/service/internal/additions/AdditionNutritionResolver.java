@@ -52,7 +52,18 @@ class AdditionNutritionResolver {
         candidate.unit(),
         candidate.grams(),
         scaled,
-        null);
+        reasoning(candidate));
+  }
+
+  /**
+   * Deterministic pairing note (the LLM appropriateness gate in inc 3 replaces this). Calorie-dense
+   * top-ups read as such; produce/dairy name the micros they reinforce.
+   */
+  private static String reasoning(AdditionCandidate candidate) {
+    if (!candidate.affinityMicros().isEmpty()) {
+      return "USDA-derived; rich in " + String.join(", ", candidate.affinityMicros());
+    }
+    return candidate.fillsCalories() ? "calorie-dense top-up" : "USDA-derived addition";
   }
 
   List<Addition> resolveAll(List<AdditionCandidate> candidates) {
