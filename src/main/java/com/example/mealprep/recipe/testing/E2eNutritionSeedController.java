@@ -169,6 +169,10 @@ public class E2eNutritionSeedController {
         }
       });
     }
+    Map<String, String> sources =
+        req.microSources() == null ? Map.of() : new LinkedHashMap<>(req.microSources());
+    Map<String, BigDecimal> confidence =
+        req.microConfidence() == null ? Map.of() : new LinkedHashMap<>(req.microConfidence());
     return new RecipeNutritionResultDto(
         recipeId,
         n != null && n.calories() != null ? n.calories() : 0,
@@ -178,7 +182,9 @@ public class E2eNutritionSeedController {
         nz(n == null ? null : n.fibreG()),
         micros,
         "calculated",
-        List.of());
+        List.of(),
+        sources,
+        confidence);
   }
 
   private static String mappingKey(String s) {
@@ -199,7 +205,14 @@ public class E2eNutritionSeedController {
 
   /** One dataset recipe to import (name + raw ingredient lines + pre-computed per-serving nutrition). */
   public record ImportRecipeRequest(
-      String name, Integer servings, List<String> ingredients, NutritionInput nutrition) {}
+      String name,
+      Integer servings,
+      List<String> ingredients,
+      NutritionInput nutrition,
+      // optional per-micro provenance {key: "measured"|"derived"|"estimated"}; null on older batches
+      Map<String, String> microSources,
+      // optional per-micro confidence 0..1 (carried for "estimated" values); null otherwise
+      Map<String, BigDecimal> microConfidence) {}
 
   /** Per-serving nutrition computed offline from USDA: macros + the 28 micros (canonical keys). */
   public record NutritionInput(

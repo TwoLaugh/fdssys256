@@ -21,4 +21,21 @@ public record NutritionPerServingDto(
     BigDecimal carbsG,
     BigDecimal fatG,
     BigDecimal fibreG,
-    Map<String, BigDecimal> micros) {}
+    Map<String, BigDecimal> micros,
+    // Per-micro provenance ("measured"/"derived"/"estimated") + confidence (0..1, for estimated),
+    // mirrored from the persisted RecipeNutritionResultDto so the UI can show how each value was
+    // sourced. Empty when the stored result predates provenance.
+    Map<String, String> microSources,
+    Map<String, BigDecimal> microConfidence) {
+
+  /** Back-compat ctor (no provenance) — empty maps. */
+  public NutritionPerServingDto(
+      int calories,
+      BigDecimal proteinG,
+      BigDecimal carbsG,
+      BigDecimal fatG,
+      BigDecimal fibreG,
+      Map<String, BigDecimal> micros) {
+    this(calories, proteinG, carbsG, fatG, fibreG, micros, Map.of(), Map.of());
+  }
+}

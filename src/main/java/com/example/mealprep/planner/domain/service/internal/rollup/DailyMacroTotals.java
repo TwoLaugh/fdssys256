@@ -28,10 +28,18 @@ public record DailyMacroTotals(
     BigDecimal carbsG,
     BigDecimal fibreG,
     BigDecimal saturatedFatG,
-    Map<String, BigDecimal> micros) {
+    Map<String, BigDecimal> micros,
+    // Per-micro lowest-trust provenance for this day: measured < derived < estimated. Mirrors the
+    // `micros` keys; used by RollupBuilder to surface how each coverage figure was sourced.
+    Map<String, String> microSources) {
 
   static Builder builder(LocalDate date) {
     return new Builder(date);
+  }
+
+  /** Provenance trust rank — higher = lower trust; the "worst" source wins a blend. */
+  static int trustRank(String source) {
+    return "estimated".equals(source) ? 2 : ("derived".equals(source) ? 1 : 0);
   }
 
   /** Mutable accumulator; one instance per date bucket while walking assignments. */
@@ -45,6 +53,7 @@ public record DailyMacroTotals(
     private BigDecimal fibreG = BigDecimal.ZERO;
     private BigDecimal saturatedFatG = BigDecimal.ZERO;
     private final Map<String, BigDecimal> micros = new LinkedHashMap<>();
+    private final Map<String, String> microSources = new LinkedHashMap<>();
 
     Builder(LocalDate date) {
       this.date = date;
@@ -85,9 +94,17 @@ public record DailyMacroTotals(
       return this;
     }
 
+    /** Record a micro's provenance, keeping the lowest-trust source seen for that key this day. */
+    Builder addMicroSource(String key, String source) {
+      String s = source == null ? "measured" : source;
+      this.microSources.merge(key, s, (a, b) -> trustRank(b) > trustRank(a) ? b : a);
+      return this;
+    }
+
     DailyMacroTotals build() {
       return new DailyMacroTotals(
-          date, kcal, proteinG, fatG, carbsG, fibreG, saturatedFatG, Map.copyOf(micros));
+          date, kcal, proteinG, fatG, carbsG, fibreG, saturatedFatG,
+          Map.copyOf(micros), Map.copyOf(microSources));
     }
   }
 }

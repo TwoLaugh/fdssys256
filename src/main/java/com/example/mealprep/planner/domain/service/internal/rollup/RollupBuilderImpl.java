@@ -184,6 +184,22 @@ class RollupBuilderImpl implements RollupBuilder {
     }
     microAvg.replaceAll((k, v) -> v.divide(n, 3, RoundingMode.HALF_UP));
 
+    // Blend per-micro provenance across the week: the lowest-trust source any contributing recipe
+    // used wins (estimated > derived > measured), so a target backed by any AI guess reads
+    // "estimated" rather than passing a guess off as hard data.
+    Map<String, String> microSourceWorst = new LinkedHashMap<>();
+    for (DailyMacroTotals d : days) {
+      if (d.microSources() == null) {
+        continue;
+      }
+      for (Map.Entry<String, String> e : d.microSources().entrySet()) {
+        microSourceWorst.merge(
+            e.getKey(),
+            e.getValue(),
+            (a, b) -> DailyMacroTotals.trustRank(b) > DailyMacroTotals.trustRank(a) ? b : a);
+      }
+    }
+
     List<NutritionTargetCoverageDocument> macros = new ArrayList<>();
     if (targets.calories() != null && targets.calories().dailyTarget() > 0) {
       macros.add(
@@ -220,6 +236,7 @@ class RollupBuilderImpl implements RollupBuilder {
                 && (!hasFloor || actual.compareTo(m.targetValue()) >= 0)
                 && (!hasCap || actual.compareTo(m.upperLimit()) <= 0);
         String status = !hasData ? "NO_DATA" : (met ? "MET" : "SHORT");
+        String source = hasData ? microSourceWorst.getOrDefault(m.nutrientKey(), "measured") : null;
         micros.add(
             new NutritionTargetCoverageDocument(
                 m.nutrientKey(),
@@ -228,7 +245,8 @@ class RollupBuilderImpl implements RollupBuilder {
                 actual,
                 hasFloor ? "LOWER_FLOOR" : "UPPER_LIMIT",
                 met,
-                status));
+                status,
+                source));
       }
     }
     int macrosMet = (int) macros.stream().filter(NutritionTargetCoverageDocument::met).count();
@@ -272,7 +290,7 @@ class RollupBuilderImpl implements RollupBuilder {
     EnforcementDirection d = dir == null ? EnforcementDirection.BOTH_BOUNDED : dir;
     boolean met = macroMet(d, actual, target);
     return new NutritionTargetCoverageDocument(
-        key, unit, target, actual, d.name(), met, met ? "MET" : "SHORT");
+        key, unit, target, actual, d.name(), met, met ? "MET" : "SHORT", "measured");
   }
 
   private static boolean macroMet(

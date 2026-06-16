@@ -157,13 +157,39 @@ public class RecipeVersionMapper {
                 }
               });
     }
+    Map<String, String> microSources = new LinkedHashMap<>();
+    JsonNode srcNode = persisted.path("microSources");
+    if (srcNode.isObject()) {
+      srcNode
+          .fields()
+          .forEachRemaining(
+              e -> {
+                if (e.getValue().isTextual()) {
+                  microSources.put(e.getKey(), e.getValue().asText());
+                }
+              });
+    }
+    Map<String, BigDecimal> microConfidence = new LinkedHashMap<>();
+    JsonNode confNode = persisted.path("microConfidence");
+    if (confNode.isObject()) {
+      confNode
+          .fields()
+          .forEachRemaining(
+              e -> {
+                if (e.getValue().isNumber()) {
+                  microConfidence.put(e.getKey(), e.getValue().decimalValue());
+                }
+              });
+    }
     return new NutritionPerServingDto(
         persisted.path("caloriesPerServing").asInt(0),
         decimalOrZero(persisted.path("proteinPerServingG")),
         decimalOrZero(persisted.path("carbsPerServingG")),
         decimalOrZero(persisted.path("fatPerServingG")),
         decimalOrZero(persisted.path("fibrePerServingG")),
-        micros);
+        micros,
+        microSources,
+        microConfidence);
   }
 
   private static BigDecimal decimalOrZero(JsonNode node) {

@@ -91,9 +91,11 @@ public class DailyMacroAggregator {
       // NutritionPerServingDto carries no saturatedFat field → satFat stays 0 (its target is an
       // upper limit, so a 0 actual never penalises). Micros flow through verbatim by source key.
       if (n.micros() != null) {
+        Map<String, String> microSrc = n.microSources() == null ? Map.of() : n.microSources();
         for (Map.Entry<String, BigDecimal> micro : n.micros().entrySet()) {
           if (micro.getKey() != null && micro.getValue() != null) {
             b.addMicro(micro.getKey(), micro.getValue());
+            b.addMicroSource(micro.getKey(), microSrc.get(micro.getKey()));
           }
         }
       }

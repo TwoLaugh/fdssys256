@@ -21,4 +21,9 @@ public record NutritionTargetCoverageDocument(
     // MET | SHORT | NO_DATA. NO_DATA = no recipe in the plan carried this nutrient, so intake is
     // UNKNOWN, not zero — projectedDailyAvg is null and the nutrient is excluded from the "short"
     // count (measurement honesty: never score an absent data source as a measured zero).
-    String status) {}
+    String status,
+    // Lowest-trust provenance backing this projection: "measured" (recipe data source) < "derived"
+    // (USDA-from-ingredient) < "estimated" (AI). If any contributing recipe's value is estimated,
+    // the whole projection reads "estimated" so the UI never presents a guess as hard data. null
+    // when NO_DATA. Macros are always "measured".
+    String source) {}

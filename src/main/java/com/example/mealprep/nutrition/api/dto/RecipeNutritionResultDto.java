@@ -23,4 +23,25 @@ public record RecipeNutritionResultDto(
     BigDecimal fibrePerServingG,
     Map<String, BigDecimal> microsPerServing,
     String nutritionStatus,
-    List<UnmappedIngredientDto> unmapped) {}
+    List<UnmappedIngredientDto> unmapped,
+    // Per-micro provenance: "measured" (recipe data source), "derived" (USDA-from-ingredient), or
+    // "estimated" (AI). A key absent from microsPerServing is UNKNOWN. microConfidence is 0..1,
+    // carried for "estimated" values; measured/derived are implicitly high-trust (absent here).
+    Map<String, String> microSources,
+    Map<String, BigDecimal> microConfidence) {
+
+  /** Back-compat ctor for calc paths that carry no provenance — defaults to empty maps. */
+  public RecipeNutritionResultDto(
+      UUID recipeId,
+      int caloriesPerServing,
+      BigDecimal proteinPerServingG,
+      BigDecimal carbsPerServingG,
+      BigDecimal fatPerServingG,
+      BigDecimal fibrePerServingG,
+      Map<String, BigDecimal> microsPerServing,
+      String nutritionStatus,
+      List<UnmappedIngredientDto> unmapped) {
+    this(recipeId, caloriesPerServing, proteinPerServingG, carbsPerServingG, fatPerServingG,
+        fibrePerServingG, microsPerServing, nutritionStatus, unmapped, Map.of(), Map.of());
+  }
+}
