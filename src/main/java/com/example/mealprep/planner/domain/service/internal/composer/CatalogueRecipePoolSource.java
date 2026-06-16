@@ -55,10 +55,14 @@ class CatalogueRecipePoolSource implements RecipePoolSource {
    * even a kind-skewed catalogue surfaces enough variety. Bounded by {@link #MAX_POOL_SIZE} so a
    * large catalogue never floods the in-memory beam search.
    */
-  private static final int CANDIDATES_PER_KIND = 50;
+  // EXPERIMENT (branch experiment/dataset-recipe-pool): raised 50->2000 to feed the beam a large
+  // candidate set from a big catalogue, so a deep pool can actually change the plan (the query is
+  // createdAt-ordered, so this widens the prefix the optimizer sees). Stress-tests beam scoring at
+  // scale. Revert to 50 for production bounded-read hygiene.
+  private static final int CANDIDATES_PER_KIND = 2000;
 
-  /** Hard ceiling on the fetched pool size (bounded-read hygiene). */
-  private static final int MAX_POOL_SIZE = 500;
+  /** Hard ceiling on the fetched pool size. EXPERIMENT: raised 500->4000 (see above). */
+  private static final int MAX_POOL_SIZE = 4000;
 
   private final HouseholdQueryService householdQueryService;
   private final RecipeQueryService recipeQueryService;
