@@ -162,7 +162,12 @@ the **INGREDIENT** path is fully wired:
   AND Stage-D substitutions now both reach coverage).
 
 Verified by unit tests (engine gap-rank/attach, resolver scaling, aggregator summing) + all
-module-boundary/ArchUnit tests green. **Pending:** live e2e verify that a generated plan's coverage
-residual closes (blocked by a mid-session Docker outage); **SIDE_RECIPE** additions; the LLM
-`ADDITION_PAIRING` appropriateness gate (gpt-5.4-mini) — deterministic notes stand in; grocery
-extra-lines + `Plan.tsx` rendering.
+module-boundary/ArchUnit tests green, **and live e2e**: a regenerated plan attached ½ avocado +
+almonds + 1 tbsp olive oil (3 USDA-derived additions) to all 7 days → day kcal **3,196 → 3,637**,
+calories coverage **SHORT → MET**, micros gained vitamin_e/magnesium/calcium/potassium/folate/
+vitamin_k. **Pending:** **SIDE_RECIPE** additions; the LLM `ADDITION_PAIRING` appropriateness gate
+(gpt-5.4-mini) — deterministic notes stand in; grocery extra-lines + `Plan.tsx` rendering.
+
+*Cosmetic follow-up:* the deterministic carrier picks the day's highest-`slotIndex` recipe-bearing
+slot, which landed on breakfast here; attaching to the largest meal (or letting the LLM gate re-home
+them) reads better. Not a correctness issue — the aggregator sums per day, so coverage is unaffected.
