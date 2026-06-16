@@ -15,4 +15,7 @@ public record NutritionCoverageDocument(
     int macrosMet,
     int macrosTotal,
     int microsMet,
-    int microsTotal) {}
+    int microsTotal,
+    // micros whose intake is UNKNOWN (no recipe carried the nutrient). Excluded from microsMet's
+    // denominator when judging coverage: "assessed" = microsTotal - microsNoData.
+    int microsNoData) {}

@@ -210,10 +210,16 @@ class RollupBuilderImpl implements RollupBuilder {
         if (!hasFloor && !hasCap) {
           continue;
         }
-        BigDecimal actual = microAvg.getOrDefault(m.nutrientKey(), BigDecimal.ZERO);
+        // null != 0: a micro no recipe carries is UNKNOWN, not a measured zero. Score it NO_DATA
+        // (projected null, excluded from the short count) instead of defaulting to 0 and flagging a
+        // false floor breach.
+        boolean hasData = microAvg.containsKey(m.nutrientKey());
+        BigDecimal actual = hasData ? microAvg.get(m.nutrientKey()) : null;
         boolean met =
-            (!hasFloor || actual.compareTo(m.targetValue()) >= 0)
+            hasData
+                && (!hasFloor || actual.compareTo(m.targetValue()) >= 0)
                 && (!hasCap || actual.compareTo(m.upperLimit()) <= 0);
+        String status = !hasData ? "NO_DATA" : (met ? "MET" : "SHORT");
         micros.add(
             new NutritionTargetCoverageDocument(
                 m.nutrientKey(),
@@ -221,13 +227,16 @@ class RollupBuilderImpl implements RollupBuilder {
                 hasFloor ? m.targetValue() : m.upperLimit(),
                 actual,
                 hasFloor ? "LOWER_FLOOR" : "UPPER_LIMIT",
-                met));
+                met,
+                status));
       }
     }
     int macrosMet = (int) macros.stream().filter(NutritionTargetCoverageDocument::met).count();
     int microsMet = (int) micros.stream().filter(NutritionTargetCoverageDocument::met).count();
+    int microsNoData =
+        (int) micros.stream().filter(c -> "NO_DATA".equals(c.status())).count();
     return new NutritionCoverageDocument(
-        macros, micros, macrosMet, macros.size(), microsMet, micros.size());
+        macros, micros, macrosMet, macros.size(), microsMet, micros.size(), microsNoData);
   }
 
   /** First eater of the first slot skeleton, preferring one that actually has a targets row. */
@@ -261,8 +270,9 @@ class RollupBuilderImpl implements RollupBuilder {
   private static NutritionTargetCoverageDocument macroCoverage(
       String key, String unit, BigDecimal target, BigDecimal actual, EnforcementDirection dir) {
     EnforcementDirection d = dir == null ? EnforcementDirection.BOTH_BOUNDED : dir;
+    boolean met = macroMet(d, actual, target);
     return new NutritionTargetCoverageDocument(
-        key, unit, target, actual, d.name(), macroMet(d, actual, target));
+        key, unit, target, actual, d.name(), met, met ? "MET" : "SHORT");
   }
 
   private static boolean macroMet(

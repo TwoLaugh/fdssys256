@@ -17,4 +17,8 @@ public record NutritionTargetCoverageDocument(
     BigDecimal target,
     BigDecimal projectedDailyAvg,
     String direction,
-    boolean met) {}
+    boolean met,
+    // MET | SHORT | NO_DATA. NO_DATA = no recipe in the plan carried this nutrient, so intake is
+    // UNKNOWN, not zero — projectedDailyAvg is null and the nutrient is excluded from the "short"
+    // count (measurement honesty: never score an absent data source as a measured zero).
+    String status) {}
