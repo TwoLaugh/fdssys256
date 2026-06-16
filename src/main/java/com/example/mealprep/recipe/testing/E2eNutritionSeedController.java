@@ -6,9 +6,12 @@ import com.example.mealprep.recipe.domain.entity.Catalogue;
 import com.example.mealprep.recipe.domain.entity.Recipe;
 import com.example.mealprep.recipe.domain.repository.RecipeRepository;
 import com.example.mealprep.recipe.domain.repository.RecipeVersionRepository;
+import com.example.mealprep.recipe.spi.ImportedRecipeData;
+import com.example.mealprep.recipe.spi.RecipeWriteApi;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -64,15 +68,147 @@ public class E2eNutritionSeedController {
   private final RecipeRepository recipeRepository;
   private final RecipeVersionRepository recipeVersionRepository;
   private final RecipeNutritionWriter nutritionWriter;
+  private final RecipeWriteApi recipeWriteApi;
 
   public E2eNutritionSeedController(
       RecipeRepository recipeRepository,
       RecipeVersionRepository recipeVersionRepository,
-      RecipeNutritionWriter nutritionWriter) {
+      RecipeNutritionWriter nutritionWriter,
+      RecipeWriteApi recipeWriteApi) {
     this.recipeRepository = recipeRepository;
     this.recipeVersionRepository = recipeVersionRepository;
     this.nutritionWriter = nutritionWriter;
+    this.recipeWriteApi = recipeWriteApi;
   }
+
+  /**
+   * Bulk-create SYSTEM recipes from an external dataset, each carrying pre-computed per-serving
+   * nutrition (macros + the 28 micros). Each is created via {@link
+   * RecipeWriteApi#saveImportedRecipe} (the discovery import seam) tagged with all four meal types
+   * so it is plannable in every slot, then its nutrition is written via the SPI. The nutrition
+   * listener fires on {@code RecipeUpdatedEvent} (edits) — NOT on import — so the written values are
+   * the final persisted state. Per-recipe failures are logged + skipped; idempotent via the
+   * fingerprint.
+   *
+   * @return {@code {seeded, microsPerRecipe}} — recipes created with nutrition + micro count
+   */
+  @PostMapping(
+      path = "/import-pool",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  public SeedResult importPool(@RequestBody List<ImportRecipeRequest> batch) {
+    int created = 0;
+    for (int idx = 0; idx < batch.size(); idx++) {
+      ImportRecipeRequest req = batch.get(idx);
+      try {
+        ImportedRecipeResultLike result = saveOne(req, idx);
+        if (result == null) {
+          continue;
+        }
+        nutritionWriter.writeNutritionPerServing(result.versionId(), toNutrition(req, result.recipeId()));
+        created++;
+      } catch (RuntimeException ex) {
+        log.warn("import-pool: skipped '{}' — {}", req.name(), ex.toString());
+      }
+    }
+    log.info("E2E import-pool: created {} of {} dataset recipes with nutrition", created, batch.size());
+    return new SeedResult(created, MICRO_PER_SERVING_BASE.size());
+  }
+
+  private record ImportedRecipeResultLike(UUID recipeId, UUID versionId) {}
+
+  private ImportedRecipeResultLike saveOne(ImportRecipeRequest req, int idx) {
+    List<ImportedRecipeData.ImportedIngredient> ings = new ArrayList<>();
+    List<String> lines = req.ingredients() == null ? List.of() : req.ingredients();
+    for (int i = 0; i < lines.size(); i++) {
+      String display = trunc(lines.get(i), 200);
+      ings.add(
+          new ImportedRecipeData.ImportedIngredient(
+              i, display, mappingKey(display), BigDecimal.ONE, "", null, false));
+    }
+    if (ings.isEmpty()) {
+      ings.add(
+          new ImportedRecipeData.ImportedIngredient(
+              0, "ingredient", "ingredient", BigDecimal.ONE, "", null, false));
+    }
+    int servings = req.servings() != null && req.servings() > 0 ? req.servings() : 4;
+    ImportedRecipeData.ImportedRecipeMetadata meta =
+        new ImportedRecipeData.ImportedRecipeMetadata(
+            servings, 10, 20, 30, List.of(), null, null, false, null,
+            List.of("breakfast", "lunch", "dinner", "snack", "snacks"));
+    ImportedRecipeData.ImportedRecipeTags tags =
+        new ImportedRecipeData.ImportedRecipeTags(null, null, "easy", List.of(), List.of());
+    String name = trunc(req.name() == null ? "Recipe" : req.name(), 160);
+    String fp = "dataset-" + idx + "-" + Integer.toHexString((name + idx).hashCode());
+    ImportedRecipeData data =
+        new ImportedRecipeData(
+            "dataset_import",
+            "dataset://corbt/all-recipes/" + idx,
+            fp,
+            name,
+            null,
+            ings,
+            List.of(new ImportedRecipeData.ImportedMethodStep(1, "Prepare and serve.", null)),
+            meta,
+            tags,
+            "dataset",
+            BigDecimal.valueOf(0.9),
+            null,
+            null);
+    var r = recipeWriteApi.saveImportedRecipe(data);
+    return r == null || r.versionId() == null ? null : new ImportedRecipeResultLike(r.recipeId(), r.versionId());
+  }
+
+  private static RecipeNutritionResultDto toNutrition(ImportRecipeRequest req, UUID recipeId) {
+    NutritionInput n = req.nutrition();
+    Map<String, BigDecimal> micros = new LinkedHashMap<>();
+    if (n != null && n.micros() != null) {
+      n.micros().forEach((k, v) -> {
+        if (v != null) {
+          micros.put(k, v);
+        }
+      });
+    }
+    return new RecipeNutritionResultDto(
+        recipeId,
+        n != null && n.calories() != null ? n.calories() : 0,
+        nz(n == null ? null : n.proteinG()),
+        nz(n == null ? null : n.carbsG()),
+        nz(n == null ? null : n.fatG()),
+        nz(n == null ? null : n.fibreG()),
+        micros,
+        "calculated",
+        List.of());
+  }
+
+  private static String mappingKey(String s) {
+    String k = s.toLowerCase().replaceAll("[^a-z0-9]+", "-").replaceAll("(^-|-$)", "");
+    if (k.isEmpty()) {
+      k = "ingredient";
+    }
+    return k.length() > 64 ? k.substring(0, 64) : k;
+  }
+
+  private static String trunc(String s, int max) {
+    return s != null && s.length() > max ? s.substring(0, max) : s;
+  }
+
+  private static BigDecimal nz(BigDecimal v) {
+    return v == null ? BigDecimal.ZERO : v;
+  }
+
+  /** One dataset recipe to import (name + raw ingredient lines + pre-computed per-serving nutrition). */
+  public record ImportRecipeRequest(
+      String name, Integer servings, List<String> ingredients, NutritionInput nutrition) {}
+
+  /** Per-serving nutrition computed offline from USDA: macros + the 28 micros (canonical keys). */
+  public record NutritionInput(
+      Integer calories,
+      BigDecimal proteinG,
+      BigDecimal carbsG,
+      BigDecimal fatG,
+      BigDecimal fibreG,
+      Map<String, BigDecimal> micros) {}
 
   /**
    * Write deterministic per-serving nutrition onto every SYSTEM recipe's current version. Idempotent
