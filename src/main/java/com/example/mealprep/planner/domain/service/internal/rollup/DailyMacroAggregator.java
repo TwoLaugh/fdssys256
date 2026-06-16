@@ -1,8 +1,12 @@
 package com.example.mealprep.planner.domain.service.internal.rollup;
 
+import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
+import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
+import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
+import com.example.mealprep.planner.domain.service.internal.PortionScaler;
 import com.example.mealprep.recipe.api.dto.NutritionPerServingDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
@@ -49,6 +53,11 @@ public class DailyMacroAggregator {
     }
 
     Map<UUID, RecipeDto> byRecipeId = indexRecipes(ctx);
+    // Portion scaling: the primary eater's per-meal calorie targets, keyed by normalised slot kind.
+    // Each slot's single serving is scaled toward its meal target so a ~440-kcal recipe can fill a
+    // 1000-kcal lunch (×2.25), letting the plan reach the daily goal instead of capping at one
+    // serving/slot. Empty when no targets → factor 1.0 (unchanged behaviour).
+    Map<String, Integer> mealCalTargets = perMealCalorieTargets(ctx);
 
     for (SlotAssignment a : plan.assignments()) {
       LocalDate date = a.onDate();
@@ -75,26 +84,37 @@ public class DailyMacroAggregator {
       // a.servings() (= skel.eaters().size(), the household head-count that DailyCostAggregator and
       // ProvisionsSubScore scale by). Multiplying nutrition by the head-count would overstate a
       // multi-eater household's per-person intake by that factor and wreck target comparison.
-      b.addKcal(n.calories());
+      // Portion factor for this slot: scale the single serving toward the slot's per-meal calorie
+      // target (clamped 0.5–3.0). Scales macros AND micros (eating 2 servings doubles both), so it
+      // lifts the calorie/protein magnitude and helps micro coverage at once. A slot whose kind has
+      // no target (or a recipe with no calories) scales by 1.0 — see PortionScaler#factor.
+      double portion =
+          a.kind() == null
+              ? 1.0
+              : PortionScaler.factor(
+                  n.calories(), mealCalTargets.get(PortionScaler.normaliseKind(a.kind().name())));
+      BigDecimal pf = BigDecimal.valueOf(portion);
+
+      b.addKcal((int) Math.round(n.calories() * portion));
       if (n.proteinG() != null) {
-        b.addProtein(n.proteinG());
+        b.addProtein(n.proteinG().multiply(pf));
       }
       if (n.carbsG() != null) {
-        b.addCarbs(n.carbsG());
+        b.addCarbs(n.carbsG().multiply(pf));
       }
       if (n.fatG() != null) {
-        b.addFat(n.fatG());
+        b.addFat(n.fatG().multiply(pf));
       }
       if (n.fibreG() != null) {
-        b.addFibre(n.fibreG());
+        b.addFibre(n.fibreG().multiply(pf));
       }
       // NutritionPerServingDto carries no saturatedFat field → satFat stays 0 (its target is an
-      // upper limit, so a 0 actual never penalises). Micros flow through verbatim by source key.
+      // upper limit, so a 0 actual never penalises). Micros flow through (× portion) by source key.
       if (n.micros() != null) {
         Map<String, String> microSrc = n.microSources() == null ? Map.of() : n.microSources();
         for (Map.Entry<String, BigDecimal> micro : n.micros().entrySet()) {
           if (micro.getKey() != null && micro.getValue() != null) {
-            b.addMicro(micro.getKey(), micro.getValue());
+            b.addMicro(micro.getKey(), micro.getValue().multiply(pf));
             b.addMicroSource(micro.getKey(), microSrc.get(micro.getKey()));
           }
         }
@@ -104,6 +124,34 @@ public class DailyMacroAggregator {
     Map<LocalDate, DailyMacroTotals> out = new LinkedHashMap<>();
     for (Map.Entry<LocalDate, DailyMacroTotals.Builder> e : builders.entrySet()) {
       out.put(e.getKey(), e.getValue().build());
+    }
+    return out;
+  }
+
+  /**
+   * Primary eater's per-meal calorie targets keyed by normalised slot kind ({@code SNACKS}→{@code
+   * SNACK}). Empty if no nutrition targets / no eaters — callers then leave the portion factor at 1.
+   */
+  private Map<String, Integer> perMealCalorieTargets(PlanCompositionContext ctx) {
+    Map<String, Integer> out = new LinkedHashMap<>();
+    if (ctx == null || ctx.nutritionByUserId() == null || ctx.slotSkeletons() == null) {
+      return out;
+    }
+    UUID primary =
+        ctx.slotSkeletons().stream()
+            .map(MealSlotSkeleton::eaters)
+            .filter(e -> e != null && !e.isEmpty())
+            .map(e -> e.get(0))
+            .findFirst()
+            .orElse(null);
+    TargetsDto t = primary == null ? null : ctx.nutritionByUserId().get(primary);
+    if (t == null || t.perMealDistribution() == null) {
+      return out;
+    }
+    for (PerMealDistributionDto m : t.perMealDistribution()) {
+      if (m != null && m.mealSlot() != null && m.calorieTarget() > 0) {
+        out.put(PortionScaler.normaliseKind(m.mealSlot().name()), m.calorieTarget());
+      }
     }
     return out;
   }
