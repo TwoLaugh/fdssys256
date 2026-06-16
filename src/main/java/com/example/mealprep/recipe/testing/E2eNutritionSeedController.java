@@ -132,10 +132,23 @@ public class E2eNutritionSeedController {
               0, "ingredient", "ingredient", BigDecimal.ONE, "", null, false));
     }
     int servings = req.servings() != null && req.servings() > 0 ? req.servings() : 4;
+    List<String> mealTypes =
+        req.mealTypes() == null || req.mealTypes().isEmpty()
+            ? List.of("breakfast", "lunch", "dinner", "snack", "snacks")
+            : req.mealTypes();
+    // Size prep/total time to the TIGHTEST slot this recipe is eligible for, so breakfast/snack
+    // slots (small time budgets) are actually fillable. The beam's time-budget hard filter rejects
+    // any recipe whose totalTimeMins exceeds budget x 1.5 — a fixed 30-min total silently excludes
+    // breakfast (15) and snack (5), which is why earlier plans only ever filled lunch + dinner.
+    int total =
+        mealTypes.contains("snack") || mealTypes.contains("snacks") ? 5
+            : mealTypes.contains("breakfast") ? 12
+                : 25;
+    int prep = Math.max(2, total / 3);
+    int cook = total - prep;
     ImportedRecipeData.ImportedRecipeMetadata meta =
         new ImportedRecipeData.ImportedRecipeMetadata(
-            servings, 10, 20, 30, List.of(), null, null, false, null,
-            List.of("breakfast", "lunch", "dinner", "snack", "snacks"));
+            servings, prep, cook, total, List.of(), null, null, false, null, mealTypes);
     ImportedRecipeData.ImportedRecipeTags tags =
         new ImportedRecipeData.ImportedRecipeTags(null, null, "easy", List.of(), List.of());
     String name = trunc(req.name() == null ? "Recipe" : req.name(), 160);
@@ -212,7 +225,9 @@ public class E2eNutritionSeedController {
       // optional per-micro provenance {key: "measured"|"derived"|"estimated"}; null on older batches
       Map<String, String> microSources,
       // optional per-micro confidence 0..1 (carried for "estimated" values); null otherwise
-      Map<String, BigDecimal> microConfidence) {}
+      Map<String, BigDecimal> microConfidence,
+      // optional per-recipe meal types (breakfast/lunch/dinner/snack); null → all kinds
+      List<String> mealTypes) {}
 
   /** Per-serving nutrition computed offline from USDA: macros + the 28 micros (canonical keys). */
   public record NutritionInput(
