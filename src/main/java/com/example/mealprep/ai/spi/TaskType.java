@@ -25,6 +25,11 @@ public enum TaskType {
   NUTRIENT_ESTIMATION,
   PLANNER_STAGE_C,
   PLANNER_PHASE2_AUGMENTATION,
+  // Culinary-appropriateness gate for in-meal additions (Phase 2): the deterministic planner picks
+  // WHICH whole foods close the day's gap; this assigns each to the most sensible meal slot + writes
+  // the pairing note ("½ avocado on the taco salad"). Skippable — falls back to deterministic
+  // placement when the AI is unavailable.
+  PLANNER_ADDITION_PAIRING,
   // Embedding sources — one per EmbeddingTaskType. Stored on ai_call_log.task_type so 01b's
   // budget guard sums embedding spend alongside completion spend. The mapping is owned by
   // AiServiceImpl.toTaskType(EmbeddingTaskType).

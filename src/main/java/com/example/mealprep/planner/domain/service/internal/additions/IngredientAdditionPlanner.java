@@ -1,19 +1,28 @@
 package com.example.mealprep.planner.domain.service.internal.additions;
 
+import com.example.mealprep.ai.domain.service.AiService;
 import com.example.mealprep.planner.api.dto.Addition;
 import com.example.mealprep.planner.api.dto.NutritionCoverageDocument;
 import com.example.mealprep.planner.api.dto.NutritionTargetCoverageDocument;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.RollupSummaryDocument;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
+import com.example.mealprep.planner.domain.service.internal.additions.AdditionPairingResult.AdditionPlacement;
 import com.example.mealprep.preference.api.dto.FilterContext;
 import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
+import com.example.mealprep.recipe.api.dto.RecipeDto;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -47,12 +56,15 @@ public class IngredientAdditionPlanner {
 
   private final AdditionNutritionResolver resolver;
   private final HardConstraintFilterService hardConstraintFilterService;
+  private final AiService aiService;
 
   IngredientAdditionPlanner(
       AdditionNutritionResolver resolver,
-      HardConstraintFilterService hardConstraintFilterService) {
+      HardConstraintFilterService hardConstraintFilterService,
+      AiService aiService) {
     this.resolver = resolver;
     this.hardConstraintFilterService = hardConstraintFilterService;
+    this.aiService = aiService;
   }
 
   /**
@@ -91,7 +103,146 @@ public class IngredientAdditionPlanner {
         shortMicros.size(),
         picked.stream().map(Addition::name).toList());
 
-    return attachPerDay(assignments, picked);
+    // LLM appropriateness gate (inc 3): assign each pick a sensible meal slot + a natural note.
+    // Falls back to the deterministic carrier-slot placement when the AI is unavailable.
+    Map<String, AdditionPlacement> placements = pairWithLlm(picked, assignments, ctx);
+    return placements.isEmpty()
+        ? attachPerDay(assignments, picked)
+        : attachByKind(assignments, picked, placements);
+  }
+
+  /**
+   * Ask the AI to assign each picked addition a meal slot + note. Returns name→placement, or an
+   * empty map (→ deterministic fallback) when there is no AI bean or the call fails/degrades.
+   */
+  private Map<String, AdditionPlacement> pairWithLlm(
+      List<Addition> picked, List<SlotAssignment> assignments, PlanCompositionContext ctx) {
+    if (aiService == null) {
+      return Map.of();
+    }
+    try {
+      String additionsText =
+          picked.stream()
+              .map(a -> "- " + a.name() + " — " + (a.reasoning() == null ? "" : a.reasoning()))
+              .collect(Collectors.joining("\n"));
+      AdditionPairingResult result =
+          aiService.execute(
+              new AdditionPairingTask(
+                  additionsText, mealsByKind(assignments, ctx), distinctKinds(assignments), null, null));
+      if (result == null || result.placements() == null) {
+        return Map.of();
+      }
+      Map<String, AdditionPlacement> byName = new LinkedHashMap<>();
+      for (AdditionPlacement p : result.placements()) {
+        if (p != null && p.additionName() != null) {
+          byName.put(p.additionName(), p);
+        }
+      }
+      return byName;
+    } catch (RuntimeException ex) {
+      log.warn("Addition pairing AI unavailable ({}); using deterministic placement", ex.toString());
+      return Map.of();
+    }
+  }
+
+  /** "BREAKFAST: Oatmeal Bowl\nLUNCH: …" for the first planned day, to give the LLM the dishes. */
+  private static String mealsByKind(List<SlotAssignment> assignments, PlanCompositionContext ctx) {
+    Map<UUID, String> names = recipeNames(ctx);
+    LocalDate first =
+        assignments.stream()
+            .map(SlotAssignment::onDate)
+            .filter(Objects::nonNull)
+            .min(Comparator.naturalOrder())
+            .orElse(null);
+    Map<String, String> byKind = new LinkedHashMap<>();
+    for (SlotAssignment a : assignments) {
+      if (first != null
+          && first.equals(a.onDate())
+          && a.kind() != null
+          && a.recipeId() != null) {
+        byKind.putIfAbsent(a.kind().name(), names.getOrDefault(a.recipeId(), "a meal"));
+      }
+    }
+    return byKind.entrySet().stream()
+        .map(e -> e.getKey() + ": " + e.getValue())
+        .collect(Collectors.joining("\n"));
+  }
+
+  private static String distinctKinds(List<SlotAssignment> assignments) {
+    return assignments.stream()
+        .filter(a -> a.kind() != null && a.recipeId() != null)
+        .map(a -> a.kind().name())
+        .distinct()
+        .collect(Collectors.joining(", "));
+  }
+
+  private static Map<UUID, String> recipeNames(PlanCompositionContext ctx) {
+    Map<UUID, String> names = new LinkedHashMap<>();
+    if (ctx.recipePool() != null && ctx.recipePool().recipes() != null) {
+      for (RecipeDto r : ctx.recipePool().recipes()) {
+        if (r != null && r.id() != null) {
+          names.putIfAbsent(r.id(), r.name() == null ? "a meal" : r.name());
+        }
+      }
+    }
+    return names;
+  }
+
+  /**
+   * Attach each addition to its LLM-assigned slot kind per day (with the LLM note), falling back to
+   * the day's carrier slot when no slot of that kind exists.
+   */
+  private static List<SlotAssignment> attachByKind(
+      List<SlotAssignment> assignments,
+      List<Addition> picked,
+      Map<String, AdditionPlacement> placements) {
+    Map<LocalDate, List<SlotAssignment>> byDay = new LinkedHashMap<>();
+    for (SlotAssignment a : assignments) {
+      if (a.onDate() != null && a.recipeId() != null) {
+        byDay.computeIfAbsent(a.onDate(), k -> new ArrayList<>()).add(a);
+      }
+    }
+    Map<SlotAssignment, List<Addition>> toAttach = new IdentityHashMap<>();
+    for (List<SlotAssignment> slots : byDay.values()) {
+      SlotAssignment carrier =
+          slots.stream().max(Comparator.comparingInt(SlotAssignment::slotIndex)).orElse(null);
+      for (Addition add : picked) {
+        AdditionPlacement p = placements.get(add.name());
+        SlotAssignment target = carrier;
+        if (p != null && p.slotKind() != null) {
+          String want = p.slotKind().trim();
+          target =
+              slots.stream()
+                  .filter(s -> s.kind() != null && s.kind().name().equalsIgnoreCase(want))
+                  .findFirst()
+                  .orElse(carrier);
+        }
+        if (target != null) {
+          Addition noted =
+              (p != null && p.note() != null && !p.note().isBlank()) ? withNote(add, p.note()) : add;
+          toAttach.computeIfAbsent(target, k -> new ArrayList<>()).add(noted);
+        }
+      }
+    }
+    List<SlotAssignment> out = new ArrayList<>(assignments.size());
+    for (SlotAssignment a : assignments) {
+      List<Addition> adds = toAttach.get(a);
+      out.add(adds == null ? a : a.withAdditions(adds));
+    }
+    return out;
+  }
+
+  private static Addition withNote(Addition a, String note) {
+    return new Addition(
+        a.kind(),
+        a.name(),
+        a.ingredientMappingKey(),
+        a.recipeId(),
+        a.quantity(),
+        a.unit(),
+        a.grams(),
+        a.nutrition(),
+        note);
   }
 
   /** Residual daily calories from the coverage's SHORT calorie macro (0 if met / absent). */

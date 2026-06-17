@@ -26,9 +26,9 @@ class IngredientAdditionPlannerTest {
   private static final LocalDate WEEK = LocalDate.of(2026, 1, 5);
 
   // Real resolver (null query service → catalogue USDA fallback); null filter is never called
-  // because the context has no eaters.
+  // because the context has no eaters; null AI service → deterministic carrier-slot placement.
   private final IngredientAdditionPlanner planner =
-      new IngredientAdditionPlanner(new AdditionNutritionResolver(null), null);
+      new IngredientAdditionPlanner(new AdditionNutritionResolver(null), null, null);
 
   private static NutritionTargetCoverageDocument shortTarget(
       String key, String unit, String target, String projected) {
