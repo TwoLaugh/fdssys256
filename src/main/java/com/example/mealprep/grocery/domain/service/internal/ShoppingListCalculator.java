@@ -10,6 +10,8 @@ import com.example.mealprep.grocery.domain.entity.ShoppingListLineType;
 import com.example.mealprep.grocery.domain.service.PriceHistoryService;
 import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
+import com.example.mealprep.planner.api.dto.Addition;
+import com.example.mealprep.planner.api.dto.AdditionKind;
 import com.example.mealprep.planner.api.dto.DayDto;
 import com.example.mealprep.planner.api.dto.MealSlotDto;
 import com.example.mealprep.planner.api.dto.PlanDto;
@@ -188,6 +190,9 @@ class ShoppingListCalculator {
         if (scheduled == null || scheduled.recipeId() == null) {
           continue; // empty slot (eating out / fasting)
         }
+        // In-meal ingredient additions are extra shopping lines (their own USDA-resolved grams),
+        // independent of whether the main recipe resolves below.
+        accumulateAdditions(demand, scheduled.additions());
         RecipeDto recipe =
             recipeCache.computeIfAbsent(
                 scheduled.recipeId(), id -> recipeQueryService.getById(id).orElse(null));
@@ -238,6 +243,33 @@ class ShoppingListCalculator {
       demand.put(key, new IngredientDemand(key, ing.displayName(), scaled, ing.unit(), null, null));
     } else {
       demand.put(key, existing.add(scaled));
+    }
+  }
+
+  /**
+   * Accumulate in-meal INGREDIENT additions as shopping demand by their USDA-resolved grams (one
+   * portion per attached slot — so a week's worth sums across the seven carrier slots). SIDE_RECIPE
+   * additions reference a real recipe and will flow through the recipe-ingredient walk when that
+   * kind ships; they are skipped here.
+   */
+  private static void accumulateAdditions(Map<String, IngredientDemand> demand, List<Addition> additions) {
+    if (additions == null) {
+      return;
+    }
+    for (Addition a : additions) {
+      if (a == null || a.kind() != AdditionKind.INGREDIENT) {
+        continue;
+      }
+      String key = IngredientMappingKeys.normalise(a.ingredientMappingKey());
+      if (key == null || key.isEmpty() || a.grams() == null) {
+        continue;
+      }
+      IngredientDemand existing = demand.get(key);
+      if (existing == null) {
+        demand.put(key, new IngredientDemand(key, a.name(), a.grams(), "g", null, null));
+      } else {
+        demand.put(key, existing.add(a.grams()));
+      }
     }
   }
 
