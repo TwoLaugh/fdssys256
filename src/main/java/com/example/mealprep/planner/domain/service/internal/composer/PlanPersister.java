@@ -172,16 +172,22 @@ class PlanPersister {
                 .servings(a.servings() > 0 ? a.servings() : 1)
                 .phase2Addition(false)
                 .additions(new ArrayList<>(a.additions()))
+                // Persist the PortionOptimizer's finalise-time factor when the chosen plan carries
+                // one (the optimiser sized the day jointly against all macro targets); otherwise
+                // fall back to the calorie-only PortionScaler computation so the persisted value
+                // matches the rollup's scaled coverage for any unoptimised assignment.
                 .portionFactor(
-                    BigDecimal.valueOf(
-                        a.kind() == null
-                            ? 1.0
-                            : PortionScaler.factor(
-                                recipeKcal.getOrDefault(a.recipeId(), 0),
-                                mealCalTargets.get(PortionScaler.normaliseKind(a.kind().name())),
-                                recipeProtein.get(a.recipeId()),
-                                mealProteinTargets.get(
-                                    PortionScaler.normaliseKind(a.kind().name())))))
+                    a.portionFactor() != null
+                        ? a.portionFactor()
+                        : BigDecimal.valueOf(
+                            a.kind() == null
+                                ? 1.0
+                                : PortionScaler.factor(
+                                    recipeKcal.getOrDefault(a.recipeId(), 0),
+                                    mealCalTargets.get(PortionScaler.normaliseKind(a.kind().name())),
+                                    recipeProtein.get(a.recipeId()),
+                                    mealProteinTargets.get(
+                                        PortionScaler.normaliseKind(a.kind().name())))))
                 .build();
         slot.setScheduledRecipe(sr);
       }

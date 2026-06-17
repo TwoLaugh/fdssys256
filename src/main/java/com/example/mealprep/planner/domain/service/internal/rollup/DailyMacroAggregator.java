@@ -144,8 +144,15 @@ public class DailyMacroAggregator {
     // target (clamped 0.5–3.0). Scales macros AND micros (eating 2 servings doubles both), so it
     // lifts the calorie/protein magnitude and helps micro coverage at once. A slot whose kind has
     // no target (or a recipe with no calories) scales by 1.0 — see PortionScaler#factor.
-    double portion = 1.0;
-    if (a.kind() != null) {
+    // FINALISE override: if the chosen plan's PortionOptimizer attached an optimised per-slot
+    // factor, use it verbatim (the optimiser is the finalise authority — it sized the day's slots
+    // jointly against ALL macro targets). When ABSENT (every in-flight beam/incremental assignment,
+    // and any assignment built before finalise) fall back to the EXACT existing calorie-only
+    // PortionScaler path, so the beam / incremental scoring walk stays byte-identical.
+    double portion;
+    if (a.portionFactor() != null) {
+      portion = a.portionFactor().doubleValue();
+    } else if (a.kind() != null) {
       String kindKey = PortionScaler.normaliseKind(a.kind().name());
       // Macro-aware: scale toward the per-meal calorie target but cap so a protein-dense recipe
       // can't inflate the day's protein floor when scaled up to hit calories.
@@ -155,6 +162,8 @@ public class DailyMacroAggregator {
               mealCalTargets.get(kindKey),
               n.proteinG(),
               mealProteinTargets.get(kindKey));
+    } else {
+      portion = 1.0;
     }
     BigDecimal pf = BigDecimal.valueOf(portion);
 

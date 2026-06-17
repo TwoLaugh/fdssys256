@@ -127,6 +127,7 @@ public class PlanComposer {
   private final Phase2Augmenter phase2Augmenter;
   private final com.example.mealprep.planner.domain.service.internal.additions.IngredientAdditionPlanner
       additionPlanner;
+  private final com.example.mealprep.planner.domain.service.internal.PortionOptimizer portionOptimizer;
   private final PlanPersister planPersister;
   private final RefineDirectiveMapper refineDirectiveMapper;
   private final AdaptationService adaptationService;
@@ -151,6 +152,7 @@ public class PlanComposer {
       Phase2Augmenter phase2Augmenter,
       com.example.mealprep.planner.domain.service.internal.additions.IngredientAdditionPlanner
               additionPlanner,
+      com.example.mealprep.planner.domain.service.internal.PortionOptimizer portionOptimizer,
       PlanPersister planPersister,
       RefineDirectiveMapper refineDirectiveMapper,
       AdaptationService adaptationService,
@@ -168,6 +170,7 @@ public class PlanComposer {
     this.stageCInvoker = stageCInvoker;
     this.phase2Augmenter = phase2Augmenter;
     this.additionPlanner = additionPlanner;
+    this.portionOptimizer = portionOptimizer;
     this.planPersister = planPersister;
     this.refineDirectiveMapper = refineDirectiveMapper;
     this.adaptationService = adaptationService;
@@ -495,6 +498,13 @@ public class PlanComposer {
     // AND these additions (chosenRollup was the pre-Phase-2 Stage-B rollup, persisted as-is before).
     List<SlotAssignment> finalAssignments =
         additionPlanner.attach(mutatedAssignments, chosenRollup, context);
+
+    // Principled per-day portioning optimisation (finalise-only): set each slot's servings to
+    // minimise deviation from ALL the user's daily macro targets at once, replacing the beam's
+    // calorie-only PortionScaler proxy on the CHOSEN plan. Attaches optimised factors the rollup
+    // (mutated → finalRollup) and the persister read back; the beam / incremental path is untouched
+    // because in-flight assignments carry no attached factor.
+    finalAssignments = portionOptimizer.optimise(finalAssignments, context);
 
     CandidatePlan mutated =
         new CandidatePlan(
