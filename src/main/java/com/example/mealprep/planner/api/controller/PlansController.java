@@ -6,6 +6,7 @@ import com.example.mealprep.planner.api.dto.AbandonPlanRequest;
 import com.example.mealprep.planner.api.dto.FeasibilityCheckResultDto;
 import com.example.mealprep.planner.api.dto.GeneratePlanRequest;
 import com.example.mealprep.planner.api.dto.PlanDto;
+import com.example.mealprep.planner.api.dto.PlanGenerationJobDto;
 import com.example.mealprep.planner.api.dto.PlanReoptSuggestionDto;
 import com.example.mealprep.planner.api.dto.RejectPlanRequest;
 import com.example.mealprep.planner.api.dto.ReoptSuggestionDto;
@@ -14,6 +15,7 @@ import com.example.mealprep.planner.api.dto.SlotStateChangeRequest;
 import com.example.mealprep.planner.domain.service.PlanQueryService;
 import com.example.mealprep.planner.domain.service.PlanWriteService;
 import com.example.mealprep.planner.domain.service.internal.composer.PlanComposer;
+import com.example.mealprep.planner.domain.service.internal.composer.PlanGenerationJobService;
 import com.example.mealprep.planner.domain.service.internal.lifecycle.RevertToPlanCoordinator;
 import com.example.mealprep.planner.exception.PlanNotFoundException;
 import com.example.mealprep.planner.exception.ReoptSuggestionNotFoundException;
@@ -70,6 +72,7 @@ public class PlansController {
   private final PlanQueryService planQueryService;
   private final PlanWriteService planWriteService;
   private final PlanComposer planComposer;
+  private final PlanGenerationJobService planGenerationJobService;
   private final RevertToPlanCoordinator revertToPlanCoordinator;
   private final PlannerAuth plannerAuth;
   private final CurrentUserResolver currentUserResolver;
@@ -78,12 +81,14 @@ public class PlansController {
       PlanQueryService planQueryService,
       PlanWriteService planWriteService,
       PlanComposer planComposer,
+      PlanGenerationJobService planGenerationJobService,
       RevertToPlanCoordinator revertToPlanCoordinator,
       PlannerAuth plannerAuth,
       CurrentUserResolver currentUserResolver) {
     this.planQueryService = planQueryService;
     this.planWriteService = planWriteService;
     this.planComposer = planComposer;
+    this.planGenerationJobService = planGenerationJobService;
     this.revertToPlanCoordinator = revertToPlanCoordinator;
     this.plannerAuth = plannerAuth;
     this.currentUserResolver = currentUserResolver;
@@ -122,6 +127,50 @@ public class PlansController {
             .getPlanById(newPlanId)
             .orElseThrow(() -> new PlanNotFoundException(newPlanId));
     return ResponseEntity.created(URI.create("/api/v1/plans/" + newPlanId)).body(dto);
+  }
+
+  @PostMapping(
+      path = "/generate/async",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Schedule plan composition on a background worker and return immediately (202 + a RUNNING"
+              + " job; COMPLETED on an Idempotency-Key replay). Poll GET"
+              + " /generate/jobs/{jobId} until the job is terminal, then load its planId. Lets the"
+              + " UI show a processing state instead of blocking on the multi-second Stage A->D run.")
+  public ResponseEntity<PlanGenerationJobDto> generateAsync(
+      @Valid @RequestBody GeneratePlanRequest request,
+      @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey) {
+    UUID userId = requireUser();
+    if (!plannerAuth.canAccessHousehold(userId, request.householdId())) {
+      throw forbidden();
+    }
+    PlanGenerationJobDto job = planGenerationJobService.submit(request, userId, idempotencyKey);
+    return ResponseEntity.accepted()
+        .location(URI.create("/api/v1/plans/generate/jobs/" + job.jobId()))
+        .body(job);
+  }
+
+  @GetMapping(path = "/generate/jobs/{jobId}", produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Poll the status of an async generation job. RUNNING while composing; COMPLETED carries"
+              + " the planId to load; FAILED carries a short errorCode. 404 if the job id is unknown"
+              + " (or was evicted by a restart — jobs are in-memory in v1).")
+  public ResponseEntity<PlanGenerationJobDto> generationJob(@PathVariable UUID jobId) {
+    UUID userId = requireUser();
+    PlanGenerationJobDto job =
+        planGenerationJobService
+            .get(jobId)
+            .orElseThrow(
+                () ->
+                    new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "generation job not found: " + jobId));
+    if (!plannerAuth.canAccessHousehold(userId, job.householdId())) {
+      throw forbidden();
+    }
+    return ResponseEntity.ok(job);
   }
 
   @PostMapping(path = "/{planId}/accept", produces = MediaType.APPLICATION_JSON_VALUE)

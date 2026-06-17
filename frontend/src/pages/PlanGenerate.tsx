@@ -35,6 +35,8 @@ import {
   shortDayLabel,
   weekRangeLabel,
 } from "./plan/shared";
+import { LIVE } from "../live/flag";
+import { submitGeneration, pollGeneration } from "../live/generate";
 
 /* ---- feasibility gate (§4a) ---------------------------------------------------------- */
 
@@ -296,6 +298,52 @@ export function PlanGenerate() {
   const [rejecting, setRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
 
+  // Live (real-backend) generation runs ASYNC: submit returns instantly, then we poll the job and
+  // show a processing state until it is terminal — so the user is never blocked on the multi-second
+  // Stage-A→D run. In mock mode this branch is dormant and the in-memory store flow drives the UI.
+  const liveHousehold = useStore((s) => s.household.current);
+  const [livePhase, setLivePhase] = useState<"idle" | "generating" | "failed">(
+    "idle",
+  );
+  const [liveError, setLiveError] = useState<string | null>(null);
+
+  async function runLiveGeneration() {
+    const hid = liveHousehold?.id;
+    if (!hid) {
+      setLiveError("No household loaded yet — try again in a moment.");
+      setLivePhase("failed");
+      return;
+    }
+    setLivePhase("generating");
+    setLiveError(null);
+    try {
+      const key = `gen-${week}-${Date.now()}`;
+      const job = await submitGeneration(
+        hid,
+        week,
+        planner.generation.forceRegenerateIfActive,
+        key,
+      );
+      const done = await pollGeneration(job.jobId, () => {});
+      if (done.status === "COMPLETED") {
+        // The live Plan page reads the freshly GENERATED plan on mount.
+        navigate("/plan");
+      } else {
+        setLiveError(
+          done.errorCode
+            ? `Generation failed (${done.errorCode}). Try again.`
+            : "Generation failed. Try again.",
+        );
+        setLivePhase("failed");
+      }
+    } catch (e) {
+      setLiveError(
+        e instanceof Error ? e.message : "Generation failed. Try again.",
+      );
+      setLivePhase("failed");
+    }
+  }
+
   // Entering the stepper targets a week; feasibility (#5) is read before
   // the generate button enables.
   useEffect(() => {
@@ -375,21 +423,21 @@ export function PlanGenerate() {
         </label>
       )}
 
-      {g.status !== "review" && (
+      {(LIVE ? livePhase !== "generating" : g.status !== "review") && (
         <div style={{ marginTop: 18, display: "flex", gap: 10 }}>
           {feasibility.feasible ? (
             <button
               className="btn btn-primary"
-              disabled={g.status === "generating"}
-              onClick={requestGeneration}
+              disabled={LIVE ? livePhase === "generating" : g.status === "generating"}
+              onClick={LIVE ? runLiveGeneration : requestGeneration}
             >
               Generate
             </button>
           ) : (
             <button
               className="btn"
-              disabled={g.status === "generating"}
-              onClick={requestGeneration}
+              disabled={LIVE ? livePhase === "generating" : g.status === "generating"}
+              onClick={LIVE ? runLiveGeneration : requestGeneration}
               title="Proceed without resolving — the plan ships flagged with quality warnings (no silent relaxation)"
             >
               Generate anyway
@@ -398,7 +446,16 @@ export function PlanGenerate() {
         </div>
       )}
 
-      {g.status === "generating" && (
+      {LIVE && livePhase === "failed" && liveError && (
+        <div
+          className="inline-note"
+          style={{ marginTop: 14, color: "var(--mp-amber)" }}
+        >
+          {liveError}
+        </div>
+      )}
+
+      {(LIVE ? livePhase === "generating" : g.status === "generating") && (
         <div>
           <div className="candidate-skeleton" style={{ marginTop: 22 }} />
           <div className="gen-wait mp-card">
@@ -414,14 +471,18 @@ export function PlanGenerate() {
               </span>
             </div>
             <div className="gen-wait-sub">
-              One blocking call, Stage A→D server-side — typically under 20
-              seconds; no progress endpoint in v1.
+              {LIVE
+                ? "Running Stage A→D on a background worker — this can take up to a"
+                  + " minute. You can leave this page; we'll land on your new plan when"
+                  + " it's ready."
+                : "One blocking call, Stage A→D server-side — typically under 20"
+                  + " seconds; no progress endpoint in v1."}
             </div>
           </div>
         </div>
       )}
 
-      {g.status === "review" && resultPlan && (
+      {!LIVE && g.status === "review" && resultPlan && (
         <ReviewCard
           plan={resultPlan}
           replayed={g.replayed}
