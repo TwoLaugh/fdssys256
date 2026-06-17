@@ -77,13 +77,27 @@ class NutritionSubScore implements SubScoreCalculator {
 
   @Override
   public BigDecimal compute(CandidatePlan plan, PlanCompositionContext ctx) {
-    UUID primary = ScoringSupport.primaryUserId(ctx);
-    TargetsDto targets = primary == null ? null : ctx.nutritionByUserId().get(primary);
+    TargetsDto targets = targetsFor(ctx);
     if (targets == null) {
       return BigDecimal.ONE; // no targets configured → vacuous fit = 1.0
     }
+    return scoreFromTotals(macroAggregator.aggregateByDate(plan, ctx), targets);
+  }
 
-    Map<LocalDate, DailyMacroTotals> byDate = macroAggregator.aggregateByDate(plan, ctx);
+  /** The primary user's targets row for {@code ctx}, or {@code null} when none is configured. */
+  TargetsDto targetsFor(PlanCompositionContext ctx) {
+    UUID primary = ScoringSupport.primaryUserId(ctx);
+    return primary == null ? null : ctx.nutritionByUserId().get(primary);
+  }
+
+  /**
+   * Score the nutrition sub-score from already-aggregated per-day totals against {@code targets} —
+   * the exact day-scoring + blend + mean the whole-plan {@link #compute} runs once it has {@code
+   * byDate}. The incremental Stage-A scorer carries the SAME per-day totals (built by the shared
+   * {@link DailyMacroAggregator} per-slot arithmetic), so calling this finalises byte-identically.
+   * {@code targets} must be non-null (caller short-circuits the no-targets case to {@code 1.0}).
+   */
+  BigDecimal scoreFromTotals(Map<LocalDate, DailyMacroTotals> byDate, TargetsDto targets) {
     if (byDate.isEmpty()) {
       return BigDecimal.ONE; // nothing to score
     }

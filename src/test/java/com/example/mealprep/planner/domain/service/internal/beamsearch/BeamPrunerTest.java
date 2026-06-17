@@ -79,8 +79,8 @@ class BeamPrunerTest {
    */
   @Test
   void empty_partial_plans_tie_break_uses_zero_uuid_sentinel() {
-    PartialPlan a = new PartialPlan(WEEK_START, List.of(), BigDecimal.valueOf(0.5));
-    PartialPlan b = new PartialPlan(WEEK_START, List.of(), BigDecimal.valueOf(0.5));
+    PartialPlan a = new PartialPlan(WEEK_START, List.of(), BigDecimal.valueOf(0.5), null);
+    PartialPlan b = new PartialPlan(WEEK_START, List.of(), BigDecimal.valueOf(0.5), null);
 
     List<PartialPlan> kept = pruner.retainTop(List.of(a, b), 2);
 
@@ -102,7 +102,7 @@ class BeamPrunerTest {
             UUID.randomUUID(),
             2,
             false);
-    return new PartialPlan(WEEK_START, List.of(a), score);
+    return new PartialPlan(WEEK_START, List.of(a), score, null);
   }
 
   private static UUID uuidOf(int seed) {

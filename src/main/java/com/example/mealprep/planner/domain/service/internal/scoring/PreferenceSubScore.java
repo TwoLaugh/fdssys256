@@ -6,8 +6,11 @@ import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
 import com.example.mealprep.preference.PreferenceModule;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -57,6 +60,33 @@ class PreferenceSubScore implements SubScoreCalculator {
 
   private final PreferenceModule preferenceModule;
 
+  /**
+   * Memo for the per-eater taste vector. {@link #compute} runs once per candidate plan and the beam
+   * scores tens of thousands of candidates per generation, each re-resolving the same household
+   * eaters' vectors — without this memo that was ~200k+ identical {@code getTasteVector} DB reads
+   * per generation (each deserialising a 1536-float pgvector), the dominant cost that blew the
+   * Stage-A beam timeout. A taste vector only changes when re-embedded (rare, async), so a short
+   * write-expiry process-wide memo is correct: a generation reads a single consistent snapshot, and
+   * staleness is bounded to the TTL. Keyed by eater id; the value is the (immutable-by-convention)
+   * stored vector or empty. Caffeine is thread-safe — concurrent generations for different
+   * households share it safely.
+   */
+  private final Cache<UUID, Optional<float[]>> tasteVectorCache =
+      Caffeine.newBuilder().maximumSize(10_000).expireAfterWrite(Duration.ofMinutes(2)).build();
+
+  /**
+   * Per-(recipe, slot) memo of the per-slot taste score, scoped to one composition context. The
+   * per-slot score is a pure function of the recipe's embedding and the slot's (eater-derived)
+   * taste vector — both fixed for the whole generation — yet the beam recomputes the 1536-dim
+   * cosine for it on every one of the tens of thousands of partials that contain the slot. Caching
+   * it per (recipeId, slotId) collapses that to one cosine per unique pairing, returning the
+   * byte-identical {@link #perRecipeScore} value (so pruning + the final score are unchanged). The
+   * map is held behind a single-entry context-identity holder so a new generation starts clean.
+   */
+  private record PrefMemo(PlanCompositionContext ctx, Map<String, BigDecimal> perSlot) {}
+
+  private volatile PrefMemo prefMemo;
+
   PreferenceSubScore(PreferenceModule preferenceModule) {
     this.preferenceModule = preferenceModule;
   }
@@ -72,7 +102,6 @@ class PreferenceSubScore implements SubScoreCalculator {
       return NEUTRAL; // mean over zero slots is neutral (no taste signal)
     }
 
-    Map<UUID, RecipeDto> recipes = ScoringSupport.recipeIndex(ctx);
     Map<UUID, MealSlotSkeleton> bySlotId =
         ctx.slotSkeletons() == null
             ? Map.of()
@@ -82,12 +111,51 @@ class PreferenceSubScore implements SubScoreCalculator {
     BigDecimal sum = BigDecimal.ZERO;
     int counted = 0;
     for (SlotAssignment a : plan.assignments()) {
-      float[] recipeVector = recipeVector(recipes, a.recipeId());
-      float[] tasteVector = tasteVectorForSlot(bySlotId.get(a.slotId()));
-      sum = sum.add(perRecipeScore(recipeVector, tasteVector));
+      sum = sum.add(perSlotScore(a, ctx, bySlotId));
       counted++;
     }
     return sum.divide(BigDecimal.valueOf(counted), 6, RoundingMode.HALF_UP);
+  }
+
+  /**
+   * The (memoised) per-slot taste score for one assignment — the exact value the whole-plan {@link
+   * #compute} sums, so the incremental Stage-A scorer accumulates the SAME per-slot values and
+   * finalises with the identical {@code sum/count scale-6 HALF_UP} mean. {@code bySlotId} is the
+   * {@code slotId -> skeleton} index; callers build it once per generation. Reuses the per-(recipe,
+   * slot) memo so a repeated pairing costs one cosine, not one per partial.
+   */
+  BigDecimal perSlotScore(
+      SlotAssignment a, PlanCompositionContext ctx, Map<UUID, MealSlotSkeleton> bySlotId) {
+    Map<String, BigDecimal> perSlotMemo = perSlotMemo(ctx);
+    String key = a.recipeId() + "|" + a.slotId();
+    BigDecimal slotScore = perSlotMemo.get(key);
+    if (slotScore == null) {
+      Map<UUID, RecipeDto> recipes = ScoringSupport.recipeIndex(ctx);
+      float[] recipeVector = recipeVector(recipes, a.recipeId());
+      float[] tasteVector = tasteVectorForSlot(bySlotId.get(a.slotId()));
+      slotScore = perRecipeScore(recipeVector, tasteVector);
+      perSlotMemo.put(key, slotScore);
+    }
+    return slotScore;
+  }
+
+  /** {@code slotId -> skeleton} index over the context's skeletons (empty when none). */
+  static Map<UUID, MealSlotSkeleton> slotIndex(PlanCompositionContext ctx) {
+    return ctx.slotSkeletons() == null
+        ? Map.of()
+        : ctx.slotSkeletons().stream()
+            .collect(Collectors.toMap(MealSlotSkeleton::slotId, Function.identity()));
+  }
+
+  /** The per-slot-score memo for {@code ctx}, recreated when the context changes (new generation). */
+  private Map<String, BigDecimal> perSlotMemo(PlanCompositionContext ctx) {
+    PrefMemo m = prefMemo;
+    if (m != null && m.ctx() == ctx) {
+      return m.perSlot();
+    }
+    Map<String, BigDecimal> fresh = new java.util.concurrent.ConcurrentHashMap<>();
+    prefMemo = new PrefMemo(ctx, fresh);
+    return fresh;
   }
 
   /**
@@ -138,7 +206,8 @@ class PreferenceSubScore implements SubScoreCalculator {
       if (eater == null) {
         continue;
       }
-      Optional<float[]> vector = preferenceModule.tasteSimilarity().getTasteVector(eater);
+      Optional<float[]> vector =
+          tasteVectorCache.get(eater, e -> preferenceModule.tasteSimilarity().getTasteVector(e));
       if (vector.isEmpty()) {
         continue;
       }

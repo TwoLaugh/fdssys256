@@ -55,7 +55,18 @@ class BatchSubScore implements SubScoreCalculator {
         distinctSessions.add(sessionId);
       }
     }
-    int distinct = distinctSessions.size() + (sawNoBatch ? 1 : 0);
+    return finalScore(slots, distinctSessions.size(), sawNoBatch);
+  }
+
+  /**
+   * The batch sub-score from the running slot count, distinct non-null session count, and the
+   * sawNoBatch flag — the exact arithmetic the whole-plan {@link #compute} runs, so the incremental
+   * Stage-A scorer (which carries a running slot count + sawNoBatch; distinctSessions is always 0 in
+   * 01e since {@link #batchSessionId} returns null) finalises identically. Empty plan → caller
+   * returns {@code 1.0} before reaching here.
+   */
+  static BigDecimal finalScore(int slots, int distinctSessions, boolean sawNoBatch) {
+    int distinct = distinctSessions + (sawNoBatch ? 1 : 0);
     BigDecimal ratio =
         BigDecimal.valueOf(distinct).divide(BigDecimal.valueOf(slots), 6, RoundingMode.HALF_UP);
     return BigDecimal.ONE.subtract(ratio).max(BigDecimal.ZERO);
@@ -63,9 +74,11 @@ class BatchSubScore implements SubScoreCalculator {
 
   /**
    * Returns the batch-cook session id for an assignment. Always {@code null} in 01e — the field is
-   * introduced by planner-01j's composer. Extracted as a seam so the swap is a one-liner.
+   * introduced by planner-01j's composer. Extracted as a seam so the swap is a one-liner. Exposed
+   * package-private so the incremental scorer reads the SAME seam (keeps it from drifting when 01j
+   * wires a real id).
    */
-  private UUID batchSessionId(SlotAssignment assignment) {
+  static UUID batchSessionId(SlotAssignment assignment) {
     return null;
   }
 }

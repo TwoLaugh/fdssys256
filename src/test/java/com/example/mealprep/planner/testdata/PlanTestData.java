@@ -496,6 +496,64 @@ public final class PlanTestData {
   }
 
   /**
+   * A {@link RecipeDto} like {@link #scoredRecipe} but whose current-version body carries the
+   * supplied per-serving {@code nutrition} AND {@code embedding} — used by the incremental-scoring
+   * oracle so preference (cosine), nutrition (per-day macros/micros), variety, and time sub-scores
+   * all produce non-trivial, recipe-dependent values.
+   */
+  public static RecipeDto scoredRecipeFull(
+      UUID id,
+      int totalTimeMins,
+      String cuisine,
+      String protein,
+      String cookingMethod,
+      float[] embedding,
+      com.example.mealprep.recipe.api.dto.NutritionPerServingDto nutrition) {
+    RecipeDto base =
+        scoredRecipe(id, totalTimeMins, cuisine, protein, cookingMethod, List.of("rice", "oil"));
+    RecipeVersionDto v = base.currentVersionBody();
+    RecipeVersionDto withBody =
+        new RecipeVersionDto(
+            v.id(),
+            v.branchId(),
+            v.versionNumber(),
+            v.parentVersionId(),
+            v.trigger(),
+            v.changeReason(),
+            v.embeddingStatus(),
+            v.createdAt(),
+            v.createdByActor(),
+            v.adapterTraceId(),
+            v.ingredients(),
+            v.methodSteps(),
+            v.metadata(),
+            v.tags(),
+            v.appliedSubstitutionIds(),
+            embedding,
+            nutrition);
+    return new RecipeDto(
+        base.id(),
+        base.userId(),
+        base.catalogue(),
+        base.name(),
+        base.description(),
+        base.currentVersion(),
+        base.currentBranchId(),
+        base.dataQuality(),
+        base.nutritionStatus(),
+        base.forkedFromRecipeId(),
+        base.lastUsedInPlanAt(),
+        base.archivedAt(),
+        base.deletedAt(),
+        base.imageUrl(),
+        base.optimisticVersion(),
+        base.createdAt(),
+        base.updatedAt(),
+        withBody,
+        base.branches());
+  }
+
+  /**
    * A {@link MealSlotSkeleton} for {@code slotId} on {@code onDate} carrying the given {@code
    * eaters}. The {@code slotId} must equal the {@link SlotAssignment#slotId()} of the matching
    * assignment so the preference / time sub-scores resolve the slot's eaters and time budget.

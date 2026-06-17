@@ -43,7 +43,7 @@ public record DailyMacroTotals(
   }
 
   /** Mutable accumulator; one instance per date bucket while walking assignments. */
-  static final class Builder {
+  public static final class Builder {
 
     private final LocalDate date;
     private int kcal;
@@ -57,6 +57,26 @@ public record DailyMacroTotals(
 
     Builder(LocalDate date) {
       this.date = date;
+    }
+
+    /**
+     * Deep copy of this builder's running accumulators — used by the incremental Stage-A scorer so
+     * each beam child folds a slot into its OWN copy of the parent's per-day totals instead of
+     * sharing (and corrupting) sibling children's accumulators. The copied {@code micros} /
+     * {@code microSources} maps preserve insertion order, so a later {@code build()} on the copy is
+     * byte-identical to building the original after the same delta sequence.
+     */
+    Builder copy() {
+      Builder b = new Builder(date);
+      b.kcal = this.kcal;
+      b.proteinG = this.proteinG;
+      b.fatG = this.fatG;
+      b.carbsG = this.carbsG;
+      b.fibreG = this.fibreG;
+      b.saturatedFatG = this.saturatedFatG;
+      b.micros.putAll(this.micros);
+      b.microSources.putAll(this.microSources);
+      return b;
     }
 
     Builder addKcal(int delta) {

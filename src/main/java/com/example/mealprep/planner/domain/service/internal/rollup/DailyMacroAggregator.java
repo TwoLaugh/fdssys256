@@ -42,10 +42,35 @@ public class DailyMacroAggregator {
   public DailyMacroAggregator() {}
 
   /**
+   * Single-entry memo so the two scoring callers that aggregate the SAME candidate within one
+   * {@code ScoringEngine.score()} pass — {@code NutritionSubScore} and {@code NutritionFloorGate} —
+   * share one walk instead of each re-summing every slot (the beam scores tens of thousands of
+   * candidates, so that doubled walk was pure waste). Keyed by candidate + context IDENTITY (both
+   * immutable for the call); a different candidate/context replaces the entry and recomputes. The
+   * result map is treated read-only by all callers, so sharing the reference is safe.
+   */
+  private record AggMemo(
+      CandidatePlan plan, PlanCompositionContext ctx, Map<LocalDate, DailyMacroTotals> result) {}
+
+  private volatile AggMemo aggMemo;
+
+  /**
    * Aggregate macros per calendar date. Days with assignments but no resolvable recipe (or no
-   * exposed nutrition) appear with zeroed totals. Iteration order is date-ascending.
+   * exposed nutrition) appear with zeroed totals. Iteration order is date-ascending. Memoised per
+   * (candidate, context) identity (see {@link AggMemo}) — byte-identical to a fresh compute.
    */
   public Map<LocalDate, DailyMacroTotals> aggregateByDate(
+      CandidatePlan plan, PlanCompositionContext ctx) {
+    AggMemo m = aggMemo;
+    if (m != null && m.plan() == plan && m.ctx() == ctx) {
+      return m.result();
+    }
+    Map<LocalDate, DailyMacroTotals> out = computeByDate(plan, ctx);
+    aggMemo = new AggMemo(plan, ctx, out);
+    return out;
+  }
+
+  private Map<LocalDate, DailyMacroTotals> computeByDate(
       CandidatePlan plan, PlanCompositionContext ctx) {
     Map<LocalDate, DailyMacroTotals.Builder> builders = new TreeMap<>();
     if (plan == null || plan.assignments() == null) {
@@ -60,78 +85,115 @@ public class DailyMacroAggregator {
     Map<String, Integer> mealCalTargets = PerMealCalorieTargets.forContext(ctx);
 
     for (SlotAssignment a : plan.assignments()) {
-      LocalDate date = a.onDate();
-      if (date == null) {
-        continue;
-      }
-      // Every day with an assignment gets a bucket even if the recipe / nutrition is missing,
-      // so the day still appears in the daily rollup list (ticket edge-case checklist).
-      DailyMacroTotals.Builder b = builders.computeIfAbsent(date, DailyMacroTotals::builder);
+      applySlot(builders, a, byRecipeId, mealCalTargets);
+    }
 
-      // Phase-2 in-meal additions ride on the assignment and carry their OWN per-portion nutrition
-      // (USDA-derived for ingredients, the side's figures for side recipes). They are pre-sized to
-      // the residual, so they are summed verbatim (NOT portion-scaled like the main) and counted
-      // even when the slot's main recipe is missing/unresolved.
-      addAdditions(b, a.additions());
+    return build(builders);
+  }
 
-      RecipeDto recipe = byRecipeId.get(a.recipeId());
-      if (recipe == null) {
-        continue; // unfilled / unresolvable slot → 0-macro contribution
-      }
-      RecipeVersionDto versionBody = recipe.currentVersionBody();
-      NutritionPerServingDto n = versionBody == null ? null : versionBody.nutritionPerServing();
-      if (n == null) {
-        // Nutrition not yet computed for this recipe (status pending / nothing persisted) → 0
-        // contribution. The day still has its bucket so it appears in the rollup list.
-        continue;
-      }
-      // PER-PERSON nutrition: targets (e.g. 3600 kcal / 150 g protein) are the primary eater's
-      // DAILY intake, so each scheduled slot contributes exactly ONE serving — deliberately NOT
-      // a.servings() (= skel.eaters().size(), the household head-count that DailyCostAggregator and
-      // ProvisionsSubScore scale by). Multiplying nutrition by the head-count would overstate a
-      // multi-eater household's per-person intake by that factor and wreck target comparison.
-      // Portion factor for this slot: scale the single serving toward the slot's per-meal calorie
-      // target (clamped 0.5–3.0). Scales macros AND micros (eating 2 servings doubles both), so it
-      // lifts the calorie/protein magnitude and helps micro coverage at once. A slot whose kind has
-      // no target (or a recipe with no calories) scales by 1.0 — see PortionScaler#factor.
-      double portion =
-          a.kind() == null
-              ? 1.0
-              : PortionScaler.factor(
-                  n.calories(), mealCalTargets.get(PortionScaler.normaliseKind(a.kind().name())));
-      BigDecimal pf = BigDecimal.valueOf(portion);
+  /**
+   * Fold one assignment's per-serving nutrition into the per-date builder map — the single source of
+   * the per-slot aggregation arithmetic, shared by the whole-plan walk ({@link #computeByDate}) and
+   * the incremental Stage-A scorer ({@code IncrementalScoringEngine}). Mutates {@code builders} in
+   * place (a {@link TreeMap} so iteration stays date-ascending), creating a day bucket on first use
+   * so every date with an assignment appears in the rollup list even when the recipe / nutrition is
+   * missing. Pure function of its arguments otherwise — no DB, no time, no randomness. The {@code
+   * mealCalTargets} map is {@link PerMealCalorieTargets#forContext} for the run; {@code byRecipeId}
+   * is the pool index — both constant for a generation, so callers build them once.
+   *
+   * <p>Returns the {@code builders} map for fluent chaining; the same reference is mutated.
+   */
+  Map<LocalDate, DailyMacroTotals.Builder> applySlot(
+      Map<LocalDate, DailyMacroTotals.Builder> builders,
+      SlotAssignment a,
+      Map<UUID, RecipeDto> byRecipeId,
+      Map<String, Integer> mealCalTargets) {
+    LocalDate date = a.onDate();
+    if (date == null) {
+      return builders;
+    }
+    // Every day with an assignment gets a bucket even if the recipe / nutrition is missing,
+    // so the day still appears in the daily rollup list (ticket edge-case checklist).
+    DailyMacroTotals.Builder b = builders.computeIfAbsent(date, DailyMacroTotals::builder);
 
-      b.addKcal((int) Math.round(n.calories() * portion));
-      if (n.proteinG() != null) {
-        b.addProtein(n.proteinG().multiply(pf));
-      }
-      if (n.carbsG() != null) {
-        b.addCarbs(n.carbsG().multiply(pf));
-      }
-      if (n.fatG() != null) {
-        b.addFat(n.fatG().multiply(pf));
-      }
-      if (n.fibreG() != null) {
-        b.addFibre(n.fibreG().multiply(pf));
-      }
-      // NutritionPerServingDto carries no saturatedFat field → satFat stays 0 (its target is an
-      // upper limit, so a 0 actual never penalises). Micros flow through (× portion) by source key.
-      if (n.micros() != null) {
-        Map<String, String> microSrc = n.microSources() == null ? Map.of() : n.microSources();
-        for (Map.Entry<String, BigDecimal> micro : n.micros().entrySet()) {
-          if (micro.getKey() != null && micro.getValue() != null) {
-            b.addMicro(micro.getKey(), micro.getValue().multiply(pf));
-            b.addMicroSource(micro.getKey(), microSrc.get(micro.getKey()));
-          }
+    // Phase-2 in-meal additions ride on the assignment and carry their OWN per-portion nutrition
+    // (USDA-derived for ingredients, the side's figures for side recipes). They are pre-sized to
+    // the residual, so they are summed verbatim (NOT portion-scaled like the main) and counted
+    // even when the slot's main recipe is missing/unresolved.
+    addAdditions(b, a.additions());
+
+    RecipeDto recipe = byRecipeId.get(a.recipeId());
+    if (recipe == null) {
+      return builders; // unfilled / unresolvable slot → 0-macro contribution
+    }
+    RecipeVersionDto versionBody = recipe.currentVersionBody();
+    NutritionPerServingDto n = versionBody == null ? null : versionBody.nutritionPerServing();
+    if (n == null) {
+      // Nutrition not yet computed for this recipe (status pending / nothing persisted) → 0
+      // contribution. The day still has its bucket so it appears in the rollup list.
+      return builders;
+    }
+    // PER-PERSON nutrition: targets (e.g. 3600 kcal / 150 g protein) are the primary eater's
+    // DAILY intake, so each scheduled slot contributes exactly ONE serving — deliberately NOT
+    // a.servings() (= skel.eaters().size(), the household head-count that DailyCostAggregator and
+    // ProvisionsSubScore scale by). Multiplying nutrition by the head-count would overstate a
+    // multi-eater household's per-person intake by that factor and wreck target comparison.
+    // Portion factor for this slot: scale the single serving toward the slot's per-meal calorie
+    // target (clamped 0.5–3.0). Scales macros AND micros (eating 2 servings doubles both), so it
+    // lifts the calorie/protein magnitude and helps micro coverage at once. A slot whose kind has
+    // no target (or a recipe with no calories) scales by 1.0 — see PortionScaler#factor.
+    double portion =
+        a.kind() == null
+            ? 1.0
+            : PortionScaler.factor(
+                n.calories(), mealCalTargets.get(PortionScaler.normaliseKind(a.kind().name())));
+    BigDecimal pf = BigDecimal.valueOf(portion);
+
+    b.addKcal((int) Math.round(n.calories() * portion));
+    if (n.proteinG() != null) {
+      b.addProtein(n.proteinG().multiply(pf));
+    }
+    if (n.carbsG() != null) {
+      b.addCarbs(n.carbsG().multiply(pf));
+    }
+    if (n.fatG() != null) {
+      b.addFat(n.fatG().multiply(pf));
+    }
+    if (n.fibreG() != null) {
+      b.addFibre(n.fibreG().multiply(pf));
+    }
+    // NutritionPerServingDto carries no saturatedFat field → satFat stays 0 (its target is an
+    // upper limit, so a 0 actual never penalises). Micros flow through (× portion) by source key.
+    if (n.micros() != null) {
+      Map<String, String> microSrc = n.microSources() == null ? Map.of() : n.microSources();
+      for (Map.Entry<String, BigDecimal> micro : n.micros().entrySet()) {
+        if (micro.getKey() != null && micro.getValue() != null) {
+          b.addMicro(micro.getKey(), micro.getValue().multiply(pf));
+          b.addMicroSource(micro.getKey(), microSrc.get(micro.getKey()));
         }
       }
     }
+    return builders;
+  }
 
+  /** Materialise the per-date builder map into immutable totals, in date-ascending order. */
+  Map<LocalDate, DailyMacroTotals> build(Map<LocalDate, DailyMacroTotals.Builder> builders) {
     Map<LocalDate, DailyMacroTotals> out = new LinkedHashMap<>();
     for (Map.Entry<LocalDate, DailyMacroTotals.Builder> e : builders.entrySet()) {
       out.put(e.getKey(), e.getValue().build());
     }
     return out;
+  }
+
+  /**
+   * Seed an empty {@link IncrementalNutritionState} for {@code ctx} — captures the per-meal calorie
+   * targets and pool index once (both constant for a generation), so each beam {@code append} folds
+   * a slot in O(1)-ish via the SAME {@link #applySlot} arithmetic the whole-plan walk uses.
+   */
+  public IncrementalNutritionState seedIncremental(PlanCompositionContext ctx) {
+    Map<UUID, RecipeDto> byRecipeId = indexRecipes(ctx);
+    Map<String, Integer> mealCalTargets = PerMealCalorieTargets.forContext(ctx);
+    return new IncrementalNutritionState(this, mealCalTargets, byRecipeId, new TreeMap<>());
   }
 
   /**

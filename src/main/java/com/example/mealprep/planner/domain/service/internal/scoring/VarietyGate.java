@@ -28,7 +28,7 @@ class VarietyGate {
     if (plan.assignments() == null || plan.assignments().isEmpty()) {
       return true;
     }
-    int maxRepeat = properties.scoring().variety().maxRepeat();
+    int maxRepeat = maxRepeat();
     Map<UUID, Integer> counts = new HashMap<>();
     for (SlotAssignment a : plan.assignments()) {
       if (a.recipeId() == null) {
@@ -40,5 +40,10 @@ class VarietyGate {
       }
     }
     return true;
+  }
+
+  /** The configured per-recipe repeat cap — exposed so the incremental scorer applies the same. */
+  int maxRepeat() {
+    return properties.scoring().variety().maxRepeat();
   }
 }

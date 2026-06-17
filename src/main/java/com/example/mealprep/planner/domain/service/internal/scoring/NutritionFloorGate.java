@@ -55,8 +55,18 @@ public class NutritionFloorGate {
     if (primary == null) {
       return true; // no user to evaluate against
     }
+    return passesForTotals(primary, macroAggregator.aggregateByDate(plan, ctx));
+  }
 
-    Map<LocalDate, DailyMacroTotals> byDate = macroAggregator.aggregateByDate(plan, ctx);
+  /**
+   * Run the floor gate against already-aggregated per-day totals for {@code primary} — the exact
+   * rollup-build + {@link NutritionFloorGateService#evaluate} the whole-plan {@link #passes} runs.
+   * The incremental Stage-A scorer carries the SAME per-day totals (shared {@link
+   * DailyMacroAggregator} arithmetic) and supplies the same {@code primary}, so this finalises
+   * byte-identically. {@code primary} must be non-null and {@code byDate} reflects a non-empty plan;
+   * an empty {@code byDate} passes vacuously, matching {@link #passes}.
+   */
+  boolean passesForTotals(UUID primary, Map<LocalDate, DailyMacroTotals> byDate) {
     if (byDate.isEmpty()) {
       return true;
     }
