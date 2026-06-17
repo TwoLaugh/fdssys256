@@ -392,6 +392,23 @@ function SlotDetailModal({
             </span>,
           )}
         {sr?.phase2Addition && row("Origin", "added in creative pass")}
+        {sr?.additions != null &&
+          sr.additions.length > 0 &&
+          row(
+            "Additions",
+            <span style={{ display: "grid", gap: 4 }}>
+              {sr.additions.map((a, i) => (
+                <span key={i} className="mp-serif" style={{ fontSize: 15 }}>
+                  + {a.name}
+                  {a.reasoning && (
+                    <span className="mp-label" style={{ marginLeft: 6, fontStyle: "italic" }}>
+                      {a.reasoning}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </span>,
+          )}
       </div>
       <div className="modal-actions" style={{ justifyContent: "space-between" }}>
         {sr ? (

@@ -6170,6 +6170,18 @@ export interface components {
                 /** @enum {string|null} */
                 augmentationSource?: "LLM" | "USER" | null;
                 phase2Addition: boolean;
+                /** In-meal additions (Phase 2) — small whole-food riders on the slot's main. */
+                additions?: {
+                    /** @enum {string} */
+                    kind?: "INGREDIENT" | "SIDE_RECIPE";
+                    name?: string;
+                    ingredientMappingKey?: string | null;
+                    grams?: number | null;
+                    reasoning?: string | null;
+                    nutrition?: {
+                        calories?: number;
+                    } | null;
+                }[] | null;
             } | null;
             /** Format: time */
             effectiveMealTime: string;
