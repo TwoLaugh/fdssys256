@@ -187,5 +187,20 @@ the v1 candidate filter is "snack-tagged recipe < 350 kcal" as a proxy — a rea
 tag (importer-side) would replace it. Unit-verified (a snack-side uniquely filling a short micro is
 picked over ingredients).
 
-**Pending (optional):** persist `portionFactor` so the MAIN recipe's grocery quantities scale with
-the portion (Phase 1b); a real `dishType=side` recipe classification to replace the snack proxy.
+**Phase 1b — persist portionFactor** ✅ (`bba8591`). `ScheduledRecipe.portion_factor` (migration
+`V20260617090000`) is computed at persist time from the same per-meal targets the coverage uses
+(shared `PerMealCalorieTargets` util); grocery scales the main's ingredient quantities by it;
+`Plan.tsx` shows "serves N · ×F per person". Live-verified: a regenerated plan persisted factors
+2.0/2.25/3.0, grocery recalculated, and the slot detail showed "serves 1 · ×3 per person".
+
+**Pending (optional):** a real `dishType=side` recipe classification to replace the snack proxy for
+SIDE_RECIPE candidates.
+
+---
+
+## Status: COMPLETE
+
+Portion scaling (Phase 1a + 1b) and additions (Phase 2 — both INGREDIENT + SIDE_RECIPE kinds,
+deterministic gap-fill + gpt-5.4-mini pairing) are built, committed, and verified end-to-end across
+coverage, grocery, and the Plan UI. The day reaches its calorie target (2,610 → ~3,680, MET); only
+the optional `dishType=side` classification remains.
