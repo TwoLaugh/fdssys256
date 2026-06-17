@@ -2,6 +2,7 @@ package com.example.mealprep.planner.domain.service.internal.additions;
 
 import com.example.mealprep.ai.domain.service.AiService;
 import com.example.mealprep.planner.api.dto.Addition;
+import com.example.mealprep.planner.api.dto.AdditionKind;
 import com.example.mealprep.planner.api.dto.NutritionCoverageDocument;
 import com.example.mealprep.planner.api.dto.NutritionTargetCoverageDocument;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
@@ -10,7 +11,9 @@ import com.example.mealprep.planner.api.dto.SlotAssignment;
 import com.example.mealprep.planner.domain.service.internal.additions.AdditionPairingResult.AdditionPlacement;
 import com.example.mealprep.preference.api.dto.FilterContext;
 import com.example.mealprep.preference.domain.service.HardConstraintFilterService;
+import com.example.mealprep.recipe.api.dto.IngredientDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
+import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -53,6 +56,12 @@ public class IngredientAdditionPlanner {
 
   /** Weight calories vs a single micro's gap-fill — the residual kcal is the primary driver. */
   private static final double CALORIE_WEIGHT = 2.0;
+
+  /** A SIDE_RECIPE candidate must be side-sized (a small standalone dish, not a full main). */
+  private static final int SIDE_MAX_KCAL = 350;
+
+  /** Cap side candidates so the greedy stays tractable + ingredients aren't swamped. */
+  private static final int MAX_SIDE_CANDIDATES = 6;
 
   private final AdditionNutritionResolver resolver;
   private final HardConstraintFilterService hardConstraintFilterService;
@@ -283,25 +292,92 @@ public class IngredientAdditionPlanner {
     return out;
   }
 
-  /** Resolve every catalogue candidate whose ingredient is safe for the whole household. */
+  /**
+   * Allergy-safe addition candidates for the household: the USDA ingredient catalogue (kind
+   * INGREDIENT) plus side-dish recipes from the pool (kind SIDE_RECIPE). Both compete in the same
+   * greedy gap-fill, ranked purely by how well they close the residual + short micros.
+   */
   private List<Addition> allergySafeAdditions(PlanCompositionContext ctx) {
-    List<java.util.UUID> eaters =
-        ctx.slotSkeletons() == null
-            ? List.of()
-            : ctx.slotSkeletons().stream()
-                .flatMap(sk -> sk.eaters() == null ? List.<java.util.UUID>of().stream() : sk.eaters().stream())
-                .distinct()
-                .toList();
+    List<UUID> eaters = eatersOf(ctx);
     List<Addition> safe = new ArrayList<>();
     for (AdditionCandidate c : AdditionCandidateCatalogue.CANDIDATES) {
-      if (eaters.isEmpty()
-          || hardConstraintFilterService
-              .checkForHousehold(eaters, List.of(c.ingredientKey()), FilterContext.ANY)
-              .passes()) {
+      if (passesAllergy(eaters, List.of(c.ingredientKey()))) {
         safe.add(resolver.resolve(c));
       }
     }
+    safe.addAll(sideCandidates(ctx, eaters));
     return safe;
+  }
+
+  /**
+   * Side-dish recipe candidates: small, nutrition-bearing pool recipes the household can safely eat,
+   * carrying their own per-serving nutrition. The proxy for "dishType = side" is a {@code snack}-
+   * tagged recipe under {@link #SIDE_MAX_KCAL} (the pool has no first-class side classification yet —
+   * a real {@code dishType} tag would replace this filter).
+   */
+  private List<Addition> sideCandidates(PlanCompositionContext ctx, List<UUID> eaters) {
+    if (ctx.recipePool() == null || ctx.recipePool().recipes() == null) {
+      return List.of();
+    }
+    List<Addition> sides = new ArrayList<>();
+    for (RecipeDto r : ctx.recipePool().recipes()) {
+      if (sides.size() >= MAX_SIDE_CANDIDATES) {
+        break;
+      }
+      RecipeVersionDto v = r.currentVersionBody();
+      if (v == null || v.metadata() == null || v.nutritionPerServing() == null) {
+        continue;
+      }
+      List<String> meals = v.metadata().mealTypes();
+      if (meals == null || !meals.contains("snack")) {
+        continue; // snack-tag stands in for "side dish" until a real dishType lands
+      }
+      int kcal = v.nutritionPerServing().calories();
+      if (kcal <= 0 || kcal > SIDE_MAX_KCAL) {
+        continue; // side-sized only — not a full main
+      }
+      List<String> keys =
+          v.ingredients() == null
+              ? List.of()
+              : v.ingredients().stream()
+                  .map(IngredientDto::ingredientMappingKey)
+                  .filter(k -> k != null && !k.isBlank())
+                  .toList();
+      if (!passesAllergy(eaters, keys)) {
+        continue;
+      }
+      sides.add(
+          new Addition(
+              AdditionKind.SIDE_RECIPE,
+              r.name() == null ? "side dish" : r.name(),
+              null,
+              r.id(),
+              BigDecimal.ONE,
+              "serving",
+              null,
+              v.nutritionPerServing(),
+              "side dish"));
+    }
+    return sides;
+  }
+
+  private static List<UUID> eatersOf(PlanCompositionContext ctx) {
+    return ctx.slotSkeletons() == null
+        ? List.of()
+        : ctx.slotSkeletons().stream()
+            .flatMap(sk -> sk.eaters() == null ? java.util.stream.Stream.<UUID>of() : sk.eaters().stream())
+            .distinct()
+            .toList();
+  }
+
+  /** Household allergy/diet gate; empty eaters or empty keys → nothing to block on (pass). */
+  private boolean passesAllergy(List<UUID> eaters, List<String> ingredientKeys) {
+    if (eaters.isEmpty() || ingredientKeys.isEmpty()) {
+      return true;
+    }
+    return hardConstraintFilterService
+        .checkForHousehold(eaters, ingredientKeys, FilterContext.ANY)
+        .passes();
   }
 
   /** Greedy knapsack-ish pick: repeatedly take the addition that best fills the remaining gap. */

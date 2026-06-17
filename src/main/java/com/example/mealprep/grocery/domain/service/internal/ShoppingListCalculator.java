@@ -193,6 +193,8 @@ class ShoppingListCalculator {
         // In-meal ingredient additions are extra shopping lines (their own USDA-resolved grams),
         // independent of whether the main recipe resolves below.
         accumulateAdditions(demand, scheduled.additions());
+        // SIDE_RECIPE additions: buy the side dish's own ingredients (one serving each).
+        accumulateSideRecipeAdditions(demand, scheduled.additions(), recipeCache);
         RecipeDto recipe =
             recipeCache.computeIfAbsent(
                 scheduled.recipeId(), id -> recipeQueryService.getById(id).orElse(null));
@@ -249,8 +251,7 @@ class ShoppingListCalculator {
   /**
    * Accumulate in-meal INGREDIENT additions as shopping demand by their USDA-resolved grams (one
    * portion per attached slot — so a week's worth sums across the seven carrier slots). SIDE_RECIPE
-   * additions reference a real recipe and will flow through the recipe-ingredient walk when that
-   * kind ships; they are skipped here.
+   * additions are recipe-backed — see {@link #accumulateSideRecipeAdditions}.
    */
   private static void accumulateAdditions(Map<String, IngredientDemand> demand, List<Addition> additions) {
     if (additions == null) {
@@ -269,6 +270,34 @@ class ShoppingListCalculator {
         demand.put(key, new IngredientDemand(key, a.name(), a.grams(), "g", null, null));
       } else {
         demand.put(key, existing.add(a.grams()));
+      }
+    }
+  }
+
+  /**
+   * Accumulate SIDE_RECIPE additions by buying their underlying recipe's ingredients (one serving
+   * each), reusing the same recipe cache as the main walk so each recipe is read at most once.
+   */
+  private void accumulateSideRecipeAdditions(
+      Map<String, IngredientDemand> demand, List<Addition> additions, Map<UUID, RecipeDto> recipeCache) {
+    if (additions == null) {
+      return;
+    }
+    for (Addition a : additions) {
+      if (a == null || a.kind() != AdditionKind.SIDE_RECIPE || a.recipeId() == null) {
+        continue;
+      }
+      RecipeDto recipe =
+          recipeCache.computeIfAbsent(a.recipeId(), id -> recipeQueryService.getById(id).orElse(null));
+      if (recipe == null
+          || recipe.currentVersionBody() == null
+          || recipe.currentVersionBody().ingredients() == null) {
+        continue;
+      }
+      for (IngredientDto ing : recipe.currentVersionBody().ingredients()) {
+        if (!ing.optional()) {
+          accumulate(demand, ing, BigDecimal.ONE); // one serving of the side
+        }
       }
     }
   }
