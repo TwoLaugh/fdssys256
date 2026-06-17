@@ -165,9 +165,16 @@ Verified by unit tests (engine gap-rank/attach, resolver scaling, aggregator sum
 module-boundary/ArchUnit tests green, **and live e2e**: a regenerated plan attached ½ avocado +
 almonds + 1 tbsp olive oil (3 USDA-derived additions) to all 7 days → day kcal **3,196 → 3,637**,
 calories coverage **SHORT → MET**, micros gained vitamin_e/magnesium/calcium/potassium/folate/
-vitamin_k. **Pending:** **SIDE_RECIPE** additions; the LLM `ADDITION_PAIRING` appropriateness gate
-(gpt-5.4-mini) — deterministic notes stand in; grocery extra-lines + `Plan.tsx` rendering.
+vitamin_k.
 
-*Cosmetic follow-up:* the deterministic carrier picks the day's highest-`slotIndex` recipe-bearing
-slot, which landed on breakfast here; attaching to the largest meal (or letting the LLM gate re-home
-them) reads better. Not a correctness issue — the aggregator sums per day, so coverage is unaffected.
+**Inc 3 — LLM pairing gate** ✅ (commit `efc5f22`). The `PLANNER_ADDITION_PAIRING` task (MID /
+gpt-5.4-mini class) assigns each deterministic pick a meal slot + a natural note; applied across the
+week by slot kind. The deterministic planner still decides WHICH foods close the gap — the LLM only
+re-homes + writes the note, and the whole call falls back to deterministic carrier-slot placement on
+`AiUnavailableException` / no AI bean / unmatched pick. Live-verified (canned response): olive oil
+re-homed to DINNER ("drizzle…over the mains"), almonds to BREAKFAST ("with your morning oats"), an
+unmatched pick fell back gracefully, calories stayed MET. This also resolves the breakfast-carrier
+cosmetic quirk.
+
+**Pending:** **SIDE_RECIPE** additions (the second kind); grocery extra-lines + `Plan.tsx`
+rendering; persisting `portionFactor` for grocery/UI (Phase 1b).
