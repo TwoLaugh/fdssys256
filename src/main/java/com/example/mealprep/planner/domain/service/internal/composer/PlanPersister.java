@@ -119,7 +119,9 @@ class PlanPersister {
     // SAME per-meal calorie targets the rollup's coverage uses (via PortionScaler) so the persisted
     // value never disagrees with the scaled coverage. Persisted so grocery + UI reflect it.
     Map<String, Integer> mealCalTargets = PerMealCalorieTargets.forContext(context);
+    Map<String, BigDecimal> mealProteinTargets = PerMealCalorieTargets.proteinForContext(context);
     Map<UUID, Integer> recipeKcal = recipeKcalById(context);
+    Map<UUID, BigDecimal> recipeProtein = recipeProteinById(context);
 
     Map<java.time.LocalDate, Day> daysByDate = new LinkedHashMap<>();
     List<SlotAssignment> assignments =
@@ -172,11 +174,14 @@ class PlanPersister {
                 .additions(new ArrayList<>(a.additions()))
                 .portionFactor(
                     BigDecimal.valueOf(
-                        PortionScaler.factor(
-                            recipeKcal.getOrDefault(a.recipeId(), 0),
-                            a.kind() == null
-                                ? null
-                                : mealCalTargets.get(PortionScaler.normaliseKind(a.kind().name())))))
+                        a.kind() == null
+                            ? 1.0
+                            : PortionScaler.factor(
+                                recipeKcal.getOrDefault(a.recipeId(), 0),
+                                mealCalTargets.get(PortionScaler.normaliseKind(a.kind().name())),
+                                recipeProtein.get(a.recipeId()),
+                                mealProteinTargets.get(
+                                    PortionScaler.normaliseKind(a.kind().name())))))
                 .build();
         slot.setScheduledRecipe(sr);
       }
@@ -201,6 +206,24 @@ class PlanPersister {
           && r.currentVersionBody() != null
           && r.currentVersionBody().nutritionPerServing() != null) {
         out.put(r.id(), r.currentVersionBody().nutritionPerServing().calories());
+      }
+    }
+    return out;
+  }
+
+  /** recipeId → per-serving protein (g) from the pool, for the macro-aware portion-factor cap. */
+  private static Map<UUID, BigDecimal> recipeProteinById(PlanCompositionContext ctx) {
+    Map<UUID, BigDecimal> out = new LinkedHashMap<>();
+    if (ctx == null || ctx.recipePool() == null || ctx.recipePool().recipes() == null) {
+      return out;
+    }
+    for (RecipeDto r : ctx.recipePool().recipes()) {
+      if (r != null
+          && r.id() != null
+          && r.currentVersionBody() != null
+          && r.currentVersionBody().nutritionPerServing() != null
+          && r.currentVersionBody().nutritionPerServing().proteinG() != null) {
+        out.put(r.id(), r.currentVersionBody().nutritionPerServing().proteinG());
       }
     }
     return out;

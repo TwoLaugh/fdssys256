@@ -2,6 +2,7 @@ package com.example.mealprep.planner.domain.service.internal.rollup;
 
 import com.example.mealprep.planner.api.dto.SlotAssignment;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Map;
 import java.util.TreeMap;
@@ -22,6 +23,7 @@ public final class IncrementalNutritionState {
 
   private final DailyMacroAggregator aggregator;
   private final Map<String, Integer> mealCalTargets;
+  private final Map<String, BigDecimal> mealProteinTargets;
   private final Map<UUID, RecipeDto> byRecipeId;
   // Date-ascending (TreeMap) so build() iteration order matches the whole-plan walk's TreeMap.
   private final TreeMap<LocalDate, DailyMacroTotals.Builder> builders;
@@ -29,10 +31,12 @@ public final class IncrementalNutritionState {
   IncrementalNutritionState(
       DailyMacroAggregator aggregator,
       Map<String, Integer> mealCalTargets,
+      Map<String, BigDecimal> mealProteinTargets,
       Map<UUID, RecipeDto> byRecipeId,
       TreeMap<LocalDate, DailyMacroTotals.Builder> builders) {
     this.aggregator = aggregator;
     this.mealCalTargets = mealCalTargets;
+    this.mealProteinTargets = mealProteinTargets;
     this.byRecipeId = byRecipeId;
     this.builders = builders;
   }
@@ -54,8 +58,9 @@ public final class IncrementalNutritionState {
         next.put(date, existing.copy());
       }
     }
-    aggregator.applySlot(next, assignment, byRecipeId, mealCalTargets);
-    return new IncrementalNutritionState(aggregator, mealCalTargets, byRecipeId, next);
+    aggregator.applySlot(next, assignment, byRecipeId, mealCalTargets, mealProteinTargets);
+    return new IncrementalNutritionState(
+        aggregator, mealCalTargets, mealProteinTargets, byRecipeId, next);
   }
 
   /** Finalise to the immutable per-day totals — byte-identical to a whole-plan aggregation. */

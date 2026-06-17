@@ -83,9 +83,10 @@ public class DailyMacroAggregator {
     // 1000-kcal lunch (×2.25), letting the plan reach the daily goal instead of capping at one
     // serving/slot. Empty when no targets → factor 1.0 (unchanged behaviour).
     Map<String, Integer> mealCalTargets = PerMealCalorieTargets.forContext(ctx);
+    Map<String, BigDecimal> mealProteinTargets = PerMealCalorieTargets.proteinForContext(ctx);
 
     for (SlotAssignment a : plan.assignments()) {
-      applySlot(builders, a, byRecipeId, mealCalTargets);
+      applySlot(builders, a, byRecipeId, mealCalTargets, mealProteinTargets);
     }
 
     return build(builders);
@@ -107,7 +108,8 @@ public class DailyMacroAggregator {
       Map<LocalDate, DailyMacroTotals.Builder> builders,
       SlotAssignment a,
       Map<UUID, RecipeDto> byRecipeId,
-      Map<String, Integer> mealCalTargets) {
+      Map<String, Integer> mealCalTargets,
+      Map<String, BigDecimal> mealProteinTargets) {
     LocalDate date = a.onDate();
     if (date == null) {
       return builders;
@@ -142,11 +144,18 @@ public class DailyMacroAggregator {
     // target (clamped 0.5–3.0). Scales macros AND micros (eating 2 servings doubles both), so it
     // lifts the calorie/protein magnitude and helps micro coverage at once. A slot whose kind has
     // no target (or a recipe with no calories) scales by 1.0 — see PortionScaler#factor.
-    double portion =
-        a.kind() == null
-            ? 1.0
-            : PortionScaler.factor(
-                n.calories(), mealCalTargets.get(PortionScaler.normaliseKind(a.kind().name())));
+    double portion = 1.0;
+    if (a.kind() != null) {
+      String kindKey = PortionScaler.normaliseKind(a.kind().name());
+      // Macro-aware: scale toward the per-meal calorie target but cap so a protein-dense recipe
+      // can't inflate the day's protein floor when scaled up to hit calories.
+      portion =
+          PortionScaler.factor(
+              n.calories(),
+              mealCalTargets.get(kindKey),
+              n.proteinG(),
+              mealProteinTargets.get(kindKey));
+    }
     BigDecimal pf = BigDecimal.valueOf(portion);
 
     b.addKcal((int) Math.round(n.calories() * portion));
@@ -193,7 +202,9 @@ public class DailyMacroAggregator {
   public IncrementalNutritionState seedIncremental(PlanCompositionContext ctx) {
     Map<UUID, RecipeDto> byRecipeId = indexRecipes(ctx);
     Map<String, Integer> mealCalTargets = PerMealCalorieTargets.forContext(ctx);
-    return new IncrementalNutritionState(this, mealCalTargets, byRecipeId, new TreeMap<>());
+    Map<String, BigDecimal> mealProteinTargets = PerMealCalorieTargets.proteinForContext(ctx);
+    return new IncrementalNutritionState(
+        this, mealCalTargets, mealProteinTargets, byRecipeId, new TreeMap<>());
   }
 
   /**
