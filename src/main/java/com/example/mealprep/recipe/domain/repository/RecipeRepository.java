@@ -100,6 +100,89 @@ public interface RecipeRepository extends JpaRepository<Recipe, UUID> {
   List<Recipe> findPlannableForUser(@Param("userId") UUID userId, Pageable page);
 
   /**
+   * Per-kind, taste-ranked planner candidate read (candidate-selection upgrade). Same plannable
+   * scope as {@link #findPlannableForUser} — un-archived, un-deleted, caller's {@code USER} rows
+   * plus the global {@code SYSTEM} catalogue — but narrowed to recipes whose <b>current version</b>
+   * is tagged with the given {@code mealType} (a member of the {@code recipe_metadata.meal_types}
+   * jsonb array) and has a non-null semantic {@code embedding}, then ordered by cosine distance to
+   * the supplied taste vector ({@code embedding <=> :tasteVector}) so the nearest-to-taste
+   * candidates come first. Bounded by {@code limit}.
+   *
+   * <p>Native because the pgvector {@code <=>} operator and {@code jsonb_exists} have no JPQL
+   * equivalent. {@code :tasteVector} is the {@code [v0,v1,...]} text literal the preference module
+   * produces (see {@code TasteSimilarityQueryService#getTasteVectorLiteral}); it is cast to {@code
+   * vector} server-side, mirroring {@code TasteProfileRepository}'s similar-user query. The current
+   * version is pinned via the {@code (recipe, current_branch_id, current_version)} triple the rest
+   * of the recipe module uses. Returns whole {@code recipe_recipes} rows ({@code select r.*}) so the
+   * service hydrates them through the same path as {@link #findPlannableForUser}.
+   *
+   * <p>Per-kind selection (vs one flat read) is the fix for a kind-skewed catalogue: a global
+   * {@code created_at} order starves rare kinds (e.g. snack/breakfast) when the oldest rows are
+   * dominated by lunch/dinner; reading each kind separately guarantees every slot kind gets
+   * candidates, and the taste ordering makes those candidates the user's most-liked ones.
+   */
+  @Query(
+      value =
+          """
+          select r.* from recipe_recipes r
+            join recipe_versions v
+              on v.recipe_id = r.id
+             and v.branch_id = r.current_branch_id
+             and v.version_number = r.current_version
+            join recipe_metadata m on m.version_id = v.id
+           where r.archived_at is null
+             and r.deleted_at is null
+             and (
+               r.catalogue = 'SYSTEM'
+               or (r.catalogue = 'USER' and r.user_id = :userId)
+             )
+             and v.embedding_status = 'embedded'
+             and v.embedding is not null
+             and jsonb_exists(m.meal_types, :mealType)
+           order by v.embedding <=> cast(:tasteVector as vector)
+           limit :limit
+          """,
+      nativeQuery = true)
+  List<Recipe> findPlannableByKindRankedByTaste(
+      @Param("userId") UUID userId,
+      @Param("mealType") String mealType,
+      @Param("tasteVector") String tasteVector,
+      @Param("limit") int limit);
+
+  /**
+   * Per-kind planner candidate read WITHOUT a taste vector — the cold-start / no-embedding fallback
+   * for {@link #findPlannableByKindRankedByTaste}. Identical plannable + current-version + {@code
+   * mealType} scope, ordered by {@code created_at asc} for a stable candidate order (the same order
+   * {@link #findPlannableForUser} uses). Used when the household has no {@code EMBEDDED} taste
+   * vector yet, so per-kind balancing still applies even before personalisation kicks in.
+   *
+   * <p>Native (not JPQL) only because {@code jsonb_exists} on the {@code meal_types} jsonb array has
+   * no JPQL equivalent — the kind filter must match {@link #findPlannableByKindRankedByTaste}.
+   */
+  @Query(
+      value =
+          """
+          select r.* from recipe_recipes r
+            join recipe_versions v
+              on v.recipe_id = r.id
+             and v.branch_id = r.current_branch_id
+             and v.version_number = r.current_version
+            join recipe_metadata m on m.version_id = v.id
+           where r.archived_at is null
+             and r.deleted_at is null
+             and (
+               r.catalogue = 'SYSTEM'
+               or (r.catalogue = 'USER' and r.user_id = :userId)
+             )
+           and jsonb_exists(m.meal_types, :mealType)
+           order by r.created_at asc
+           limit :limit
+          """,
+      nativeQuery = true)
+  List<Recipe> findPlannableByKind(
+      @Param("userId") UUID userId, @Param("mealType") String mealType, @Param("limit") int limit);
+
+  /**
    * Library list/search page ({@code GET /api/v1/recipes}). One query serves all three LLD views
    * via the caller-computed catalogue booleans:
    *

@@ -27,6 +27,19 @@ public interface TasteSimilarityQueryService {
   Optional<float[]> getTasteVector(UUID userId);
 
   /**
+   * The user's stored taste embedding rendered as the pgvector text literal ({@code [v0,v1,...]})
+   * that a recipe-side similarity query binds and casts server-side (mirroring {@link
+   * #findSimilarUsers}, which binds the same format internally). Empty when the vector is not yet
+   * computed (status PENDING / FAILED) or the user has no profile.
+   *
+   * <p>Lets the planner's recipe pool source rank candidates by taste cosine ({@code embedding
+   * <=> :tasteVector}) without ever handling the raw {@code float[]} or knowing the embedding
+   * dimension — the model/dimension stay an internal detail of this module; the planner just
+   * relays an opaque literal string to the recipe query.
+   */
+  Optional<String> getTasteVectorLiteral(UUID userId);
+
+  /**
    * Users whose taste profile is most similar to {@code userId}'s, nearest-first, excluding {@code
    * userId} itself. Backed by the pgvector cosine-distance operator over the partial HNSW index.
    * Empty when {@code userId} has no embedded vector yet. {@code limit} caps the result count.

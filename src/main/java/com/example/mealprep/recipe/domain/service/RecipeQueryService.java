@@ -68,6 +68,25 @@ public interface RecipeQueryService {
   List<RecipeDto> findPlannableCandidates(UUID userId, int limit);
 
   /**
+   * Per-kind, taste-aware planner candidate read (candidate-selection upgrade). Returns up to
+   * {@code limit} plannable candidates for {@code userId} — the caller's own {@code USER} rows plus
+   * the global {@code SYSTEM} catalogue — whose <b>current version</b> is tagged with {@code
+   * mealType} (lower-case meal kind, e.g. {@code "breakfast"}), each hydrated to the same {@link
+   * RecipeDto} shape {@link #findPlannableCandidates} produces.
+   *
+   * <p>When {@code tasteVectorLiteral} is non-blank (the {@code [v0,v1,...]} pgvector literal from
+   * {@code TasteSimilarityQueryService#getTasteVectorLiteral}), candidates are ordered by ascending
+   * taste cosine distance ({@code embedding <=> tasteVector}) so the user's most-liked recipes come
+   * first; only embedded recipes participate. When it is {@code null}/blank (cold start, no embedded
+   * vector), candidates fall back to {@code createdAt asc} ordering. Either way the read is
+   * per-kind, so a kind-skewed catalogue can no longer starve rare slot kinds (snack/breakfast) the
+   * way a single flat {@code createdAt} read does. Empty list for a null/blank {@code mealType} or
+   * non-positive {@code limit}.
+   */
+  List<RecipeDto> findPlannableCandidatesByKind(
+      UUID userId, String mealType, int limit, String tasteVectorLiteral);
+
+  /**
    * Returns the branches for a recipe sorted by {@code createdAt ASC} (so 'main' is first). Throws
    * {@code RecipeNotFoundException} if the recipe doesn't exist or is soft-deleted.
    */

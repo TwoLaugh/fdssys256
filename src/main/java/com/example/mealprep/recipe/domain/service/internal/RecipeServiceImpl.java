@@ -269,6 +269,27 @@ public class RecipeServiceImpl
 
   @Override
   @Transactional(readOnly = true)
+  public List<RecipeDto> findPlannableCandidatesByKind(
+      UUID userId, String mealType, int limit, String tasteVectorLiteral) {
+    if (userId == null || mealType == null || mealType.isBlank() || limit <= 0) {
+      return List.of();
+    }
+    // Taste-ranked when the household has an embedded vector; createdAt fallback otherwise. Both
+    // reads are per-kind so a kind-skewed catalogue can't starve rare slot kinds (snack/breakfast).
+    List<Recipe> recipes =
+        (tasteVectorLiteral != null && !tasteVectorLiteral.isBlank())
+            ? recipeRepository.findPlannableByKindRankedByTaste(
+                userId, mealType, tasteVectorLiteral, limit)
+            : recipeRepository.findPlannableByKind(userId, mealType, limit);
+    List<RecipeDto> dtos = new ArrayList<>(recipes.size());
+    for (Recipe recipe : recipes) {
+      dtos.add(hydrate(recipe));
+    }
+    return dtos;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
   public Page<RecipeDto> searchLibrary(
       UUID userId, RecipeSearchCriteriaDto criteria, Pageable pageable) {
     boolean includeUser = criteria.catalogue() == null || criteria.catalogue() == Catalogue.USER;
