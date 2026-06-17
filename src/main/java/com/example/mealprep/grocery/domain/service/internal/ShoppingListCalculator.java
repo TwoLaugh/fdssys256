@@ -229,8 +229,13 @@ class ShoppingListCalculator {
       base = 1;
     }
     int slotServings = scheduled.servings() > 0 ? scheduled.servings() : base;
+    // Phase 1b: also scale by the per-person portion factor (the main is eaten at N servings/person
+    // to hit the calorie target), so we buy enough food for the scaled plate.
+    BigDecimal portion =
+        scheduled.portionFactor() == null ? BigDecimal.ONE : scheduled.portionFactor();
     return BigDecimal.valueOf(slotServings)
-        .divide(BigDecimal.valueOf(base), 6, RoundingMode.HALF_UP);
+        .divide(BigDecimal.valueOf(base), 6, RoundingMode.HALF_UP)
+        .multiply(portion);
   }
 
   private static void accumulate(

@@ -1,6 +1,7 @@
 package com.example.mealprep.planner.api.dto;
 
 import com.example.mealprep.planner.domain.entity.AugmentationSource;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
@@ -23,13 +24,15 @@ public record ScheduledRecipeDto(
     String augmentationNotes,
     AugmentationSource augmentationSource,
     boolean phase2Addition,
-    List<Addition> additions) {
+    List<Addition> additions,
+    BigDecimal portionFactor) {
 
   public ScheduledRecipeDto {
     additions = additions == null ? List.of() : List.copyOf(additions);
+    portionFactor = portionFactor == null ? BigDecimal.ONE : portionFactor;
   }
 
-  /** Back-compat ctor (no additions) — defaults to an empty list, for pre-Phase-2 call sites. */
+  /** Back-compat ctor (no additions / portion factor) — for pre-Phase-2 call sites. */
   public ScheduledRecipeDto(
       UUID id,
       UUID recipeId,
@@ -50,6 +53,7 @@ public record ScheduledRecipeDto(
         augmentationNotes,
         augmentationSource,
         phase2Addition,
-        List.of());
+        List.of(),
+        BigDecimal.ONE);
   }
 }

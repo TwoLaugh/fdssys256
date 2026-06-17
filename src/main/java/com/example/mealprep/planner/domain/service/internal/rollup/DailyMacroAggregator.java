@@ -1,12 +1,10 @@
 package com.example.mealprep.planner.domain.service.internal.rollup;
 
-import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
-import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.planner.api.dto.Addition;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
-import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
+import com.example.mealprep.planner.domain.service.internal.PerMealCalorieTargets;
 import com.example.mealprep.planner.domain.service.internal.PortionScaler;
 import com.example.mealprep.recipe.api.dto.NutritionPerServingDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
@@ -59,7 +57,7 @@ public class DailyMacroAggregator {
     // Each slot's single serving is scaled toward its meal target so a ~440-kcal recipe can fill a
     // 1000-kcal lunch (×2.25), letting the plan reach the daily goal instead of capping at one
     // serving/slot. Empty when no targets → factor 1.0 (unchanged behaviour).
-    Map<String, Integer> mealCalTargets = perMealCalorieTargets(ctx);
+    Map<String, Integer> mealCalTargets = PerMealCalorieTargets.forContext(ctx);
 
     for (SlotAssignment a : plan.assignments()) {
       LocalDate date = a.onDate();
@@ -173,34 +171,6 @@ public class DailyMacroAggregator {
         }
       }
     }
-  }
-
-  /**
-   * Primary eater's per-meal calorie targets keyed by normalised slot kind ({@code SNACKS}→{@code
-   * SNACK}). Empty if no nutrition targets / no eaters — callers then leave the portion factor at 1.
-   */
-  private Map<String, Integer> perMealCalorieTargets(PlanCompositionContext ctx) {
-    Map<String, Integer> out = new LinkedHashMap<>();
-    if (ctx == null || ctx.nutritionByUserId() == null || ctx.slotSkeletons() == null) {
-      return out;
-    }
-    UUID primary =
-        ctx.slotSkeletons().stream()
-            .map(MealSlotSkeleton::eaters)
-            .filter(e -> e != null && !e.isEmpty())
-            .map(e -> e.get(0))
-            .findFirst()
-            .orElse(null);
-    TargetsDto t = primary == null ? null : ctx.nutritionByUserId().get(primary);
-    if (t == null || t.perMealDistribution() == null) {
-      return out;
-    }
-    for (PerMealDistributionDto m : t.perMealDistribution()) {
-      if (m != null && m.mealSlot() != null && m.calorieTarget() > 0) {
-        out.put(PortionScaler.normaliseKind(m.mealSlot().name()), m.calorieTarget());
-      }
-    }
-    return out;
   }
 
   private Map<UUID, RecipeDto> indexRecipes(PlanCompositionContext ctx) {

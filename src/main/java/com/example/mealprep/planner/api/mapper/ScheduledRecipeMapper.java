@@ -25,6 +25,7 @@ public abstract class ScheduledRecipeMapper {
         entity.getAugmentationNotes(),
         entity.getAugmentationSource(),
         entity.isPhase2Addition(),
-        entity.getAdditions());
+        entity.getAdditions(),
+        entity.getPortionFactor());
   }
 }

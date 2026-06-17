@@ -14,7 +14,10 @@ import com.example.mealprep.planner.domain.entity.ScheduledRecipe;
 import com.example.mealprep.planner.domain.entity.SlotState;
 import com.example.mealprep.planner.domain.entity.TriggerKind;
 import com.example.mealprep.planner.domain.repository.PlanRepository;
+import com.example.mealprep.planner.domain.service.internal.PerMealCalorieTargets;
+import com.example.mealprep.planner.domain.service.internal.PortionScaler;
 import com.example.mealprep.planner.domain.service.internal.lifecycle.PlanStateMachine;
+import com.example.mealprep.recipe.api.dto.RecipeDto;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -112,6 +115,12 @@ class PlanPersister {
     // kind,
     // so a real multi-kind plan produced duplicate (plan_id, on_date) rows -> 23505. It went
     // unnoticed while NoOpRecipePoolSource kept every plan empty — no slots, no day rows.)
+    // Portion factor (Phase 1b): the per-person servings each main scales to, computed from the
+    // SAME per-meal calorie targets the rollup's coverage uses (via PortionScaler) so the persisted
+    // value never disagrees with the scaled coverage. Persisted so grocery + UI reflect it.
+    Map<String, Integer> mealCalTargets = PerMealCalorieTargets.forContext(context);
+    Map<UUID, Integer> recipeKcal = recipeKcalById(context);
+
     Map<java.time.LocalDate, Day> daysByDate = new LinkedHashMap<>();
     List<SlotAssignment> assignments =
         chosen.assignments() == null ? List.of() : chosen.assignments();
@@ -161,6 +170,13 @@ class PlanPersister {
                 .servings(a.servings() > 0 ? a.servings() : 1)
                 .phase2Addition(false)
                 .additions(new ArrayList<>(a.additions()))
+                .portionFactor(
+                    BigDecimal.valueOf(
+                        PortionScaler.factor(
+                            recipeKcal.getOrDefault(a.recipeId(), 0),
+                            a.kind() == null
+                                ? null
+                                : mealCalTargets.get(PortionScaler.normaliseKind(a.kind().name())))))
                 .build();
         slot.setScheduledRecipe(sr);
       }
@@ -171,6 +187,23 @@ class PlanPersister {
     plan.setStatus(PlanStatus.GENERATED);
 
     return planRepository.save(plan);
+  }
+
+  /** recipeId → per-serving calories from the composition pool, for the portion-factor maths. */
+  private static Map<UUID, Integer> recipeKcalById(PlanCompositionContext ctx) {
+    Map<UUID, Integer> out = new LinkedHashMap<>();
+    if (ctx == null || ctx.recipePool() == null || ctx.recipePool().recipes() == null) {
+      return out;
+    }
+    for (RecipeDto r : ctx.recipePool().recipes()) {
+      if (r != null
+          && r.id() != null
+          && r.currentVersionBody() != null
+          && r.currentVersionBody().nutritionPerServing() != null) {
+        out.put(r.id(), r.currentVersionBody().nutritionPerServing().calories());
+      }
+    }
+    return out;
   }
 
   private static ScoreBreakdownDocument zeroBreakdown() {

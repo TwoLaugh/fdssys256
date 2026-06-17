@@ -376,7 +376,13 @@ function SlotDetailModal({
                 .join(", ")})`
             : "Just you",
         )}
-        {sr && row("Servings", `serves ${sr.servings}`)}
+        {sr &&
+          row(
+            "Servings",
+            sr.portionFactor != null && sr.portionFactor !== 1
+              ? `serves ${sr.servings} · ×${sr.portionFactor} per person`
+              : `serves ${sr.servings}`,
+          )}
         {sr?.batchCookSessionId &&
           row("Batch session", sr.batchCookSessionId)}
         {sr?.augmentationNotes &&

@@ -6182,6 +6182,8 @@ export interface components {
                         calories?: number;
                     } | null;
                 }[] | null;
+                /** Per-person servings of the main, sized to the meal's calorie target (Phase 1b). */
+                portionFactor?: number;
             } | null;
             /** Format: time */
             effectiveMealTime: string;

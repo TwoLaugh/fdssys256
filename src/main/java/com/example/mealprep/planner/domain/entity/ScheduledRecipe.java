@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -79,4 +80,14 @@ public class ScheduledRecipe {
   @Column(name = "additions", nullable = false, columnDefinition = "jsonb")
   @Builder.Default
   private List<Addition> additions = new ArrayList<>();
+
+  /**
+   * Servings of this recipe the primary eater consumes — sized to the slot's per-meal calorie target
+   * (Phase 1b, distinct from head-count {@code servings}). Drives grocery quantities (× factor) and
+   * the "× N servings" UI; defaults to 1.0. Computed by {@code PortionScaler} at persist time from
+   * the same per-meal targets the rollup's coverage uses, so the two never disagree.
+   */
+  @Column(name = "portion_factor", nullable = false)
+  @Builder.Default
+  private BigDecimal portionFactor = BigDecimal.ONE;
 }
