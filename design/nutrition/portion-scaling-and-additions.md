@@ -176,5 +176,16 @@ re-homed to DINNER ("drizzle…over the mains"), almonds to BREAKFAST ("with you
 unmatched pick fell back gracefully, calories stayed MET. This also resolves the breakfast-carrier
 cosmetic quirk.
 
-**Pending:** **SIDE_RECIPE** additions (the second kind); grocery extra-lines + `Plan.tsx`
-rendering; persisting `portionFactor` for grocery/UI (Phase 1b).
+**Inc 4 — grocery + frontend** ✅ (`d7bd900`, `d4de5b4`). Ingredient additions become shopping-list
+lines (olive oil 40.5 g etc.); the Plan slot detail renders an "Additions" row with the pairing
+note. Live-verified end-to-end (accepted plan gen 18, 3,682 kcal).
+
+**Inc 5 — SIDE_RECIPE** ✅ (`61b0f99`). The second addition kind: side-dish recipes from the pool
+(own per-serving nutrition) compete in the same greedy, allergy-checked via their ingredients;
+grocery buys the side's ingredients. Data note: the pool has no first-class side classification, so
+the v1 candidate filter is "snack-tagged recipe < 350 kcal" as a proxy — a real {@code dishType=side}
+tag (importer-side) would replace it. Unit-verified (a snack-side uniquely filling a short micro is
+picked over ingredients).
+
+**Pending (optional):** persist `portionFactor` so the MAIN recipe's grocery quantities scale with
+the portion (Phase 1b); a real `dishType=side` recipe classification to replace the snack proxy.
