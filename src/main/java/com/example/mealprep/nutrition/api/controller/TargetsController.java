@@ -1,9 +1,12 @@
 package com.example.mealprep.nutrition.api.controller;
 
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
+import com.example.mealprep.nutrition.api.dto.ComputeTargetsRequest;
+import com.example.mealprep.nutrition.api.dto.ComputedTargetDefaultsDto;
 import com.example.mealprep.nutrition.api.dto.NutritionTargetsAuditEntryDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
+import com.example.mealprep.nutrition.domain.service.GuidelineDefaultsService;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.nutrition.domain.service.NutritionUpdateService;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
@@ -41,14 +44,17 @@ public class TargetsController {
 
   private final NutritionQueryService queryService;
   private final NutritionUpdateService updateService;
+  private final GuidelineDefaultsService guidelineDefaultsService;
   private final CurrentUserResolver currentUserResolver;
 
   public TargetsController(
       NutritionQueryService queryService,
       NutritionUpdateService updateService,
+      GuidelineDefaultsService guidelineDefaultsService,
       CurrentUserResolver currentUserResolver) {
     this.queryService = queryService;
     this.updateService = updateService;
+    this.guidelineDefaultsService = guidelineDefaultsService;
     this.currentUserResolver = currentUserResolver;
   }
 
@@ -83,6 +89,20 @@ public class TargetsController {
   public TargetsDto update(@Valid @RequestBody UpdateTargetsRequest request) {
     UUID userId = requireCurrentUserId();
     return updateService.updateTargets(userId, request, userId);
+  }
+
+  @PostMapping(
+      path = "/compute-defaults",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary =
+          "Compute guideline-default targets (BMR calories, protein g/kg, age/sex micro DRI) from"
+              + " the supplied demographics. A preview only — nothing is persisted; the user reviews,"
+              + " edits, then saves via PUT.")
+  public ComputedTargetDefaultsDto computeDefaults(@Valid @RequestBody ComputeTargetsRequest request) {
+    requireCurrentUserId(); // authenticated-only; the computation itself is stateless
+    return guidelineDefaultsService.compute(request);
   }
 
   @GetMapping(path = "/audit-log", produces = MediaType.APPLICATION_JSON_VALUE)
