@@ -115,6 +115,49 @@ public class E2eNutritionSeedController {
     return new SeedResult(created, MICRO_PER_SERVING_BASE.size());
   }
 
+  /**
+   * Backfill REAL per-serving nutrition onto EXISTING SYSTEM recipes, matched by name — without
+   * recreating them (so their embeddings, branches and ids survive). Used to add the USDA-derived
+   * fatty-acid breakdown (saturated/mono/poly) to a pool that was imported before those keys
+   * existed: re-deriving offline produces {name → full nutrition incl. the new micros}, and this
+   * writes it through the same {@link RecipeNutritionWriter} SPI onto each matched recipe's current
+   * version. Name-matched (not the import fingerprint) so it is chunk-safe and never duplicates.
+   * Unmatched names are skipped. First recipe wins on duplicate names.
+   *
+   * @return {@code {written, microsPerRecipe}} — recipes whose nutrition was rewritten
+   */
+  @PostMapping(
+      path = "/write-by-name",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  public SeedResult writeByName(@RequestBody List<ImportRecipeRequest> batch) {
+    Map<String, Recipe> byName = new java.util.HashMap<>();
+    for (Recipe r : recipeRepository.findByCatalogue(Catalogue.SYSTEM)) {
+      if (r.getName() != null) {
+        byName.putIfAbsent(r.getName(), r);
+      }
+    }
+    int written = 0;
+    for (ImportRecipeRequest req : batch) {
+      Recipe recipe = req.name() == null ? null : byName.get(trunc(req.name(), 160));
+      if (recipe == null || recipe.getCurrentBranchId() == null) {
+        continue;
+      }
+      UUID versionId =
+          recipeVersionRepository
+              .findCurrentVersionId(
+                  recipe.getId(), recipe.getCurrentBranchId(), recipe.getCurrentVersion())
+              .orElse(null);
+      if (versionId == null) {
+        continue;
+      }
+      nutritionWriter.writeNutritionPerServing(versionId, toNutrition(req, recipe.getId()));
+      written++;
+    }
+    log.info("E2E write-by-name: rewrote nutrition for {} of {} batch recipes", written, batch.size());
+    return new SeedResult(written, MICRO_PER_SERVING_BASE.size());
+  }
+
   private record ImportedRecipeResultLike(UUID recipeId, UUID versionId) {}
 
   private ImportedRecipeResultLike saveOne(ImportRecipeRequest req, int idx) {
