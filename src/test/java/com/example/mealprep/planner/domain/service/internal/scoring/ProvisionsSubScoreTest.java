@@ -208,7 +208,8 @@ class ProvisionsSubScoreTest {
                 new PlannerProperties.ScoringTuning.ProvisionsTuning(
                     new PlannerProperties.ScoringTuning.ProvisionsTuning.WasteValueTiers(
                         BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO)),
-                PlanTestData.defaultTuning().cost()),
+                PlanTestData.defaultTuning().cost(),
+                PlanTestData.defaultTuning().nutritionMacroWeights()),
             java.time.Duration.ofSeconds(20),
             3,
             5,

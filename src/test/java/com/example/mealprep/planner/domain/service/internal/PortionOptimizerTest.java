@@ -12,6 +12,7 @@ import com.example.mealprep.nutrition.domain.entity.Goal;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
+import com.example.mealprep.planner.config.PlannerProperties;
 import com.example.mealprep.planner.testdata.PlanTestData;
 import com.example.mealprep.recipe.api.dto.NutritionPerServingDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
@@ -35,7 +36,11 @@ import org.junit.jupiter.api.Test;
 class PortionOptimizerTest {
 
   private static final LocalDate DAY = LocalDate.of(2026, 1, 5);
-  private final PortionOptimizer optimizer = new PortionOptimizer();
+  // Fixture weights (calories/protein 1.5, others 1.0 — see PlanTestData.defaultTuning); the
+  // in-test objective comparison below uses the SAME weights the optimiser minimises under, so the
+  // "optimised beats calorie-only" assertion is measured against the objective actually optimised.
+  private final PlannerProperties properties = PlanTestData.scoringProperties();
+  private final PortionOptimizer optimizer = new PortionOptimizer(properties);
 
   // ---- (a) beats calorie-only scaling on a protein-dense + carb-heavy day ----------------------
 
@@ -87,7 +92,7 @@ class PortionOptimizerTest {
     List<double[]> perServing =
         List.of(macroVec(proteinDense), macroVec(carbHeavy));
     List<PortionOptimizer.MacroTarget> macros =
-        PortionOptimizer.configuredMacros(targets);
+        PortionOptimizer.configuredMacros(targets, properties.scoring().nutritionMacroWeights());
 
     double calOnlyObjective =
         PortionOptimizer.objective(perServing, new double[] {calOnly1, calOnly2}, macros);

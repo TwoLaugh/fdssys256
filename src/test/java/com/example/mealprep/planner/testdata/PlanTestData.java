@@ -318,7 +318,17 @@ public final class PlanTestData {
         new PlannerProperties.ScoringTuning.ProvisionsTuning(
             new PlannerProperties.ScoringTuning.ProvisionsTuning.WasteValueTiers(
                 new BigDecimal("1.0"), new BigDecimal("2.0"), new BigDecimal("3.0"))),
-        new PlannerProperties.ScoringTuning.CostTuning(new BigDecimal("0.1")));
+        new PlannerProperties.ScoringTuning.CostTuning(new BigDecimal("0.1")),
+        // Neutral-ish fixture weights (calories/protein 1.5, others 1.0) — matches the optimiser's
+        // original hardcoded importances so PortionOptimizerTest assertions stay valid; the live
+        // production default (carbs/fat ~0.2) lives in application.properties, not here.
+        new PlannerProperties.ScoringTuning.NutritionMacroWeights(
+            new BigDecimal("1.5"),
+            new BigDecimal("1.5"),
+            new BigDecimal("1.0"),
+            new BigDecimal("1.0"),
+            new BigDecimal("1.0"),
+            new BigDecimal("1.0")));
   }
 
   /** Default mid-week sub-config (planner-01i): lock=24h, maxSuggestionsPerPlan=3. */

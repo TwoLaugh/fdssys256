@@ -3,6 +3,8 @@ package com.example.mealprep.planner.domain.service.internal;
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
+import com.example.mealprep.planner.config.PlannerProperties;
+import com.example.mealprep.planner.config.PlannerProperties.ScoringTuning.NutritionMacroWeights;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
@@ -49,15 +51,10 @@ import org.springframework.stereotype.Component;
 public class PortionOptimizer {
 
   // ---- tunable penalty weights -----------------------------------------------------------------
-  // Per-macro importance: calories + protein dominate (the user's primary levers), the rest are a
-  // meaningful secondary nudge. Tunable; promote to PlannerProperties if per-environment calibration
-  // is needed.
-  private static final double IMPORTANCE_CALORIES = 1.5;
-  private static final double IMPORTANCE_PROTEIN = 1.5;
-  private static final double IMPORTANCE_CARBS = 1.0;
-  private static final double IMPORTANCE_FAT = 1.0;
-  private static final double IMPORTANCE_FIBRE = 1.0;
-  private static final double IMPORTANCE_SAT_FAT = 1.0;
+  // Per-macro importance is now CONFIGURED (mealprep.planner.scoring.nutrition-macro-weights.*) and
+  // injected via PlannerProperties — this is the user-facing "what do you care about" knob. The live
+  // default is calories/protein-primary with carbs/fat a minor nudge; a weight of 0 drops a macro
+  // from the objective entirely (importance × penalty == 0). See NutritionMacroWeights.
 
   // Direction-aware (under, over) deviation weights. A FLOOR penalises undershoot hard (3.0) but
   // STILL mildly penalises overshoot (0.5) — this is the nuance that stops the optimiser piling on
@@ -75,7 +72,11 @@ public class PortionOptimizer {
   // others fixed is a 1-D grid search and the objective is bounded below.
   private static final int GREEDY_PASSES = 6;
 
-  public PortionOptimizer() {}
+  private final PlannerProperties properties;
+
+  public PortionOptimizer(PlannerProperties properties) {
+    this.properties = properties;
+  }
 
   /**
    * Attach optimised per-slot portion factors to {@code assignments}, grouped + solved per {@code
@@ -88,7 +89,7 @@ public class PortionOptimizer {
       return assignments;
     }
     TargetsDto targets = primaryTargets(ctx);
-    List<MacroTarget> configured = configuredMacros(targets);
+    List<MacroTarget> configured = configuredMacros(targets, properties.scoring().nutritionMacroWeights());
     Map<UUID, RecipeDto> byRecipeId = indexRecipes(ctx);
 
     // Group assignments by day, preserving the original list position so we can stitch the solved
@@ -328,23 +329,27 @@ public class PortionOptimizer {
   /**
    * The configured macro targets for the primary eater, in the SAME set + direction source {@code
    * NutritionSubScore} uses: calories from {@code TargetsDto.calories()} and protein/carbs/fat/
-   * fibre/satFat from the {@code MacroTargetDto} fields with their {@code direction()}. A macro whose
-   * target is null/0 is skipped. Empty when there are no targets.
+   * fibre/satFat from the {@code MacroTargetDto} fields with their {@code direction()}. Each macro's
+   * importance is the caller-supplied configured {@code weights} (so the objective honours "calories
+   * + protein matter, carbs/fat barely do"); a macro with weight {@code 0} still enters the list but
+   * with zero importance, so its penalty term vanishes (importance × penalty == 0) — it's ignored
+   * without a special case. A macro whose target is null/0 is skipped. Empty when there are no
+   * targets.
    */
-  static List<MacroTarget> configuredMacros(TargetsDto targets) {
+  static List<MacroTarget> configuredMacros(TargetsDto targets, NutritionMacroWeights weights) {
     List<MacroTarget> out = new ArrayList<>();
     if (targets == null) {
       return out;
     }
     if (targets.calories() != null && targets.calories().dailyTarget() > 0) {
-      addMacro(out, Macro.CALORIES, IMPORTANCE_CALORIES,
+      addMacro(out, Macro.CALORIES, weights.calories().doubleValue(),
           targets.calories().dailyTarget(), targets.calories().direction());
     }
-    addMacroTarget(out, Macro.PROTEIN, IMPORTANCE_PROTEIN, targets.protein());
-    addMacroTarget(out, Macro.CARBS, IMPORTANCE_CARBS, targets.carbs());
-    addMacroTarget(out, Macro.FAT, IMPORTANCE_FAT, targets.fat());
-    addMacroTarget(out, Macro.FIBRE, IMPORTANCE_FIBRE, targets.fibre());
-    addMacroTarget(out, Macro.SAT_FAT, IMPORTANCE_SAT_FAT, targets.satFat());
+    addMacroTarget(out, Macro.PROTEIN, weights.protein().doubleValue(), targets.protein());
+    addMacroTarget(out, Macro.CARBS, weights.carbs().doubleValue(), targets.carbs());
+    addMacroTarget(out, Macro.FAT, weights.fat().doubleValue(), targets.fat());
+    addMacroTarget(out, Macro.FIBRE, weights.fibre().doubleValue(), targets.fibre());
+    addMacroTarget(out, Macro.SAT_FAT, weights.satFat().doubleValue(), targets.satFat());
     return out;
   }
 
