@@ -204,7 +204,10 @@ public class IngredientAdditionPlanner {
       int picksToday = Math.min(perDayCount, benchSize);
       for (int j = 0; j < picksToday; j++) {
         Addition pick = bench.get((dayIndex + j) % benchSize); // sliding window → day-to-day variety
-        SlotAssignment target = slots.get(j % slots.size()); // round-robin → spread across meals
+        // Round-robin across the day's meals, the starting meal rotated by day so additions land on
+        // a DIFFERENT meal each day (every meal — breakfast included — gets sides over the week)
+        // instead of always the same first-N meals.
+        SlotAssignment target = slots.get((dayIndex + j) % slots.size());
         AdditionPlacement p = placements.get(pick.name());
         Addition noted =
             (p != null && p.note() != null && !p.note().isBlank()) ? withNote(pick, p.note()) : pick;
