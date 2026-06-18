@@ -492,19 +492,25 @@ public class PlanComposer {
       }
     }
 
-    // Phase 2b — in-meal additions: attach USDA-derived ingredient additions to close the residual
-    // calories + short micros that portion scaling alone leaves. Runs after Stage-D so it sees the
-    // final recipe set; the rollup is rebuilt below so coverage reflects both Stage-D substitutions
-    // AND these additions (chosenRollup was the pre-Phase-2 Stage-B rollup, persisted as-is before).
-    List<SlotAssignment> finalAssignments =
-        additionPlanner.attach(mutatedAssignments, chosenRollup, context);
-
-    // Principled per-day portioning optimisation (finalise-only): set each slot's servings to
-    // minimise deviation from ALL the user's daily macro targets at once, replacing the beam's
-    // calorie-only PortionScaler proxy on the CHOSEN plan. Attaches optimised factors the rollup
-    // (mutated → finalRollup) and the persister read back; the beam / incremental path is untouched
-    // because in-flight assignments carry no attached factor.
-    finalAssignments = portionOptimizer.optimise(finalAssignments, context);
+    // Phase 2b — additions <-> portioning, as a 2-pass loop so the sides fill the TRUE residual and
+    // the mains are sized net of the sides (rather than the old one-shot: pick sides against the
+    // stale beam coverage, then size mains once).
+    //
+    //   1. size the mains alone to the targets (the optimiser is finalise-only + deterministic),
+    //   2. rebuild coverage from the optimally-sized mains — this is the real residual,
+    //   3. pick in-meal additions against THAT residual (not the pre-optimisation Stage-B rollup),
+    //   4. re-size the mains net of the chosen additions (the optimiser's fixed-additions offset).
+    //
+    // Both optimiser passes + the intermediate rollup are cheap (finalise-only, one chosen plan).
+    List<SlotAssignment> sizedMains = portionOptimizer.optimise(mutatedAssignments, context);
+    RollupSummaryDocument optimisedResidual =
+        rollupBuilder.build(
+            new CandidatePlan(
+                chosen.candidateId(), chosen.weekStartDate(), sizedMains, chosen.scoreResult()),
+            context);
+    List<SlotAssignment> withAdditions =
+        additionPlanner.attach(sizedMains, optimisedResidual, context);
+    List<SlotAssignment> finalAssignments = portionOptimizer.optimise(withAdditions, context);
 
     CandidatePlan mutated =
         new CandidatePlan(
