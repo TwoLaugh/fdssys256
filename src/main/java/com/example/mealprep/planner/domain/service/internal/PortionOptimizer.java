@@ -5,6 +5,7 @@ import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
 import com.example.mealprep.planner.config.PlannerProperties;
 import com.example.mealprep.planner.config.PlannerProperties.ScoringTuning.NutritionMacroWeights;
+import com.example.mealprep.planner.api.dto.Addition;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
@@ -71,6 +72,9 @@ public class PortionOptimizer {
   // common case exactly). A handful of passes converges since each slot's best value given the
   // others fixed is a 1-D grid search and the objective is bounded below.
   private static final int GREEDY_PASSES = 6;
+
+  /** Zero per-day additions baseline — the mains-only objective (unit tests, no-additions days). */
+  private static final double[] ZERO_OFFSET = new double[Macro.values().length];
 
   private final PlannerProperties properties;
 
@@ -173,27 +177,76 @@ public class PortionOptimizer {
       return;
     }
 
+    // Fixed per-day additions baseline. Phase-2 in-meal additions ride on the assignments and are
+    // summed VERBATIM by DailyMacroAggregator (NOT portion-scaled). The optimiser must size the
+    // mains against the target NET of this baseline, else the persisted day = optimised-mains +
+    // additions overshoots every target the additions already contribute to. Modelled as a constant
+    // offset added to every candidate's day total, so the optimiser's day-total arithmetic is
+    // identical to the aggregator's — the two now cooperate instead of double-counting.
+    double[] additionOffset = dayAdditionOffset(assignments, dayIndices);
+
     double[] grid = grid();
     double[] solution =
         sizable.size() <= 5
-            ? bruteForce(perServing, configured, grid)
-            : greedy(perServing, configured, grid, warmStart);
+            ? bruteForce(perServing, configured, grid, additionOffset)
+            : greedy(perServing, configured, grid, warmStart, additionOffset);
 
     for (int s = 0; s < sizable.size(); s++) {
       factors[sizable.get(s)] = BigDecimal.valueOf(solution[s]);
     }
   }
 
+  /**
+   * The day's verbatim in-meal additions summed into a {@link Macro}-ordinal-indexed vector — the
+   * fixed baseline the mains are sized against. Mirrors {@code DailyMacroAggregator.addAdditions}:
+   * additions are pre-sized to the residual, so they are summed as-is (NOT portion-scaled), and
+   * satFat stays 0 (no per-serving field). A day with no additions yields an all-zero offset.
+   */
+  private static double[] dayAdditionOffset(List<SlotAssignment> assignments, List<Integer> dayIndices) {
+    double[] offset = new double[Macro.values().length];
+    for (int idx : dayIndices) {
+      List<Addition> additions = assignments.get(idx).additions();
+      if (additions == null) {
+        continue;
+      }
+      for (Addition add : additions) {
+        if (add == null || add.nutrition() == null) {
+          continue;
+        }
+        NutritionPerServingDto n = add.nutrition();
+        offset[Macro.CALORIES.ordinal()] += n.calories();
+        offset[Macro.PROTEIN.ordinal()] += d(n.proteinG());
+        offset[Macro.CARBS.ordinal()] += d(n.carbsG());
+        offset[Macro.FAT.ordinal()] += d(n.fatG());
+        offset[Macro.FIBRE.ordinal()] += d(n.fibreG());
+        // SAT_FAT has no per-serving field → stays 0, matching the aggregator + perServingMacros.
+      }
+    }
+    return offset;
+  }
+
   // ---- pure solver (unit-testable, no Spring / DB / time) --------------------------------------
 
   /**
-   * Total day objective: sum over configured macros of the direction-aware deviation penalty of the
-   * day total (Σ_i x_i × macro_i). Pure function of the per-serving vectors + chosen servings.
+   * Total day objective with NO fixed additions baseline (mains-only) — the case unit tests pin.
+   * Delegates to the offset-aware core with a zero offset.
    */
   static double objective(List<double[]> perServing, double[] servings, List<MacroTarget> macros) {
+    return objective(perServing, servings, macros, ZERO_OFFSET);
+  }
+
+  /**
+   * Total day objective: sum over configured macros of the direction-aware deviation penalty of the
+   * day total = {@code fixedOffset[m] + Σ_i x_i × macro_i}. The {@code fixedOffset} is the day's
+   * verbatim in-meal additions ({@link Macro}-ordinal indexed), so the mains are sized against the
+   * target NET of the additions — making this arithmetic identical to {@code DailyMacroAggregator}'s
+   * (mains × factor + additions verbatim). Pure function of its arguments.
+   */
+  static double objective(
+      List<double[]> perServing, double[] servings, List<MacroTarget> macros, double[] fixedOffset) {
     double total = 0.0;
     for (int m = 0; m < macros.size(); m++) {
-      double dayTotal = 0.0;
+      double dayTotal = fixedOffset[m];
       for (int i = 0; i < perServing.size(); i++) {
         dayTotal += servings[i] * perServing.get(i)[m];
       }
@@ -224,12 +277,12 @@ public class PortionOptimizer {
 
   /** Exhaustive grid search over all slots — the global minimum for ≤ 5 slots ({@code ≤ 11^5}). */
   private static double[] bruteForce(
-      List<double[]> perServing, List<MacroTarget> macros, double[] grid) {
+      List<double[]> perServing, List<MacroTarget> macros, double[] grid, double[] offset) {
     int n = perServing.size();
     double[] current = new double[n];
     double[] best = new double[n];
     double[] bestObj = {Double.POSITIVE_INFINITY};
-    bruteForceRec(perServing, macros, grid, current, 0, best, bestObj);
+    bruteForceRec(perServing, macros, grid, offset, current, 0, best, bestObj);
     return best;
   }
 
@@ -237,12 +290,13 @@ public class PortionOptimizer {
       List<double[]> perServing,
       List<MacroTarget> macros,
       double[] grid,
+      double[] offset,
       double[] current,
       int depth,
       double[] best,
       double[] bestObj) {
     if (depth == current.length) {
-      double obj = objective(perServing, current, macros);
+      double obj = objective(perServing, current, macros, offset);
       if (obj < bestObj[0]) {
         bestObj[0] = obj;
         System.arraycopy(current, 0, best, 0, current.length);
@@ -251,7 +305,7 @@ public class PortionOptimizer {
     }
     for (double g : grid) {
       current[depth] = g;
-      bruteForceRec(perServing, macros, grid, current, depth + 1, best, bestObj);
+      bruteForceRec(perServing, macros, grid, offset, current, depth + 1, best, bestObj);
     }
   }
 
@@ -264,7 +318,8 @@ public class PortionOptimizer {
       List<double[]> perServing,
       List<MacroTarget> macros,
       double[] grid,
-      List<Double> warmStart) {
+      List<Double> warmStart,
+      double[] offset) {
     int n = perServing.size();
     double[] servings = new double[n];
     for (int i = 0; i < n; i++) {
@@ -277,7 +332,7 @@ public class PortionOptimizer {
         double bestObj = Double.POSITIVE_INFINITY;
         for (double g : grid) {
           servings[i] = g;
-          double obj = objective(perServing, servings, macros);
+          double obj = objective(perServing, servings, macros, offset);
           if (obj < bestObj) {
             bestObj = obj;
             bestG = g;

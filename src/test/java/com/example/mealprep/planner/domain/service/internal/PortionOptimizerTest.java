@@ -3,6 +3,8 @@ package com.example.mealprep.planner.domain.service.internal;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.mealprep.core.types.SlotKind;
+import com.example.mealprep.planner.api.dto.Addition;
+import com.example.mealprep.planner.api.dto.AdditionKind;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
 import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
@@ -239,6 +241,61 @@ class PortionOptimizerTest {
     assertThat(factor).isLessThan(PortionScaler.MAX_FACTOR);
   }
 
+  // ---- (f) the optimiser sizes mains NET of fixed in-meal additions ----------------------------
+
+  @Test
+  void optimiser_sizes_mains_net_of_fixed_additions() {
+    UUID userId = UUID.randomUUID();
+    UUID r1 = UUID.randomUUID();
+    // One lean dinner main: 500 kcal/serving. Other macros are trivially satisfiable below, so
+    // calories alone drive the factor and the cooperation effect is isolated.
+    RecipeDto recipe = recipeWithNutrition(r1, nutrition(500, "40", "30", "10", "5"));
+    UUID s1 = UUID.randomUUID();
+    SlotAssignment bare = dinnerAssignment(s1, r1);
+    // A FIXED 1500-kcal addition riding on the slot (DailyMacroAggregator sums it verbatim, NOT
+    // portion-scaled). The optimiser must size the main DOWN to leave room for it.
+    Addition bigSide =
+        new Addition(
+            AdditionKind.INGREDIENT,
+            "big fixed side",
+            "generic_key",
+            null,
+            BigDecimal.ONE,
+            "serving",
+            null,
+            nutrition(1500, "0", "0", "0", "0"),
+            null);
+    SlotAssignment withAddition = bare.withAdditions(List.of(bigSide));
+
+    // Calories bounded at 2000 and NO macro targets — so the calorie band alone drives the chosen
+    // factor and the cooperation effect is isolated cleanly (no normalised-overshoot noise from
+    // placeholder macro targets).
+    TargetsDto targets =
+        targets(
+            userId,
+            2000,
+            EnforcementDirection.BOTH_BOUNDED,
+            null, // protein — unset
+            null, // carbs — unset
+            null, // fat — unset
+            null, // fibre — unset
+            2000); // per-meal DINNER kcal target (warm start only)
+    PlanCompositionContext ctx =
+        contextFor(userId, List.of(s1), List.of(recipe), targets);
+
+    double bareFactor =
+        optimizer.optimise(List.of(bare), ctx).get(0).portionFactor().doubleValue();
+    double withFactor =
+        optimizer.optimise(List.of(withAddition), ctx).get(0).portionFactor().doubleValue();
+
+    // Bare: 500×x closest to 2000 from below → maxes the grid at 3.0 (= 1500 kcal).
+    assertThat(bareFactor).isEqualTo(3.0);
+    // With the fixed 1500-kcal addition: 500×x + 1500 == 2000 at x = 1.0 — the optimiser sizes the
+    // main DOWN so the PERSISTED day (main + addition) lands exactly on target instead of overshooting.
+    assertThat(withFactor).isEqualTo(1.0);
+    assertThat(withFactor).isLessThan(bareFactor);
+  }
+
   // ---- helpers ---------------------------------------------------------------------------------
 
   private static double[] macroVec(NutritionPerServingDto n) {
@@ -315,7 +372,7 @@ class PortionOptimizerTest {
             new PerMealDistributionDto(
                 com.example.mealprep.nutrition.domain.entity.MealSlot.DINNER,
                 perMealDinnerCalTarget,
-                protein.targetG())),
+                protein == null ? null : protein.targetG())),
         List.of(),
         null,
         List.of(),
