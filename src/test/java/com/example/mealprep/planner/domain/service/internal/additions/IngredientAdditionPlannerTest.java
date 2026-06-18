@@ -55,33 +55,56 @@ class IngredientAdditionPlannerTest {
   }
 
   @Test
-  void attaches_additions_that_close_calorie_and_micro_gaps() {
-    // Two days, two slots each; the higher slotIndex (dinner) is the carrier per day.
-    List<SlotAssignment> assignments =
+  void attaches_additions_spread_across_meals_and_varied_across_days() {
+    // Two days, three meals each (breakfast/lunch/dinner at slotIndex 0/1/2).
+    List<SlotAssignment> day0 =
         List.of(
             PlanTestData.assignment(UUID.randomUUID(), UUID.randomUUID(), WEEK, 0, 2),
-            PlanTestData.assignment(UUID.randomUUID(), UUID.randomUUID(), WEEK, 2, 2),
+            PlanTestData.assignment(UUID.randomUUID(), UUID.randomUUID(), WEEK, 1, 2),
+            PlanTestData.assignment(UUID.randomUUID(), UUID.randomUUID(), WEEK, 2, 2));
+    List<SlotAssignment> day1 =
+        List.of(
             PlanTestData.assignment(UUID.randomUUID(), UUID.randomUUID(), WEEK.plusDays(1), 0, 2),
+            PlanTestData.assignment(UUID.randomUUID(), UUID.randomUUID(), WEEK.plusDays(1), 1, 2),
             PlanTestData.assignment(UUID.randomUUID(), UUID.randomUUID(), WEEK.plusDays(1), 2, 2));
+    List<SlotAssignment> assignments = new java.util.ArrayList<>();
+    assignments.addAll(day0);
+    assignments.addAll(day1);
     PlanCompositionContext ctx = PlanTestData.minimalContext(List.of(), List.of());
 
     List<SlotAssignment> result = planner.attach(assignments, rollupWithGap(), ctx);
 
     List<SlotAssignment> withAdditions =
         result.stream().filter(a -> !a.additions().isEmpty()).toList();
-    // One carrier slot per day → exactly 2 days get additions.
-    assertThat(withAdditions).hasSize(2);
-    // Carriers are the dinner slots (slotIndex 2), not the breakfast slots.
-    assertThat(withAdditions).allSatisfy(a -> assertThat(a.slotIndex()).isEqualTo(2));
+    assertThat(withAdditions).isNotEmpty();
 
-    List<Addition> picks = withAdditions.get(0).additions();
-    assertThat(picks).isNotEmpty().hasSizeLessThanOrEqualTo(3);
-    // Picks meaningfully close the ~404 kcal residual.
-    int pickedKcal = picks.stream().mapToInt(p -> p.nutrition().calories()).sum();
-    assertThat(pickedKcal).isGreaterThan(200);
-    // At least one pick reinforces the short vitamin_e (the greedy ranks micro-rich picks up).
-    assertThat(picks)
-        .anySatisfy(p -> assertThat(p.nutrition().micros()).containsKey("vitamin_e_mg"));
+    // SPREAD: additions do NOT all pile on the dinner carrier — at least one lands on a non-dinner
+    // slot (slotIndex < 2), which the old single-carrier behaviour never did.
+    assertThat(withAdditions)
+        .anySatisfy(a -> assertThat(a.slotIndex()).isLessThan(2));
+    // No slot carries more than MAX_ADDITIONS.
+    assertThat(withAdditions).allSatisfy(a -> assertThat(a.additions()).hasSizeLessThanOrEqualTo(3));
+
+    // The gap is still meaningfully closed: each day's additions total real calories.
+    java.util.function.Function<LocalDate, Integer> dayKcal =
+        d ->
+            result.stream()
+                .filter(a -> d.equals(a.onDate()))
+                .flatMap(a -> a.additions().stream())
+                .mapToInt(p -> p.nutrition().calories())
+                .sum();
+    assertThat(dayKcal.apply(WEEK)).isGreaterThan(200);
+    assertThat(dayKcal.apply(WEEK.plusDays(1))).isGreaterThan(200);
+
+    // VARIETY: day 0 and day 1 are not served the identical set of sides.
+    java.util.function.Function<LocalDate, java.util.Set<String>> dayPicks =
+        d ->
+            result.stream()
+                .filter(a -> d.equals(a.onDate()))
+                .flatMap(a -> a.additions().stream())
+                .map(Addition::name)
+                .collect(java.util.stream.Collectors.toSet());
+    assertThat(dayPicks.apply(WEEK)).isNotEqualTo(dayPicks.apply(WEEK.plusDays(1)));
   }
 
   @Test

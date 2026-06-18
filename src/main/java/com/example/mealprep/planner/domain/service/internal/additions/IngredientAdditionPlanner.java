@@ -18,12 +18,14 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -36,8 +38,11 @@ import org.springframework.stereotype.Component;
  * (after portion scaling): the residual daily calories + the short micronutrients, then greedily
  * picks up to {@link #MAX_ADDITIONS} catalogue candidates that best close them — allergy-checked
  * against the household via the same {@link HardConstraintFilterService} the Stage-A hard filter
- * and {@code AugmentationVerifier} use. The picks are attached to one slot per day so every day's
- * total rises by their (USDA-derived) nutrition.
+ * and {@code AugmentationVerifier} use. The picks are then distributed across the week ({@link
+ * #distributeAcrossWeek}): SPREAD across each day's meals (round-robin by slot, never all piled on
+ * one carrier) and VARIED day-to-day (a window sliding over a ranked {@link #BENCH_SIZE} bench), so
+ * the eater isn't served the identical three sides on the same meal every day while each day's total
+ * still rises by the picks' (USDA-derived) nutrition.
  *
  * <p>Deterministic, no AI: cheap, no tokens, no latency. The LLM appropriateness gate (inc 3) only
  * refines <i>which</i> sensible candidate pairs with <i>which</i> dish + writes the note; the math
@@ -50,6 +55,13 @@ public class IngredientAdditionPlanner {
 
   /** At most this many additions per meal (design §Safety/bounds). */
   private static final int MAX_ADDITIONS = 3;
+
+  /**
+   * Size of the variety bench — the ranked pool of gap-relevant candidates the per-day window slides
+   * over so consecutive days rotate through DIFFERENT sides instead of the identical set every day.
+   * Larger than {@link #MAX_ADDITIONS} so there are alternatives to rotate in.
+   */
+  private static final int BENCH_SIZE = 6;
 
   /** Don't bother adding for a trivial calorie gap (portion scaling already got most of it). */
   private static final double MIN_RESIDUAL_KCAL = 80;
@@ -104,20 +116,108 @@ public class IngredientAdditionPlanner {
 
     List<Addition> picked = greedyPick(safe, residualKcal, shortMicros);
     if (picked.isEmpty()) {
-      return assignments;
+      return assignments; // nothing meaningfully closes the gap
     }
+    int perDayCount = picked.size();
+    // A deeper ranked bench — the greedy's diverse picks FIRST (so day 0 is optimal) then the
+    // next-best gap-relevant alternatives — so consecutive days can rotate through DIFFERENT sides
+    // instead of eating the identical set all week.
+    List<Addition> bench = buildBench(picked, safe, residualKcal, shortMicros);
     log.debug(
-        "Phase-2 additions: residual {}kcal + {} short micros -> picked {}",
+        "Phase-2 additions: residual {}kcal + {} short micros -> {} picks/day from a bench of {} ({})",
         Math.round(residualKcal),
         shortMicros.size(),
-        picked.stream().map(Addition::name).toList());
+        perDayCount,
+        bench.size(),
+        bench.stream().map(Addition::name).toList());
 
-    // LLM appropriateness gate (inc 3): assign each pick a sensible meal slot + a natural note.
-    // Falls back to the deterministic carrier-slot placement when the AI is unavailable.
-    Map<String, AdditionPlacement> placements = pairWithLlm(picked, assignments, ctx);
-    return placements.isEmpty()
-        ? attachPerDay(assignments, picked)
-        : attachByKind(assignments, picked, placements);
+    // LLM appropriateness gate (inc 3): a natural-language note per addition. The SLOT is chosen
+    // deterministically (round-robin across the day's meals) so additions always SPREAD instead of
+    // piling on one carrier; the LLM note just makes each pairing read naturally.
+    Map<String, AdditionPlacement> placements = pairWithLlm(bench, assignments, ctx);
+    return distributeAcrossWeek(assignments, bench, perDayCount, placements);
+  }
+
+  /**
+   * The variety bench: the greedy's diverse gap-filling picks FIRST (preserving an optimal day 0),
+   * then the next-best still-gap-relevant candidates appended by descending score, capped at {@link
+   * #BENCH_SIZE}. {@link #distributeAcrossWeek} slides a per-day window over this list so consecutive
+   * days rotate through different sides. Falls back to just the greedy picks when no extra candidate
+   * is gap-relevant.
+   */
+  private static List<Addition> buildBench(
+      List<Addition> picked,
+      List<Addition> safe,
+      double residualKcal,
+      Map<String, Double> shortMicros) {
+    List<Addition> bench = new ArrayList<>(picked);
+    Set<String> have = new HashSet<>();
+    for (Addition a : picked) {
+      have.add(a.name());
+    }
+    safe.stream()
+        .filter(a -> !have.contains(a.name()))
+        .filter(a -> score(a, residualKcal, shortMicros) > 0)
+        .sorted(
+            Comparator.comparingDouble((Addition a) -> score(a, residualKcal, shortMicros))
+                .reversed())
+        .forEach(
+            a -> {
+              if (bench.size() < BENCH_SIZE) {
+                bench.add(a);
+              }
+            });
+    return bench;
+  }
+
+  /**
+   * Attach {@code perDayCount} additions to EACH day, (a) spread across the day's meals — pick j
+   * lands on the j-th meal (round-robin by slot index) so they never all pile on one carrier — and
+   * (b) varied across days — a window into {@code bench} that slides by one each day, so consecutive
+   * days serve different sides while day 0 keeps the optimal diverse set. The {@code placements} map
+   * (LLM, keyed by addition name) supplies the natural-language note when present.
+   */
+  private static List<SlotAssignment> distributeAcrossWeek(
+      List<SlotAssignment> assignments,
+      List<Addition> bench,
+      int perDayCount,
+      Map<String, AdditionPlacement> placements) {
+    if (bench.isEmpty() || perDayCount <= 0) {
+      return assignments;
+    }
+    // Recipe-bearing slots grouped by day, in date order (TreeMap) so the day index is stable.
+    Map<LocalDate, List<SlotAssignment>> byDay = new TreeMap<>();
+    for (SlotAssignment a : assignments) {
+      if (a.onDate() != null && a.recipeId() != null) {
+        byDay.computeIfAbsent(a.onDate(), k -> new ArrayList<>()).add(a);
+      }
+    }
+    int benchSize = bench.size();
+    Map<SlotAssignment, List<Addition>> toAttach = new IdentityHashMap<>();
+    int dayIndex = 0;
+    for (List<SlotAssignment> slots : byDay.values()) {
+      if (slots.isEmpty()) {
+        dayIndex++;
+        continue;
+      }
+      slots.sort(Comparator.comparingInt(SlotAssignment::slotIndex));
+      int picksToday = Math.min(perDayCount, benchSize);
+      for (int j = 0; j < picksToday; j++) {
+        Addition pick = bench.get((dayIndex + j) % benchSize); // sliding window → day-to-day variety
+        SlotAssignment target = slots.get(j % slots.size()); // round-robin → spread across meals
+        AdditionPlacement p = placements.get(pick.name());
+        Addition noted =
+            (p != null && p.note() != null && !p.note().isBlank()) ? withNote(pick, p.note()) : pick;
+        toAttach.computeIfAbsent(target, k -> new ArrayList<>()).add(noted);
+      }
+      dayIndex++;
+    }
+    List<SlotAssignment> out = new ArrayList<>(assignments.size());
+    for (SlotAssignment a : assignments) {
+      List<Addition> adds = toAttach.get(a);
+      out.add(adds == null ? a : a.withAdditions(adds));
+    }
+    return out;
   }
 
   /**
@@ -195,50 +295,6 @@ public class IngredientAdditionPlanner {
       }
     }
     return names;
-  }
-
-  /**
-   * Attach each addition to its LLM-assigned slot kind per day (with the LLM note), falling back to
-   * the day's carrier slot when no slot of that kind exists.
-   */
-  private static List<SlotAssignment> attachByKind(
-      List<SlotAssignment> assignments,
-      List<Addition> picked,
-      Map<String, AdditionPlacement> placements) {
-    Map<LocalDate, List<SlotAssignment>> byDay = new LinkedHashMap<>();
-    for (SlotAssignment a : assignments) {
-      if (a.onDate() != null && a.recipeId() != null) {
-        byDay.computeIfAbsent(a.onDate(), k -> new ArrayList<>()).add(a);
-      }
-    }
-    Map<SlotAssignment, List<Addition>> toAttach = new IdentityHashMap<>();
-    for (List<SlotAssignment> slots : byDay.values()) {
-      SlotAssignment carrier =
-          slots.stream().max(Comparator.comparingInt(SlotAssignment::slotIndex)).orElse(null);
-      for (Addition add : picked) {
-        AdditionPlacement p = placements.get(add.name());
-        SlotAssignment target = carrier;
-        if (p != null && p.slotKind() != null) {
-          String want = p.slotKind().trim();
-          target =
-              slots.stream()
-                  .filter(s -> s.kind() != null && s.kind().name().equalsIgnoreCase(want))
-                  .findFirst()
-                  .orElse(carrier);
-        }
-        if (target != null) {
-          Addition noted =
-              (p != null && p.note() != null && !p.note().isBlank()) ? withNote(add, p.note()) : add;
-          toAttach.computeIfAbsent(target, k -> new ArrayList<>()).add(noted);
-        }
-      }
-    }
-    List<SlotAssignment> out = new ArrayList<>(assignments.size());
-    for (SlotAssignment a : assignments) {
-      List<Addition> adds = toAttach.get(a);
-      out.add(adds == null ? a : a.withAdditions(adds));
-    }
-    return out;
   }
 
   private static Addition withNote(Addition a, String note) {
@@ -441,28 +497,4 @@ public class IngredientAdditionPlanner {
     return s;
   }
 
-  /**
-   * Attach the picked additions to one slot per day — the highest-index recipe-bearing slot (the
-   * day's largest meal). The day total is what matters (the aggregator sums per day), so a single
-   * carrier slot per day is sufficient; the LLM gate (inc 3) re-homes them to the best dish.
-   */
-  private static List<SlotAssignment> attachPerDay(
-      List<SlotAssignment> assignments, List<Addition> picked) {
-    Map<LocalDate, SlotAssignment> carrierByDay = new LinkedHashMap<>();
-    for (SlotAssignment a : assignments) {
-      if (a.onDate() == null || a.recipeId() == null) {
-        continue;
-      }
-      SlotAssignment current = carrierByDay.get(a.onDate());
-      if (current == null || a.slotIndex() > current.slotIndex()) {
-        carrierByDay.put(a.onDate(), a);
-      }
-    }
-    List<SlotAssignment> out = new ArrayList<>(assignments.size());
-    for (SlotAssignment a : assignments) {
-      SlotAssignment carrier = carrierByDay.get(a.onDate());
-      out.add(carrier == a ? a.withAdditions(picked) : a);
-    }
-    return out;
-  }
 }
