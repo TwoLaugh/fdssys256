@@ -55,12 +55,17 @@ class CatalogueRecipePoolSourceTest {
   @Mock private RecipeQueryService recipeQueryService;
   @Mock private PreferenceModule preferenceModule;
   @Mock private TasteSimilarityQueryService tasteSimilarity;
+  @Mock private com.example.mealprep.nutrition.domain.service.NutritionQueryService nutritionQueryService;
 
   private CatalogueRecipePoolSource source;
 
   @BeforeEach
   void setUp() {
-    source = new CatalogueRecipePoolSource(householdQueryService, recipeQueryService, preferenceModule);
+    // Unstubbed getTargets() returns Optional.empty() (Mockito default), so the macro re-rank is a
+    // no-op here and the taste-order assertions below are unaffected.
+    source =
+        new CatalogueRecipePoolSource(
+            householdQueryService, recipeQueryService, preferenceModule, nutritionQueryService);
   }
 
   /** Wire the preference facade so {@code userId} has (or lacks) an embedded taste vector. */

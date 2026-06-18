@@ -4,11 +4,17 @@ import com.example.mealprep.core.types.SlotKind;
 import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.api.dto.HouseholdMemberDto;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
+import com.example.mealprep.nutrition.api.dto.TargetsDto;
+import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.preference.PreferenceModule;
+import com.example.mealprep.recipe.api.dto.NutritionPerServingDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
+import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -85,14 +91,26 @@ class CatalogueRecipePoolSource implements RecipePoolSource {
   /** Hard ceiling on the fetched pool size (across all kinds + members). */
   private static final int MAX_POOL_SIZE = 750;
 
+  /**
+   * How hard a recipe's EXCESS fat (fraction of its calories above the eater's target fat-fraction)
+   * demotes it within a kind's taste-ranked block — in candidate positions per unit of excess.
+   * Bounded + soft (taste still dominates): a dish at +25 percentage-points of fat moves ~{@code
+   * 0.25 × this} places. This is the "bring fat DOWN vs a fatty pool" lever — portioning alone can't
+   * make a fatty pool lean, but biasing selection toward lower-fat-ratio dishes can.
+   */
+  private static final double FAT_RERANK_POSITIONS = 150.0;
+
   private final HouseholdQueryService householdQueryService;
   private final RecipeQueryService recipeQueryService;
   private final PreferenceModule preferenceModule;
+  private final NutritionQueryService nutritionQueryService;
 
   CatalogueRecipePoolSource(
       HouseholdQueryService householdQueryService,
       RecipeQueryService recipeQueryService,
-      PreferenceModule preferenceModule) {
+      PreferenceModule preferenceModule,
+      NutritionQueryService nutritionQueryService) {
+    this.nutritionQueryService = nutritionQueryService;
     this.householdQueryService = householdQueryService;
     this.recipeQueryService = recipeQueryService;
     this.preferenceModule = preferenceModule;
@@ -122,6 +140,11 @@ class CatalogueRecipePoolSource implements RecipePoolSource {
     // and in every kind they're tagged with; a recipe must enter the pool once). Insertion order
     // keeps each kind's taste-ranked block contiguous so the per-slot cap downstream takes the
     // top-ranked candidates of the matching kind.
+    // Macro-aware re-rank target: the primary eater's fat-fraction-of-calories. When set, each
+    // kind's taste-ranked block is softly re-ordered to demote dishes whose fat ratio runs above it
+    // — so the beam gets leaner raw material from a fatty pool, without abandoning taste.
+    double targetFatFraction = resolveTargetFatFraction(memberUserIds);
+
     Map<UUID, RecipeDto> byId = new LinkedHashMap<>();
     int tasteAwareMembers = 0;
     for (UUID userId : memberUserIds) {
@@ -136,6 +159,7 @@ class CatalogueRecipePoolSource implements RecipePoolSource {
         List<RecipeDto> candidates =
             recipeQueryService.findPlannableCandidatesByKind(
                 userId, mealType, CANDIDATES_PER_KIND, tasteVector.orElse(null));
+        candidates = macroReRank(candidates, targetFatFraction);
         for (RecipeDto candidate : candidates) {
           if (candidate != null && candidate.id() != null) {
             byId.putIfAbsent(candidate.id(), candidate);
@@ -160,6 +184,60 @@ class CatalogueRecipePoolSource implements RecipePoolSource {
         memberUserIds.size(),
         traceId);
     return pool;
+  }
+
+  /**
+   * The primary eater's target fat-fraction (fat kcal ÷ calorie target), or a negative sentinel when
+   * no usable target exists (→ macro re-rank is skipped, pure taste order). First member with both a
+   * calorie target and a fat target wins.
+   */
+  private double resolveTargetFatFraction(List<UUID> memberUserIds) {
+    for (UUID userId : memberUserIds) {
+      Optional<TargetsDto> t = nutritionQueryService.getTargets(userId);
+      if (t.isEmpty()
+          || t.get().calories() == null
+          || t.get().calories().dailyTarget() <= 0
+          || t.get().fat() == null
+          || t.get().fat().targetG() == null) {
+        continue;
+      }
+      double fatKcal = t.get().fat().targetG().doubleValue() * 9.0;
+      return fatKcal / t.get().calories().dailyTarget();
+    }
+    return -1.0;
+  }
+
+  /**
+   * Soft, stable re-rank of a kind's taste-ranked block: keep the taste order but add a penalty,
+   * measured in candidate positions, for each recipe's EXCESS fat-fraction over {@code
+   * targetFatFraction}. No-op when there is no target or the input is tiny.
+   */
+  private static List<RecipeDto> macroReRank(List<RecipeDto> tasteRanked, double targetFatFraction) {
+    if (targetFatFraction <= 0 || tasteRanked.size() < 3) {
+      return tasteRanked;
+    }
+    Map<UUID, Double> rank = new HashMap<>();
+    for (int i = 0; i < tasteRanked.size(); i++) {
+      RecipeDto r = tasteRanked.get(i);
+      rank.put(r.id(), i + FAT_RERANK_POSITIONS * fatExcessFraction(r, targetFatFraction));
+    }
+    List<RecipeDto> out = new ArrayList<>(tasteRanked);
+    out.sort(Comparator.comparingDouble(r -> rank.getOrDefault(r.id(), 0.0)));
+    return out;
+  }
+
+  /** {@code max(0, recipeFatFraction − target)}; 0 when the recipe carries no usable nutrition. */
+  private static double fatExcessFraction(RecipeDto recipe, double targetFatFraction) {
+    if (recipe == null) {
+      return 0.0;
+    }
+    RecipeVersionDto v = recipe.currentVersionBody();
+    NutritionPerServingDto n = v == null ? null : v.nutritionPerServing();
+    if (n == null || n.calories() <= 0 || n.fatG() == null) {
+      return 0.0;
+    }
+    double recipeFatFraction = n.fatG().doubleValue() * 9.0 / n.calories();
+    return Math.max(0.0, recipeFatFraction - targetFatFraction);
   }
 
   /**
