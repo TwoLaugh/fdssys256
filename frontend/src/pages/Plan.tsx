@@ -579,6 +579,19 @@ function WeekGrid({
                             ` · start by ${leadTime(slot.mealTime as string, slot.timeBudgetMin)}`}
                         </span>
                       )}
+                      {slot.scheduledRecipe?.additions != null &&
+                        slot.scheduledRecipe.additions.length > 0 && (
+                          <span
+                            className="plan-cell-additions"
+                            title={slot.scheduledRecipe.additions
+                              .map((a) => a.name)
+                              .join(", ")}
+                          >
+                            {slot.scheduledRecipe.additions
+                              .map((a) => `+ ${a.name}`)
+                              .join(" · ")}
+                          </span>
+                        )}
                     </span>
                     {slot.scheduledRecipe?.batchCookSessionId && (
                       <span className="batch-tag">BATCH</span>
