@@ -110,6 +110,7 @@ const MACRO_COVERAGE_LABEL: Record<string, string> = {
   carbs: "Carbs",
   fat: "Fat",
   fibre: "Fibre",
+  saturated_fat: "Saturated fat",
 };
 
 const fmtCoverageNum = (n: number): string =>

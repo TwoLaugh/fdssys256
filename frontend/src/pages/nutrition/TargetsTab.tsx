@@ -49,6 +49,26 @@ const MACRO_ROWS: Array<{ key: MacroFieldKey; label: string }> = [
   { key: "satFat", label: "Sat fat" },
 ];
 
+/**
+ * "Fat spread" presets — a friendly saturated-fat preference. Total fat can run high on a
+ * fish/avocado/olive-oil diet and still be healthy; what's worth limiting is the SATURATED share.
+ * Each preset sets the saturated-fat target as an upper limit derived from the calorie target
+ * (≈ pctKcal × kcal / 9 kcal-per-gram); Relaxed clears it so saturated fat floats with total fat.
+ */
+const SAT_FAT_PRESETS: Array<{
+  key: string;
+  label: string;
+  pctKcal: number | null;
+  desc: string;
+}> = [
+  { key: "relaxed", label: "Relaxed", pctKcal: null, desc: "No saturated-fat cap — fat floats freely." },
+  { key: "moderate", label: "Moderate", pctKcal: 0.1, desc: "Cap saturated fat at ~10% of calories (general guideline)." },
+  { key: "strict", label: "Strict", pctKcal: 0.05, desc: "Cap saturated fat at ~5% of calories (heart-health strict)." },
+];
+
+const satFatLimitFor = (pctKcal: number | null, dailyKcal: number): number | null =>
+  pctKcal == null ? null : Math.round((pctKcal * dailyKcal) / 9);
+
 function DirectionSelect({
   value,
   onChange,
@@ -346,6 +366,45 @@ function TargetsEditor({
             })}
           </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Fat spread — saturated-fat preference (a friendly shortcut for the Sat fat row above) */}
+      <div className="mp-card section-card">
+        <span className="mp-label">Fat spread — saturated-fat preference</span>
+        <div className="inline-note" style={{ marginTop: 4 }}>
+          Not all fat is equal. Total fat can run high on a fish, avocado and olive-oil diet and
+          still be healthy — what's worth limiting is the saturated share. This caps saturated fat;
+          unsaturated fat is left to float, so the planner prefers leaner-saturated dishes.
+        </div>
+        <div className="filter-row" style={{ marginTop: 10 }}>
+          {SAT_FAT_PRESETS.map((p) => {
+            const limit = satFatLimitFor(p.pctKcal, calories.dailyTarget);
+            const cur = macros.satFat.targetG ?? null;
+            const active = limit == null ? cur == null : cur != null && Math.abs(cur - limit) <= 2;
+            return (
+              <button
+                key={p.key}
+                className={`filter-chip${active ? " active" : ""}`}
+                title={p.desc}
+                onClick={() =>
+                  setMacro("satFat", {
+                    targetG: limit,
+                    floorG: null,
+                    direction: "UPPER_LIMIT",
+                    isHardFloor: false,
+                  })
+                }
+              >
+                {p.label}
+                {limit != null && (
+                  <span className="inline-note" style={{ marginLeft: 6 }}>
+                    ≤{limit} g
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
