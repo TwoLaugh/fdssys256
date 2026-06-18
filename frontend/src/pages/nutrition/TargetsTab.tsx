@@ -252,11 +252,14 @@ function TargetsEditor({
       if (!res.ok) throw new Error(`compute failed (${res.status})`);
       const d = await res.json();
       setCalories((c) => ({ ...c, dailyTarget: Math.round(d.calories) }));
+      // Protein is a SOFT floor by default: a HARD protein floor forces the planner to repeat the
+      // few protein-dense recipes (killing variety + over-shooting fat) to guarantee the minimum,
+      // whereas as a scored target it still lands on the floor while staying varied + macro-balanced.
       setMacro("protein", {
         targetG: Number(d.proteinG),
         floorG: Number(d.proteinG),
         direction: "LOWER_FLOOR",
-        isHardFloor: true,
+        isHardFloor: false,
       });
       setMacro("carbs", { targetG: Number(d.carbsG), direction: "BOTH_BOUNDED" });
       setMacro("fat", { targetG: Number(d.fatG), direction: "BOTH_BOUNDED" });
