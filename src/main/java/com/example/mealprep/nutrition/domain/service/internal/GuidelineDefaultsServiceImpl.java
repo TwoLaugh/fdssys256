@@ -11,6 +11,7 @@ import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 
@@ -69,11 +70,18 @@ public class GuidelineDefaultsServiceImpl implements GuidelineDefaultsService {
             .multiply(BigDecimal.valueOf(calories))
             .divide(BigDecimal.valueOf(KCAL_PER_G_FAT), 1, RoundingMode.HALF_UP);
 
-    // Micronutrient floors are an age/sex DRI LOOKUP (not weight-scaled). Seed column 'sex' is
-    // lower-case ('male'/'female'); map the enum to it.
+    // Micronutrient floors are an age/sex/life-stage DRI LOOKUP (not weight-scaled). Seed column
+    // 'sex' is lower-case ('male'/'female'); map the enum to it. Pregnancy/lactation floors only
+    // exist for a reproductive-age female — if the band has none, fall back to the NONE rows.
     String sex = req.biologicalSex() == BiologicalSex.MALE ? "male" : "female";
+    String lifeStage = req.lifeStage() == null ? "NONE" : req.lifeStage().name();
+    List<DriDefault> driRows =
+        driDefaultRepository.findByAgeGroupAndSexAndLifeStage(ageGroup, sex, lifeStage);
+    if (driRows.isEmpty() && !"NONE".equals(lifeStage)) {
+      driRows = driDefaultRepository.findByAgeGroupAndSexAndLifeStage(ageGroup, sex, "NONE");
+    }
     Map<String, BigDecimal> micros = new LinkedHashMap<>();
-    for (DriDefault dri : driDefaultRepository.findByAgeGroupAndSex(ageGroup, sex)) {
+    for (DriDefault dri : driRows) {
       micros.put(dri.getMicroName(), dri.getRdaValue());
     }
     // Scale the energy/protein-linked micros above the flat DRI when body size implies more.

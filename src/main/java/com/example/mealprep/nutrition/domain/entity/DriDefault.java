@@ -40,6 +40,9 @@ public class DriDefault {
   @Column(name = "sex", nullable = false, length = 8)
   private String sex;
 
+  @Column(name = "life_stage", nullable = false, length = 16)
+  private String lifeStage;
+
   @Column(name = "micro_name", nullable = false, length = 64)
   private String microName;
 
