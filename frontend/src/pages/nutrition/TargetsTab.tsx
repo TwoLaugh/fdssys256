@@ -180,6 +180,71 @@ function TargetsEditor({
   const setMacro = (key: MacroFieldKey, patch: Partial<MacroTargetDto>) =>
     setMacros((m) => ({ ...m, [key]: { ...m[key], ...patch } }));
 
+  // "Compute from my details" — demographics drive the guideline defaults (BMR calories, protein
+  // 1.8 g/kg, age/sex micro DRI). The computed values fill the editable fields below; nothing is
+  // saved until the user reviews + hits Save, so every default stays overridable.
+  const [demo, setDemo] = useState({
+    biologicalSex: "MALE" as "MALE" | "FEMALE",
+    dateOfBirth: "",
+    weightKg: "",
+    heightCm: "",
+    activityLevel: "MODERATELY_ACTIVE",
+  });
+  const [computeMsg, setComputeMsg] = useState<string | null>(null);
+  const [computing, setComputing] = useState(false);
+
+  const computeFromDetails = async () => {
+    if (!demo.dateOfBirth || !demo.weightKg || !demo.heightCm) {
+      setComputeMsg("Enter date of birth, weight and height first.");
+      return;
+    }
+    setComputing(true);
+    setComputeMsg(null);
+    try {
+      const res = await fetch("/api/v1/nutrition/targets/compute-defaults", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          biologicalSex: demo.biologicalSex,
+          dateOfBirth: demo.dateOfBirth,
+          weightKg: Number(demo.weightKg),
+          heightCm: Number(demo.heightCm),
+          activityLevel: demo.activityLevel,
+          goal,
+        }),
+      });
+      if (!res.ok) throw new Error(`compute failed (${res.status})`);
+      const d = await res.json();
+      setCalories((c) => ({ ...c, dailyTarget: Math.round(d.calories) }));
+      setMacro("protein", {
+        targetG: Number(d.proteinG),
+        floorG: Number(d.proteinG),
+        direction: "LOWER_FLOOR",
+        isHardFloor: true,
+      });
+      setMacro("carbs", { targetG: Number(d.carbsG), direction: "BOTH_BOUNDED" });
+      setMacro("fat", { targetG: Number(d.fatG), direction: "BOTH_BOUNDED" });
+      setMacro("fibre", { targetG: Number(d.fibreG), floorG: Number(d.fibreG), direction: "LOWER_FLOOR" });
+      setMacro("satFat", { targetG: Number(d.satFatG), direction: "UPPER_LIMIT" });
+      const micros = (d.micros ?? {}) as Record<string, number>;
+      setMicroTargets((rows) =>
+        rows.map((r) =>
+          micros[r.nutrientKey] != null
+            ? { ...r, targetValue: Number(micros[r.nutrientKey]) }
+            : r,
+        ),
+      );
+      setComputeMsg(
+        `Filled from guidelines — BMR ${d.bmr} kcal · ${d.ageGroup} DRI band. Review + edit below, then Save.`,
+      );
+    } catch (e) {
+      setComputeMsg(`Couldn't compute (needs the live backend): ${(e as Error).message}`);
+    } finally {
+      setComputing(false);
+    }
+  };
+
   const save = () => {
     saveTargets({
       goal,
@@ -215,6 +280,86 @@ function TargetsEditor({
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Compute from my details — demographics drive the guideline defaults */}
+      <div className="mp-card section-card">
+        <span className="mp-label">Compute from my details</span>
+        <div className="inline-note" style={{ marginTop: 4 }}>
+          Fill guideline defaults from your body + activity — calories by Mifflin–St Jeor BMR,
+          protein at 1.8 g/kg, micronutrients by your age/sex DRI band. Everything stays editable
+          below; nothing saves until you hit Save.
+        </div>
+        <div
+          className="targets-row"
+          style={{ marginTop: 10, gap: 10, flexWrap: "wrap", alignItems: "center" }}
+        >
+          <select
+            className="time-select"
+            aria-label="Biological sex"
+            value={demo.biologicalSex}
+            onChange={(e) =>
+              setDemo((d) => ({ ...d, biologicalSex: e.target.value as "MALE" | "FEMALE" }))
+            }
+          >
+            <option value="FEMALE">Female</option>
+            <option value="MALE">Male</option>
+          </select>
+          <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+            <span className="inline-note">born</span>
+            <input
+              type="date"
+              className="time-select"
+              aria-label="Date of birth"
+              value={demo.dateOfBirth}
+              onChange={(e) => setDemo((d) => ({ ...d, dateOfBirth: e.target.value }))}
+            />
+          </label>
+          <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+            <span className="inline-note">weight</span>
+            <input
+              type="number"
+              className="text-input"
+              style={{ width: 78, padding: "6px 10px" }}
+              aria-label="Weight kg"
+              value={demo.weightKg}
+              onChange={(e) => setDemo((d) => ({ ...d, weightKg: e.target.value }))}
+            />
+            <span className="inline-note">kg</span>
+          </label>
+          <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+            <span className="inline-note">height</span>
+            <input
+              type="number"
+              className="text-input"
+              style={{ width: 78, padding: "6px 10px" }}
+              aria-label="Height cm"
+              value={demo.heightCm}
+              onChange={(e) => setDemo((d) => ({ ...d, heightCm: e.target.value }))}
+            />
+            <span className="inline-note">cm</span>
+          </label>
+          <select
+            className="time-select"
+            aria-label="Activity level"
+            value={demo.activityLevel}
+            onChange={(e) => setDemo((d) => ({ ...d, activityLevel: e.target.value }))}
+          >
+            <option value="SEDENTARY">Sedentary</option>
+            <option value="LIGHTLY_ACTIVE">Lightly active</option>
+            <option value="MODERATELY_ACTIVE">Moderately active</option>
+            <option value="VERY_ACTIVE">Very active</option>
+            <option value="EXTRA_ACTIVE">Extra active</option>
+          </select>
+          <button className="btn btn-small" onClick={computeFromDetails} disabled={computing}>
+            {computing ? "Computing…" : "Compute guideline defaults"}
+          </button>
+        </div>
+        {computeMsg && (
+          <div className="inline-note" style={{ marginTop: 8, color: "var(--mp-terra)" }}>
+            {computeMsg}
+          </div>
+        )}
       </div>
 
       {/* Calories */}
