@@ -75,6 +75,11 @@ type PlanNutritionCoverage = {
   microsMet: number;
   microsTotal: number;
   microsNoData?: number;
+  fatBreakdown?: {
+    saturatedG: number | null;
+    monounsaturatedG: number | null;
+    polyunsaturatedG: number | null;
+  } | null;
 };
 
 /** Short provenance badge — only shown for non-measured (lossy) sources so the user knows a
@@ -219,6 +224,25 @@ function PlanNutritionPanel({
           label={MACRO_COVERAGE_LABEL[row.key] ?? row.key}
         />
       ))}
+
+      {coverage.fatBreakdown &&
+        (coverage.fatBreakdown.monounsaturatedG != null ||
+          coverage.fatBreakdown.polyunsaturatedG != null) && (
+          <div
+            className="inline-note"
+            style={{ margin: "2px 0 6px", paddingLeft: 2 }}
+            title="USDA-derived fatty-acid split. Saturated is the one worth limiting; mono + poly unsaturated are the healthy fats that float."
+          >
+            Fat spread:{" "}
+            {fmtCoverageNum(coverage.fatBreakdown.saturatedG ?? 0)} g saturated ·{" "}
+            {fmtCoverageNum(
+              (coverage.fatBreakdown.monounsaturatedG ?? 0) +
+                (coverage.fatBreakdown.polyunsaturatedG ?? 0),
+            )}{" "}
+            g unsaturated ({fmtCoverageNum(coverage.fatBreakdown.monounsaturatedG ?? 0)} mono ·{" "}
+            {fmtCoverageNum(coverage.fatBreakdown.polyunsaturatedG ?? 0)} poly)
+          </div>
+        )}
 
       {coverage.micros.length > 0 && (
         <div

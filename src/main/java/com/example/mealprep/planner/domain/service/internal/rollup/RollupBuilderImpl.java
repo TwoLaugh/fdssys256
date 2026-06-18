@@ -258,8 +258,17 @@ class RollupBuilderImpl implements RollupBuilder {
     int microsMet = (int) micros.stream().filter(NutritionTargetCoverageDocument::met).count();
     int microsNoData =
         (int) micros.stream().filter(c -> "NO_DATA".equals(c.status())).count();
+    // Informational fat breakdown for the "fat spread" display: saturated (also a scored macro row)
+    // + the unsaturated mono/poly (carried in the micros map, no target). Null when no fat data.
+    BigDecimal monoAvg = microAvg.get(DailyMacroTotals.MONOUNSATURATED_FAT_KEY);
+    BigDecimal polyAvg = microAvg.get(DailyMacroTotals.POLYUNSATURATED_FAT_KEY);
+    NutritionCoverageDocument.FatBreakdown fatBreakdown =
+        (satFatAvg.signum() == 0 && monoAvg == null && polyAvg == null)
+            ? null
+            : new NutritionCoverageDocument.FatBreakdown(satFatAvg, monoAvg, polyAvg);
     return new NutritionCoverageDocument(
-        macros, micros, macrosMet, macros.size(), microsMet, micros.size(), microsNoData);
+        macros, micros, macrosMet, macros.size(), microsMet, micros.size(), microsNoData,
+        fatBreakdown);
   }
 
   /** First eater of the first slot skeleton, preferring one that actually has a targets row. */
