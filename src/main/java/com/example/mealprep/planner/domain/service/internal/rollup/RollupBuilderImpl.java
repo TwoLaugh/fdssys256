@@ -172,6 +172,8 @@ class RollupBuilderImpl implements RollupBuilder {
     BigDecimal carbsAvg = sumBd(days, DailyMacroTotals::carbsG).divide(n, 1, RoundingMode.HALF_UP);
     BigDecimal fatAvg = sumBd(days, DailyMacroTotals::fatG).divide(n, 1, RoundingMode.HALF_UP);
     BigDecimal fibreAvg = sumBd(days, DailyMacroTotals::fibreG).divide(n, 1, RoundingMode.HALF_UP);
+    BigDecimal satFatAvg =
+        sumBd(days, DailyMacroTotals::saturatedFatG).divide(n, 1, RoundingMode.HALF_UP);
 
     Map<String, BigDecimal> microAvg = new LinkedHashMap<>();
     for (DailyMacroTotals d : days) {
@@ -214,6 +216,9 @@ class RollupBuilderImpl implements RollupBuilder {
     addMacroCoverage(macros, "carbs", targets.carbs(), carbsAvg);
     addMacroCoverage(macros, "fat", targets.fat(), fatAvg);
     addMacroCoverage(macros, "fibre", targets.fibre(), fibreAvg);
+    // Saturated fat (USDA-derived, bridged into the macro total) — only shown when the user has set
+    // a saturated-fat target; addMacroCoverage no-ops on a null target.
+    addMacroCoverage(macros, "saturated_fat", targets.satFat(), satFatAvg);
 
     List<NutritionTargetCoverageDocument> micros = new ArrayList<>();
     if (targets.microTargets() != null) {

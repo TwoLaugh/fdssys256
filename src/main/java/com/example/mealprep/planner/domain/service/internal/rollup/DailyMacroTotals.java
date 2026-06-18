@@ -33,6 +33,19 @@ public record DailyMacroTotals(
     // `micros` keys; used by RollupBuilder to surface how each coverage figure was sourced.
     Map<String, String> microSources) {
 
+  /**
+   * Wire keys for the fatty-acid breakdown. Saturated/mono/poly fat are USDA-derived per serving and
+   * ride the per-serving {@code micros} map (same provenance pipeline as the micronutrients), but
+   * saturated fat is a MACRO — {@link DailyMacroAggregator} bridges {@link #SATURATED_FAT_KEY} into
+   * the dedicated {@link #saturatedFatG()} total so it steers scoring + portioning, while mono/poly
+   * are carried in {@code micros} for display. These literals are the contract with the offline
+   * importer ({@code build_usda_fill.py}).
+   */
+  public static final String SATURATED_FAT_KEY = "saturated_fat_g";
+
+  public static final String MONOUNSATURATED_FAT_KEY = "monounsaturated_fat_g";
+  public static final String POLYUNSATURATED_FAT_KEY = "polyunsaturated_fat_g";
+
   static Builder builder(LocalDate date) {
     return new Builder(date);
   }

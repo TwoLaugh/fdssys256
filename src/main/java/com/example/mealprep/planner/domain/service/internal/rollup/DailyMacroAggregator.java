@@ -191,6 +191,15 @@ public class DailyMacroAggregator {
         }
       }
     }
+    // Saturated fat is USDA-derived into the per-serving micros map but is a MACRO (its own target +
+    // optimiser term + the dedicated saturatedFatG total NutritionSubScore + the rollup read). Bridge
+    // it across, scaled by the SAME portion factor as the other macros, so the value actually steers
+    // selection + portioning instead of sitting inert at 0. (Mono/poly stay in `micros` for display.)
+    BigDecimal satFat =
+        n.micros() == null ? null : n.micros().get(DailyMacroTotals.SATURATED_FAT_KEY);
+    if (satFat != null) {
+      b.addSaturatedFat(satFat.multiply(pf));
+    }
     return builders;
   }
 
@@ -250,6 +259,12 @@ public class DailyMacroAggregator {
             b.addMicro(micro.getKey(), micro.getValue());
             b.addMicroSource(micro.getKey(), microSrc.get(micro.getKey()));
           }
+        }
+        // Bridge an addition's saturated fat into the macro total (verbatim — additions are
+        // pre-sized, not portion-scaled), mirroring the main-recipe bridge in applySlot.
+        BigDecimal satFat = n.micros().get(DailyMacroTotals.SATURATED_FAT_KEY);
+        if (satFat != null) {
+          b.addSaturatedFat(satFat);
         }
       }
     }

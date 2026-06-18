@@ -5,6 +5,7 @@ import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
 import com.example.mealprep.planner.config.PlannerProperties;
 import com.example.mealprep.planner.config.PlannerProperties.ScoringTuning.NutritionMacroWeights;
+import com.example.mealprep.planner.domain.service.internal.rollup.DailyMacroTotals;
 import com.example.mealprep.planner.api.dto.Addition;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
@@ -444,8 +445,9 @@ public class PortionOptimizer {
   /**
    * Per-serving macro vector for {@code a}, index-aligned with the {@link Macro} ordinal order, or
    * {@code null} when the slot has no resolvable per-serving nutrition (→ the slot is fixed at 1.0).
-   * SatFat is always 0 — {@code NutritionPerServingDto} carries no saturated-fat field, mirroring
-   * {@code DailyMacroAggregator}.
+   * Saturated fat is USDA-derived into the per-serving {@code micros} map (key {@link
+   * DailyMacroTotals#SATURATED_FAT_KEY}); read it here so the optimiser can size servings to keep
+   * saturated fat under its limit (0 when the recipe carries no saturated-fat figure).
    */
   private double[] perServingMacros(SlotAssignment a, Map<UUID, RecipeDto> byRecipeId) {
     NutritionPerServingDto n = nutritionFor(a, byRecipeId);
@@ -458,7 +460,9 @@ public class PortionOptimizer {
     m[Macro.CARBS.ordinal()] = d(n.carbsG());
     m[Macro.FAT.ordinal()] = d(n.fatG());
     m[Macro.FIBRE.ordinal()] = d(n.fibreG());
-    m[Macro.SAT_FAT.ordinal()] = 0.0; // no satFat field on per-serving nutrition
+    BigDecimal satFat =
+        n.micros() == null ? null : n.micros().get(DailyMacroTotals.SATURATED_FAT_KEY);
+    m[Macro.SAT_FAT.ordinal()] = satFat == null ? 0.0 : satFat.doubleValue();
     return m;
   }
 
