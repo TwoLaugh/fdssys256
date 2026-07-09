@@ -69,6 +69,10 @@ public class PortionOptimizer {
   private static final double BOUNDED_UNDER = 3.0;
   private static final double BOUNDED_OVER = 3.0;
 
+  // A snack slot may scale DOWN but not UP past one serving — keeps the day-total optimiser from
+  // turning a snack into a full meal. Mains stay at the physical PortionScaler.MAX_FACTOR.
+  private static final double SNACK_MAX_FACTOR = 1.0;
+
   // Greedy coordinate-descent passes for days with > 5 slots (rare; the brute force handles the
   // common case exactly). A handful of passes converges since each slot's best value given the
   // others fixed is a 1-D grid search and the objective is bounded below.
@@ -186,11 +190,21 @@ public class PortionOptimizer {
     // identical to the aggregator's — the two now cooperate instead of double-counting.
     double[] additionOffset = dayAdditionOffset(assignments, dayIndices);
 
+    // Per-slot upper bound on the serving factor. Snacks are capped so the day-total optimiser can't
+    // balloon a snack into a 2-3× meal (e.g. a 600 kcal recipe scaled ×2.25 → a 1,400 kcal "snack");
+    // the mains carry the remaining calories instead. Everything else keeps the physical max.
+    double[] maxFactor = new double[sizable.size()];
+    for (int s = 0; s < sizable.size(); s++) {
+      SlotAssignment a = assignments.get(sizable.get(s));
+      boolean isSnack = a.kind() != null && a.kind().name().toUpperCase(java.util.Locale.ROOT).contains("SNACK");
+      maxFactor[s] = isSnack ? SNACK_MAX_FACTOR : PortionScaler.MAX_FACTOR;
+    }
+
     double[] grid = grid();
     double[] solution =
         sizable.size() <= 5
-            ? bruteForce(perServing, configured, grid, additionOffset)
-            : greedy(perServing, configured, grid, warmStart, additionOffset);
+            ? bruteForce(perServing, configured, grid, additionOffset, maxFactor)
+            : greedy(perServing, configured, grid, warmStart, additionOffset, maxFactor);
 
     for (int s = 0; s < sizable.size(); s++) {
       factors[sizable.get(s)] = BigDecimal.valueOf(solution[s]);
@@ -278,12 +292,16 @@ public class PortionOptimizer {
 
   /** Exhaustive grid search over all slots — the global minimum for ≤ 5 slots ({@code ≤ 11^5}). */
   private static double[] bruteForce(
-      List<double[]> perServing, List<MacroTarget> macros, double[] grid, double[] offset) {
+      List<double[]> perServing,
+      List<MacroTarget> macros,
+      double[] grid,
+      double[] offset,
+      double[] maxFactor) {
     int n = perServing.size();
     double[] current = new double[n];
     double[] best = new double[n];
     double[] bestObj = {Double.POSITIVE_INFINITY};
-    bruteForceRec(perServing, macros, grid, offset, current, 0, best, bestObj);
+    bruteForceRec(perServing, macros, grid, offset, maxFactor, current, 0, best, bestObj);
     return best;
   }
 
@@ -292,6 +310,7 @@ public class PortionOptimizer {
       List<MacroTarget> macros,
       double[] grid,
       double[] offset,
+      double[] maxFactor,
       double[] current,
       int depth,
       double[] best,
@@ -305,8 +324,11 @@ public class PortionOptimizer {
       return;
     }
     for (double g : grid) {
+      if (g > maxFactor[depth] + 1e-9) {
+        continue; // slot-specific cap (e.g. snacks ≤ 1 serving)
+      }
       current[depth] = g;
-      bruteForceRec(perServing, macros, grid, offset, current, depth + 1, best, bestObj);
+      bruteForceRec(perServing, macros, grid, offset, maxFactor, current, depth + 1, best, bestObj);
     }
   }
 
@@ -320,11 +342,12 @@ public class PortionOptimizer {
       List<MacroTarget> macros,
       double[] grid,
       List<Double> warmStart,
-      double[] offset) {
+      double[] offset,
+      double[] maxFactor) {
     int n = perServing.size();
     double[] servings = new double[n];
     for (int i = 0; i < n; i++) {
-      servings[i] = warmStart.get(i);
+      servings[i] = Math.min(warmStart.get(i), maxFactor[i]); // honour the slot cap from the start
     }
     for (int pass = 0; pass < GREEDY_PASSES; pass++) {
       boolean changed = false;
@@ -332,6 +355,9 @@ public class PortionOptimizer {
         double bestG = servings[i];
         double bestObj = Double.POSITIVE_INFINITY;
         for (double g : grid) {
+          if (g > maxFactor[i] + 1e-9) {
+            continue; // slot-specific cap (e.g. snacks ≤ 1 serving)
+          }
           servings[i] = g;
           double obj = objective(perServing, servings, macros, offset);
           if (obj < bestObj) {

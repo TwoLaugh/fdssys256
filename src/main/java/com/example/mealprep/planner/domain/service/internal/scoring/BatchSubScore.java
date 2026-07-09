@@ -45,6 +45,21 @@ class BatchSubScore implements SubScoreCalculator {
       return BigDecimal.ONE;
     }
     int slots = plan.assignments().size();
+    if (batchCookingPreferred(ctx)) {
+      // Meal-prep households are rewarded for REUSING recipes (cook once, eat across the week):
+      // fewer distinct recipes → higher score. This positive concentration reward is what makes the
+      // raised variety cap (see VarietyGate) actually bite — without it the variety sub-score's
+      // diversity pull keeps every recipe at the per-week minimum. Distinct here = distinct non-null
+      // recipe ids, exactly mirroring the incremental scorer's {@code recipeCounts.size()} so the
+      // oracle invariant holds.
+      Set<UUID> distinctRecipes = new HashSet<>();
+      for (SlotAssignment a : plan.assignments()) {
+        if (a.recipeId() != null) {
+          distinctRecipes.add(a.recipeId());
+        }
+      }
+      return finalScore(slots, distinctRecipes.size());
+    }
     Set<UUID> distinctSessions = new HashSet<>();
     boolean sawNoBatch = false;
     for (SlotAssignment a : plan.assignments()) {
@@ -59,17 +74,52 @@ class BatchSubScore implements SubScoreCalculator {
   }
 
   /**
-   * The batch sub-score from the running slot count, distinct non-null session count, and the
-   * sawNoBatch flag — the exact arithmetic the whole-plan {@link #compute} runs, so the incremental
-   * Stage-A scorer (which carries a running slot count + sawNoBatch; distinctSessions is always 0 in
-   * 01e since {@link #batchSessionId} returns null) finalises identically. Empty plan → caller
-   * returns {@code 1.0} before reaching here.
+   * True when the household's merged lifestyle config marks batch-cooking — switches the sub-score
+   * from session-coordination (the 01e stub) to a recipe-reuse reward. Static + ctx-typed so the
+   * incremental scorer applies the identical branch.
    */
-  static BigDecimal finalScore(int slots, int distinctSessions, boolean sawNoBatch) {
-    int distinct = distinctSessions + (sawNoBatch ? 1 : 0);
+  static boolean batchCookingPreferred(PlanCompositionContext ctx) {
+    return ctx != null
+        && ctx.mergedHouseholdPrefs() != null
+        && ctx.mergedHouseholdPrefs().mergedLifestyleConfig() != null
+        && ctx.mergedHouseholdPrefs().mergedLifestyleConfig().batchCookingPreferred();
+  }
+
+  /**
+   * Weight multiplier applied to the batch sub-score for batch-cooking households. The recipe-reuse
+   * reward and the variety sub-score's diversity pull are roughly equal-and-opposite at the base 1/7
+   * weight, so the plan stays at the per-week minimum repetition; this lifts the reward enough to
+   * actually concentrate the plan. Tuned for moderate concentration (~10–12 distinct recipes over a
+   * 28-slot week); raise for tighter batching, lower for looser.
+   */
+  private static final BigDecimal BATCH_COOKING_WEIGHT_MULTIPLIER = BigDecimal.valueOf(2.0);
+
+  /**
+   * The batch-sub-score weight to apply for {@code ctx}: the base weight boosted by {@link
+   * #BATCH_COOKING_WEIGHT_MULTIPLIER} when batch-cooking, else the base weight unchanged. Shared by
+   * the whole-plan and incremental composites so both weight the batch term identically.
+   */
+  static BigDecimal effectiveWeight(BigDecimal baseWeight, PlanCompositionContext ctx) {
+    return batchCookingPreferred(ctx)
+        ? baseWeight.multiply(BATCH_COOKING_WEIGHT_MULTIPLIER)
+        : baseWeight;
+  }
+
+  /** Core {@code 1 - distinct/slots}, clamped at 0. Empty plan → caller returns {@code 1.0}. */
+  static BigDecimal finalScore(int slots, int distinct) {
     BigDecimal ratio =
         BigDecimal.valueOf(distinct).divide(BigDecimal.valueOf(slots), 6, RoundingMode.HALF_UP);
     return BigDecimal.ONE.subtract(ratio).max(BigDecimal.ZERO);
+  }
+
+  /**
+   * The batch sub-score from the running slot count, distinct non-null session count, and the
+   * sawNoBatch flag — the exact arithmetic the whole-plan {@link #compute} runs for the non-batch
+   * path, so the incremental Stage-A scorer finalises identically. Empty plan → caller returns {@code
+   * 1.0} before reaching here.
+   */
+  static BigDecimal finalScore(int slots, int distinctSessions, boolean sawNoBatch) {
+    return finalScore(slots, distinctSessions + (sawNoBatch ? 1 : 0));
   }
 
   /**

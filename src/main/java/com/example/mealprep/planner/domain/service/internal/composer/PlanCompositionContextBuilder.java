@@ -4,6 +4,8 @@ import com.example.mealprep.core.types.SlotKind;
 import com.example.mealprep.household.api.dto.HouseholdSettingsDto;
 import com.example.mealprep.household.api.dto.PlannerSlotEntryDto;
 import com.example.mealprep.household.api.dto.SlotConfigurationPlannerViewDto;
+import com.example.mealprep.household.api.dto.MergedSoftPreferencesDto;
+import com.example.mealprep.household.domain.service.HouseholdMergeService;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
@@ -23,8 +25,10 @@ import com.example.mealprep.recipe.api.dto.RecipeDto;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,6 +68,7 @@ public class PlanCompositionContextBuilder implements ReoptContextBuilder {
   private static final Logger log = LoggerFactory.getLogger(PlanCompositionContextBuilder.class);
 
   private final HouseholdQueryService householdQueryService;
+  private final HouseholdMergeService householdMergeService;
   private final PreferenceQueryService preferenceQueryService;
   private final NutritionQueryService nutritionQueryService;
   private final ProvisionForPlannerService provisionForPlannerService;
@@ -72,17 +77,43 @@ public class PlanCompositionContextBuilder implements ReoptContextBuilder {
 
   PlanCompositionContextBuilder(
       HouseholdQueryService householdQueryService,
+      HouseholdMergeService householdMergeService,
       PreferenceQueryService preferenceQueryService,
       NutritionQueryService nutritionQueryService,
       ProvisionForPlannerService provisionForPlannerService,
       RecipePoolSource recipePoolSource,
       Clock clock) {
     this.householdQueryService = householdQueryService;
+    this.householdMergeService = householdMergeService;
     this.preferenceQueryService = preferenceQueryService;
     this.nutritionQueryService = nutritionQueryService;
     this.provisionForPlannerService = provisionForPlannerService;
     this.recipePoolSource = recipePoolSource;
     this.clock = clock;
+  }
+
+  /**
+   * The household's merged soft preferences (lifestyle window / novelty / batch-cooking flags) for
+   * the given eaters, or {@code null} when unavailable — read-only and best-effort, so a missing /
+   * empty household never blocks generation. This is the surface the scoring layer reads for
+   * per-household meal-prep behaviour ({@code VarietyGate}, {@code BatchSubScore}); before this it
+   * was always {@code null} (the "no cross-module surface yet" placeholder), so the lifestyle config
+   * never reached the planner.
+   */
+  private MergedSoftPreferencesDto mergeSoftPrefs(UUID householdId, List<UUID> eaterUserIds) {
+    if (householdId == null || eaterUserIds == null || eaterUserIds.isEmpty()) {
+      return null;
+    }
+    try {
+      return householdMergeService.mergeSoftPreferencesForSlot(householdId, eaterUserIds);
+    } catch (RuntimeException ex) {
+      log.warn(
+          "Merged soft prefs unavailable for household={} ({}); planner runs without the lifestyle"
+              + " merge (meal-prep / novelty preferences will not apply).",
+          householdId,
+          ex.toString());
+      return null;
+    }
   }
 
   /**
@@ -132,8 +163,8 @@ public class PlanCompositionContextBuilder implements ReoptContextBuilder {
         request.weekStartDate(),
         skeletons,
         hardConstraintsByUserId,
-        Map.of(), // soft-preference bundle: no cross-module surface exists yet (LLD reconciliation)
-        null, // merged household prefs: ditto
+        Map.of(), // per-user soft-preference bundles: not yet consumed by the planner
+        mergeSoftPrefs(householdId, memberUserIds), // merged lifestyle prefs (meal-prep / novelty)
         provisions,
         householdSettings,
         new RecipePoolSnapshot(pool, clock.instant()),
@@ -168,8 +199,10 @@ public class PlanCompositionContextBuilder implements ReoptContextBuilder {
 
     Map<UUID, HardConstraintsDto> hardConstraintsByUserId = new HashMap<>();
     Map<UUID, TargetsDto> nutritionByUserId = new HashMap<>();
+    Set<UUID> eaters = new LinkedHashSet<>();
     for (MealSlot slot : nonPinnedSlots) {
       for (UUID eater : slot.getEaters()) {
+        eaters.add(eater);
         hardConstraintsByUserId.computeIfAbsent(
             eater, u -> preferenceQueryService.getHardConstraints(u).orElse(null));
         nutritionByUserId.computeIfAbsent(
@@ -195,7 +228,7 @@ public class PlanCompositionContextBuilder implements ReoptContextBuilder {
         skeletons,
         hardConstraintsByUserId,
         Map.of(),
-        null,
+        mergeSoftPrefs(householdId, new ArrayList<>(eaters)),
         provisions,
         householdSettings,
         new RecipePoolSnapshot(pool, clock.instant()),

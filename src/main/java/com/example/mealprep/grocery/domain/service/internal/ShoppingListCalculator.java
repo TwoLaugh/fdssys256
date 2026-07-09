@@ -1,6 +1,7 @@
 package com.example.mealprep.grocery.domain.service.internal;
 
 import com.example.mealprep.core.ingredient.IngredientMappingKeys;
+import com.example.mealprep.core.ingredient.IngredientUnitConverter;
 import com.example.mealprep.grocery.api.dto.PriceAggregateDto;
 import com.example.mealprep.grocery.domain.entity.LineFulfilmentStatus;
 import com.example.mealprep.grocery.domain.entity.PackSizeHeuristic;
@@ -34,6 +35,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
@@ -245,11 +247,18 @@ class ShoppingListCalculator {
       return;
     }
     BigDecimal scaled = ing.quantity().multiply(scale);
+    // Convert to grams so heterogeneous recipe units (2 tbsp + 1 cup + 1 clove) aggregate
+    // coherently per canonical ingredient and the pack optimiser can compute a real purchase +
+    // leftover. Falls back to the raw unit when the amount cannot be confidently converted
+    // (unknown count-ingredient / unrecognised unit) — those keys just won't pack-match.
+    Optional<BigDecimal> grams = IngredientUnitConverter.toGrams(scaled, ing.unit(), key);
+    BigDecimal qty = grams.orElse(scaled);
+    String unit = grams.isPresent() ? "g" : ing.unit();
     IngredientDemand existing = demand.get(key);
     if (existing == null) {
-      demand.put(key, new IngredientDemand(key, ing.displayName(), scaled, ing.unit(), null, null));
+      demand.put(key, new IngredientDemand(key, ing.displayName(), qty, unit, null, null));
     } else {
-      demand.put(key, existing.add(scaled));
+      demand.put(key, existing.add(qty));
     }
   }
 

@@ -14,5 +14,7 @@ import org.mapstruct.Mapping;
 public interface ShoppingListLineMapper {
 
   @Mapping(target = "isStaleEstimate", source = "staleEstimate")
+  @Mapping(target = "leftoverQuantityG", expression = "java(ShoppingListBuffer.leftover(entity))")
+  @Mapping(target = "bufferPercent", expression = "java(ShoppingListBuffer.bufferPercent(entity))")
   ShoppingListLineDto toDto(ShoppingListLine entity);
 }

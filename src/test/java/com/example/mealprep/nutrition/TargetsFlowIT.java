@@ -427,15 +427,19 @@ class TargetsFlowIT {
             base.activityAdjustments(),
             1L);
 
-    mvc.perform(
-            put("/api/v1/nutrition/targets")
-                .cookie(user.cookie())
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(req)))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.version").value(2))
-        .andExpect(jsonPath("$.microTargets.length()").value(3))
-        .andExpect(openApi().isValid(openApiValidator));
+    // Before the fix this 409'd ("household-integrity-violation"); now it succeeds.
+    MvcResult putResult =
+        mvc.perform(
+                put("/api/v1/nutrition/targets")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(req)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.microTargets.length()").value(3))
+            .andExpect(openApi().isValid(openApiValidator))
+            .andReturn();
+    int putVersion =
+        objectMapper.readTree(putResult.getResponse().getContentAsString()).get("version").asInt();
 
     // The overlapping key was UPDATED in place (not delete+reinsert), the unchanged key survives,
     // and the new key was inserted — exactly three rows.
@@ -466,6 +470,15 @@ class TargetsFlowIT {
             Long.class,
             seeded.getId());
     assertThat(calciumCount).isEqualTo(1L);
+
+    // GET-after-PUT reflects the persisted change AND reports the SAME version the PUT returned.
+    // This guards the optimistic-locking contract: the PUT response version must not lag the
+    // committed row version (a child-only edit does not advance @Version, but response and row must
+    // agree, or the client's next PUT with the returned version would 409).
+    mvc.perform(get("/api/v1/nutrition/targets").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.microTargets.length()").value(3))
+        .andExpect(jsonPath("$.version").value(putVersion));
   }
 
   // ---------------- GET /api/v1/nutrition/targets/audit-log ----------------

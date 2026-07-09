@@ -302,6 +302,41 @@ public final class PlanTestData {
         Map.of());
   }
 
+  /**
+   * A {@link PlanCompositionContext} carrying a merged lifestyle config, for variety-cap tests.
+   * Only {@code mergedLifestyleConfig} (novelty %, batch-cooking flag) is populated; everything else
+   * mirrors {@link #minimalContext}.
+   */
+  public static PlanCompositionContext contextWithLifestyle(
+      Integer noveltyTolerancePercent, boolean batchCookingPreferred) {
+    com.example.mealprep.household.api.dto.LifestyleConfigDocument lifestyle =
+        new com.example.mealprep.household.api.dto.LifestyleConfigDocument(
+            null, null, noveltyTolerancePercent, batchCookingPreferred);
+    com.example.mealprep.household.api.dto.MergedSoftPreferencesDto merged =
+        new com.example.mealprep.household.api.dto.MergedSoftPreferencesDto(
+            UUID.randomUUID(),
+            List.of(),
+            null,
+            lifestyle,
+            List.of(),
+            null,
+            Instant.parse("2026-01-01T00:00:00Z"));
+    return new PlanCompositionContext(
+        UUID.randomUUID(),
+        LocalDate.of(2026, 1, 5),
+        List.of(),
+        Map.<UUID, com.example.mealprep.preference.api.dto.HardConstraintsDto>of(),
+        Map.<UUID, com.example.mealprep.household.api.dto.SoftPreferenceBundleDto>of(),
+        merged,
+        null,
+        null,
+        new RecipePoolSnapshot(List.of(), Instant.parse("2026-01-01T00:00:00Z")),
+        List.of(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        Map.of());
+  }
+
   // ---- planner-01e scoring fixture builders ---------------------------------------------------
 
   /**

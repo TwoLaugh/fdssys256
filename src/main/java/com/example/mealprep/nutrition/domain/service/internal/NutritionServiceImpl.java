@@ -108,9 +108,6 @@ import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.LockModeType;
-import jakarta.persistence.PersistenceContext;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
@@ -194,22 +191,6 @@ public class NutritionServiceImpl
   static final String FIELD_EATING_WINDOW = "eatingWindow";
   static final String FIELD_ACTIVITY_ADJUSTMENTS = "activityAdjustments";
 
-  /**
-   * The four field paths backed by owned child relations (the three list children + the {@code
-   * @OneToOne} eating window). Used to decide whether an update changed ONLY children: Hibernate
-   * does not dirty the aggregate root when only an owned child collection mutates, so its {@code
-   * @Version} UPDATE never fires and the root version would go stale. When the change set is a
-   * subset of these, we force-increment the root version (mirrors {@code
-   * PreferenceServiceImpl.updateHardConstraints}); when a parent-owned scalar also changed,
-   * Hibernate already bumps once and a forced increment would double-bump.
-   */
-  private static final Set<String> CHILD_FIELDS =
-      Set.of(
-          FIELD_PER_MEAL_DISTRIBUTION,
-          FIELD_MICRO_TARGETS,
-          FIELD_EATING_WINDOW,
-          FIELD_ACTIVITY_ADJUSTMENTS);
-
   private static final int RANGE_MAX_DAYS = 35;
 
   private final NutritionTargetsRepository targetsRepository;
@@ -237,16 +218,6 @@ public class NutritionServiceImpl
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
-
-  /**
-   * Field-injected so the existing constructor (and the pure unit tests {@code
-   * NutritionServiceImplTest} / {@code NutritionTargetsDiffMutationTest}, which mock the repository
-   * layer and never really flush) stay unchanged. Mirrors the {@code @PersistenceContext
-   * EntityManager} idiom in {@code PreferenceServiceImpl}. Used to force-increment the targets
-   * root's {@code @Version} when an update touched only owned child relations. Null in the pure unit
-   * tests, where there is no real flush to protect.
-   */
-  @PersistenceContext private EntityManager entityManager;
 
   public NutritionServiceImpl(
       NutritionTargetsRepository targetsRepository,
@@ -386,6 +357,15 @@ public class NutritionServiceImpl
 
   static final String DEFAULT_DRI_SEX = "female";
 
+  /**
+   * Caps (upper limits) for micronutrients where MORE is harmful, not better — these are SEEDED as a
+   * {@code upperLimit} on the DRI-default micro target so the planner actually penalises exceeding
+   * them (the RDA alone is a floor, so without this a plan piles on sodium with no cost). Sodium uses
+   * the CDRR (chronic-disease-risk-reduction) limit; chloride its UL.
+   */
+  static final Map<String, BigDecimal> MICRO_UPPER_LIMITS =
+      Map.of("sodium_mg", new BigDecimal("2300"), "chloride_mg", new BigDecimal("3600"));
+
   @Override
   @Transactional
   public TargetsDto initialiseTargets(UUID userId, UpdateTargetsRequest request) {
@@ -407,7 +387,12 @@ public class NutritionServiceImpl
             MicroTarget.builder()
                 .id(UUID.randomUUID())
                 .nutrientKey(dri.getMicroName())
-                .targetValue(dri.getRdaValue())
+                // Cap-only micros (sodium/chloride) carry NO floor — the RDA floor is meaningless
+                // (always exceeded) and would mask the cap in coverage; everything else keeps the
+                // RDA as a floor.
+                .targetValue(
+                    MICRO_UPPER_LIMITS.containsKey(dri.getMicroName()) ? null : dri.getRdaValue())
+                .upperLimit(MICRO_UPPER_LIMITS.get(dri.getMicroName())) // cap sodium/chloride
                 .sourcePreference("dri_default")
                 .hardFloor(false) // micros default to warning-only per LLD line 774
                 .build());
@@ -582,19 +567,15 @@ public class NutritionServiceImpl
     Instant now = Instant.now(clock);
     writeAuditRows(aggregate.getId(), actorUserId, changedFields, before, after, now);
 
-    // Force-increment the root @Version when ONLY owned child relations changed. Hibernate does not
-    // dirty the aggregate root on a child-collection-only mutation (now reachable since the merge
-    // above lets such PUTs succeed instead of colliding), so without this the root version would go
-    // stale and the optimistic-locking contract (response/GET version advances on every real edit)
-    // would break for child-only edits. When a parent-owned scalar also changed, Hibernate already
-    // bumps once, so we must NOT force again (double-bump). Mirrors PreferenceServiceImpl.
-    if (CHILD_FIELDS.containsAll(changedFields)) {
-      forceIncrementRootVersion(aggregate);
-    }
-
-    // saveAndFlush so the @Version bump materialises before we map to DTO; otherwise the response
-    // carries the stale version. Same trick as PreferenceServiceImpl.updateHardConstraints and
-    // HouseholdServiceImpl.createHousehold.
+    // NOTE on @Version + child-only edits: Hibernate does not dirty the aggregate root when only an
+    // owned child relation (per-meal / micros / activity / eating window) changes, so the root's
+    // @Version does not advance on a child-only PUT — the response and a follow-up GET stay
+    // consistent at the same version. A forced increment (OPTIMISTIC_FORCE_INCREMENT) was rejected
+    // here: it is scheduled as a before-commit process, so it would NOT be visible in this
+    // transaction's response (mapper.toDto reads the pre-increment value) yet WOULD commit the
+    // higher version — leaving the response one behind the row and 409-ing the client's next PUT.
+    // saveAndFlush so any parent-scalar @Version bump (when a scalar also changed) materialises
+    // before we map to DTO. Same trick as PreferenceServiceImpl / HouseholdServiceImpl.createHousehold.
     NutritionTargets saved = targetsRepository.saveAndFlush(aggregate);
     eventPublisher.publishEvent(
         new NutritionTargetsChangedEvent(
@@ -605,19 +586,6 @@ public class NutritionServiceImpl
         changedFields,
         saved.getVersion());
     return mapper.toDto(saved);
-  }
-
-  /**
-   * Force Hibernate to bump the targets root's {@code @Version} even when only an owned child
-   * relation changed. {@code OPTIMISTIC_FORCE_INCREMENT} schedules a version UPDATE on the root at
-   * flush time; without it a child-only mutation leaves the parent clean and the version stale.
-   * Guarded for the pure unit tests where the {@link EntityManager} is not injected (repositories
-   * are mocked, nothing is really flushed, so there is no real version to protect).
-   */
-  private void forceIncrementRootVersion(NutritionTargets aggregate) {
-    if (entityManager != null) {
-      entityManager.lock(aggregate, LockModeType.OPTIMISTIC_FORCE_INCREMENT);
-    }
   }
 
   @Override

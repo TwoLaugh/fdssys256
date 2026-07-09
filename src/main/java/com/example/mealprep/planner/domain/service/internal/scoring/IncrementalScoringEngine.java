@@ -131,7 +131,7 @@ public class IncrementalScoringEngine implements BeamCandidateScorer {
     if (a.recipeId() != null) {
       recipeCounts = new HashMap<>(parent.recipeCounts);
       int next = recipeCounts.merge(a.recipeId(), 1, Integer::sum);
-      if (next > varietyGate.maxRepeat()) {
+      if (next > varietyGate.maxRepeat(ctx)) {
         varietyGateFailed = true;
       }
     }
@@ -163,7 +163,7 @@ public class IncrementalScoringEngine implements BeamCandidateScorer {
     BigDecimal preference = finalisePreference(state);
     BigDecimal time = finaliseTime(state);
     BigDecimal variety = finaliseVariety(state);
-    BigDecimal batch = finaliseBatch(state);
+    BigDecimal batch = finaliseBatch(state, ctx);
     BigDecimal nutrition = finaliseNutrition(state, ctx);
     BigDecimal cost = costSubScore.compute(plan, ctx);
     BigDecimal provisions = provisionsSubScore.compute(plan, ctx);
@@ -176,7 +176,7 @@ public class IncrementalScoringEngine implements BeamCandidateScorer {
             .add(cost.multiply(w.cost()))
             .add(variety.multiply(w.variety()))
             .add(time.multiply(w.time()))
-            .add(batch.multiply(w.batch()))
+            .add(batch.multiply(BatchSubScore.effectiveWeight(w.batch(), ctx)))
             .add(provisions.multiply(w.provisions()));
 
     boolean floorPassed = finaliseFloorGate(state, plan, ctx);
@@ -227,9 +227,14 @@ public class IncrementalScoringEngine implements BeamCandidateScorer {
         varietySubScore.varietyTargets());
   }
 
-  private BigDecimal finaliseBatch(IncrementalScoreState state) {
+  private BigDecimal finaliseBatch(IncrementalScoreState state, PlanCompositionContext ctx) {
     if (state.batchSlotCount == 0) {
       return BigDecimal.ONE; // empty plan → vacuous
+    }
+    if (BatchSubScore.batchCookingPreferred(ctx)) {
+      // recipe-reuse reward: distinct recipes = recipeCounts.size() (non-null ids), mirroring the
+      // whole-plan compute()'s distinct-recipe set so the oracle invariant holds.
+      return BatchSubScore.finalScore(state.batchSlotCount, state.recipeCounts.size());
     }
     return BatchSubScore.finalScore(
         state.batchSlotCount, state.distinctSessions.size(), state.sawNoBatch);
