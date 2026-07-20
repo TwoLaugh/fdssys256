@@ -282,6 +282,22 @@ class Phase2AugmenterImplTest {
   }
 
   @Test
+  void aiInvalidRequest_returnsEmptyResult() {
+    // Fatal 4xx (bad key / placeholder model id) — misconfigured provider must skip-and-flag,
+    // never fail the generation.
+    when(aiService.execute(any(AiTask.class)))
+        .thenThrow(
+            new com.example.mealprep.ai.exception.AiInvalidRequestException(
+                "OpenAI 401 (AUTH): invalid api key"));
+
+    AugmentationResult result = augmenter.augment(chosenPlan(), rollup(), ctx, UUID.randomUUID());
+
+    assertThat(result.applied()).isEmpty();
+    assertThat(result.discardedByVerifier()).isEmpty();
+    assertThat(result.emittedDirectives()).isEmpty();
+  }
+
+  @Test
   void taskDispatched_isPhase2AugmentationTask_withCorrectWiring() {
     registerResponse(new Phase2AugmentationResponse(List.of(), List.of()));
 

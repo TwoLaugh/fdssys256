@@ -1,6 +1,7 @@
 package com.example.mealprep.planner.domain.service.internal.stagec;
 
 import com.example.mealprep.ai.domain.service.AiService;
+import com.example.mealprep.ai.exception.AiException;
 import com.example.mealprep.ai.exception.AiInvalidResponseException;
 import com.example.mealprep.ai.exception.AiUnavailableException;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
@@ -100,6 +101,12 @@ class Phase2AugmenterImpl implements Phase2Augmenter {
     } catch (AiInvalidResponseException e) {
       log.warn("Phase 2: AI returned an unusable payload; emitting empty augmentation result", e);
       return EMPTY;
+    } catch (AiException e) {
+      // Any other AI failure — fatal 4xx (bad key / placeholder model id → AiInvalidRequest-
+      // Exception), cost-cap rejection, open breaker, token-cap. Phase 2 is a pure enhancement:
+      // skip-and-flag, never fail the generation over a misconfigured provider.
+      log.warn("Phase 2: AI call failed ({}); emitting empty augmentation result", e.toString());
+      return EMPTY;
     }
 
     if (response == null) {
@@ -188,8 +195,8 @@ class Phase2AugmenterImpl implements Phase2Augmenter {
 
   /**
    * Per-day gap detection: walk each day's calories, macros, and micronutrients against the primary
-   * user's {@code TargetsDto} and flag any that breach a {@code LOWER_FLOOR} / {@code UPPER_LIMIT} /
-   * {@code BOTH_BOUNDED} target. Emits {@code {date, macro|micro, target, actual, direction}}
+   * user's {@code TargetsDto} and flag any that breach a {@code LOWER_FLOOR} / {@code UPPER_LIMIT}
+   * / {@code BOTH_BOUNDED} target. Emits {@code {date, macro|micro, target, actual, direction}}
    * entries the Stage-D LLM uses to know which slot to augment toward. Micros read the day's
    * per-serving micro totals (now that recipe nutrition is wired); a micro missing from the day →
    * actual {@code 0} → flagged as a floor breach.
@@ -245,7 +252,9 @@ class Phase2AugmenterImpl implements Phase2Augmenter {
     gaps.add(gap);
   }
 
-  /** Flag the day's calorie total against the daily calorie target (the scenario's 3.6k headline). */
+  /**
+   * Flag the day's calorie total against the daily calorie target (the scenario's 3.6k headline).
+   */
   private void addCalorieGap(
       List<Map<String, Object>> gaps, CandidateDailyRollupDto day, CalorieTargetDto cal) {
     if (cal == null || cal.dailyTarget() <= 0) {
