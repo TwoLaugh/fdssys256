@@ -1,9 +1,9 @@
-# Graph integration — G05 seed + G06 ingest + G07 recompute (engine side)
+# Graph integration — G05 seed + G06 ingest + G07 recompute + G08 harness (engine side)
 
 Implements tickets `tickets/engine-integration/G05-ingredientmapping-seed.md`,
-`G06-batch-ingest.md` and `G07-nutrition-recompute.md` from the spike repo
-(`culinary-graph-spike`, branch `culinary-graph-spike`), plus the engine-side nutrient-key
-contract test G04 deferred (`GraphNutrientKeyContractTest`).
+`G06-batch-ingest.md`, `G07-nutrition-recompute.md` and `G08-comparison-harness.md` (boundary
+half) from the spike repo (`culinary-graph-spike`, branch `culinary-graph-spike`), plus the
+engine-side nutrient-key contract test G04 deferred (`GraphNutrientKeyContractTest`).
 
 ## The seed artifact (G05)
 
@@ -59,6 +59,17 @@ batch `jobId` in `recipe_imports` / the batch's `ingest_report.json` — see G11
   law #2). Honesty gates fail the dish (counted rejected, row stays PENDING) on any
   non-`calculated` status or zero-kcal result. `ingest_report.json` entries now carry
   `nutritionStatus: CALCULATED`.
+- G08 boundary harness: `docs/graph/spike-side/compare_batch_nutrition.py` (+ offline test
+  suite, both DESTINED FOR `culinary-graph-spike/corpus_expansion/` — same delivery pattern as
+  the G05 generator). Per batch it diffs the engine recompute (`GET /api/v1/recipes/{id}`,
+  read path pinned by `RecipeNutritionWriterImplIT`) against `nutrition_expected.json`:
+  kcal ≤2% relative, micros ≤5% with the near-zero absolute floor (expected <1.0 unit →
+  |Δ| ≤0.05 unit; zero-expected keys are a fabrication detector), missing/extra keys =
+  vocabulary rot. Tolerances pin+freeze from batch 1 (D5, `--pin-tolerances`, ceilings only
+  tighten). Quarantine lever = reversible `POST .../archive` (`--quarantine`; dry run by
+  default), over-tolerance dishes NAMED in `divergence_report.json`. Engine side: no
+  production changes (per ticket). No real draft batch has been exported yet, so the
+  end-to-end M-SEED run remains pending spike-side G01 output.
 - The landed spike exporter stamps a deterministic per-batch `jobId` (UUIDv5) into every
   payload; the ingest runner uses it as-is (one jobId per batch preserved across re-runs) and
   aborts if payloads disagree.
