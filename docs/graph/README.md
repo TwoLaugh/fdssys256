@@ -1,9 +1,9 @@
-# Graph integration — G05 seed + G06 ingest (engine side)
+# Graph integration — G05 seed + G06 ingest + G07 recompute (engine side)
 
-Implements tickets `tickets/engine-integration/G05-ingredientmapping-seed.md` and
-`G06-batch-ingest.md` from the spike repo (`culinary-graph-spike`, branch
-`culinary-graph-spike`), plus the engine-side nutrient-key contract test G04 deferred
-(`GraphNutrientKeyContractTest`).
+Implements tickets `tickets/engine-integration/G05-ingredientmapping-seed.md`,
+`G06-batch-ingest.md` and `G07-nutrition-recompute.md` from the spike repo
+(`culinary-graph-spike`, branch `culinary-graph-spike`), plus the engine-side nutrient-key
+contract test G04 deferred (`GraphNutrientKeyContractTest`).
 
 ## The seed artifact (G05)
 
@@ -53,9 +53,12 @@ batch `jobId` in `recipe_imports` / the batch's `ingest_report.json` — see G11
 
 ## Status notes
 
-- G07 (nutrition recompute on import) was not landed when this was built: ingested dishes stay
-  `nutritionStatus=PENDING` and `ingest_report.json` records that honestly. When G07 lands,
-  `GraphBatchIngestServiceImpl` is the invocation point (marked in the import loop).
+- G07 landed: the import loop invokes `GraphImportNutritionRecalc` per dish — the ENGINE
+  recomputes per-serving nutrition from the artifact's exact-grams lines × the seeded mappings
+  and persists via the `RecipeNutritionWriter` SPI (spike numbers are never persisted, standing
+  law #2). Honesty gates fail the dish (counted rejected, row stays PENDING) on any
+  non-`calculated` status or zero-kcal result. `ingest_report.json` entries now carry
+  `nutritionStatus: CALCULATED`.
 - The landed spike exporter stamps a deterministic per-batch `jobId` (UUIDv5) into every
   payload; the ingest runner uses it as-is (one jobId per batch preserved across re-runs) and
   aborts if payloads disagree.

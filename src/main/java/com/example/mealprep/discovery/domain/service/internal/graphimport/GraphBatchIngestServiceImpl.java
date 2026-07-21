@@ -48,8 +48,11 @@ import org.springframework.stereotype.Service;
  * UUID would break re-run traceability for no gain (recorded deviation from the ticket text, which
  * predates the landed exporter).
  *
- * <p>Post-import nutrition recompute is G07's mechanism; until it lands, imported dishes stay
- * {@code nutritionStatus=PENDING} and the report records that honestly.
+ * <p>Post-import nutrition recompute is G07's {@link GraphImportNutritionRecalc}: per imported
+ * dish, the ENGINE recomputes per-serving nutrition from the artifact's exact-grams lines × the
+ * G05-seeded mappings and persists via the writer SPI — spike numbers are never persisted (standing
+ * law #2). A recompute gate failure counts the dish rejected; its recipe row stays honestly {@code
+ * PENDING}.
  */
 @Service
 public class GraphBatchIngestServiceImpl
@@ -71,18 +74,21 @@ public class GraphBatchIngestServiceImpl
   private final NutritionQueryService nutritionQueryService;
   private final RecipeWriteApi recipeWriteApi;
   private final JdbcTemplate jdbcTemplate;
+  private final GraphImportNutritionRecalc nutritionRecalc;
 
   public GraphBatchIngestServiceImpl(
       GraphImportProperties properties,
       ObjectMapper objectMapper,
       NutritionQueryService nutritionQueryService,
       RecipeWriteApi recipeWriteApi,
-      JdbcTemplate jdbcTemplate) {
+      JdbcTemplate jdbcTemplate,
+      GraphImportNutritionRecalc nutritionRecalc) {
     this.properties = properties;
     this.objectMapper = objectMapper;
     this.nutritionQueryService = nutritionQueryService;
     this.recipeWriteApi = recipeWriteApi;
     this.jdbcTemplate = jdbcTemplate;
+    this.nutritionRecalc = nutritionRecalc;
   }
 
   @Override
@@ -245,16 +251,21 @@ public class GraphBatchIngestServiceImpl
         ImportedRecipeResult result =
             recipeWriteApi.saveImportedRecipe(
                 data.withDataQuality(com.example.mealprep.core.types.DataQuality.AI_GENERATED));
+        // G07: explicit engine recompute from the artifact's exact-grams lines. Its honesty
+        // gates throw BEFORE any nutrition write, so a gate failure lands the dish in rejected
+        // with the recipe row honestly PENDING (dedup re-runs rewrite identical values).
+        GraphImportNutritionRecalc.Outcome outcome =
+            nutritionRecalc.recompute(data, result.recipeId(), result.versionId());
         if (result.newlyCreated()) {
           created++;
         } else {
           dedupSkipped++;
         }
-        // G07 owns the recompute trigger; until it lands, imports stay PENDING (honest).
-        ingested.add(new IngestedDish(fp, result.recipeId(), result.versionId(), "PENDING"));
+        ingested.add(
+            new IngestedDish(fp, result.recipeId(), result.versionId(), outcome.nutritionStatus()));
       } catch (RuntimeException ex) {
         log.warn(
-            "graph ingest saveImportedRecipe failed for {} ({}): {}",
+            "graph ingest import failed for {} ({}): {}",
             fp,
             ex.getClass().getSimpleName(),
             ex.getMessage());

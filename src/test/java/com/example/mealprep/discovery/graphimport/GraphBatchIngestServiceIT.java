@@ -17,6 +17,7 @@ import com.example.mealprep.discovery.api.dto.GraphBatchIngestRequest;
 import com.example.mealprep.discovery.config.GraphImportProperties;
 import com.example.mealprep.discovery.domain.service.GraphBatchIngestService;
 import com.example.mealprep.discovery.domain.service.internal.graphimport.GraphBatchIngestServiceImpl;
+import com.example.mealprep.discovery.domain.service.internal.graphimport.GraphImportNutritionRecalc;
 import com.example.mealprep.nutrition.api.dto.IngredientMappingSource;
 import com.example.mealprep.nutrition.api.dto.IngredientNutritionDocument;
 import com.example.mealprep.nutrition.domain.entity.IngredientMapping;
@@ -91,6 +92,7 @@ class GraphBatchIngestServiceIT {
   @Autowired private NutritionQueryService nutritionQueryService;
   @Autowired private RecipeWriteApi recipeWriteApi;
   @Autowired private RecipeQueryService recipeQueryService;
+  @Autowired private GraphImportNutritionRecalc nutritionRecalc;
   @Autowired private MockMvc mvc;
   @Autowired private AuthProperties authProperties;
   @Autowired private UserRepository userRepository;
@@ -103,6 +105,8 @@ class GraphBatchIngestServiceIT {
   @BeforeEach
   void seedMappings() {
     // Minimal G05-style subset seeded directly through the repository (test package — allowed).
+    // Micros carry the canonical-key shape incl. the saturated_fat_g bridge (G04); the G07
+    // recompute must reproduce exactly these values × grams/100 — no other micro key may appear.
     for (String key : List.of("rice", "broccoli")) {
       mappingRepository.save(
           IngredientMapping.builder()
@@ -119,7 +123,7 @@ class GraphBatchIngestServiceIT {
                       BigDecimal.ONE,
                       null,
                       null,
-                      Map.of("iron_mg", BigDecimal.ONE),
+                      Map.of("iron_mg", BigDecimal.ONE, "saturated_fat_g", new BigDecimal("0.5")),
                       Map.of()))
               .confidence(new BigDecimal("1.000"))
               .needsReview(false)
@@ -245,7 +249,36 @@ class GraphBatchIngestServiceIT {
         .anyMatch(r -> r.fp().equals(FP_C) && r.reason().equals("unknown equipment: wok"));
     assertThat(report.recipeIds()).hasSize(1);
     assertThat(report.recipeIds().get(0).fp()).isEqualTo(FP_A);
-    assertThat(report.recipeIds().get(0).nutritionStatus()).isEqualTo("PENDING");
+    // G07: the import loop triggers the ENGINE recompute — the dish lands CALCULATED, not
+    // PENDING, with real per-serving figures persisted through the writer SPI.
+    assertThat(report.recipeIds().get(0).nutritionStatus()).isEqualTo("CALCULATED");
+    assertThat(
+            jdbcTemplate.queryForObject(
+                "SELECT nutrition_status FROM recipe_recipes WHERE catalogue = 'SYSTEM'",
+                String.class))
+        .isEqualTo("CALCULATED");
+    // Hand-computed Σ(grams/100 × per-100g)/servings — proves grams actually flow (the
+    // finding-3 zero-kcal regression pin): rice 180 g + broccoli 120 g on the 100 kcal/100g
+    // seed docs at servings=1 → 300 kcal; protein 3.00 g; iron 3.00 mg; satfat bridge 1.50 g.
+    String nutritionJson =
+        jdbcTemplate.queryForObject(
+            "SELECT nutrition_per_serving FROM recipe_versions WHERE id = ?",
+            String.class,
+            report.recipeIds().get(0).versionId());
+    assertThat(nutritionJson).isNotNull();
+    JsonNode persisted = objectMapper.readTree(nutritionJson);
+    assertThat(persisted.get("nutritionStatus").asText()).isEqualTo("calculated");
+    assertThat(persisted.get("caloriesPerServing").asInt()).isEqualTo(300);
+    assertThat(persisted.get("proteinPerServingG").decimalValue()).isEqualByComparingTo("3.00");
+    assertThat(persisted.get("microsPerServing").get("iron_mg").decimalValue())
+        .isEqualByComparingTo("3.00");
+    assertThat(persisted.get("microsPerServing").get("saturated_fat_g").decimalValue())
+        .isEqualByComparingTo("1.50");
+    // The 5 engine micros with no spike source stay ABSENT (not fabricated) — G04 contract.
+    for (String absent :
+        List.of("biotin_mcg", "chloride_mg", "iodine_mcg", "chromium_mcg", "molybdenum_mcg")) {
+      assertThat(persisted.get("microsPerServing").has(absent)).isFalse();
+    }
 
     // one recipe_imports row with the batch jobId, manifest sourceKey, 32-char stamp, and a
     // null canonical_url (design-doc open item V1 formally closed here)
@@ -281,6 +314,15 @@ class GraphBatchIngestServiceIT {
     assertThat(rerun.dedupSkipped()).isEqualTo(1);
     assertThat(rerun.note()).isNotNull(); // dedup-without-content-comparison landmine surfaced
     assertThat(rerun.recipeIds()).hasSize(1); // ids still collected on resume
+    // G07 writer idempotency on the dedup path: the recompute re-runs and rewrites values that
+    // are byte-identical to the first pass.
+    assertThat(rerun.recipeIds().get(0).nutritionStatus()).isEqualTo("CALCULATED");
+    assertThat(
+            jdbcTemplate.queryForObject(
+                "SELECT nutrition_per_serving FROM recipe_versions WHERE id = ?",
+                String.class,
+                rerun.recipeIds().get(0).versionId()))
+        .isEqualTo(nutritionJson);
     assertThat(importedRecipeCount()).isEqualTo(recipes);
     assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM recipe_versions", Long.class))
         .isEqualTo(versions);
@@ -297,7 +339,8 @@ class GraphBatchIngestServiceIT {
             objectMapper,
             nutritionQueryService,
             recipeWriteApi,
-            jdbcTemplate);
+            jdbcTemplate,
+            nutritionRecalc);
     GraphBatchIngestReport report = disabled.ingest(dir.toString());
     assertThat(report.status()).isEqualTo(GraphBatchIngestReport.STATUS_DISABLED);
     assertThat(importedRecipeCount()).isZero();
