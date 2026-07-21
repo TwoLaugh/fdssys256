@@ -436,6 +436,54 @@ class RecipeServiceImplTest {
         .allSatisfy(ing -> assertThat(ing.getIngredientMappingKey()).isNotBlank());
   }
 
+  // ---------------- saveImportedRecipe: G10 dataQuality provenance ----------------
+
+  @Test
+  void saveImportedRecipe_aiGeneratedQuality_persistsQualityAndSourceType() {
+    // G10: a graph-batch dish carries dataQuality=AI_GENERATED through the SPI → the recipe row
+    // and the recipe_imports provenance row both say so (the honesty rule's typed channel).
+    stubImportPersistence();
+    var data =
+        importedRecipeWith(
+                List.of(
+                    new com.example.mealprep.recipe.spi.ImportedRecipeData.ImportedIngredient(
+                        0, "Rice", "rice", BigDecimal.TEN, "g", null, false)))
+            .withDataQuality(com.example.mealprep.core.types.DataQuality.AI_GENERATED);
+
+    service().saveImportedRecipe(data);
+
+    ArgumentCaptor<Recipe> recipeCaptor = ArgumentCaptor.forClass(Recipe.class);
+    verify(recipeRepository).save(recipeCaptor.capture());
+    assertThat(recipeCaptor.getValue().getDataQuality()).isEqualTo(DataQuality.AI_GENERATED);
+
+    ArgumentCaptor<RecipeImport> importCaptor = ArgumentCaptor.forClass(RecipeImport.class);
+    verify(importRepository).save(importCaptor.capture());
+    assertThat(importCaptor.getValue().getSourceType()).isEqualTo(ImportSource.AI_GENERATED);
+  }
+
+  @Test
+  void saveImportedRecipe_nullQuality_defaultsToWebDiscovered_regressionPin() {
+    // Back-compat pin: the 13-arg constructor (null dataQuality) keeps the pre-G10 behaviour —
+    // discovery-crawl imports stay WEB_DISCOVERED on both the recipe and the provenance row.
+    stubImportPersistence();
+    var data =
+        importedRecipeWith(
+            List.of(
+                new com.example.mealprep.recipe.spi.ImportedRecipeData.ImportedIngredient(
+                    0, "Rice", "rice", BigDecimal.TEN, "g", null, false)));
+    assertThat(data.dataQuality()).isNull(); // 13-arg ctor defaults null
+
+    service().saveImportedRecipe(data);
+
+    ArgumentCaptor<Recipe> recipeCaptor = ArgumentCaptor.forClass(Recipe.class);
+    verify(recipeRepository).save(recipeCaptor.capture());
+    assertThat(recipeCaptor.getValue().getDataQuality()).isEqualTo(DataQuality.WEB_DISCOVERED);
+
+    ArgumentCaptor<RecipeImport> importCaptor = ArgumentCaptor.forClass(RecipeImport.class);
+    verify(importRepository).save(importCaptor.capture());
+    assertThat(importCaptor.getValue().getSourceType()).isEqualTo(ImportSource.WEB_DISCOVERED);
+  }
+
   // ---------------- findPlannableCandidates (planner Stage-A read) ----------------
 
   @Test

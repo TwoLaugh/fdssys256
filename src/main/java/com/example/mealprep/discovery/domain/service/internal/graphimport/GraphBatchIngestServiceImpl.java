@@ -240,7 +240,11 @@ public class GraphBatchIngestServiceImpl
         continue;
       }
       try {
-        ImportedRecipeResult result = recipeWriteApi.saveImportedRecipe(data);
+        // G10: every graph dish is stamped AI_GENERATED regardless of what the payload carries —
+        // the honesty rule's typed channel (recipe.dataQuality + recipe_imports.source_type).
+        ImportedRecipeResult result =
+            recipeWriteApi.saveImportedRecipe(
+                data.withDataQuality(com.example.mealprep.core.types.DataQuality.AI_GENERATED));
         if (result.newlyCreated()) {
           created++;
         } else {

@@ -4,6 +4,7 @@ import com.example.mealprep.recipe.api.dto.ConfirmImportRequest;
 import com.example.mealprep.recipe.api.dto.CreateBranchRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.CreateSubstitutionRequest;
+import com.example.mealprep.recipe.api.dto.ImportJobArchiveResult;
 import com.example.mealprep.recipe.api.dto.ImportRecipeFromHtmlRequest;
 import com.example.mealprep.recipe.api.dto.ImportRecipeFromUrlRequest;
 import com.example.mealprep.recipe.api.dto.RecipeBranchDto;
@@ -202,6 +203,29 @@ public interface RecipeUpdateService {
    * {@link #archive}. No event is published per LLD §Events. Per LLD line 566 / recipe-01g.
    */
   void unarchive(UUID recipeId, UUID actorUserId);
+
+  /**
+   * G11 graph-batch withdraw seam: soft-archive every SYSTEM-catalogue, non-deleted recipe whose
+   * {@code recipe_imports} row carries the given {@code jobId} with {@code sourceType =
+   * AI_GENERATED} (one {@code jobId} per graph batch is the G06 invariant; the source-type pin
+   * keeps a graph withdraw from sweeping a discovery crawl that shares the {@code job_id} column).
+   * Archive is the sanctioned exposure lever — {@code archived_at} is excluded from every plannable
+   * read ({@code RecipeRepository} JPQL/native predicates), the row and its provenance survive
+   * intact, and already-generated plans keep their slots (plans reference recipes; archive does not
+   * touch them). Idempotent; atomic across the batch ({@code @Transactional}). Publishes {@code
+   * RecipeArchivedEvent(cause=MANUAL_ADMIN)} per actual transition, mirroring {@link #archive}.
+   * Caller (the discovery admin controller) is responsible for admin gating; {@code actorUserId} is
+   * recorded in the audit log only — SYSTEM rows are archivable by any authenticated caller (v1
+   * admin-open policy, {@code authoriseArchiveOp}).
+   */
+  ImportJobArchiveResult archiveByImportJobId(UUID jobId, UUID actorUserId);
+
+  /**
+   * Reversal of {@link #archiveByImportJobId} — clears {@code archived_at} on the same (jobId,
+   * AI_GENERATED) match set: full restore, embeddings/ratings intact. Idempotent; no event
+   * published (mirrors {@link #unarchive}).
+   */
+  ImportJobArchiveResult unarchiveByImportJobId(UUID jobId, UUID actorUserId);
 
   /**
    * Bulk-update {@code last_used_in_plan_at = now()} for the supplied recipe IDs. Empty list →

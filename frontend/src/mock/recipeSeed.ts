@@ -1067,6 +1067,7 @@ function makeProvenance(args: {
   sourceType: RecipeImportDto["sourceType"];
   sourceUrl?: string | null;
   extractionMethod?: string | null;
+  sourceKey?: string | null;
   importedAt: string;
   duplicateOfRecipeId?: string | null;
 }): RecipeImportDto {
@@ -1077,6 +1078,7 @@ function makeProvenance(args: {
     sourceUrl: args.sourceUrl ?? null,
     sourcePayload: null,
     extractionMethod: args.extractionMethod ?? null,
+    sourceKey: args.sourceKey ?? null,
     duplicateOfRecipeId: args.duplicateOfRecipeId ?? null,
     importedAt: args.importedAt,
     importedByUserId: MOCK_USER_ID,
@@ -1300,8 +1302,13 @@ export function createRecipeSeed(): {
       sourceUrl: "https://www.bbcgoodfood.com/recipes/lemon-orzo-chicken",
       extractionMethod: "json_ld", importedAt: T("2026-06-09", "19:30"),
     }),
+    // Graph-batch dish (G10): carries the 32-char generator audit stamp + campaign sourceKey the
+    // detail page renders verbatim. black-bean-tacos below stays stamp-less — the no-provenance-
+    // detail edge (chip renders, stamp line omitted, no error).
     "chickpea-spinach-curry": makeProvenance({
       recipeId: "chickpea-spinach-curry", sourceType: "AI_GENERATED",
+      extractionMethod: "graph@395c11a+c@c81a2e87dacf339f",
+      sourceKey: "graph:camp-2026-07-dinner1",
       importedAt: T("2026-05-20"),
     }),
     "black-bean-tacos": makeProvenance({

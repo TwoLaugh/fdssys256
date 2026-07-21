@@ -22,6 +22,7 @@ import com.example.mealprep.nutrition.api.dto.IngredientNutritionDocument;
 import com.example.mealprep.nutrition.domain.entity.IngredientMapping;
 import com.example.mealprep.nutrition.domain.repository.IngredientMappingRepository;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
+import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import com.example.mealprep.recipe.spi.RecipeWriteApi;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -89,6 +90,7 @@ class GraphBatchIngestServiceIT {
   @Autowired private IngredientMappingRepository mappingRepository;
   @Autowired private NutritionQueryService nutritionQueryService;
   @Autowired private RecipeWriteApi recipeWriteApi;
+  @Autowired private RecipeQueryService recipeQueryService;
   @Autowired private MockMvc mvc;
   @Autowired private AuthProperties authProperties;
   @Autowired private UserRepository userRepository;
@@ -249,14 +251,21 @@ class GraphBatchIngestServiceIT {
     // null canonical_url (design-doc open item V1 formally closed here)
     Map<String, Object> importRow =
         jdbcTemplate.queryForMap(
-            "SELECT job_id, source_key, extraction_method, canonical_url, content_fingerprint"
-                + " FROM recipe_imports");
+            "SELECT job_id, source_key, extraction_method, canonical_url, content_fingerprint,"
+                + " source_type FROM recipe_imports");
     assertThat(String.valueOf(importRow.get("job_id"))).isEqualTo(JOB_ID);
     assertThat(importRow.get("source_key")).isEqualTo(SOURCE_KEY);
     assertThat(importRow.get("extraction_method")).isEqualTo(STAMP);
     assertThat(String.valueOf(importRow.get("extraction_method")).length()).isEqualTo(32);
     assertThat(importRow.get("canonical_url")).isNull();
     assertThat(importRow.get("content_fingerprint")).isEqualTo(FP_A);
+    // G10: graph dishes stop masquerading as scraped ones — provenance + recipe row both say
+    // AI_GENERATED (the runner stamps every dish regardless of payload contents).
+    assertThat(importRow.get("source_type")).isEqualTo("AI_GENERATED");
+    assertThat(
+            jdbcTemplate.queryForObject(
+                "SELECT data_quality FROM recipe_recipes WHERE catalogue = 'SYSTEM'", String.class))
+        .isEqualTo("AI_GENERATED");
 
     // ingest_report.json written into the batch dir and equal to the HTTP-shaped response
     JsonNode reportFile = objectMapper.readTree(dir.resolve("ingest_report.json").toFile());
@@ -428,5 +437,130 @@ class GraphBatchIngestServiceIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(new GraphBatchIngestRequest("x"))))
         .andExpect(status().isForbidden());
+  }
+
+  // ===== G11 withdraw/restore (archive lever by batch jobId) =====
+
+  private static String withdrawPath(String jobId) {
+    return "/api/v1/discovery/admin/graph-batches/" + jobId + "/withdraw";
+  }
+
+  private static String restorePath(String jobId) {
+    return "/api/v1/discovery/admin/graph-batches/" + jobId + "/restore";
+  }
+
+  private Object archivedAt(UUID recipeId) {
+    return jdbcTemplate.queryForObject(
+        "SELECT archived_at FROM recipe_recipes WHERE id = ?", Object.class, recipeId);
+  }
+
+  private List<UUID> plannableDinnerIds(UUID userId) {
+    return recipeQueryService.findPlannableCandidatesByKind(userId, "dinner", 50, null).stream()
+        .map(com.example.mealprep.recipe.api.dto.RecipeDto::id)
+        .toList();
+  }
+
+  @Test
+  void withdrawByJobId_archivesReversiblyIdempotently_andLeavesPlannableReads() throws Exception {
+    Path dir = buildBatch();
+    GraphBatchIngestReport ingest = ingestService.ingest(dir.toString());
+    assertThat(ingest.created()).isEqualTo(1);
+    UUID recipeId = ingest.recipeIds().get(0).recipeId();
+
+    // Before withdraw: the dish is in the per-kind plannable read (SYSTEM row, dinner tag).
+    UUID anyUser = UUID.randomUUID();
+    assertThat(plannableDinnerIds(anyUser)).contains(recipeId);
+
+    AuthedUser admin = register();
+    given(adminProperties.isAdmin(admin.userId())).willReturn(true);
+
+    // Withdraw: archived, out of the plannable read immediately (G08-verified archive lever).
+    mvc.perform(post(withdrawPath(JOB_ID)).cookie(admin.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.action").value("WITHDRAWN"))
+        .andExpect(jsonPath("$.matched").value(1))
+        .andExpect(jsonPath("$.changedRecipeIds[0]").value(recipeId.toString()))
+        .andExpect(jsonPath("$.skippedRecipeIds").isEmpty());
+    assertThat(archivedAt(recipeId)).isNotNull();
+    assertThat(plannableDinnerIds(anyUser)).doesNotContain(recipeId);
+
+    // Idempotent repeat: same match, nothing changed, still archived.
+    mvc.perform(post(withdrawPath(JOB_ID)).cookie(admin.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.matched").value(1))
+        .andExpect(jsonPath("$.changedRecipeIds").isEmpty());
+    assertThat(archivedAt(recipeId)).isNotNull();
+
+    // Restore: archived_at cleared, plannable again — full reversal.
+    mvc.perform(post(restorePath(JOB_ID)).cookie(admin.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.action").value("RESTORED"))
+        .andExpect(jsonPath("$.matched").value(1))
+        .andExpect(jsonPath("$.changedRecipeIds[0]").value(recipeId.toString()));
+    assertThat(archivedAt(recipeId)).isNull();
+    assertThat(plannableDinnerIds(anyUser)).contains(recipeId);
+
+    // Idempotent restore repeat.
+    mvc.perform(post(restorePath(JOB_ID)).cookie(admin.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.changedRecipeIds").isEmpty());
+  }
+
+  @Test
+  void withdrawUnknownJobId_returns404() throws Exception {
+    AuthedUser admin = register();
+    given(adminProperties.isAdmin(admin.userId())).willReturn(true);
+    mvc.perform(post(withdrawPath(UUID.randomUUID().toString())).cookie(admin.cookie()))
+        .andExpect(status().isNotFound());
+    mvc.perform(post(restorePath(UUID.randomUUID().toString())).cookie(admin.cookie()))
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void withdraw_neverSweepsADiscoveryCrawlSharingTheJobIdColumn() throws Exception {
+    // A WEB_DISCOVERED import (13-arg SPI ctor → null dataQuality → WEB_DISCOVERED, the pre-G10
+    // regression pin) carrying a jobId must be invisible to the graph withdraw endpoint: the
+    // sourceType=AI_GENERATED match returns nothing → 404, row untouched.
+    UUID crawlJobId = UUID.randomUUID();
+    var crawlDish =
+        new com.example.mealprep.recipe.spi.ImportedRecipeData(
+            "bbcgoodfood-sitemap",
+            "https://example.test/crawl/1",
+            "d".repeat(64),
+            "Crawled dish",
+            null,
+            List.of(
+                new com.example.mealprep.recipe.spi.ImportedRecipeData.ImportedIngredient(
+                    1, "rice", "rice", new BigDecimal("100"), "g", null, false)),
+            List.of(
+                new com.example.mealprep.recipe.spi.ImportedRecipeData.ImportedMethodStep(
+                    1, "Cook.", 5)),
+            null,
+            null,
+            "json_ld",
+            null,
+            crawlJobId,
+            UUID.randomUUID());
+    UUID crawlRecipeId = recipeWriteApi.saveImportedRecipe(crawlDish).recipeId();
+    assertThat(
+            jdbcTemplate.queryForObject(
+                "SELECT source_type FROM recipe_imports WHERE recipe_id = ?",
+                String.class,
+                crawlRecipeId))
+        .isEqualTo("WEB_DISCOVERED");
+
+    AuthedUser admin = register();
+    given(adminProperties.isAdmin(admin.userId())).willReturn(true);
+    mvc.perform(post(withdrawPath(crawlJobId.toString())).cookie(admin.cookie()))
+        .andExpect(status().isNotFound());
+    assertThat(archivedAt(crawlRecipeId)).isNull();
+  }
+
+  @Test
+  void withdraw_adminGated_401Anonymous_403NonAdmin() throws Exception {
+    mvc.perform(post(withdrawPath(JOB_ID))).andExpect(status().isUnauthorized());
+    AuthedUser user = register(); // not allowlisted → fail-closed 403
+    mvc.perform(post(withdrawPath(JOB_ID)).cookie(user.cookie())).andExpect(status().isForbidden());
+    mvc.perform(post(restorePath(JOB_ID)).cookie(user.cookie())).andExpect(status().isForbidden());
   }
 }

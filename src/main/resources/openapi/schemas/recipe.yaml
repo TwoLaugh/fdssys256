@@ -518,6 +518,14 @@ RecipeImportDto:
       type: string
       maxLength: 32
       nullable: true
+    sourceKey:
+      type: string
+      maxLength: 64
+      nullable: true
+      description: >
+        Discovery/graph source key persisted on the import row (e.g. "bbcgoodfood-sitemap",
+        "graph:<campaign-id>"). Null for plain URL imports. Additive per G10 so the detail page
+        can show the campaign id.
     duplicateOfRecipeId: { type: string, format: uuid, nullable: true }
     importedAt: { type: string, format: date-time }
     importedByUserId: { type: string, format: uuid }

@@ -1413,6 +1413,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nutrition/admin/ingredient-mappings/seed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin: seed the ingredient-mapping cache from the spike-canon graph seed artifact (G05). Idempotent, first-writer-wins; any collision => status FAILED + 409, existing rows never overwritten. */
+        post: operations["seedIngredientMappings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nutrition/health-directives": {
         parameters: {
             query?: never;
@@ -2656,6 +2673,63 @@ export interface paths {
          * @description Planner cold-start path. Returns the terminal DTO on completion or the partial DTO on timeout. Use strictTimeout=true to receive 408 instead of 200 on deadline expiry.
          */
         post: operations["runDiscoveryJobSync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/admin/graph-batches/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin: ingest an exported graph-batch directory (G06). Imports only review-approved fingerprints through the RecipeWriteApi seam; fail-closed validation; fingerprint-dedup idempotent; one jobId per batch.
+         * @description Body carries a server-local absolute path to the batch dir (D4 option (a), single operator). Non-OK statuses (DISABLED, INVALID_BATCH, ABORTED_MISSING_KEYS, REJECTED_RESTRICTED_DIET) return 409 with the same report shape and zero writes.
+         */
+        post: operations["ingestGraphBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/admin/graph-batches/{jobId}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin: withdraw a live graph batch (G11) — reversibly archive every AI_GENERATED recipe imported under this jobId. Archived rows leave every plannable read immediately; already-generated plans keep their slots. Idempotent.
+         * @description One jobId per graph batch (G06 invariant). Only AI_GENERATED import rows match — a graph withdraw never sweeps a discovery crawl's harvest sharing the job_id column. Flipping mealprep.graph.import.enabled=false stops future ingest but does NOT retro-hide dishes; this endpoint is the retro lever. Reverse with /restore.
+         */
+        post: operations["withdrawGraphBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/admin/graph-batches/{jobId}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin: restore a withdrawn graph batch (G11) — clear archived_at on the same jobId match set. Full restore, embeddings/ratings intact. Idempotent. */
+        post: operations["restoreGraphBatch"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5704,6 +5778,8 @@ export interface components {
             sourceUrl?: string | null;
             sourcePayload?: unknown;
             extractionMethod?: string | null;
+            /** @description Discovery/graph source key persisted on the import row (e.g. "bbcgoodfood-sitemap", "graph:<campaign-id>"). Null for plain URL imports. Additive per G10 so the detail page can show the campaign id. */
+            sourceKey?: string | null;
             /** Format: uuid */
             duplicateOfRecipeId?: string | null;
             /** Format: date-time */
@@ -7862,9 +7938,69 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        IngredientMappingSeedReport: {
+            inserted?: number;
+            skippedIdentical?: number;
+            rejected?: {
+                searchTerm?: string | null;
+                reason?: string;
+            }[];
+            collisions?: {
+                searchTerm?: string;
+                existingSource?: string | null;
+                existingExternalId?: string | null;
+                firstDivergingField?: string;
+                note?: string;
+            }[];
+            /** @enum {string} */
+            status?: "OK" | "FAILED";
+            meta?: {
+                [key: string]: unknown;
+            } | null;
+        } & {
+            [key: string]: unknown;
+        };
         RevertToPlanRequest: {
             /** Format: uuid */
             targetHistoricalPlanId: string;
+        };
+        GraphBatchIngestReport: {
+            batchId?: string | null;
+            jobId?: string | null;
+            /** @enum {string} */
+            status?: "OK" | "DISABLED" | "INVALID_BATCH" | "ABORTED_MISSING_KEYS" | "REJECTED_RESTRICTED_DIET";
+            created?: number;
+            dedupSkipped?: number;
+            notApproved?: number;
+            rejected?: {
+                fp?: string;
+                reason?: string;
+            }[];
+            recipeIds?: {
+                fp?: string;
+                /** Format: uuid */
+                recipeId?: string;
+                /** Format: uuid */
+                versionId?: string | null;
+                nutritionStatus?: string | null;
+            }[];
+            missingMappingKeys?: string[];
+            errors?: string[];
+            note?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        GraphBatchWithdrawReport: {
+            /** Format: uuid */
+            jobId: string;
+            /** @enum {string} */
+            action: "WITHDRAWN" | "RESTORED";
+            /** @description Recipes whose AI_GENERATED import row carries the jobId, regardless of state. */
+            matched: number;
+            /** @description Rows actually transitioned by this call; empty on a repeat call. */
+            changedRecipeIds: string[];
+            /** @description Matched rows deliberately left alone (soft-deleted, or promoted into a user catalogue). */
+            skippedRecipeIds: string[];
         };
         /** @enum {string} */
         ChangeDimension: "SALT_LEVEL" | "PROTEIN" | "METHOD_SIMPLIFICATION" | "PORTION_SIZE" | "FLAVOUR_BALANCE" | "ACID_BALANCE" | "TEXTURE" | "COOKING_TIME" | "SUBSTITUTION_PROMOTION" | "GENERAL";
@@ -12514,6 +12650,73 @@ export interface operations {
             };
         };
     };
+    seedIngredientMappings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    _meta?: {
+                        [key: string]: unknown;
+                    } | null;
+                    rows: ({
+                        searchTerm: string;
+                        /** @enum {string} */
+                        source: "USDA" | "OPEN_FOOD_FACTS" | "MANUAL";
+                        externalId?: string | null;
+                        basisNote?: string | null;
+                        nutritionPer100g: {
+                            [key: string]: unknown;
+                        };
+                    } & {
+                        [key: string]: unknown;
+                    })[];
+                };
+            };
+        };
+        responses: {
+            /** @description Seed run completed with no collisions (inserted / skippedIdentical / rejected in the report). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngredientMappingSeedReport"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Authenticated but not on the admin allowlist. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Collision(s): existing rows differ from the seed and were NOT overwritten — hard stop, human adjudication required. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngredientMappingSeedReport"];
+                };
+            };
+        };
+    };
     listHealthDirectives: {
         parameters: {
             query?: {
@@ -16339,6 +16542,157 @@ export interface operations {
             };
             /** @description All discovery sources unavailable. */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    ingestGraphBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    batchPath: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Batch processed (per-dish rejections ride in the report). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphBatchIngestReport"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Authenticated but not on the admin allowlist. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Flag off, invalid batch/verdicts, unseeded keys, or restricted-diet policy — zero writes; see report.status/errors. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphBatchIngestReport"];
+                };
+            };
+        };
+    };
+    withdrawGraphBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Batch withdrawn (changedRecipeIds empty on a repeat call — idempotency signal). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphBatchWithdrawReport"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Authenticated but not on the admin allowlist. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No AI_GENERATED import rows carry this jobId — not a known graph batch. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    restoreGraphBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Batch restored (changedRecipeIds empty on a repeat call — idempotency signal). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphBatchWithdrawReport"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Authenticated but not on the admin allowlist. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No AI_GENERATED import rows carry this jobId — not a known graph batch. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
