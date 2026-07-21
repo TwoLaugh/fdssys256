@@ -192,6 +192,8 @@ paths:
     $ref: 'paths/nutrition.yaml#/nutritionIngredientCorrection'
   /api/v1/nutrition/ingredients/needs-review:
     $ref: 'paths/nutrition.yaml#/nutritionIngredientNeedsReview'
+  /api/v1/nutrition/admin/ingredient-mappings/seed:
+    $ref: 'paths/nutrition.yaml#/nutritionAdminMappingSeed'
   /api/v1/nutrition/health-directives:
     $ref: 'paths/nutrition.yaml#/nutritionHealthDirectives'
   /api/v1/nutrition/health-directives/{directiveId}:

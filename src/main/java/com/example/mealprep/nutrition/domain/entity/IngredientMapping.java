@@ -68,6 +68,14 @@ public class IngredientMapping {
   @Column(name = "last_verified_at")
   private Instant lastVerifiedAt;
 
+  /**
+   * G05 (graph integration): per-row basis/provenance note. Seeded rows record the consumed-basis
+   * convention + spike-canon provenance; lazily populated USDA/OFF rows leave it {@code null}. Read
+   * by humans when adjudicating a G08 divergence — never by the recompute.
+   */
+  @Column(name = "basis_note", length = 255)
+  private String basisNote;
+
   @Version
   @Column(name = "version", nullable = false)
   private long version;

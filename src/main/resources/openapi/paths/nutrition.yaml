@@ -1105,3 +1105,87 @@ nutritionIntakeWeekAggregate:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+nutritionAdminMappingSeed:
+  post:
+    tags: [Nutrition]
+    operationId: seedIngredientMappings
+    summary: 'Admin: seed the ingredient-mapping cache from the spike-canon graph seed artifact (G05). Idempotent, first-writer-wins; any collision => status FAILED + 409, existing rows never overwritten.'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [rows]
+            properties:
+              _meta:
+                type: object
+                additionalProperties: true
+                nullable: true
+              rows:
+                type: array
+                minItems: 1
+                items:
+                  type: object
+                  additionalProperties: true
+                  required: [searchTerm, source, nutritionPer100g]
+                  properties:
+                    searchTerm: { type: string }
+                    source: { type: string, enum: [USDA, OPEN_FOOD_FACTS, MANUAL] }
+                    externalId: { type: string, nullable: true }
+                    basisNote: { type: string, nullable: true, maxLength: 255 }
+                    nutritionPer100g:
+                      type: object
+                      additionalProperties: true
+    responses:
+      '200':
+        description: 'Seed run completed with no collisions (inserted / skippedIdentical / rejected in the report).'
+        content:
+          application/json:
+            schema: { $ref: '#/IngredientMappingSeedReport' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Authenticated but not on the admin allowlist.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Collision(s): existing rows differ from the seed and were NOT overwritten — hard stop, human adjudication required.'
+        content:
+          application/json:
+            schema: { $ref: '#/IngredientMappingSeedReport' }
+
+IngredientMappingSeedReport:
+  type: object
+  additionalProperties: true
+  properties:
+    inserted: { type: integer }
+    skippedIdentical: { type: integer }
+    rejected:
+      type: array
+      items:
+        type: object
+        properties:
+          searchTerm: { type: string, nullable: true }
+          reason: { type: string }
+    collisions:
+      type: array
+      items:
+        type: object
+        properties:
+          searchTerm: { type: string }
+          existingSource: { type: string, nullable: true }
+          existingExternalId: { type: string, nullable: true }
+          firstDivergingField: { type: string }
+          note: { type: string }
+    status: { type: string, enum: [OK, FAILED] }
+    meta:
+      type: object
+      additionalProperties: true
+      nullable: true
