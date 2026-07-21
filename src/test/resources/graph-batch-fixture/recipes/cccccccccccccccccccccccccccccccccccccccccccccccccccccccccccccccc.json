@@ -1,0 +1,57 @@
+{
+ "canonicalUrl": null,
+ "contentFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+ "description": "Fixture dish for the G06 ingest IT.",
+ "extractionConfidence": null,
+ "extractionMethod": "graph@1234abc+c@0123456789abcdef",
+ "ingredients": [
+  {
+   "displayName": "rice",
+   "ingredientMappingKey": "rice",
+   "lineOrder": 1,
+   "optional": false,
+   "preparation": null,
+   "quantity": 150,
+   "unit": "g"
+  }
+ ],
+ "jobId": "5d8f2c1e-0000-5000-8000-2f6b0e6c9a11",
+ "metadata": {
+  "cookTimeMins": 12,
+  "cuisine": null,
+  "equipmentRequired": [
+   "wok"
+  ],
+  "freezerWeeks": null,
+  "fridgeDays": null,
+  "mealTypes": [
+   "dinner"
+  ],
+  "packable": null,
+  "prepTimeMins": 10,
+  "servings": 1,
+  "totalTimeMins": 22
+ },
+ "method": [
+  {
+   "durationMinutes": 12,
+   "instruction": "Simmer everything gently.",
+   "stepNumber": 1
+  },
+  {
+   "durationMinutes": null,
+   "instruction": "Serve.",
+   "stepNumber": 2
+  }
+ ],
+ "name": "Dish with unknown equipment",
+ "sourceKey": "graph:camp-it-2026-07",
+ "tags": {
+  "complexity": null,
+  "cookingMethod": "simmer",
+  "dietaryFlags": [],
+  "flavourProfile": null,
+  "protein": null
+ },
+ "traceId": "33333333-3333-5333-8333-333333333333"
+}

@@ -340,6 +340,8 @@ paths:
     $ref: 'paths/discovery.yaml#/discoveryAdminOrphanSweep'
   /api/v1/discovery/admin/jobs/sync:
     $ref: 'paths/discovery.yaml#/discoveryAdminJobsSync'
+  /api/v1/discovery/admin/graph-batches/ingest:
+    $ref: 'paths/discovery.yaml#/discoveryAdminGraphBatchIngest'
   # ===== adaptation =====
   /api/v1/adaptation/pending-changes:
     $ref: 'paths/adaptation.yaml#/adaptationPendingChanges'
