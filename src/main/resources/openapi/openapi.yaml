@@ -342,6 +342,10 @@ paths:
     $ref: 'paths/discovery.yaml#/discoveryAdminJobsSync'
   /api/v1/discovery/admin/graph-batches/ingest:
     $ref: 'paths/discovery.yaml#/discoveryAdminGraphBatchIngest'
+  /api/v1/discovery/admin/graph-batches/{jobId}/withdraw:
+    $ref: 'paths/discovery.yaml#/discoveryAdminGraphBatchWithdraw'
+  /api/v1/discovery/admin/graph-batches/{jobId}/restore:
+    $ref: 'paths/discovery.yaml#/discoveryAdminGraphBatchRestore'
   # ===== adaptation =====
   /api/v1/adaptation/pending-changes:
     $ref: 'paths/adaptation.yaml#/adaptationPendingChanges'
