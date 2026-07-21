@@ -104,19 +104,28 @@ class NutritionRecipeRecalcFlowIT {
     return new AuthedUser(UUID.fromString(userIdJson), cookie);
   }
 
+  private static IngredientDto ingredient(
+      int lineOrder, String key, String displayName, BigDecimal quantity, String unit) {
+    return new IngredientDto(
+        UUID.randomUUID(),
+        lineOrder,
+        key,
+        displayName,
+        quantity,
+        unit,
+        null,
+        false,
+        false,
+        BigDecimal.valueOf(0.95));
+  }
+
   private RecipeVersionDto versionDto(UUID versionId) {
-    IngredientDto ing =
-        new IngredientDto(
-            UUID.randomUUID(),
-            0,
-            "chicken breast",
-            "Chicken breast",
-            BigDecimal.valueOf(1.0),
-            "piece",
-            null,
-            false,
-            false,
-            BigDecimal.valueOf(0.95));
+    return versionDto(
+        versionId,
+        ingredient(0, "chicken breast", "Chicken breast", BigDecimal.valueOf(1.0), "piece"));
+  }
+
+  private RecipeVersionDto versionDto(UUID versionId, IngredientDto... ingredients) {
     return new RecipeVersionDto(
         versionId,
         UUID.randomUUID(),
@@ -128,7 +137,7 @@ class NutritionRecipeRecalcFlowIT {
         Instant.parse("2026-05-09T10:00:00Z"),
         "user:abc",
         null,
-        List.of(ing),
+        List.of(ingredients),
         List.of(),
         null,
         null,
@@ -232,5 +241,84 @@ class NutritionRecipeRecalcFlowIT {
     // Bridge writer is wired (not the Noop) → no Warning header.
     String warning = result.getResponse().getHeader("Warning");
     assertThat(warning).isNull();
+  }
+
+  @Test
+  void recalc_realQuantities_produceNonZeroKcal_andCalculatedStatus() throws Exception {
+    // Regression for the silent-zeros bug: the recalc paths used to hand the calc
+    // gramsEstimate=null on every line, so a fully-mapped recipe persisted 0 kcal with status
+    // "calculated". With unit→gram conversion wired in, real quantities must produce real kcal.
+    AuthedUser user = registerUser();
+    UUID recipeId = UUID.randomUUID();
+    UUID versionId = UUID.randomUUID();
+    ingredientMappingRepository.save(
+        NutritionTestData.ingredientMapping("chicken breast", IngredientMappingSource.USDA, 0.95));
+    ingredientMappingRepository.save(
+        NutritionTestData.ingredientMapping("rice", IngredientMappingSource.USDA, 0.95));
+    when(recipeQueryService.getVersionWithSubstitutions(any(), any()))
+        .thenReturn(
+            versionDto(
+                versionId,
+                // Weight family: 200 g exactly.
+                ingredient(0, "chicken breast", "Chicken breast", BigDecimal.valueOf(200), "g"),
+                // Volume family: 1 cup × 236.6 ml × density(rice)=0.85 → 201.110 g.
+                ingredient(1, "rice", "Rice", BigDecimal.valueOf(1.0), "cup")));
+
+    RecalculateRecipeNutritionRequest body =
+        new RecalculateRecipeNutritionRequest(UUID.randomUUID(), 2);
+
+    // Both lines map to the 165 kcal/100g fixture doc: 200 g → 330 kcal, 201.110 g → 331.83 kcal,
+    // total 662 (HALF_UP) at servings=1.
+    mvc.perform(
+            post(
+                    "/api/v1/nutrition/recipes/{recipeId}/versions/{versionId}/recalculate",
+                    recipeId,
+                    versionId)
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(body)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.nutritionStatus").value("calculated"))
+        .andExpect(jsonPath("$.caloriesPerServing").value(662))
+        .andExpect(jsonPath("$.unmapped").isEmpty())
+        .andExpect(openApi().isValid(openApiValidator));
+
+    // And the honest result is what gets persisted through the SPI bridge.
+    org.mockito.Mockito.verify(recipeWriteApi)
+        .updateNutritionStatus(
+            org.mockito.ArgumentMatchers.eq(versionId),
+            org.mockito.ArgumentMatchers.eq(
+                com.example.mealprep.recipe.domain.entity.NutritionStatus.CALCULATED),
+            any());
+  }
+
+  @Test
+  void recalc_countUnitsOnly_staysPending_neverFakesCalculated() throws Exception {
+    // Count units ("piece") have no gram conversion — nothing contributes, so the result must be
+    // "pending" with zero kcal, not a dishonest "calculated".
+    AuthedUser user = registerUser();
+    UUID recipeId = UUID.randomUUID();
+    UUID versionId = UUID.randomUUID();
+    ingredientMappingRepository.save(
+        NutritionTestData.ingredientMapping("chicken breast", IngredientMappingSource.USDA, 0.95));
+    when(recipeQueryService.getVersionWithSubstitutions(any(), any()))
+        .thenReturn(versionDto(versionId));
+
+    RecalculateRecipeNutritionRequest body =
+        new RecalculateRecipeNutritionRequest(UUID.randomUUID(), 2);
+
+    mvc.perform(
+            post(
+                    "/api/v1/nutrition/recipes/{recipeId}/versions/{versionId}/recalculate",
+                    recipeId,
+                    versionId)
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(body)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.nutritionStatus").value("pending"))
+        .andExpect(jsonPath("$.caloriesPerServing").value(0))
+        .andExpect(jsonPath("$.unmapped[0].reason").value("grams-unknown"))
+        .andExpect(openApi().isValid(openApiValidator));
   }
 }

@@ -181,11 +181,13 @@ class RecipeNutritionWriterImplIT {
     JsonNode recalcBody = objectMapper.readTree(recalc.getResponse().getContentAsString());
     assertThat(recalcBody.get("nutritionStatus").asText()).isEqualTo("calculated");
     int calories = recalcBody.get("caloriesPerServing").asInt();
+    // "calculated" must mean real figures: 1600 g of mapped ingredients cannot be 0 kcal.
+    assertThat(calories).isGreaterThan(0);
 
     // Read-after-write consistency: the next GET carries exactly what the recalc persisted - the
     // hero pills are wireable from GET /recipes/{id} alone (no write op as a read workaround).
-    // (Figures may legitimately be 0 here: both compute paths currently pass gramsEstimate=null
-    // so each line contributes zero - calc accuracy is out of this ticket's scope.)
+    // (The recalc path derives gramsEstimate from quantity+unit, so the three all-gram default
+    // ingredients produce real non-zero figures here.)
     MvcResult reread =
         mvc.perform(get("/api/v1/recipes/" + recipeId).cookie(user.cookie()))
             .andExpect(status().isOk())

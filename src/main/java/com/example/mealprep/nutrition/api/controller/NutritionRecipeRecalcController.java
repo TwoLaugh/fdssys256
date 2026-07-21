@@ -5,18 +5,17 @@ import com.example.mealprep.nutrition.api.dto.CalculateRecipeNutritionRequest;
 import com.example.mealprep.nutrition.api.dto.RecalculateRecipeNutritionRequest;
 import com.example.mealprep.nutrition.api.dto.RecipeIngredientLineDto;
 import com.example.mealprep.nutrition.api.dto.RecipeNutritionResultDto;
+import com.example.mealprep.nutrition.api.mapper.RecipeNutritionLineMapper;
 import com.example.mealprep.nutrition.domain.service.NutritionCalculationService;
 import com.example.mealprep.nutrition.exception.RecipeNutritionWriteFailedException;
 import com.example.mealprep.nutrition.exception.RecipeVersionLookupFailedException;
 import com.example.mealprep.nutrition.spi.RecipeNutritionWriter;
 import com.example.mealprep.nutrition.spi.internal.NoopRecipeNutritionWriterConfiguration;
-import com.example.mealprep.recipe.api.dto.IngredientDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -101,7 +100,8 @@ public class NutritionRecipeRecalcController {
       throw new RecipeVersionLookupFailedException(recipeId, versionId);
     }
 
-    List<RecipeIngredientLineDto> lines = mapLines(version.ingredients());
+    List<RecipeIngredientLineDto> lines =
+        RecipeNutritionLineMapper.toCalcLines(version.ingredients());
     if (lines.isEmpty()) {
       // Degenerate version — no ingredients to compute. Return a pending result without invoking
       // the calc (the calc's @Size(min=1) constraint would otherwise refuse the call).
@@ -156,18 +156,5 @@ public class NutritionRecipeRecalcController {
         .currentUserId()
         .orElseThrow(
             () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required."));
-  }
-
-  private static List<RecipeIngredientLineDto> mapLines(List<IngredientDto> ingredients) {
-    if (ingredients == null || ingredients.isEmpty()) {
-      return List.of();
-    }
-    List<RecipeIngredientLineDto> out = new ArrayList<>(ingredients.size());
-    for (IngredientDto in : ingredients) {
-      out.add(
-          new RecipeIngredientLineDto(
-              in.displayName(), in.ingredientMappingKey(), in.quantity(), in.unit(), null, null));
-    }
-    return out;
   }
 }

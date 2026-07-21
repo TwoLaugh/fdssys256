@@ -414,7 +414,9 @@ class NutritionCalculationServiceTest {
   }
 
   @Test
-  void calculate_nullGramsEstimate_treatsLineAsZeroContribution() {
+  void calculate_nullGramsEstimate_allLines_returnsPending_neverCalculated() {
+    // A fully-mapped recipe whose lines carry no gram weight computes zero everywhere. That is an
+    // absence of data, not a measurement — the status must stay "pending", not "calculated".
     UUID recipeId = UUID.randomUUID();
     when(ingredientMappingRepository.findBySearchTermIn(anyCollection()))
         .thenReturn(List.of(mappingForChicken()));
@@ -429,9 +431,42 @@ class NutritionCalculationServiceTest {
 
     RecipeNutritionResultDto result = service.calculateRecipeNutrition(req);
 
-    assertThat(result.nutritionStatus()).isEqualTo("calculated");
+    assertThat(result.nutritionStatus()).isEqualTo("pending");
     assertThat(result.caloriesPerServing()).isZero();
     assertThat(result.proteinPerServingG()).isEqualByComparingTo("0.00");
+    assertThat(result.unmapped()).hasSize(1);
+    assertThat(result.unmapped().get(0).reason()).isEqualTo("grams-unknown");
+  }
+
+  @Test
+  void calculate_someLinesMissingGrams_returnsPartial_withGramsUnknownReason() {
+    UUID recipeId = UUID.randomUUID();
+    when(ingredientMappingRepository.findBySearchTermIn(anyCollection()))
+        .thenReturn(List.of(mappingForChicken(), mappingForRice()));
+
+    CalculateRecipeNutritionRequest req =
+        new CalculateRecipeNutritionRequest(
+            recipeId,
+            List.of(
+                new RecipeIngredientLineDto(
+                    "Chicken breast",
+                    "chicken breast",
+                    BigDecimal.valueOf(1.0),
+                    "piece",
+                    BigDecimal.valueOf(200),
+                    false),
+                new RecipeIngredientLineDto(
+                    "Rice", "rice", BigDecimal.valueOf(1.0), "handful", null, false)),
+            1);
+
+    RecipeNutritionResultDto result = service.calculateRecipeNutrition(req);
+
+    // The chicken line contributes normally; the grams-less rice line degrades the status.
+    assertThat(result.nutritionStatus()).isEqualTo("partial");
+    assertThat(result.caloriesPerServing()).isEqualTo(330);
+    assertThat(result.unmapped()).hasSize(1);
+    assertThat(result.unmapped().get(0).name()).isEqualTo("Rice");
+    assertThat(result.unmapped().get(0).reason()).isEqualTo("grams-unknown");
   }
 
   @Test

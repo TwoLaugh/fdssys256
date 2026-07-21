@@ -358,10 +358,10 @@ public class NutritionServiceImpl
   static final String DEFAULT_DRI_SEX = "female";
 
   /**
-   * Caps (upper limits) for micronutrients where MORE is harmful, not better — these are SEEDED as a
-   * {@code upperLimit} on the DRI-default micro target so the planner actually penalises exceeding
-   * them (the RDA alone is a floor, so without this a plan piles on sodium with no cost). Sodium uses
-   * the CDRR (chronic-disease-risk-reduction) limit; chloride its UL.
+   * Caps (upper limits) for micronutrients where MORE is harmful, not better — these are SEEDED as
+   * a {@code upperLimit} on the DRI-default micro target so the planner actually penalises
+   * exceeding them (the RDA alone is a floor, so without this a plan piles on sodium with no cost).
+   * Sodium uses the CDRR (chronic-disease-risk-reduction) limit; chloride its UL.
    */
   static final Map<String, BigDecimal> MICRO_UPPER_LIMITS =
       Map.of("sodium_mg", new BigDecimal("2300"), "chloride_mg", new BigDecimal("3600"));
@@ -575,7 +575,8 @@ public class NutritionServiceImpl
     // transaction's response (mapper.toDto reads the pre-increment value) yet WOULD commit the
     // higher version — leaving the response one behind the row and 409-ing the client's next PUT.
     // saveAndFlush so any parent-scalar @Version bump (when a scalar also changed) materialises
-    // before we map to DTO. Same trick as PreferenceServiceImpl / HouseholdServiceImpl.createHousehold.
+    // before we map to DTO. Same trick as PreferenceServiceImpl /
+    // HouseholdServiceImpl.createHousehold.
     NutritionTargets saved = targetsRepository.saveAndFlush(aggregate);
     eventPublisher.publishEvent(
         new NutritionTargetsChangedEvent(
@@ -2369,7 +2370,11 @@ public class NutritionServiceImpl
    * IngredientMappingRepository#findBySearchTermIn} (batch, amortises round-trips), multiplies each
    * line's {@code gramsEstimate / 100} by the mapping's per-100g nutrition, sums, then divides by
    * the request's {@code servings}. Status is one of {@code calculated} / {@code partial} / {@code
-   * pending} per LLD §nutritionStatus.
+   * pending} per LLD §nutritionStatus, with the honesty refinement that a line whose gram weight is
+   * unknown ({@code gramsEstimate=null}) contributes zero and therefore caps the status at {@code
+   * partial} (reported in {@code unmapped} with reason {@code grams-unknown}); when no line
+   * contributes any grams at all the status is {@code pending}, never {@code calculated} — a
+   * fully-mapped recipe must not read as measured-complete with zero kcal.
    */
   private RecipeNutritionResultDto computeRecipeNutrition(
       CalculateRecipeNutritionRequest request, String phase) {
@@ -2409,7 +2414,10 @@ public class NutritionServiceImpl
     Map<String, BigDecimal> totalMicros = new LinkedHashMap<>();
     List<UnmappedIngredientDto> unmapped = new ArrayList<>();
     boolean anyNeedsReview = false;
+    boolean anyMappingIssue = false;
     int resolvedCount = 0;
+    int contributingCount = 0;
+    int gramsUnknownCount = 0;
 
     for (int i = 0; i < lines.size(); i++) {
       RecipeIngredientLineDto line = lines.get(i);
@@ -2417,22 +2425,36 @@ public class NutritionServiceImpl
       IngredientMapping mapping = key == null ? null : byKey.get(key);
       if (mapping == null) {
         unmapped.add(new UnmappedIngredientDto(line.name(), "not-in-cache", BigDecimal.ZERO));
+        anyMappingIssue = true;
         continue;
       }
       resolvedCount++;
       if (mapping.isNeedsReview()) {
         anyNeedsReview = true;
       }
-      BigDecimal grams = line.gramsEstimate() != null ? line.gramsEstimate() : BigDecimal.ZERO;
-      // factor = grams/100 — keep 6 d.p. so per-line rounding does not bias the sum.
-      BigDecimal factor = grams.divide(BD_100, 6, RoundingMode.HALF_UP);
       IngredientNutritionDocument doc = mapping.getNutritionPer100g();
       if (doc == null) {
         // The cache row has no nutrition payload — treat as unmapped.
         unmapped.add(new UnmappedIngredientDto(line.name(), "no-nutrition-doc", BigDecimal.ZERO));
+        anyMappingIssue = true;
         resolvedCount--;
         continue;
       }
+      if (line.gramsEstimate() == null) {
+        // Mapped, but no gram weight (count unit / unconvertible unit) — the line contributes
+        // zero to the totals, so the result must not be reported as fully calculated.
+        gramsUnknownCount++;
+        unmapped.add(
+            new UnmappedIngredientDto(
+                line.name(),
+                "grams-unknown",
+                mapping.getConfidence() != null ? mapping.getConfidence() : BigDecimal.ZERO));
+        continue;
+      }
+      contributingCount++;
+      BigDecimal grams = line.gramsEstimate();
+      // factor = grams/100 — keep 6 d.p. so per-line rounding does not bias the sum.
+      BigDecimal factor = grams.divide(BD_100, 6, RoundingMode.HALF_UP);
       if (doc.calories() != null) {
         totalCalories =
             totalCalories.add(BigDecimal.valueOf(doc.calories().longValue()).multiply(factor));
@@ -2469,10 +2491,14 @@ public class NutritionServiceImpl
     totalMicros.forEach(
         (k, v) -> microsPerServing.put(k, v.divide(servings, 2, RoundingMode.HALF_UP)));
 
+    // Honesty rule: "calculated" is reserved for a result where every line was mapped AND carried
+    // a real gram weight. If nothing contributed any grams the totals are all zero — that is an
+    // absence of data, not a measurement, so the status stays "pending". Any line with an unknown
+    // gram weight (count units, unconvertible units) understates the totals → degrade to "partial".
     String status;
-    if (resolvedCount == 0) {
+    if (contributingCount == 0) {
       status = "pending";
-    } else if (unmapped.isEmpty() && !anyNeedsReview) {
+    } else if (!anyMappingIssue && !anyNeedsReview && gramsUnknownCount == 0) {
       status = "calculated";
     } else {
       status = "partial";
@@ -2491,11 +2517,14 @@ public class NutritionServiceImpl
             List.copyOf(unmapped));
 
     log.debug(
-        "nutrition calc phase={} recipeId={} servings={} resolved={} unmapped={} status={}",
+        "nutrition calc phase={} recipeId={} servings={} resolved={} contributing={}"
+            + " gramsUnknown={} unmapped={} status={}",
         phase,
         request.recipeId(),
         request.servings(),
         resolvedCount,
+        contributingCount,
+        gramsUnknownCount,
         unmapped.size(),
         status);
 

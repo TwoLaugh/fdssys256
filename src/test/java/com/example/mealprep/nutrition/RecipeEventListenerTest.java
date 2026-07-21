@@ -121,6 +121,10 @@ class RecipeEventListenerTest {
     verify(calculationService).recalculateForEvolvedRecipe(reqCaptor.capture());
     assertThat(reqCaptor.getValue().recipeId()).isEqualTo(recipeId);
     assertThat(reqCaptor.getValue().ingredients()).hasSize(1);
+    // 200 g must reach the calc as a real gram weight — a null gramsEstimate here silently
+    // computes zero nutrition (the bug this listener path used to have).
+    assertThat(reqCaptor.getValue().ingredients().get(0).gramsEstimate())
+        .isEqualByComparingTo(BigDecimal.valueOf(200));
     verify(writer).writeNutritionPerServing(eq(versionId), any());
   }
 
