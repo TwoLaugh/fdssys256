@@ -3,14 +3,14 @@ package com.example.mealprep.planner.domain.service.internal;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.mealprep.core.types.SlotKind;
-import com.example.mealprep.planner.api.dto.Addition;
-import com.example.mealprep.planner.api.dto.AdditionKind;
 import com.example.mealprep.nutrition.api.dto.CalorieTargetDto;
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
 import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
 import com.example.mealprep.nutrition.domain.entity.Goal;
+import com.example.mealprep.planner.api.dto.Addition;
+import com.example.mealprep.planner.api.dto.AdditionKind;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
@@ -30,10 +30,10 @@ import org.junit.jupiter.api.Test;
  * Unit test for {@link PortionOptimizer} — the finalise-time per-day portioning optimisation that
  * replaces the beam's calorie-only {@code PortionScaler} proxy on the chosen plan. The optimiser
  * sizes the day's slots jointly to minimise total weighted deviation from ALL the primary eater's
- * daily macro targets at once; these tests pin (a) it beats calorie-only scaling on a
- * protein-dense + carb-heavy day, (b) factors stay on the [0.5, 3.0] step grid, (c) no targets →
- * all 1.0, (d) a recipe with no nutrition → 1.0 for that slot, (e) a protein FLOOR does not get
- * maxed out (overshoot is mildly penalised).
+ * daily macro targets at once; these tests pin (a) it beats calorie-only scaling on a protein-dense
+ * + carb-heavy day, (b) factors stay on the [0.5, 3.0] step grid, (c) no targets → all 1.0, (d) a
+ * recipe with no nutrition → 1.0 for that slot, (e) a protein FLOOR does not get maxed out
+ * (overshoot is mildly penalised).
  */
 class PortionOptimizerTest {
 
@@ -50,11 +50,9 @@ class PortionOptimizerTest {
   void optimised_day_is_closer_to_all_targets_than_calorie_only_scaling() {
     UUID userId = UUID.randomUUID();
     // Protein-dense main: 500 kcal, 70 g protein, 10 g carbs, 18 g fat, 3 g fibre per serving.
-    NutritionPerServingDto proteinDense =
-        nutrition(500, "70", "10", "18", "3");
+    NutritionPerServingDto proteinDense = nutrition(500, "70", "10", "18", "3");
     // Carb-heavy main: 400 kcal, 8 g protein, 90 g carbs, 6 g fat, 10 g fibre per serving.
-    NutritionPerServingDto carbHeavy =
-        nutrition(400, "8", "90", "6", "10");
+    NutritionPerServingDto carbHeavy = nutrition(400, "8", "90", "6", "10");
 
     UUID r1 = UUID.randomUUID();
     UUID r2 = UUID.randomUUID();
@@ -91,8 +89,7 @@ class PortionOptimizerTest {
     assertThat(calOnly1).isEqualTo(2.0);
     assertThat(calOnly2).isEqualTo(2.5);
 
-    List<double[]> perServing =
-        List.of(macroVec(proteinDense), macroVec(carbHeavy));
+    List<double[]> perServing = List.of(macroVec(proteinDense), macroVec(carbHeavy));
     List<PortionOptimizer.MacroTarget> macros =
         PortionOptimizer.configuredMacros(targets, properties.scoring().nutritionMacroWeights());
 
@@ -118,7 +115,8 @@ class PortionOptimizerTest {
     UUID userId = UUID.randomUUID();
     UUID r1 = UUID.randomUUID();
     UUID r2 = UUID.randomUUID();
-    // One tiny recipe (would want to scale UP past 3.0) and one huge (would want to scale BELOW 0.5)
+    // One tiny recipe (would want to scale UP past 3.0) and one huge (would want to scale BELOW
+    // 0.5)
     // — the grid clamp must hold both.
     RecipeDto tiny = recipeWithNutrition(r1, nutrition(50, "5", "5", "1", "1"));
     RecipeDto huge = recipeWithNutrition(r2, nutrition(5000, "300", "300", "100", "50"));
@@ -135,8 +133,7 @@ class PortionOptimizerTest {
             macro("60", EnforcementDirection.UPPER_LIMIT),
             macro("30", EnforcementDirection.LOWER_FLOOR),
             1000);
-    PlanCompositionContext ctx =
-        contextFor(userId, List.of(s1, s2), List.of(tiny, huge), targets);
+    PlanCompositionContext ctx = contextFor(userId, List.of(s1, s2), List.of(tiny, huge), targets);
 
     List<SlotAssignment> result =
         optimizer.optimise(List.of(dinnerAssignment(s1, r1), dinnerAssignment(s2, r2)), ctx);
@@ -162,8 +159,7 @@ class PortionOptimizerTest {
     UUID s1 = UUID.randomUUID();
     UUID s2 = UUID.randomUUID();
     // Context with a recipe pool but NO nutrition targets row.
-    PlanCompositionContext ctx =
-        contextFor(userId, List.of(s1, s2), List.of(recipe), null);
+    PlanCompositionContext ctx = contextFor(userId, List.of(s1, s2), List.of(recipe), null);
 
     List<SlotAssignment> result =
         optimizer.optimise(List.of(dinnerAssignment(s1, r1), dinnerAssignment(s2, r1)), ctx);
@@ -212,7 +208,8 @@ class PortionOptimizerTest {
     UUID userId = UUID.randomUUID();
     // Very protein-dense single dinner: 600 kcal, 60 g protein per serving. Calories floor only;
     // protein has a generous floor (100 g). With ONLY a "more is fine" mindset the optimiser could
-    // pile servings up to 3.0 — but overshoot is mildly penalised on a floor, so it should stop near
+    // pile servings up to 3.0 — but overshoot is mildly penalised on a floor, so it should stop
+    // near
     // the point that meets the floors, not the grid maximum.
     UUID r1 = UUID.randomUUID();
     RecipeDto recipe = recipeWithNutrition(r1, nutrition(600, "60", "30", "20", "5"));
@@ -230,11 +227,9 @@ class PortionOptimizerTest {
             macro("80", EnforcementDirection.UPPER_LIMIT), // fat limit (caps over-scaling)
             macro("10", EnforcementDirection.LOWER_FLOOR), // fibre floor
             600);
-    PlanCompositionContext ctx =
-        contextFor(userId, List.of(s1), List.of(recipe), targets);
+    PlanCompositionContext ctx = contextFor(userId, List.of(s1), List.of(recipe), targets);
 
-    List<SlotAssignment> result =
-        optimizer.optimise(List.of(dinnerAssignment(s1, r1)), ctx);
+    List<SlotAssignment> result = optimizer.optimise(List.of(dinnerAssignment(s1, r1)), ctx);
 
     double factor = result.get(0).portionFactor().doubleValue();
     // It must NOT max out at the grid ceiling just because protein/calories are floors.
@@ -280,18 +275,17 @@ class PortionOptimizerTest {
             null, // fat — unset
             null, // fibre — unset
             2000); // per-meal DINNER kcal target (warm start only)
-    PlanCompositionContext ctx =
-        contextFor(userId, List.of(s1), List.of(recipe), targets);
+    PlanCompositionContext ctx = contextFor(userId, List.of(s1), List.of(recipe), targets);
 
-    double bareFactor =
-        optimizer.optimise(List.of(bare), ctx).get(0).portionFactor().doubleValue();
+    double bareFactor = optimizer.optimise(List.of(bare), ctx).get(0).portionFactor().doubleValue();
     double withFactor =
         optimizer.optimise(List.of(withAddition), ctx).get(0).portionFactor().doubleValue();
 
     // Bare: 500×x closest to 2000 from below → maxes the grid at 3.0 (= 1500 kcal).
     assertThat(bareFactor).isEqualTo(3.0);
     // With the fixed 1500-kcal addition: 500×x + 1500 == 2000 at x = 1.0 — the optimiser sizes the
-    // main DOWN so the PERSISTED day (main + addition) lands exactly on target instead of overshooting.
+    // main DOWN so the PERSISTED day (main + addition) lands exactly on target instead of
+    // overshooting.
     assertThat(withFactor).isEqualTo(1.0);
     assertThat(withFactor).isLessThan(bareFactor);
   }
@@ -381,17 +375,13 @@ class PortionOptimizerTest {
   }
 
   private static PlanCompositionContext contextFor(
-      UUID userId,
-      List<UUID> slotIds,
-      List<RecipeDto> recipePool,
-      TargetsDto targets) {
+      UUID userId, List<UUID> slotIds, List<RecipeDto> recipePool, TargetsDto targets) {
     List<MealSlotSkeleton> skeletons = new ArrayList<>();
     int idx = 0;
     for (UUID slotId : slotIds) {
       skeletons.add(PlanTestData.skeletonWithEaters(slotId, DAY, idx++, List.of(userId)));
     }
-    Map<UUID, TargetsDto> nutritionByUserId =
-        targets == null ? Map.of() : Map.of(userId, targets);
+    Map<UUID, TargetsDto> nutritionByUserId = targets == null ? Map.of() : Map.of(userId, targets);
     return PlanTestData.scoringContext(skeletons, recipePool, null, Map.of(), nutritionByUserId);
   }
 }

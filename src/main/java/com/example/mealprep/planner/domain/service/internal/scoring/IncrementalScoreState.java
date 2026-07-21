@@ -9,10 +9,10 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Immutable running accumulators for the incremental Stage-A composite. Appending one slot derives a
- * new state in O(1)-ish (small set/map copies) instead of re-walking the whole partial plan, and the
- * composite is finalised from these raw accumulators by {@link IncrementalScoringEngine} reproducing
- * each sub-score's exact arithmetic verbatim.
+ * Immutable running accumulators for the incremental Stage-A composite. Appending one slot derives
+ * a new state in O(1)-ish (small set/map copies) instead of re-walking the whole partial plan, and
+ * the composite is finalised from these raw accumulators by {@link IncrementalScoringEngine}
+ * reproducing each sub-score's exact arithmetic verbatim.
  *
  * <p>RAW accumulators only — running sums (BigDecimal, order-independent-exact), counts, distinct
  * sets, per-day nutrition totals, and the variety-gate repeat counts. All rounding / division is
@@ -22,7 +22,8 @@ import java.util.UUID;
  *   <li>preference: {@code preferenceSum} + {@code preferenceCount} of the per-slot taste score.
  *   <li>time: {@code timeSum} + {@code timeCount} of the per-slot time score.
  *   <li>variety: distinct {@code cuisines} / {@code proteins} / {@code methods} sets.
- *   <li>batch: {@code batchSlotCount} (= total slots) + {@code sawNoBatch} + {@code distinctSessions}.
+ *   <li>batch: {@code batchSlotCount} (= total slots) + {@code sawNoBatch} + {@code
+ *       distinctSessions}.
  *   <li>nutrition + floor gate: {@code nutrition} carries the per-day totals.
  *   <li>variety gate: {@code recipeCounts} (recipeId → count) + {@code varietyGateFailed}.
  * </ul>

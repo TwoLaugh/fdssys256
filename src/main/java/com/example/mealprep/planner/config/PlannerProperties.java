@@ -168,8 +168,9 @@ public record PlannerProperties(
      * optimiser fighting them. The default is calories/protein-primary (calories 2.0, protein 1.5)
      * with carbs/fat a minor nudge (0.2) — for a goal-driven meal planner calories + protein are
      * the levers the user actually steers, and over-constraining carbs/fat with a fatty pool just
-     * starves calories. (Per-user weights on the nutrition targets are the productionised layer; this
-     * is the global default knob.) A weight of 0 removes the macro from the objective entirely.
+     * starves calories. (Per-user weights on the nutrition targets are the productionised layer;
+     * this is the global default knob.) A weight of 0 removes the macro from the objective
+     * entirely.
      */
     public record NutritionMacroWeights(
         @NotNull @DecimalMin("0.0") BigDecimal calories,

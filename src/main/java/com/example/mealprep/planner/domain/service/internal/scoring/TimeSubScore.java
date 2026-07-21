@@ -62,15 +62,13 @@ class TimeSubScore implements SubScoreCalculator {
   }
 
   /**
-   * The per-slot time-fit score for one assignment — the exact value the whole-plan {@link #compute}
-   * sums, so the incremental Stage-A scorer accumulates the SAME per-slot values and finalises with
-   * the identical {@code sum/count scale-6 HALF_UP} mean. {@code bySlotId} / {@code recipes} are the
-   * per-generation skeleton + pool indexes.
+   * The per-slot time-fit score for one assignment — the exact value the whole-plan {@link
+   * #compute} sums, so the incremental Stage-A scorer accumulates the SAME per-slot values and
+   * finalises with the identical {@code sum/count scale-6 HALF_UP} mean. {@code bySlotId} / {@code
+   * recipes} are the per-generation skeleton + pool indexes.
    */
   static BigDecimal perSlotScore(
-      SlotAssignment a,
-      Map<UUID, MealSlotSkeleton> bySlotId,
-      Map<UUID, RecipeDto> recipes) {
+      SlotAssignment a, Map<UUID, MealSlotSkeleton> bySlotId, Map<UUID, RecipeDto> recipes) {
     MealSlotSkeleton skel = bySlotId.get(a.slotId());
     RecipeDto recipe = ScoringSupport.findRecipe(recipes, a.recipeId()).orElse(null);
     if (skel == null || recipe == null || recipe.currentVersionBody() == null) {

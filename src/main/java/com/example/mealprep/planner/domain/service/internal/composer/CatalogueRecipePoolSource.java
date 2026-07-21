@@ -57,9 +57,9 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>Scope = caller's USER recipes &cup; SYSTEM recipes.</b> The recipe read scopes USER rows to
  * the supplied user-id and always includes the global SYSTEM catalogue. SYSTEM rows are visible to
- * everyone; USER rows are per-user — this per-user scoping is what keeps the E2E soak suite isolated
- * (one user's private recipes never leak into another user's plan), while the shared SYSTEM
- * catalogue gives every household a baseline pool.
+ * everyone; USER rows are per-user — this per-user scoping is what keeps the E2E soak suite
+ * isolated (one user's private recipes never leak into another user's plan), while the shared
+ * SYSTEM catalogue gives every household a baseline pool.
  *
  * <p>This is an <b>unconditional</b> {@code @Component}, so it is the only {@link RecipePoolSource}
  * in a normal context. The fallback {@link NoOpRecipePoolSource} carries
@@ -95,8 +95,8 @@ class CatalogueRecipePoolSource implements RecipePoolSource {
    * How hard a recipe's EXCESS fat (fraction of its calories above the eater's target fat-fraction)
    * demotes it within a kind's taste-ranked block — in candidate positions per unit of excess.
    * Bounded + soft (taste still dominates): a dish at +25 percentage-points of fat moves ~{@code
-   * 0.25 × this} places. This is the "bring fat DOWN vs a fatty pool" lever — portioning alone can't
-   * make a fatty pool lean, but biasing selection toward lower-fat-ratio dishes can.
+   * 0.25 × this} places. This is the "bring fat DOWN vs a fatty pool" lever — portioning alone
+   * can't make a fatty pool lean, but biasing selection toward lower-fat-ratio dishes can.
    */
   private static final double FAT_RERANK_POSITIONS = 150.0;
 
@@ -148,7 +148,8 @@ class CatalogueRecipePoolSource implements RecipePoolSource {
     Map<UUID, RecipeDto> byId = new LinkedHashMap<>();
     int tasteAwareMembers = 0;
     for (UUID userId : memberUserIds) {
-      Optional<String> tasteVector = preferenceModule.tasteSimilarity().getTasteVectorLiteral(userId);
+      Optional<String> tasteVector =
+          preferenceModule.tasteSimilarity().getTasteVectorLiteral(userId);
       if (tasteVector.isPresent()) {
         tasteAwareMembers++;
       }
@@ -187,9 +188,9 @@ class CatalogueRecipePoolSource implements RecipePoolSource {
   }
 
   /**
-   * The primary eater's target fat-fraction (fat kcal ÷ calorie target), or a negative sentinel when
-   * no usable target exists (→ macro re-rank is skipped, pure taste order). First member with both a
-   * calorie target and a fat target wins.
+   * The primary eater's target fat-fraction (fat kcal ÷ calorie target), or a negative sentinel
+   * when no usable target exists (→ macro re-rank is skipped, pure taste order). First member with
+   * both a calorie target and a fat target wins.
    */
   private double resolveTargetFatFraction(List<UUID> memberUserIds) {
     for (UUID userId : memberUserIds) {
@@ -212,7 +213,8 @@ class CatalogueRecipePoolSource implements RecipePoolSource {
    * measured in candidate positions, for each recipe's EXCESS fat-fraction over {@code
    * targetFatFraction}. No-op when there is no target or the input is tiny.
    */
-  private static List<RecipeDto> macroReRank(List<RecipeDto> tasteRanked, double targetFatFraction) {
+  private static List<RecipeDto> macroReRank(
+      List<RecipeDto> tasteRanked, double targetFatFraction) {
     if (targetFatFraction <= 0 || tasteRanked.size() < 3) {
       return tasteRanked;
     }

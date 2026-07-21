@@ -77,11 +77,11 @@ public interface RecipeQueryService {
    * <p>When {@code tasteVectorLiteral} is non-blank (the {@code [v0,v1,...]} pgvector literal from
    * {@code TasteSimilarityQueryService#getTasteVectorLiteral}), candidates are ordered by ascending
    * taste cosine distance ({@code embedding <=> tasteVector}) so the user's most-liked recipes come
-   * first; only embedded recipes participate. When it is {@code null}/blank (cold start, no embedded
-   * vector), candidates fall back to {@code createdAt asc} ordering. Either way the read is
-   * per-kind, so a kind-skewed catalogue can no longer starve rare slot kinds (snack/breakfast) the
-   * way a single flat {@code createdAt} read does. Empty list for a null/blank {@code mealType} or
-   * non-positive {@code limit}.
+   * first; only embedded recipes participate. When it is {@code null}/blank (cold start, no
+   * embedded vector), candidates fall back to {@code createdAt asc} ordering. Either way the read
+   * is per-kind, so a kind-skewed catalogue can no longer starve rare slot kinds (snack/breakfast)
+   * the way a single flat {@code createdAt} read does. Empty list for a null/blank {@code mealType}
+   * or non-positive {@code limit}.
    */
   List<RecipeDto> findPlannableCandidatesByKind(
       UUID userId, String mealType, int limit, String tasteVectorLiteral);

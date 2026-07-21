@@ -73,8 +73,8 @@ public class ScheduledRecipe {
 
   /**
    * In-meal additions bolted onto this slot's main recipe in Phase 2 (portion-scaling + additions
-   * design) — a JSONB list, soft refs to recipe/USDA like the id columns above. Defaults to an empty
-   * list so pre-additions plans and the {@code NOT NULL DEFAULT '[]'} column agree.
+   * design) — a JSONB list, soft refs to recipe/USDA like the id columns above. Defaults to an
+   * empty list so pre-additions plans and the {@code NOT NULL DEFAULT '[]'} column agree.
    */
   @Type(JsonBinaryType.class)
   @Column(name = "additions", nullable = false, columnDefinition = "jsonb")
@@ -82,10 +82,11 @@ public class ScheduledRecipe {
   private List<Addition> additions = new ArrayList<>();
 
   /**
-   * Servings of this recipe the primary eater consumes — sized to the slot's per-meal calorie target
-   * (Phase 1b, distinct from head-count {@code servings}). Drives grocery quantities (× factor) and
-   * the "× N servings" UI; defaults to 1.0. Computed by {@code PortionScaler} at persist time from
-   * the same per-meal targets the rollup's coverage uses, so the two never disagree.
+   * Servings of this recipe the primary eater consumes — sized to the slot's per-meal calorie
+   * target (Phase 1b, distinct from head-count {@code servings}). Drives grocery quantities (×
+   * factor) and the "× N servings" UI; defaults to 1.0. Computed by {@code PortionScaler} at
+   * persist time from the same per-meal targets the rollup's coverage uses, so the two never
+   * disagree.
    */
   @Column(name = "portion_factor", nullable = false)
   @Builder.Default

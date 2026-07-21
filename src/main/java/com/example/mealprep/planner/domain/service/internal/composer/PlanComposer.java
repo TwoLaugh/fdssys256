@@ -125,9 +125,11 @@ public class PlanComposer {
   private final RollupBuilder rollupBuilder;
   private final StageCInvoker stageCInvoker;
   private final Phase2Augmenter phase2Augmenter;
-  private final com.example.mealprep.planner.domain.service.internal.additions.IngredientAdditionPlanner
+  private final com.example.mealprep.planner.domain.service.internal.additions
+          .IngredientAdditionPlanner
       additionPlanner;
-  private final com.example.mealprep.planner.domain.service.internal.PortionOptimizer portionOptimizer;
+  private final com.example.mealprep.planner.domain.service.internal.PortionOptimizer
+      portionOptimizer;
   private final PlanPersister planPersister;
   private final RefineDirectiveMapper refineDirectiveMapper;
   private final AdaptationService adaptationService;
@@ -151,7 +153,7 @@ public class PlanComposer {
       StageCInvoker stageCInvoker,
       Phase2Augmenter phase2Augmenter,
       com.example.mealprep.planner.domain.service.internal.additions.IngredientAdditionPlanner
-              additionPlanner,
+          additionPlanner,
       com.example.mealprep.planner.domain.service.internal.PortionOptimizer portionOptimizer,
       PlanPersister planPersister,
       RefineDirectiveMapper refineDirectiveMapper,

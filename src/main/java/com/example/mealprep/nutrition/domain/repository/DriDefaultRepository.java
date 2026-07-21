@@ -17,9 +17,9 @@ public interface DriDefaultRepository extends JpaRepository<DriDefault, UUID> {
 
   /**
    * All DRI defaults for one {@code (age_group, sex)} band at the default (non-pregnant,
-   * non-lactating) life-stage — one row per micronutrient. Explicitly pinned to {@code
-   * life_stage = 'NONE'} so the table's pregnancy/lactation variants never duplicate a key for
-   * callers that don't care about life-stage.
+   * non-lactating) life-stage — one row per micronutrient. Explicitly pinned to {@code life_stage =
+   * 'NONE'} so the table's pregnancy/lactation variants never duplicate a key for callers that
+   * don't care about life-stage.
    */
   @Query(
       "select d from DriDefault d where d.ageGroup = :ageGroup and d.sex = :sex and d.lifeStage ="
@@ -27,6 +27,8 @@ public interface DriDefaultRepository extends JpaRepository<DriDefault, UUID> {
   List<DriDefault> findByAgeGroupAndSex(
       @Param("ageGroup") String ageGroup, @Param("sex") String sex);
 
-  /** All DRI defaults for one {@code (age_group, sex, life_stage)} band, one row per micronutrient. */
+  /**
+   * All DRI defaults for one {@code (age_group, sex, life_stage)} band, one row per micronutrient.
+   */
   List<DriDefault> findByAgeGroupAndSexAndLifeStage(String ageGroup, String sex, String lifeStage);
 }

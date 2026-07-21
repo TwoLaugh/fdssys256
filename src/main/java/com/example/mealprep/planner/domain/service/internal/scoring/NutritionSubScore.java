@@ -38,9 +38,9 @@ import org.springframework.stereotype.Component;
  * are that user's daily intake). Scoring weekly actuals against daily targets — the pre-wiring
  * behaviour — compared a week's intake to a day's target; scoring per day fixes that.
  *
- * <p><b>Macro vs micro blend.</b> The handful of macros (calories + protein carry the most weight in
- * practice) and the ~30 micro targets are blended {@link #MACRO_WEIGHT}/{@link #MICRO_WEIGHT} so a
- * long micro list cannot drown out calories/protein. A micro {@code targetValue} is a daily floor
+ * <p><b>Macro vs micro blend.</b> The handful of macros (calories + protein carry the most weight
+ * in practice) and the ~30 micro targets are blended {@link #MACRO_WEIGHT}/{@link #MICRO_WEIGHT} so
+ * a long micro list cannot drown out calories/protein. A micro {@code targetValue} is a daily floor
  * (want ≥), an {@code upperLimit} a cap (want ≤); both set ⇒ the day must satisfy both.
  *
  * <p><b>Key-alignment dependency.</b> A micro absent from the day's totals scores as a shortfall
@@ -48,9 +48,9 @@ import org.springframework.stereotype.Component;
  * normalised to the target {@code nutrientKey}s — otherwise a key mismatch reads as a false
  * shortfall. That normalisation is the Stage-4 data-path work.
  *
- * <p>Aggregation is against the household's primary user only ({@link ScoringSupport#primaryUserId})
- * — the per-eater average is deferred to a calibration pass. A plan with no targets row, or no
- * configured macro/micro targets, scores a vacuous {@code 1.0}.
+ * <p>Aggregation is against the household's primary user only ({@link
+ * ScoringSupport#primaryUserId}) — the per-eater average is deferred to a calibration pass. A plan
+ * with no targets row, or no configured macro/micro targets, scores a vacuous {@code 1.0}.
  */
 @Component
 class NutritionSubScore implements SubScoreCalculator {
@@ -135,7 +135,9 @@ class NutritionSubScore implements SubScoreCalculator {
     return scores.isEmpty() ? null : mean(scores);
   }
 
-  /** Mean coverage over each configured micro target for one day; {@code null} if none configured. */
+  /**
+   * Mean coverage over each configured micro target for one day; {@code null} if none configured.
+   */
   private static BigDecimal microFitScore(DailyMacroTotals day, TargetsDto targets) {
     List<MicroTargetDto> micros = targets.microTargets();
     if (micros == null || micros.isEmpty()) {

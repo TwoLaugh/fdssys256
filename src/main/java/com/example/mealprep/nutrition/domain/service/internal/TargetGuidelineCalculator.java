@@ -17,13 +17,15 @@ import org.springframework.stereotype.Component;
  * <p>What is (and isn't) weight-driven, deliberately:
  *
  * <ul>
- *   <li><b>Calories</b> — Mifflin-St Jeor BMR (weight/height/age/sex) × PAL (activity) × goal delta.
- *       This is where weight legitimately drives the number.
- *   <li><b>Protein</b> — {@value #PROTEIN_G_PER_KG_STR} g per kg body weight (an athletic/high-protein
- *       default; the user picked 1.8). Weight-driven, as a floor.
- *   <li><b>Fibre</b> — 14 g per 1000 kcal (IOM Adequate Intake), so it scales with the calorie need.
+ *   <li><b>Calories</b> — Mifflin-St Jeor BMR (weight/height/age/sex) × PAL (activity) × goal
+ *       delta. This is where weight legitimately drives the number.
+ *   <li><b>Protein</b> — {@value #PROTEIN_G_PER_KG_STR} g per kg body weight (an
+ *       athletic/high-protein default; the user picked 1.8). Weight-driven, as a floor.
+ *   <li><b>Fibre</b> — 14 g per 1000 kcal (IOM Adequate Intake), so it scales with the calorie
+ *       need.
  *   <li><b>Fat / carbs</b> — fat at 30% of kcal; carbs fill the remaining energy. These keep the
- *       macro totals internally consistent with the calorie target (the user can ignore/loosen them).
+ *       macro totals internally consistent with the calorie target (the user can ignore/loosen
+ *       them).
  *   <li><b>Micronutrients</b> — NOT computed here. Micro DRIs are age/sex/life-stage <i>lookups</i>
  *       (not weight formulas); the service seeds them from the {@code nutrition_dri_defaults} table
  *       using {@link #ageGroup} + sex. This calculator only resolves the age band.
@@ -55,9 +57,9 @@ public class TargetGuidelineCalculator {
   }
 
   /**
-   * The DRI {@code age_group} band for the person's age. The seed currently covers adult bands only,
-   * so under-19 clamps to {@code 19-30} and over-70 clamps to {@code 51-70} (a safe approximation
-   * until child / 71+ bands are seeded).
+   * The DRI {@code age_group} band for the person's age. The seed currently covers adult bands
+   * only, so under-19 clamps to {@code 19-30} and over-70 clamps to {@code 51-70} (a safe
+   * approximation until child / 71+ bands are seeded).
    */
   public String ageGroup(LocalDate dob, LocalDate today) {
     int age = ageYears(dob, today);
@@ -73,8 +75,7 @@ public class TargetGuidelineCalculator {
   /** Mifflin-St Jeor basal metabolic rate (kcal/day): {@code 10·kg + 6.25·cm − 5·age + s}. */
   public int bmr(BiologicalSex sex, int ageYears, BigDecimal weightKg, BigDecimal heightCm) {
     double s = sex == BiologicalSex.MALE ? 5.0 : -161.0;
-    double bmr =
-        10.0 * weightKg.doubleValue() + 6.25 * heightCm.doubleValue() - 5.0 * ageYears + s;
+    double bmr = 10.0 * weightKg.doubleValue() + 6.25 * heightCm.doubleValue() - 5.0 * ageYears + s;
     return (int) Math.round(bmr);
   }
 

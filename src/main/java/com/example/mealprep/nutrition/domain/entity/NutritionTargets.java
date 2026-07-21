@@ -335,7 +335,9 @@ public class NutritionTargets {
     this.microTargets.addAll(toAdd);
   }
 
-  /** Reconcile the activity adjustments against {@code desired} by {@code activityLevel}, in place. */
+  /**
+   * Reconcile the activity adjustments against {@code desired} by {@code activityLevel}, in place.
+   */
   public void mergeActivityAdjustments(List<ActivityAdjustment> desired) {
     Map<ActivityLevel, ActivityAdjustment> existing = new HashMap<>();
     for (ActivityAdjustment a : this.activityAdjustments) {

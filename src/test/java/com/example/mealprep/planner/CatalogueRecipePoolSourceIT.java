@@ -266,7 +266,9 @@ class CatalogueRecipePoolSourceIT {
     };
   }
 
-  /** A single-slot skeleton of the given kind for {@code userId} (per-kind pool reads key off it). */
+  /**
+   * A single-slot skeleton of the given kind for {@code userId} (per-kind pool reads key off it).
+   */
   private MealSlotSkeleton slot(SlotKind kind, UUID userId) {
     return new MealSlotSkeleton(
         UUID.randomUUID(),

@@ -93,14 +93,14 @@ public class DailyMacroAggregator {
   }
 
   /**
-   * Fold one assignment's per-serving nutrition into the per-date builder map — the single source of
-   * the per-slot aggregation arithmetic, shared by the whole-plan walk ({@link #computeByDate}) and
-   * the incremental Stage-A scorer ({@code IncrementalScoringEngine}). Mutates {@code builders} in
-   * place (a {@link TreeMap} so iteration stays date-ascending), creating a day bucket on first use
-   * so every date with an assignment appears in the rollup list even when the recipe / nutrition is
-   * missing. Pure function of its arguments otherwise — no DB, no time, no randomness. The {@code
-   * mealCalTargets} map is {@link PerMealCalorieTargets#forContext} for the run; {@code byRecipeId}
-   * is the pool index — both constant for a generation, so callers build them once.
+   * Fold one assignment's per-serving nutrition into the per-date builder map — the single source
+   * of the per-slot aggregation arithmetic, shared by the whole-plan walk ({@link #computeByDate})
+   * and the incremental Stage-A scorer ({@code IncrementalScoringEngine}). Mutates {@code builders}
+   * in place (a {@link TreeMap} so iteration stays date-ascending), creating a day bucket on first
+   * use so every date with an assignment appears in the rollup list even when the recipe /
+   * nutrition is missing. Pure function of its arguments otherwise — no DB, no time, no randomness.
+   * The {@code mealCalTargets} map is {@link PerMealCalorieTargets#forContext} for the run; {@code
+   * byRecipeId} is the pool index — both constant for a generation, so callers build them once.
    *
    * <p>Returns the {@code builders} map for fluent chaining; the same reference is mutated.
    */
@@ -191,10 +191,14 @@ public class DailyMacroAggregator {
         }
       }
     }
-    // Saturated fat is USDA-derived into the per-serving micros map but is a MACRO (its own target +
-    // optimiser term + the dedicated saturatedFatG total NutritionSubScore + the rollup read). Bridge
-    // it across, scaled by the SAME portion factor as the other macros, so the value actually steers
-    // selection + portioning instead of sitting inert at 0. (Mono/poly stay in `micros` for display.)
+    // Saturated fat is USDA-derived into the per-serving micros map but is a MACRO (its own target
+    // +
+    // optimiser term + the dedicated saturatedFatG total NutritionSubScore + the rollup read).
+    // Bridge
+    // it across, scaled by the SAME portion factor as the other macros, so the value actually
+    // steers
+    // selection + portioning instead of sitting inert at 0. (Mono/poly stay in `micros` for
+    // display.)
     BigDecimal satFat =
         n.micros() == null ? null : n.micros().get(DailyMacroTotals.SATURATED_FAT_KEY);
     if (satFat != null) {

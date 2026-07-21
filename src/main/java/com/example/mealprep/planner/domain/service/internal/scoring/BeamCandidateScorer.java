@@ -6,9 +6,9 @@ import com.example.mealprep.planner.api.dto.SlotAssignment;
 import java.math.BigDecimal;
 
 /**
- * Per-candidate scoring seam used by the Stage-A beam search during pruning. Production wires {@link
- * IncrementalScoringEngine} — it carries opaque running accumulators on each partial so appending
- * one slot is O(1)-ish and the composite is byte-identical to the exact {@link
+ * Per-candidate scoring seam used by the Stage-A beam search during pruning. Production wires
+ * {@link IncrementalScoringEngine} — it carries opaque running accumulators on each partial so
+ * appending one slot is O(1)-ish and the composite is byte-identical to the exact {@link
  * ScoringEngine#score}{@code .composite()}. The seam keeps the beam testable with a deterministic
  * scorer (the beam-mechanics unit test) without dragging in the seven sub-score beans.
  *

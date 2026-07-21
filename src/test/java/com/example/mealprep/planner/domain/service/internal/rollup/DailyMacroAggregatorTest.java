@@ -93,7 +93,8 @@ class DailyMacroAggregatorTest {
   @Test
   void additions_contribute_their_own_nutrition_even_without_a_main_recipe() {
     // An ingredient addition carries its own per-portion nutrition; the aggregator sums it directly
-    // (NOT portion-scaled) and counts it even though the slot's main recipe is absent from the pool.
+    // (NOT portion-scaled) and counts it even though the slot's main recipe is absent from the
+    // pool.
     Addition oil =
         new Addition(
             AdditionKind.INGREDIENT,

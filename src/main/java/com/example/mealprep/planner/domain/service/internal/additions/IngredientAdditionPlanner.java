@@ -41,8 +41,8 @@ import org.springframework.stereotype.Component;
  * and {@code AugmentationVerifier} use. The picks are then distributed across the week ({@link
  * #distributeAcrossWeek}): SPREAD across each day's meals (round-robin by slot, never all piled on
  * one carrier) and VARIED day-to-day (a window sliding over a ranked {@link #BENCH_SIZE} bench), so
- * the eater isn't served the identical three sides on the same meal every day while each day's total
- * still rises by the picks' (USDA-derived) nutrition.
+ * the eater isn't served the identical three sides on the same meal every day while each day's
+ * total still rises by the picks' (USDA-derived) nutrition.
  *
  * <p>Deterministic, no AI: cheap, no tokens, no latency. The LLM appropriateness gate (inc 3) only
  * refines <i>which</i> sensible candidate pairs with <i>which</i> dish + writes the note; the math
@@ -57,9 +57,9 @@ public class IngredientAdditionPlanner {
   private static final int MAX_ADDITIONS = 3;
 
   /**
-   * Size of the variety bench — the ranked pool of gap-relevant candidates the per-day window slides
-   * over so consecutive days rotate through DIFFERENT sides instead of the identical set every day.
-   * Larger than {@link #MAX_ADDITIONS} so there are alternatives to rotate in.
+   * Size of the variety bench — the ranked pool of gap-relevant candidates the per-day window
+   * slides over so consecutive days rotate through DIFFERENT sides instead of the identical set
+   * every day. Larger than {@link #MAX_ADDITIONS} so there are alternatives to rotate in.
    */
   private static final int BENCH_SIZE = 6;
 
@@ -89,9 +89,9 @@ public class IngredientAdditionPlanner {
   }
 
   /**
-   * Return {@code assignments} with in-meal additions attached (one slot per day). A no-op — returns
-   * the input list unchanged — when there are no targets, no meaningful gap, or no allergy-safe
-   * candidate helps.
+   * Return {@code assignments} with in-meal additions attached (one slot per day). A no-op —
+   * returns the input list unchanged — when there are no targets, no meaningful gap, or no
+   * allergy-safe candidate helps.
    */
   public List<SlotAssignment> attach(
       List<SlotAssignment> assignments, RollupSummaryDocument rollup, PlanCompositionContext ctx) {
@@ -141,9 +141,9 @@ public class IngredientAdditionPlanner {
   /**
    * The variety bench: the greedy's diverse gap-filling picks FIRST (preserving an optimal day 0),
    * then the next-best still-gap-relevant candidates appended by descending score, capped at {@link
-   * #BENCH_SIZE}. {@link #distributeAcrossWeek} slides a per-day window over this list so consecutive
-   * days rotate through different sides. Falls back to just the greedy picks when no extra candidate
-   * is gap-relevant.
+   * #BENCH_SIZE}. {@link #distributeAcrossWeek} slides a per-day window over this list so
+   * consecutive days rotate through different sides. Falls back to just the greedy picks when no
+   * extra candidate is gap-relevant.
    */
   private static List<Addition> buildBench(
       List<Addition> picked,
@@ -173,9 +173,9 @@ public class IngredientAdditionPlanner {
   /**
    * Attach {@code perDayCount} additions to EACH day, (a) spread across the day's meals — pick j
    * lands on the j-th meal (round-robin by slot index) so they never all pile on one carrier — and
-   * (b) varied across days — a window into {@code bench} that slides by one each day, so consecutive
-   * days serve different sides while day 0 keeps the optimal diverse set. The {@code placements} map
-   * (LLM, keyed by addition name) supplies the natural-language note when present.
+   * (b) varied across days — a window into {@code bench} that slides by one each day, so
+   * consecutive days serve different sides while day 0 keeps the optimal diverse set. The {@code
+   * placements} map (LLM, keyed by addition name) supplies the natural-language note when present.
    */
   private static List<SlotAssignment> distributeAcrossWeek(
       List<SlotAssignment> assignments,
@@ -203,14 +203,17 @@ public class IngredientAdditionPlanner {
       slots.sort(Comparator.comparingInt(SlotAssignment::slotIndex));
       int picksToday = Math.min(perDayCount, benchSize);
       for (int j = 0; j < picksToday; j++) {
-        Addition pick = bench.get((dayIndex + j) % benchSize); // sliding window → day-to-day variety
+        Addition pick =
+            bench.get((dayIndex + j) % benchSize); // sliding window → day-to-day variety
         // Round-robin across the day's meals, the starting meal rotated by day so additions land on
         // a DIFFERENT meal each day (every meal — breakfast included — gets sides over the week)
         // instead of always the same first-N meals.
         SlotAssignment target = slots.get((dayIndex + j) % slots.size());
         AdditionPlacement p = placements.get(pick.name());
         Addition noted =
-            (p != null && p.note() != null && !p.note().isBlank()) ? withNote(pick, p.note()) : pick;
+            (p != null && p.note() != null && !p.note().isBlank())
+                ? withNote(pick, p.note())
+                : pick;
         toAttach.computeIfAbsent(target, k -> new ArrayList<>()).add(noted);
       }
       dayIndex++;
@@ -240,7 +243,11 @@ public class IngredientAdditionPlanner {
       AdditionPairingResult result =
           aiService.execute(
               new AdditionPairingTask(
-                  additionsText, mealsByKind(assignments, ctx), distinctKinds(assignments), null, null));
+                  additionsText,
+                  mealsByKind(assignments, ctx),
+                  distinctKinds(assignments),
+                  null,
+                  null));
       if (result == null || result.placements() == null) {
         return Map.of();
       }
@@ -252,7 +259,8 @@ public class IngredientAdditionPlanner {
       }
       return byName;
     } catch (RuntimeException ex) {
-      log.warn("Addition pairing AI unavailable ({}); using deterministic placement", ex.toString());
+      log.warn(
+          "Addition pairing AI unavailable ({}); using deterministic placement", ex.toString());
       return Map.of();
     }
   }
@@ -268,10 +276,7 @@ public class IngredientAdditionPlanner {
             .orElse(null);
     Map<String, String> byKind = new LinkedHashMap<>();
     for (SlotAssignment a : assignments) {
-      if (first != null
-          && first.equals(a.onDate())
-          && a.kind() != null
-          && a.recipeId() != null) {
+      if (first != null && first.equals(a.onDate()) && a.kind() != null && a.recipeId() != null) {
         byKind.putIfAbsent(a.kind().name(), names.getOrDefault(a.recipeId(), "a meal"));
       }
     }
@@ -369,10 +374,10 @@ public class IngredientAdditionPlanner {
   }
 
   /**
-   * Side-dish recipe candidates: small, nutrition-bearing pool recipes the household can safely eat,
-   * carrying their own per-serving nutrition. The proxy for "dishType = side" is a {@code snack}-
-   * tagged recipe under {@link #SIDE_MAX_KCAL} (the pool has no first-class side classification yet —
-   * a real {@code dishType} tag would replace this filter).
+   * Side-dish recipe candidates: small, nutrition-bearing pool recipes the household can safely
+   * eat, carrying their own per-serving nutrition. The proxy for "dishType = side" is a {@code
+   * snack}- tagged recipe under {@link #SIDE_MAX_KCAL} (the pool has no first-class side
+   * classification yet — a real {@code dishType} tag would replace this filter).
    */
   private List<Addition> sideCandidates(PlanCompositionContext ctx, List<UUID> eaters) {
     if (ctx.recipePool() == null || ctx.recipePool().recipes() == null) {
@@ -424,7 +429,9 @@ public class IngredientAdditionPlanner {
     return ctx.slotSkeletons() == null
         ? List.of()
         : ctx.slotSkeletons().stream()
-            .flatMap(sk -> sk.eaters() == null ? java.util.stream.Stream.<UUID>of() : sk.eaters().stream())
+            .flatMap(
+                sk ->
+                    sk.eaters() == null ? java.util.stream.Stream.<UUID>of() : sk.eaters().stream())
             .distinct()
             .toList();
   }
@@ -482,7 +489,9 @@ public class IngredientAdditionPlanner {
     return picked;
   }
 
-  /** Fraction of the residual kcal + each short micro this addition fills (capped per dimension). */
+  /**
+   * Fraction of the residual kcal + each short micro this addition fills (capped per dimension).
+   */
   private static double score(Addition a, double residualKcal, Map<String, Double> gaps) {
     double s = 0;
     int kcal = a.nutrition().calories();
@@ -499,5 +508,4 @@ public class IngredientAdditionPlanner {
     }
     return s;
   }
-
 }

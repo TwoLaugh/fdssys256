@@ -10,8 +10,8 @@ import java.util.List;
  * this result is tagged {@code source="estimated"} with the model's {@code confidence}, so coverage
  * never presents an AI guess as measured or USDA-derived data.
  *
- * <p>{@code @JsonIgnoreProperties} so a model that adds a stray field (e.g. a per-estimate
- * {@code reasoning}) does not fail deserialisation.
+ * <p>{@code @JsonIgnoreProperties} so a model that adds a stray field (e.g. a per-estimate {@code
+ * reasoning}) does not fail deserialisation.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record NutrientEstimationResult(List<Estimate> estimates) {

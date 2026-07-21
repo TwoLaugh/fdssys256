@@ -97,10 +97,11 @@ class CostSubScore implements SubScoreCalculator {
   /**
    * Ingredient-reuse reward (the no-budget shopping-economy proxy): {@code 1 − distinctKeys /
    * totalKeys} over the plan's <b>distinct</b> recipes (repeats add no new shopping items). Higher
-   * when the chosen recipes share canonical ingredient keys, so the planner favours recipe sets that
-   * collapse into a smaller, less wasteful shopping list. Neutral ({@code 0.5}) for an empty plan or
-   * a pool with no ingredient data — preserving the prior no-budget behaviour exactly in that case.
-   * Whole-plan (like the cost path) so the incremental and exact composites stay byte-identical.
+   * when the chosen recipes share canonical ingredient keys, so the planner favours recipe sets
+   * that collapse into a smaller, less wasteful shopping list. Neutral ({@code 0.5}) for an empty
+   * plan or a pool with no ingredient data — preserving the prior no-budget behaviour exactly in
+   * that case. Whole-plan (like the cost path) so the incremental and exact composites stay
+   * byte-identical.
    */
   private BigDecimal reuseScore(CandidatePlan plan, PlanCompositionContext ctx) {
     if (plan.assignments() == null || plan.assignments().isEmpty()) {

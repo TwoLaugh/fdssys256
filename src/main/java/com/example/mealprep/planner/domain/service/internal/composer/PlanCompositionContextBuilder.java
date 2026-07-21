@@ -2,9 +2,9 @@ package com.example.mealprep.planner.domain.service.internal.composer;
 
 import com.example.mealprep.core.types.SlotKind;
 import com.example.mealprep.household.api.dto.HouseholdSettingsDto;
+import com.example.mealprep.household.api.dto.MergedSoftPreferencesDto;
 import com.example.mealprep.household.api.dto.PlannerSlotEntryDto;
 import com.example.mealprep.household.api.dto.SlotConfigurationPlannerViewDto;
-import com.example.mealprep.household.api.dto.MergedSoftPreferencesDto;
 import com.example.mealprep.household.domain.service.HouseholdMergeService;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
@@ -97,8 +97,8 @@ public class PlanCompositionContextBuilder implements ReoptContextBuilder {
    * the given eaters, or {@code null} when unavailable — read-only and best-effort, so a missing /
    * empty household never blocks generation. This is the surface the scoring layer reads for
    * per-household meal-prep behaviour ({@code VarietyGate}, {@code BatchSubScore}); before this it
-   * was always {@code null} (the "no cross-module surface yet" placeholder), so the lifestyle config
-   * never reached the planner.
+   * was always {@code null} (the "no cross-module surface yet" placeholder), so the lifestyle
+   * config never reached the planner.
    */
   private MergedSoftPreferencesDto mergeSoftPrefs(UUID householdId, List<UUID> eaterUserIds) {
     if (householdId == null || eaterUserIds == null || eaterUserIds.isEmpty()) {

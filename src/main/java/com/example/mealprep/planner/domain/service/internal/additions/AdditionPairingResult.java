@@ -4,8 +4,8 @@ import java.util.List;
 
 /**
  * Structured output of the {@code PLANNER_ADDITION_PAIRING} AI task (Phase 2, inc 3). For each
- * addition the deterministic planner picked, the model returns the meal slot it pairs with best +
- * a short natural note. Applied across the week's days; falls back to deterministic placement when
+ * addition the deterministic planner picked, the model returns the meal slot it pairs with best + a
+ * short natural note. Applied across the week's days; falls back to deterministic placement when
  * the AI is unavailable.
  */
 public record AdditionPairingResult(List<AdditionPlacement> placements) {

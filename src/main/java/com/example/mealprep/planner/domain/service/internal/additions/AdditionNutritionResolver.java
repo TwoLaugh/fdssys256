@@ -28,7 +28,9 @@ class AdditionNutritionResolver {
 
   private static final BigDecimal HUNDRED = new BigDecimal("100");
 
-  /** USDA reference values scaled to a portion are "derived", not measured for this exact recipe. */
+  /**
+   * USDA reference values scaled to a portion are "derived", not measured for this exact recipe.
+   */
   private static final String SOURCE_DERIVED = "derived";
 
   private final NutritionQueryService nutritionQueryService;
@@ -37,7 +39,9 @@ class AdditionNutritionResolver {
     this.nutritionQueryService = nutritionQueryService;
   }
 
-  /** Resolve one candidate into an addition with its portion-scaled, provenance-tagged nutrition. */
+  /**
+   * Resolve one candidate into an addition with its portion-scaled, provenance-tagged nutrition.
+   */
   Addition resolve(AdditionCandidate candidate) {
     NutritionPerServingDto per100g =
         livePer100g(candidate.ingredientKey()).orElseGet(candidate::per100g);

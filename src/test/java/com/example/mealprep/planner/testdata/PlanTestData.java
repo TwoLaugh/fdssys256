@@ -304,8 +304,8 @@ public final class PlanTestData {
 
   /**
    * A {@link PlanCompositionContext} carrying a merged lifestyle config, for variety-cap tests.
-   * Only {@code mergedLifestyleConfig} (novelty %, batch-cooking flag) is populated; everything else
-   * mirrors {@link #minimalContext}.
+   * Only {@code mergedLifestyleConfig} (novelty %, batch-cooking flag) is populated; everything
+   * else mirrors {@link #minimalContext}.
    */
   public static PlanCompositionContext contextWithLifestyle(
       Integer noveltyTolerancePercent, boolean batchCookingPreferred) {

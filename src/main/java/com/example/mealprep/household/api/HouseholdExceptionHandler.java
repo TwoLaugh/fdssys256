@@ -208,8 +208,8 @@ public class HouseholdExceptionHandler {
    * <p><b>Scoped to household constraints.</b> This advice, {@code NutritionExceptionHandler} and
    * {@code PlannerExceptionHandler} each register a {@code DataIntegrityViolationException} handler
    * at {@link Order#HIGHEST_PRECEDENCE}, so whichever Spring orders first would otherwise claim
-   * EVERY {@code DataIntegrityViolationException} app-wide — which is how a nutrition micro-target /
-   * per-meal 23505 was being mislabelled as a "household integrity violation". We therefore only
+   * EVERY {@code DataIntegrityViolationException} app-wide — which is how a nutrition micro-target
+   * / per-meal 23505 was being mislabelled as a "household integrity violation". We therefore only
    * emit the household-specific response when the violated constraint is household-owned (its name
    * mentions {@code household}); any other constraint gets a module-neutral {@code
    * data-integrity-violation} 409 instead of a misleading household label.

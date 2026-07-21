@@ -100,7 +100,8 @@ public class TargetsController {
           "Compute guideline-default targets (BMR calories, protein g/kg, age/sex micro DRI) from"
               + " the supplied demographics. A preview only — nothing is persisted; the user reviews,"
               + " edits, then saves via PUT.")
-  public ComputedTargetDefaultsDto computeDefaults(@Valid @RequestBody ComputeTargetsRequest request) {
+  public ComputedTargetDefaultsDto computeDefaults(
+      @Valid @RequestBody ComputeTargetsRequest request) {
     requireCurrentUserId(); // authenticated-only; the computation itself is stateless
     return guidelineDefaultsService.compute(request);
   }

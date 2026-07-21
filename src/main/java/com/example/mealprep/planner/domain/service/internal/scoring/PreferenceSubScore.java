@@ -147,7 +147,9 @@ class PreferenceSubScore implements SubScoreCalculator {
             .collect(Collectors.toMap(MealSlotSkeleton::slotId, Function.identity()));
   }
 
-  /** The per-slot-score memo for {@code ctx}, recreated when the context changes (new generation). */
+  /**
+   * The per-slot-score memo for {@code ctx}, recreated when the context changes (new generation).
+   */
   private Map<String, BigDecimal> perSlotMemo(PlanCompositionContext ctx) {
     PrefMemo m = prefMemo;
     if (m != null && m.ctx() == ctx) {

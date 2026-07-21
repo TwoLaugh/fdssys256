@@ -184,7 +184,8 @@ class PlanPersister {
                                 ? 1.0
                                 : PortionScaler.factor(
                                     recipeKcal.getOrDefault(a.recipeId(), 0),
-                                    mealCalTargets.get(PortionScaler.normaliseKind(a.kind().name())),
+                                    mealCalTargets.get(
+                                        PortionScaler.normaliseKind(a.kind().name())),
                                     recipeProtein.get(a.recipeId()),
                                     mealProteinTargets.get(
                                         PortionScaler.normaliseKind(a.kind().name())))))

@@ -5,15 +5,15 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 
 /**
- * Derives the purchase <b>leftover</b> and <b>buffer %</b> for a shopping-list line — how much of the
- * bought pack(s) goes unused this week. Only meaningful for weight-coherent lines: the demand must be
- * in grams (so {@code IngredientUnitConverter} resolved it) and a gram pack must be suggested.
- * Count-bought lines (eggs, produce) and unconverted lines return {@code null}.
+ * Derives the purchase <b>leftover</b> and <b>buffer %</b> for a shopping-list line — how much of
+ * the bought pack(s) goes unused this week. Only meaningful for weight-coherent lines: the demand
+ * must be in grams (so {@code IngredientUnitConverter} resolved it) and a gram pack must be
+ * suggested. Count-bought lines (eggs, produce) and unconverted lines return {@code null}.
  *
  * <p>{@code bought = suggestedPackSizeG × suggestedPackCount} (suggestedPackCount is the number of
- * packs to buy); {@code leftover = max(0, bought − requestedQuantity)}; {@code buffer% =
- * leftover / bought × 100}. A high buffer on a staple isn't waste — it's pantry carryover; the buffer
- * matters most for perishables.
+ * packs to buy); {@code leftover = max(0, bought − requestedQuantity)}; {@code buffer% = leftover /
+ * bought × 100}. A high buffer on a staple isn't waste — it's pantry carryover; the buffer matters
+ * most for perishables.
  */
 public final class ShoppingListBuffer {
 
@@ -24,7 +24,10 @@ public final class ShoppingListBuffer {
     if (bought == null || line.getRequestedQuantity() == null) {
       return null;
     }
-    return bought.subtract(line.getRequestedQuantity()).max(BigDecimal.ZERO).setScale(1, RoundingMode.HALF_UP);
+    return bought
+        .subtract(line.getRequestedQuantity())
+        .max(BigDecimal.ZERO)
+        .setScale(1, RoundingMode.HALF_UP);
   }
 
   static BigDecimal bufferPercent(ShoppingListLine line) {

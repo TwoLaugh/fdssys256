@@ -41,10 +41,10 @@ class CostSubScoreTest {
 
   /**
    * Zero weekly budget must short-circuit past the cost-fit division (the {@code
-   * weeklyTarget().compareTo(0) <= 0} guard) into the no-budget INGREDIENT-REUSE path — NOT divide by
-   * zero. Kills the L70 ConditionalsBoundary mutant {@code <= 0} → {@code < 0}: with the mutant a zero
-   * target falls through and divides estimatedCost by a zero budget, throwing instead of returning a
-   * reuse score. A single recipe shares nothing, so reuse = {@code 1 − 1/1 = 0}.
+   * weeklyTarget().compareTo(0) <= 0} guard) into the no-budget INGREDIENT-REUSE path — NOT divide
+   * by zero. Kills the L70 ConditionalsBoundary mutant {@code <= 0} → {@code < 0}: with the mutant
+   * a zero target falls through and divides estimatedCost by a zero budget, throwing instead of
+   * returning a reuse score. A single recipe shares nothing, so reuse = {@code 1 − 1/1 = 0}.
    */
   @Test
   void zero_budget_takes_reuse_path_not_divide_by_zero() {
@@ -62,8 +62,8 @@ class CostSubScoreTest {
 
   /**
    * No-budget reuse reward: a plan whose distinct recipes SHARE ingredient keys scores higher than
-   * one whose recipes are disjoint (a smaller shopping list). Shared = 4 distinct of 6 total → {@code
-   * 1 − 4/6 ≈ 0.333}; disjoint = 6 of 6 → {@code 0}.
+   * one whose recipes are disjoint (a smaller shopping list). Shared = 4 distinct of 6 total →
+   * {@code 1 − 4/6 ≈ 0.333}; disjoint = 6 of 6 → {@code 0}.
    */
   @Test
   void reuse_rewards_ingredient_overlap() {
@@ -75,10 +75,12 @@ class CostSubScoreTest {
     RecipeDto rec2 =
         PlanTestData.scoredRecipe(r2, 20, "Thai", "tofu", "fry", List.of("rice", "tofu", "ginger"));
     RecipeDto rec3 =
-        PlanTestData.scoredRecipe(r3, 20, "Brit", "beef", "roast", List.of("beef", "potato", "carrot"));
+        PlanTestData.scoredRecipe(
+            r3, 20, "Brit", "beef", "roast", List.of("beef", "potato", "carrot"));
     var bundle = PlanTestData.provisionsBundle(PlanTestData.budget(null), Map.of(), List.of());
     PlanCompositionContext ctx =
-        PlanTestData.scoringContext(List.of(), List.of(rec1, rec2, rec3), bundle, Map.of(), Map.of());
+        PlanTestData.scoringContext(
+            List.of(), List.of(rec1, rec2, rec3), bundle, Map.of(), Map.of());
     CandidatePlan shared =
         PlanTestData.candidatePlan(
             WEEK,

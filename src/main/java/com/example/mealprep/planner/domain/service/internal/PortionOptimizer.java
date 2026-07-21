@@ -3,13 +3,13 @@ package com.example.mealprep.planner.domain.service.internal;
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
 import com.example.mealprep.nutrition.api.dto.TargetsDto;
 import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
-import com.example.mealprep.planner.config.PlannerProperties;
-import com.example.mealprep.planner.config.PlannerProperties.ScoringTuning.NutritionMacroWeights;
-import com.example.mealprep.planner.domain.service.internal.rollup.DailyMacroTotals;
 import com.example.mealprep.planner.api.dto.Addition;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
+import com.example.mealprep.planner.config.PlannerProperties;
+import com.example.mealprep.planner.config.PlannerProperties.ScoringTuning.NutritionMacroWeights;
+import com.example.mealprep.planner.domain.service.internal.rollup.DailyMacroTotals;
 import com.example.mealprep.recipe.api.dto.NutritionPerServingDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
@@ -36,8 +36,8 @@ import org.springframework.stereotype.Component;
  * is left intact as the beam's cheap ranking proxy; this is the finalise authority. The beam,
  * incremental scoring, and aggregator's existing scaler path are all untouched: during the search
  * assignments carry a {@code null} portion factor, so the old path runs; here we attach the
- * optimised factor via {@link SlotAssignment#withPortionFactor}, and the aggregator / persister read
- * it when present.
+ * optimised factor via {@link SlotAssignment#withPortionFactor}, and the aggregator / persister
+ * read it when present.
  *
  * <p><b>The optimisation (per day).</b> For each day, choose servings {@code x_i} for the day's
  * slots on the grid {@code {0.5, 0.75, …, 3.0}} (= {@link PortionScaler#MIN_FACTOR}..{@link
@@ -54,7 +54,8 @@ public class PortionOptimizer {
 
   // ---- tunable penalty weights -----------------------------------------------------------------
   // Per-macro importance is now CONFIGURED (mealprep.planner.scoring.nutrition-macro-weights.*) and
-  // injected via PlannerProperties — this is the user-facing "what do you care about" knob. The live
+  // injected via PlannerProperties — this is the user-facing "what do you care about" knob. The
+  // live
   // default is calories/protein-primary with carbs/fat a minor nudge; a weight of 0 drops a macro
   // from the objective entirely (importance × penalty == 0). See NutritionMacroWeights.
 
@@ -93,12 +94,14 @@ public class PortionOptimizer {
    * each assignment. A day with no targets, or a slot whose recipe has no per-serving nutrition,
    * leaves that slot's factor at {@code 1.0}.
    */
-  public List<SlotAssignment> optimise(List<SlotAssignment> assignments, PlanCompositionContext ctx) {
+  public List<SlotAssignment> optimise(
+      List<SlotAssignment> assignments, PlanCompositionContext ctx) {
     if (assignments == null || assignments.isEmpty()) {
       return assignments;
     }
     TargetsDto targets = primaryTargets(ctx);
-    List<MacroTarget> configured = configuredMacros(targets, properties.scoring().nutritionMacroWeights());
+    List<MacroTarget> configured =
+        configuredMacros(targets, properties.scoring().nutritionMacroWeights());
     Map<UUID, RecipeDto> byRecipeId = indexRecipes(ctx);
 
     // Group assignments by day, preserving the original list position so we can stitch the solved
@@ -190,13 +193,16 @@ public class PortionOptimizer {
     // identical to the aggregator's — the two now cooperate instead of double-counting.
     double[] additionOffset = dayAdditionOffset(assignments, dayIndices);
 
-    // Per-slot upper bound on the serving factor. Snacks are capped so the day-total optimiser can't
-    // balloon a snack into a 2-3× meal (e.g. a 600 kcal recipe scaled ×2.25 → a 1,400 kcal "snack");
+    // Per-slot upper bound on the serving factor. Snacks are capped so the day-total optimiser
+    // can't
+    // balloon a snack into a 2-3× meal (e.g. a 600 kcal recipe scaled ×2.25 → a 1,400 kcal
+    // "snack");
     // the mains carry the remaining calories instead. Everything else keeps the physical max.
     double[] maxFactor = new double[sizable.size()];
     for (int s = 0; s < sizable.size(); s++) {
       SlotAssignment a = assignments.get(sizable.get(s));
-      boolean isSnack = a.kind() != null && a.kind().name().toUpperCase(java.util.Locale.ROOT).contains("SNACK");
+      boolean isSnack =
+          a.kind() != null && a.kind().name().toUpperCase(java.util.Locale.ROOT).contains("SNACK");
       maxFactor[s] = isSnack ? SNACK_MAX_FACTOR : PortionScaler.MAX_FACTOR;
     }
 
@@ -217,7 +223,8 @@ public class PortionOptimizer {
    * additions are pre-sized to the residual, so they are summed as-is (NOT portion-scaled), and
    * satFat stays 0 (no per-serving field). A day with no additions yields an all-zero offset.
    */
-  private static double[] dayAdditionOffset(List<SlotAssignment> assignments, List<Integer> dayIndices) {
+  private static double[] dayAdditionOffset(
+      List<SlotAssignment> assignments, List<Integer> dayIndices) {
     double[] offset = new double[Macro.values().length];
     for (int idx : dayIndices) {
       List<Addition> additions = assignments.get(idx).additions();
@@ -254,11 +261,14 @@ public class PortionOptimizer {
    * Total day objective: sum over configured macros of the direction-aware deviation penalty of the
    * day total = {@code fixedOffset[m] + Σ_i x_i × macro_i}. The {@code fixedOffset} is the day's
    * verbatim in-meal additions ({@link Macro}-ordinal indexed), so the mains are sized against the
-   * target NET of the additions — making this arithmetic identical to {@code DailyMacroAggregator}'s
-   * (mains × factor + additions verbatim). Pure function of its arguments.
+   * target NET of the additions — making this arithmetic identical to {@code
+   * DailyMacroAggregator}'s (mains × factor + additions verbatim). Pure function of its arguments.
    */
   static double objective(
-      List<double[]> perServing, double[] servings, List<MacroTarget> macros, double[] fixedOffset) {
+      List<double[]> perServing,
+      double[] servings,
+      List<MacroTarget> macros,
+      double[] fixedOffset) {
     double total = 0.0;
     for (int m = 0; m < macros.size(); m++) {
       double dayTotal = fixedOffset[m];
@@ -334,8 +344,8 @@ public class PortionOptimizer {
 
   /**
    * Greedy coordinate descent for larger days: each pass walks the slots and snaps each to its best
-   * grid value given the others fixed; warm-started from the calorie-only factors. Deterministic and
-   * monotonically non-increasing in the objective, so it converges in a few passes.
+   * grid value given the others fixed; warm-started from the calorie-only factors. Deterministic
+   * and monotonically non-increasing in the objective, so it converges in a few passes.
    */
   private static double[] greedy(
       List<double[]> perServing,
@@ -379,7 +389,9 @@ public class PortionOptimizer {
 
   /** The serving grid {@code {0.5, 0.75, …, 3.0}} from {@link PortionScaler}'s physical bounds. */
   static double[] grid() {
-    int steps = (int) Math.round((PortionScaler.MAX_FACTOR - PortionScaler.MIN_FACTOR) / PortionScaler.STEP);
+    int steps =
+        (int)
+            Math.round((PortionScaler.MAX_FACTOR - PortionScaler.MIN_FACTOR) / PortionScaler.STEP);
     double[] out = new double[steps + 1];
     for (int i = 0; i <= steps; i++) {
       out[i] = PortionScaler.MIN_FACTOR + i * PortionScaler.STEP;
@@ -395,8 +407,7 @@ public class PortionOptimizer {
   // ---- target / nutrition resolution -----------------------------------------------------------
 
   /** Per-macro target + direction weights, as the solver consumes them. */
-  record MacroTarget(
-      Macro macro, double target, double importance, double wUnder, double wOver) {}
+  record MacroTarget(Macro macro, double target, double importance, double wUnder, double wOver) {}
 
   /** The macro set the optimiser ranges over — mirrors {@code NutritionSubScore}'s macro fields. */
   enum Macro {
@@ -411,12 +422,12 @@ public class PortionOptimizer {
   /**
    * The configured macro targets for the primary eater, in the SAME set + direction source {@code
    * NutritionSubScore} uses: calories from {@code TargetsDto.calories()} and protein/carbs/fat/
-   * fibre/satFat from the {@code MacroTargetDto} fields with their {@code direction()}. Each macro's
-   * importance is the caller-supplied configured {@code weights} (so the objective honours "calories
-   * + protein matter, carbs/fat barely do"); a macro with weight {@code 0} still enters the list but
-   * with zero importance, so its penalty term vanishes (importance × penalty == 0) — it's ignored
-   * without a special case. A macro whose target is null/0 is skipped. Empty when there are no
-   * targets.
+   * fibre/satFat from the {@code MacroTargetDto} fields with their {@code direction()}. Each
+   * macro's importance is the caller-supplied configured {@code weights} (so the objective honours
+   * "calories + protein matter, carbs/fat barely do"); a macro with weight {@code 0} still enters
+   * the list but with zero importance, so its penalty term vanishes (importance × penalty == 0) —
+   * it's ignored without a special case. A macro whose target is null/0 is skipped. Empty when
+   * there are no targets.
    */
   static List<MacroTarget> configuredMacros(TargetsDto targets, NutritionMacroWeights weights) {
     List<MacroTarget> out = new ArrayList<>();
@@ -424,8 +435,12 @@ public class PortionOptimizer {
       return out;
     }
     if (targets.calories() != null && targets.calories().dailyTarget() > 0) {
-      addMacro(out, Macro.CALORIES, weights.calories().doubleValue(),
-          targets.calories().dailyTarget(), targets.calories().direction());
+      addMacro(
+          out,
+          Macro.CALORIES,
+          weights.calories().doubleValue(),
+          targets.calories().dailyTarget(),
+          targets.calories().direction());
     }
     addMacroTarget(out, Macro.PROTEIN, weights.protein().doubleValue(), targets.protein());
     addMacroTarget(out, Macro.CARBS, weights.carbs().doubleValue(), targets.carbs());
@@ -470,8 +485,8 @@ public class PortionOptimizer {
 
   /**
    * Per-serving macro vector for {@code a}, index-aligned with the {@link Macro} ordinal order, or
-   * {@code null} when the slot has no resolvable per-serving nutrition (→ the slot is fixed at 1.0).
-   * Saturated fat is USDA-derived into the per-serving {@code micros} map (key {@link
+   * {@code null} when the slot has no resolvable per-serving nutrition (→ the slot is fixed at
+   * 1.0). Saturated fat is USDA-derived into the per-serving {@code micros} map (key {@link
    * DailyMacroTotals#SATURATED_FAT_KEY}); read it here so the optimiser can size servings to keep
    * saturated fat under its limit (0 when the recipe carries no saturated-fat figure).
    */
@@ -502,9 +517,9 @@ public class PortionOptimizer {
   }
 
   /**
-   * The primary eater's {@code TargetsDto}, resolved the same way {@code PerMealCalorieTargets} does
-   * (first eater of the first slot skeleton → {@code nutritionByUserId}). {@code null} when there is
-   * no eater / no targets row.
+   * The primary eater's {@code TargetsDto}, resolved the same way {@code PerMealCalorieTargets}
+   * does (first eater of the first slot skeleton → {@code nutritionByUserId}). {@code null} when
+   * there is no eater / no targets row.
    */
   private static TargetsDto primaryTargets(PlanCompositionContext ctx) {
     if (ctx == null || ctx.nutritionByUserId() == null || ctx.slotSkeletons() == null) {

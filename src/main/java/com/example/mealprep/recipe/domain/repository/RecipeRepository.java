@@ -113,8 +113,8 @@ public interface RecipeRepository extends JpaRepository<Recipe, UUID> {
    * produces (see {@code TasteSimilarityQueryService#getTasteVectorLiteral}); it is cast to {@code
    * vector} server-side, mirroring {@code TasteProfileRepository}'s similar-user query. The current
    * version is pinned via the {@code (recipe, current_branch_id, current_version)} triple the rest
-   * of the recipe module uses. Returns whole {@code recipe_recipes} rows ({@code select r.*}) so the
-   * service hydrates them through the same path as {@link #findPlannableForUser}.
+   * of the recipe module uses. Returns whole {@code recipe_recipes} rows ({@code select r.*}) so
+   * the service hydrates them through the same path as {@link #findPlannableForUser}.
    *
    * <p>Per-kind selection (vs one flat read) is the fix for a kind-skewed catalogue: a global
    * {@code created_at} order starves rare kinds (e.g. snack/breakfast) when the oldest rows are
@@ -156,8 +156,8 @@ public interface RecipeRepository extends JpaRepository<Recipe, UUID> {
    * {@link #findPlannableForUser} uses). Used when the household has no {@code EMBEDDED} taste
    * vector yet, so per-kind balancing still applies even before personalisation kicks in.
    *
-   * <p>Native (not JPQL) only because {@code jsonb_exists} on the {@code meal_types} jsonb array has
-   * no JPQL equivalent — the kind filter must match {@link #findPlannableByKindRankedByTaste}.
+   * <p>Native (not JPQL) only because {@code jsonb_exists} on the {@code meal_types} jsonb array
+   * has no JPQL equivalent — the kind filter must match {@link #findPlannableByKindRankedByTaste}.
    */
   @Query(
       value =

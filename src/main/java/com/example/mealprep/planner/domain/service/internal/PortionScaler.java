@@ -13,7 +13,9 @@ import java.util.Locale;
  * meal's calorie target and clamped so a recipe far below target can't fabricate an absurd plate
  * (and a recipe far above target shrinks rather than overshooting):
  *
- * <pre>{@code factor = clamp(round_to_step(perMealCalorieTarget / recipe.kcalPerServing), 0.5, 3.0)}</pre>
+ * <pre>
+ * {@code factor = clamp(round_to_step(perMealCalorieTarget / recipe.kcalPerServing), 0.5, 3.0)}
+ * </pre>
  *
  * <p>Deliberately deterministic (no AI): cheap, predictable, no token cost or latency. Held here as
  * a stateless util so the same arithmetic is shared by {@code DailyMacroAggregator} (Phase 1a,
@@ -60,9 +62,10 @@ public final class PortionScaler {
 
   /**
    * Servings of a recipe the primary eater consumes to meet a per-meal calorie target, clamped to
-   * {@code [MIN_FACTOR, MAX_FACTOR]} in {@link #STEP} increments. Falls back to {@code 1.0} when the
-   * recipe has no calories ({@code <= 0}) or there is no target for the slot ({@code null}/{@code
-   * <= 0}) — so an un-sizable slot contributes a plain single serving and coverage stays honest.
+   * {@code [MIN_FACTOR, MAX_FACTOR]} in {@link #STEP} increments. Falls back to {@code 1.0} when
+   * the recipe has no calories ({@code <= 0}) or there is no target for the slot ({@code
+   * null}/{@code <= 0}) — so an un-sizable slot contributes a plain single serving and coverage
+   * stays honest.
    */
   public static double factor(int kcalPerServing, Integer perMealCalorieTarget) {
     return factor(kcalPerServing, perMealCalorieTarget, null, null);
@@ -74,9 +77,9 @@ public final class PortionScaler {
    * the per-meal protein target — i.e. {@code factor = clamp(min(calorieFactor, proteinCapFactor),
    * 0.5, 3.0)}. The protein cap engages only when both a per-meal protein target and the recipe's
    * per-serving protein are known and positive; otherwise this is exactly the calorie-only {@link
-   * #factor(int, Integer)} (so callers/tests without a per-meal protein distribution are unchanged).
-   * Keeps protein-dense taste picks from inflating the daily protein floor when scaled to hit
-   * calories.
+   * #factor(int, Integer)} (so callers/tests without a per-meal protein distribution are
+   * unchanged). Keeps protein-dense taste picks from inflating the daily protein floor when scaled
+   * to hit calories.
    */
   public static double factor(
       int kcalPerServing,

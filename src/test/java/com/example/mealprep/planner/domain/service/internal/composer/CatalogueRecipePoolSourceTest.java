@@ -55,7 +55,9 @@ class CatalogueRecipePoolSourceTest {
   @Mock private RecipeQueryService recipeQueryService;
   @Mock private PreferenceModule preferenceModule;
   @Mock private TasteSimilarityQueryService tasteSimilarity;
-  @Mock private com.example.mealprep.nutrition.domain.service.NutritionQueryService nutritionQueryService;
+
+  @Mock
+  private com.example.mealprep.nutrition.domain.service.NutritionQueryService nutritionQueryService;
 
   private CatalogueRecipePoolSource source;
 
@@ -109,7 +111,8 @@ class CatalogueRecipePoolSourceTest {
         PlanTestData.recipeFor(UUID.randomUUID(), SlotKind.DINNER, 30, List.of(), List.of());
     RecipeDto r2 =
         PlanTestData.recipeFor(UUID.randomUUID(), SlotKind.DINNER, 25, List.of(), List.of());
-    when(recipeQueryService.findPlannableCandidatesByKind(userId, "dinner", CANDIDATES_PER_KIND, VEC))
+    when(recipeQueryService.findPlannableCandidatesByKind(
+            userId, "dinner", CANDIDATES_PER_KIND, VEC))
         .thenReturn(List.of(r1, r2));
 
     List<RecipeDto> pool =
@@ -144,7 +147,8 @@ class CatalogueRecipePoolSourceTest {
 
     ArgumentCaptor<String> mealType = ArgumentCaptor.forClass(String.class);
     verify(recipeQueryService, times(3))
-        .findPlannableCandidatesByKind(eq(userId), mealType.capture(), eq(CANDIDATES_PER_KIND), eq(VEC));
+        .findPlannableCandidatesByKind(
+            eq(userId), mealType.capture(), eq(CANDIDATES_PER_KIND), eq(VEC));
     assertThat(mealType.getAllValues()).containsExactlyInAnyOrder("breakfast", "dinner", "lunch");
   }
 
@@ -169,9 +173,11 @@ class CatalogueRecipePoolSourceTest {
     RecipeDto userBOnly =
         PlanTestData.recipeFor(UUID.randomUUID(), SlotKind.DINNER, 15, List.of(), List.of());
 
-    when(recipeQueryService.findPlannableCandidatesByKind(userA, "dinner", CANDIDATES_PER_KIND, VEC))
+    when(recipeQueryService.findPlannableCandidatesByKind(
+            userA, "dinner", CANDIDATES_PER_KIND, VEC))
         .thenReturn(List.of(userAOnly, systemShared));
-    when(recipeQueryService.findPlannableCandidatesByKind(userB, "dinner", CANDIDATES_PER_KIND, VEC))
+    when(recipeQueryService.findPlannableCandidatesByKind(
+            userB, "dinner", CANDIDATES_PER_KIND, VEC))
         .thenReturn(List.of(userBOnly, systemShared));
 
     List<RecipeDto> pool =
@@ -213,7 +219,8 @@ class CatalogueRecipePoolSourceTest {
     List<RecipeDto> withNulls = new ArrayList<>();
     withNulls.add(null);
     withNulls.add(good);
-    when(recipeQueryService.findPlannableCandidatesByKind(eq(userId), eq("dinner"), anyInt(), any()))
+    when(recipeQueryService.findPlannableCandidatesByKind(
+            eq(userId), eq("dinner"), anyInt(), any()))
         .thenReturn(withNulls);
 
     List<RecipeDto> pool =

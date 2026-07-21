@@ -43,7 +43,8 @@ class IngredientLineParserTest {
     assertParse("1/2 cup all-purpose flour", "all-purpose flour", "0.5", "cup");
     assertParse("3/4 cup chopped fresh basil", "fresh basil", "0.75", "cup");
     assertParse("1 1/2 lbs asparagus, trimmed", "asparagus", "1.5", "lb");
-    assertParse("1/3 cup brown sugar, packed", "brown sugar", "0.3333", "cup"); // 1/3 → 0.3333 (scale 4)
+    assertParse(
+        "1/3 cup brown sugar, packed", "brown sugar", "0.3333", "cup"); // 1/3 → 0.3333 (scale 4)
   }
 
   @Test

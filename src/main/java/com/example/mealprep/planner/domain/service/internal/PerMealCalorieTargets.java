@@ -10,10 +10,11 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * The primary eater's per-meal calorie targets, keyed by normalised slot kind ({@code SNACKS}→{@code
- * SNACK}). Single source for the {@code DailyMacroAggregator} (which scales coverage) and {@code
- * PlanPersister} (which persists the resulting {@code portionFactor}) so the factor both compute via
- * {@link PortionScaler} is identical. Empty when there are no targets / no eaters → factor 1.0.
+ * The primary eater's per-meal calorie targets, keyed by normalised slot kind ({@code
+ * SNACKS}→{@code SNACK}). Single source for the {@code DailyMacroAggregator} (which scales
+ * coverage) and {@code PlanPersister} (which persists the resulting {@code portionFactor}) so the
+ * factor both compute via {@link PortionScaler} is identical. Empty when there are no targets / no
+ * eaters → factor 1.0.
  */
 public final class PerMealCalorieTargets {
 
@@ -66,7 +67,9 @@ public final class PerMealCalorieTargets {
       return out;
     }
     for (PerMealDistributionDto m : t.perMealDistribution()) {
-      if (m != null && m.mealSlot() != null && m.proteinTargetG() != null
+      if (m != null
+          && m.mealSlot() != null
+          && m.proteinTargetG() != null
           && m.proteinTargetG().signum() > 0) {
         out.put(PortionScaler.normaliseKind(m.mealSlot().name()), m.proteinTargetG());
       }

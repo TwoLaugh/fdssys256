@@ -20,12 +20,12 @@ import org.springframework.stereotype.Service;
  * {@code planId}) or {@code FAILED}.
  *
  * <p>Composition is dispatched to the bounded default {@code applicationTaskExecutor} (see {@code
- * DefaultAsyncConfig} — core 4 / max 8 / bounded queue / CallerRunsPolicy back-pressure) via a plain
- * {@link Executor#execute(Runnable)} rather than an {@code @Async} method, which keeps this a single
- * self-contained bean (no second runner bean + no {@code @Lazy} cycle to break) and reuses the same
- * back-pressured pool the rest of the app's background work uses. The worker thread runs {@code
- * compose} under its own transaction (the composer is {@code @Transactional}); {@code userId} is
- * passed explicitly so no inherited security/transaction context is required.
+ * DefaultAsyncConfig} — core 4 / max 8 / bounded queue / CallerRunsPolicy back-pressure) via a
+ * plain {@link Executor#execute(Runnable)} rather than an {@code @Async} method, which keeps this a
+ * single self-contained bean (no second runner bean + no {@code @Lazy} cycle to break) and reuses
+ * the same back-pressured pool the rest of the app's background work uses. The worker thread runs
+ * {@code compose} under its own transaction (the composer is {@code @Transactional}); {@code
+ * userId} is passed explicitly so no inherited security/transaction context is required.
  *
  * <p>Idempotency-Key replays short-circuit: if the composer already has a cached plan for the key,
  * the returned job is {@code COMPLETED} immediately (no work scheduled), mirroring the synchronous

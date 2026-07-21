@@ -34,12 +34,12 @@ public record DailyMacroTotals(
     Map<String, String> microSources) {
 
   /**
-   * Wire keys for the fatty-acid breakdown. Saturated/mono/poly fat are USDA-derived per serving and
-   * ride the per-serving {@code micros} map (same provenance pipeline as the micronutrients), but
-   * saturated fat is a MACRO — {@link DailyMacroAggregator} bridges {@link #SATURATED_FAT_KEY} into
-   * the dedicated {@link #saturatedFatG()} total so it steers scoring + portioning, while mono/poly
-   * are carried in {@code micros} for display. These literals are the contract with the offline
-   * importer ({@code build_usda_fill.py}).
+   * Wire keys for the fatty-acid breakdown. Saturated/mono/poly fat are USDA-derived per serving
+   * and ride the per-serving {@code micros} map (same provenance pipeline as the micronutrients),
+   * but saturated fat is a MACRO — {@link DailyMacroAggregator} bridges {@link #SATURATED_FAT_KEY}
+   * into the dedicated {@link #saturatedFatG()} total so it steers scoring + portioning, while
+   * mono/poly are carried in {@code micros} for display. These literals are the contract with the
+   * offline importer ({@code build_usda_fill.py}).
    */
   public static final String SATURATED_FAT_KEY = "saturated_fat_g";
 
@@ -75,8 +75,8 @@ public record DailyMacroTotals(
     /**
      * Deep copy of this builder's running accumulators — used by the incremental Stage-A scorer so
      * each beam child folds a slot into its OWN copy of the parent's per-day totals instead of
-     * sharing (and corrupting) sibling children's accumulators. The copied {@code micros} /
-     * {@code microSources} maps preserve insertion order, so a later {@code build()} on the copy is
+     * sharing (and corrupting) sibling children's accumulators. The copied {@code micros} / {@code
+     * microSources} maps preserve insertion order, so a later {@code build()} on the copy is
      * byte-identical to building the original after the same delta sequence.
      */
     Builder copy() {
@@ -136,8 +136,15 @@ public record DailyMacroTotals(
 
     DailyMacroTotals build() {
       return new DailyMacroTotals(
-          date, kcal, proteinG, fatG, carbsG, fibreG, saturatedFatG,
-          Map.copyOf(micros), Map.copyOf(microSources));
+          date,
+          kcal,
+          proteinG,
+          fatG,
+          carbsG,
+          fibreG,
+          saturatedFatG,
+          Map.copyOf(micros),
+          Map.copyOf(microSources));
     }
   }
 }

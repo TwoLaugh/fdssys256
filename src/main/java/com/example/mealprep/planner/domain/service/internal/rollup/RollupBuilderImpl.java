@@ -168,7 +168,8 @@ class RollupBuilderImpl implements RollupBuilder {
     BigDecimal n = BigDecimal.valueOf(days.size());
 
     BigDecimal kcalAvg = sumInt(days, DailyMacroTotals::kcal).divide(n, 0, RoundingMode.HALF_UP);
-    BigDecimal proteinAvg = sumBd(days, DailyMacroTotals::proteinG).divide(n, 1, RoundingMode.HALF_UP);
+    BigDecimal proteinAvg =
+        sumBd(days, DailyMacroTotals::proteinG).divide(n, 1, RoundingMode.HALF_UP);
     BigDecimal carbsAvg = sumBd(days, DailyMacroTotals::carbsG).divide(n, 1, RoundingMode.HALF_UP);
     BigDecimal fatAvg = sumBd(days, DailyMacroTotals::fatG).divide(n, 1, RoundingMode.HALF_UP);
     BigDecimal fibreAvg = sumBd(days, DailyMacroTotals::fibreG).divide(n, 1, RoundingMode.HALF_UP);
@@ -256,8 +257,7 @@ class RollupBuilderImpl implements RollupBuilder {
     }
     int macrosMet = (int) macros.stream().filter(NutritionTargetCoverageDocument::met).count();
     int microsMet = (int) micros.stream().filter(NutritionTargetCoverageDocument::met).count();
-    int microsNoData =
-        (int) micros.stream().filter(c -> "NO_DATA".equals(c.status())).count();
+    int microsNoData = (int) micros.stream().filter(c -> "NO_DATA".equals(c.status())).count();
     // Informational fat breakdown for the "fat spread" display: saturated (also a scored macro row)
     // + the unsaturated mono/poly (carried in the micros map, no target). Null when no fat data.
     BigDecimal monoAvg = microAvg.get(DailyMacroTotals.MONOUNSATURATED_FAT_KEY);
@@ -267,7 +267,13 @@ class RollupBuilderImpl implements RollupBuilder {
             ? null
             : new NutritionCoverageDocument.FatBreakdown(satFatAvg, monoAvg, polyAvg);
     return new NutritionCoverageDocument(
-        macros, micros, macrosMet, macros.size(), microsMet, micros.size(), microsNoData,
+        macros,
+        micros,
+        macrosMet,
+        macros.size(),
+        microsMet,
+        micros.size(),
+        microsNoData,
         fatBreakdown);
   }
 
@@ -307,8 +313,7 @@ class RollupBuilderImpl implements RollupBuilder {
         key, unit, target, actual, d.name(), met, met ? "MET" : "SHORT", "measured");
   }
 
-  private static boolean macroMet(
-      EnforcementDirection dir, BigDecimal actual, BigDecimal target) {
+  private static boolean macroMet(EnforcementDirection dir, BigDecimal actual, BigDecimal target) {
     if (target == null || target.signum() == 0) {
       return true;
     }

@@ -15,8 +15,8 @@ import java.util.UUID;
 /**
  * AI dispatcher task that estimates the per-serving micronutrients a data source could NOT supply
  * (no USDA-from-ingredient value, none on the recipe source), from the recipe's name + ingredient
- * lines. The provenance seam's {@code estimated} tier — its output is always written
- * {@code source="estimated"} with the returned {@code confidence}, never silently merged with
+ * lines. The provenance seam's {@code estimated} tier — its output is always written {@code
+ * source="estimated"} with the returned {@code confidence}, never silently merged with
  * measured/derived numbers.
  *
  * <p>MID tier: estimation needs some food-composition reasoning but is not frontier-grade. Mirrors
@@ -82,10 +82,14 @@ public final class NutrientEstimationTask implements AiTask<NutrientEstimationRe
   @Override
   public Map<String, Object> variables() {
     return Map.of(
-        "recipe.name", recipeName,
-        "recipe.servings", servings,
-        "recipe.ingredients", String.join("\n", ingredients),
-        "missing.nutrientKeys", String.join(", ", missingNutrientKeys));
+        "recipe.name",
+        recipeName,
+        "recipe.servings",
+        servings,
+        "recipe.ingredients",
+        String.join("\n", ingredients),
+        "missing.nutrientKeys",
+        String.join(", ", missingNutrientKeys));
   }
 
   @Override

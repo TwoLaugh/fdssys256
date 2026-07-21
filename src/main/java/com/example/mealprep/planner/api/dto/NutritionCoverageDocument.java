@@ -27,7 +27,8 @@ public record NutritionCoverageDocument(
     FatBreakdown fatBreakdown) {
 
   /** Weekly-average fatty-acid split for display (grams/day). */
-  public record FatBreakdown(BigDecimal saturatedG, BigDecimal monounsaturatedG, BigDecimal polyunsaturatedG) {}
+  public record FatBreakdown(
+      BigDecimal saturatedG, BigDecimal monounsaturatedG, BigDecimal polyunsaturatedG) {}
 
   /** Back-compat ctor (no fat breakdown) — keeps pre-fat-subtype construction sites compiling. */
   public NutritionCoverageDocument(

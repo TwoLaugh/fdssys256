@@ -27,9 +27,9 @@ import com.example.mealprep.planner.domain.service.internal.rollup.WeeklyCostCon
 import com.example.mealprep.planner.testdata.PlanTestData;
 import com.example.mealprep.preference.PreferenceModule;
 import com.example.mealprep.preference.domain.service.TasteSimilarityQueryService;
+import com.example.mealprep.provisions.api.dto.ProvisionForPlannerBundleDto;
 import com.example.mealprep.recipe.api.dto.NutritionPerServingDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
-import com.example.mealprep.provisions.api.dto.ProvisionForPlannerBundleDto;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -42,14 +42,16 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Correctness gate for the incremental Stage-A scorer. Builds a range of representative composition
- * contexts + partial plans of varying length and asserts that the incremental composite (computed by
- * appending slots one-by-one, exactly as {@code BeamSearchEngineImpl} does) equals the exact {@link
- * ScoringEngine#score}{@code .composite()} for the same plan, byte-for-byte ({@code compareTo == 0}).
+ * contexts + partial plans of varying length and asserts that the incremental composite (computed
+ * by appending slots one-by-one, exactly as {@code BeamSearchEngineImpl} does) equals the exact
+ * {@link ScoringEngine#score}{@code .composite()} for the same plan, byte-for-byte ({@code
+ * compareTo == 0}).
  *
- * <p>Both engines are built from the SAME sub-score beans / gates / properties, so any divergence is
- * a bug in the incremental accumulators, not differing inputs. The {@link NutritionFloorGateService}
- * is a single shared mock answering deterministically off the rollup it is handed — so the real
- * gate and the incremental gate (which build byte-identical rollups) always agree.
+ * <p>Both engines are built from the SAME sub-score beans / gates / properties, so any divergence
+ * is a bug in the incremental accumulators, not differing inputs. The {@link
+ * NutritionFloorGateService} is a single shared mock answering deterministically off the rollup it
+ * is handed — so the real gate and the incremental gate (which build byte-identical rollups) always
+ * agree.
  */
 class IncrementalScoringOracleTest {
 
@@ -60,7 +62,8 @@ class IncrementalScoringOracleTest {
   private final PlannerProperties props = PlanTestData.scoringProperties();
 
   private final PreferenceModule preferenceModule = mock(PreferenceModule.class);
-  private final TasteSimilarityQueryService tasteSimilarity = mock(TasteSimilarityQueryService.class);
+  private final TasteSimilarityQueryService tasteSimilarity =
+      mock(TasteSimilarityQueryService.class);
 
   private final DailyMacroAggregator macroAggregator = new DailyMacroAggregator();
   private final NutritionFloorGateService floorGateService = mock(NutritionFloorGateService.class);
@@ -119,8 +122,7 @@ class IncrementalScoringOracleTest {
         .thenAnswer(
             inv -> {
               CandidatePlanRollupDto rollup = inv.getArgument(1);
-              boolean ok =
-                  rollup.perDay().stream().allMatch(d -> d.calories() >= 50);
+              boolean ok = rollup.perDay().stream().allMatch(d -> d.calories() >= 50);
               return new FloorGateResultDto(ok, List.of(), ok ? "ok" : "low");
             });
   }
@@ -128,8 +130,9 @@ class IncrementalScoringOracleTest {
   // ---- the oracle assertion -------------------------------------------------------------------
 
   /**
-   * Append the assignments one-by-one through the incremental engine (mirroring the beam) and assert
-   * the running composite at EVERY prefix equals the exact engine scoring that same prefix plan.
+   * Append the assignments one-by-one through the incremental engine (mirroring the beam) and
+   * assert the running composite at EVERY prefix equals the exact engine scoring that same prefix
+   * plan.
    */
   private void assertIncrementalMatchesExactForEveryPrefix(
       List<SlotAssignment> assignments, PlanCompositionContext ctx) {
@@ -190,8 +193,7 @@ class IncrementalScoringOracleTest {
       for (int s = 0; s < 3; s++) {
         int idx = d * 3 + s;
         SlotKind kind = s == 0 ? SlotKind.BREAKFAST : s == 1 ? SlotKind.LUNCH : SlotKind.DINNER;
-        MealSlotSkeleton skel =
-            PlanTestData.skeletonFor(WEEK.plusDays(d), s, kind, 20 + idx * 5);
+        MealSlotSkeleton skel = PlanTestData.skeletonFor(WEEK.plusDays(d), s, kind, 20 + idx * 5);
         UUID r = UUID.randomUUID();
         RecipeDto recipe =
             fullRecipe(
@@ -224,16 +226,7 @@ class IncrementalScoringOracleTest {
     // null recipeId assignment
     assignments.add(
         new SlotAssignment(
-            UUID.randomUUID(),
-            s0.slotId(),
-            0,
-            WEEK,
-            SlotKind.LUNCH,
-            null,
-            null,
-            null,
-            2,
-            false));
+            UUID.randomUUID(), s0.slotId(), 0, WEEK, SlotKind.LUNCH, null, null, null, 2, false));
     // recipeId not in the pool (missing recipe)
     assignments.add(PlanTestData.assignment(s1.slotId(), UUID.randomUUID(), WEEK, 1, 2));
     // present recipe
@@ -270,7 +263,8 @@ class IncrementalScoringOracleTest {
       skels.add(skel);
       assignments.add(PlanTestData.assignment(skel.slotId(), r, WEEK.plusDays(i), 0, 2));
     }
-    PlanCompositionContext ctx = scoringCtx(skels, List.of(recipe), user, Map.of(user, targetsFor(user)));
+    PlanCompositionContext ctx =
+        scoringCtx(skels, List.of(recipe), user, Map.of(user, targetsFor(user)));
     assertIncrementalMatchesExactForEveryPrefix(assignments, ctx);
   }
 
@@ -289,8 +283,12 @@ class IncrementalScoringOracleTest {
             "fry",
             new float[] {0.1f, 0.2f, 0.3f, 0.4f},
             new NutritionPerServingDto(
-                10, new BigDecimal("1"), new BigDecimal("2"), new BigDecimal("1"),
-                new BigDecimal("0.5"), Map.of()));
+                10,
+                new BigDecimal("1"),
+                new BigDecimal("2"),
+                new BigDecimal("1"),
+                new BigDecimal("0.5"),
+                Map.of()));
     MealSlotSkeleton skel = PlanTestData.skeletonFor(WEEK, 0, SlotKind.DINNER, 30);
     PlanCompositionContext ctx =
         scoringCtx(List.of(skel), List.of(leanRecipe), user, Map.of(user, targetsFor(user)));
@@ -353,10 +351,14 @@ class IncrementalScoringOracleTest {
         user,
         Goal.MAINTAIN,
         new CalorieTargetDto(2000, 0, 0, "daily", EnforcementDirection.BOTH_BOUNDED),
-        new MacroTargetDto(new BigDecimal("120"), null, "daily", EnforcementDirection.LOWER_FLOOR, true),
-        new MacroTargetDto(new BigDecimal("200"), null, "daily", EnforcementDirection.UPPER_LIMIT, true),
-        new MacroTargetDto(new BigDecimal("60"), null, "daily", EnforcementDirection.UPPER_LIMIT, true),
-        new MacroTargetDto(new BigDecimal("30"), null, "daily", EnforcementDirection.LOWER_FLOOR, true),
+        new MacroTargetDto(
+            new BigDecimal("120"), null, "daily", EnforcementDirection.LOWER_FLOOR, true),
+        new MacroTargetDto(
+            new BigDecimal("200"), null, "daily", EnforcementDirection.UPPER_LIMIT, true),
+        new MacroTargetDto(
+            new BigDecimal("60"), null, "daily", EnforcementDirection.UPPER_LIMIT, true),
+        new MacroTargetDto(
+            new BigDecimal("30"), null, "daily", EnforcementDirection.LOWER_FLOOR, true),
         null,
         null,
         List.of(),
@@ -368,7 +370,9 @@ class IncrementalScoringOracleTest {
         0L);
   }
 
-  /** Context with the given primary user wired into soft prefs so {@code primaryUserId} resolves. */
+  /**
+   * Context with the given primary user wired into soft prefs so {@code primaryUserId} resolves.
+   */
   private PlanCompositionContext scoringCtx(
       List<MealSlotSkeleton> skeletons,
       List<RecipeDto> pool,

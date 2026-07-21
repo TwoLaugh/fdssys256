@@ -12,10 +12,10 @@ import org.springframework.stereotype.Component;
 /**
  * Multiplicative variety hard-gate. Per LLD §scoring: a recipe may appear at most {@code maxRepeat}
  * times across {@code plan.assignments}; any recipe exceeding that fails the gate (composite → 0).
- * The cap is <b>per-household</b>: it defaults to {@code mealprep.planner.scoring.variety.max-repeat}
- * (default 2; {@code @Min(1)}) but is lifted when the household's merged lifestyle config marks
- * batch-cooking, so a meal-prepper can cook-once-eat-many — see {@link
- * #maxRepeat(PlanCompositionContext)}. Empty / null plan passes vacuously.
+ * The cap is <b>per-household</b>: it defaults to {@code
+ * mealprep.planner.scoring.variety.max-repeat} (default 2; {@code @Min(1)}) but is lifted when the
+ * household's merged lifestyle config marks batch-cooking, so a meal-prepper can cook-once-eat-many
+ * — see {@link #maxRepeat(PlanCompositionContext)}. Empty / null plan passes vacuously.
  */
 @Component
 class VarietyGate {
@@ -24,8 +24,9 @@ class VarietyGate {
    * Per-recipe weekly cap for a batch-cooking household — a prep block of one dish across several
    * days. With the recipe-reuse reward ({@code BatchSubScore}) driving concentration toward the cap
    * floor, this cap is what sets the meal-prep intensity: 3 yields a <em>moderate</em> ~10 distinct
-   * recipes over a 28-slot week (mostly 3×); 4+ is more aggressive (~7–8 distinct, heavy 4×). Applied
-   * when {@code batchCookingPreferred}; the configured default still wins if it is already higher.
+   * recipes over a 28-slot week (mostly 3×); 4+ is more aggressive (~7–8 distinct, heavy 4×).
+   * Applied when {@code batchCookingPreferred}; the configured default still wins if it is already
+   * higher.
    */
   private static final int BATCH_REPEAT_CAP = 3;
 

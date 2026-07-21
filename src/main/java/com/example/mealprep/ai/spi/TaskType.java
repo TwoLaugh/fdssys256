@@ -26,7 +26,8 @@ public enum TaskType {
   PLANNER_STAGE_C,
   PLANNER_PHASE2_AUGMENTATION,
   // Culinary-appropriateness gate for in-meal additions (Phase 2): the deterministic planner picks
-  // WHICH whole foods close the day's gap; this assigns each to the most sensible meal slot + writes
+  // WHICH whole foods close the day's gap; this assigns each to the most sensible meal slot +
+  // writes
   // the pairing note ("½ avocado on the taco salad"). Skippable — falls back to deterministic
   // placement when the AI is unavailable.
   PLANNER_ADDITION_PAIRING,

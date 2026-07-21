@@ -384,10 +384,13 @@ class TargetsFlowIT {
   @Test
   void put_updatesOverlappingMicroKeys_changedPlusAdded_returns200_notConflict() throws Exception {
     // Regression for the targets-update 23505: PUT-updating an INITIALISED row whose new child set
-    // shares natural keys with the existing rows used to fail with 409 "household-integrity-violation".
+    // shares natural keys with the existing rows used to fail with 409
+    // "household-integrity-violation".
     // Clear-and-readd orphan-removed iron_mg / vitamin_d_iu and re-inserted fresh-UUID rows for the
-    // SAME (targets_id, nutrient_key); Hibernate flushed those INSERTs before the orphan DELETEs, so
-    // the unchanged-key rows collided with the not-yet-deleted old rows on uq_nutrition_micro_targets_key.
+    // SAME (targets_id, nutrient_key); Hibernate flushed those INSERTs before the orphan DELETEs,
+    // so
+    // the unchanged-key rows collided with the not-yet-deleted old rows on
+    // uq_nutrition_micro_targets_key.
     // The fix reconciles children by natural key (update-in-place / delete-removed / insert-new).
     AuthedUser user = registerUser();
     NutritionTargets seeded = seedTargetsForUser(user.userId());
@@ -397,7 +400,8 @@ class TargetsFlowIT {
             put("/api/v1/nutrition/targets")
                 .cookie(user.cookie())
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(NutritionTestData.defaultUpdateRequest(0L))))
+                .content(
+                    objectMapper.writeValueAsString(NutritionTestData.defaultUpdateRequest(0L))))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.version").value(1))
         .andExpect(jsonPath("$.microTargets.length()").value(2));

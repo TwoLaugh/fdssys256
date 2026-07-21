@@ -8,8 +8,8 @@ import java.util.List;
  * A curated in-meal addition candidate (Phase 2 — {@code
  * design/nutrition/portion-scaling-and-additions.md}). The catalogue defines <i>which</i> whole
  * foods are sensible additions + their portion + which nutrients they are strong in; the actual
- * nutrition is USDA-derived (resolved live from the nutrition module's ingredient-mapping cache when
- * present, else from {@code per100g} here as a USDA-sourced fallback — see {@code
+ * nutrition is USDA-derived (resolved live from the nutrition module's ingredient-mapping cache
+ * when present, else from {@code per100g} here as a USDA-sourced fallback — see {@code
  * AdditionNutritionResolver}).
  *
  * @param ingredientKey normalised ingredient mapping key (allergy filter + grocery + USDA lookup)

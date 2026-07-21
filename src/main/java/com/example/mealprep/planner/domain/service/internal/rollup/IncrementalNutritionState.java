@@ -12,8 +12,8 @@ import java.util.UUID;
  * Immutable carrier of the running per-day macro/micro accumulators for the incremental Stage-A
  * scorer. Wraps a date-ascending map of {@link DailyMacroTotals.Builder} (the same mutable
  * accumulator the whole-plan {@link DailyMacroAggregator} walk uses) so the byte-identical
- * arithmetic is shared, but presents a copy-on-append face: each {@link #append} returns a NEW state
- * whose builders are deep copies, so sibling beam children never corrupt each other's totals.
+ * arithmetic is shared, but presents a copy-on-append face: each {@link #append} returns a NEW
+ * state whose builders are deep copies, so sibling beam children never corrupt each other's totals.
  *
  * <p>The {@code Builder} type is package-private to {@code rollup}; this carrier is the public seam
  * the sibling {@code scoring} package uses, never naming {@code Builder} itself. Finalising to
@@ -52,8 +52,10 @@ public final class IncrementalNutritionState {
     LocalDate date = assignment.onDate();
     if (date != null) {
       DailyMacroTotals.Builder existing = next.get(date);
-      // Copy the affected day so the parent / siblings keep their own accumulators intact. applySlot
-      // re-creates the bucket via computeIfAbsent when absent, so a brand-new day needs no pre-seed.
+      // Copy the affected day so the parent / siblings keep their own accumulators intact.
+      // applySlot
+      // re-creates the bucket via computeIfAbsent when absent, so a brand-new day needs no
+      // pre-seed.
       if (existing != null) {
         next.put(date, existing.copy());
       }

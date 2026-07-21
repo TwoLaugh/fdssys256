@@ -267,7 +267,8 @@ class ShoppingListCalculator {
    * portion per attached slot — so a week's worth sums across the seven carrier slots). SIDE_RECIPE
    * additions are recipe-backed — see {@link #accumulateSideRecipeAdditions}.
    */
-  private static void accumulateAdditions(Map<String, IngredientDemand> demand, List<Addition> additions) {
+  private static void accumulateAdditions(
+      Map<String, IngredientDemand> demand, List<Addition> additions) {
     if (additions == null) {
       return;
     }
@@ -293,7 +294,9 @@ class ShoppingListCalculator {
    * each), reusing the same recipe cache as the main walk so each recipe is read at most once.
    */
   private void accumulateSideRecipeAdditions(
-      Map<String, IngredientDemand> demand, List<Addition> additions, Map<UUID, RecipeDto> recipeCache) {
+      Map<String, IngredientDemand> demand,
+      List<Addition> additions,
+      Map<UUID, RecipeDto> recipeCache) {
     if (additions == null) {
       return;
     }
@@ -302,7 +305,8 @@ class ShoppingListCalculator {
         continue;
       }
       RecipeDto recipe =
-          recipeCache.computeIfAbsent(a.recipeId(), id -> recipeQueryService.getById(id).orElse(null));
+          recipeCache.computeIfAbsent(
+              a.recipeId(), id -> recipeQueryService.getById(id).orElse(null));
       if (recipe == null
           || recipe.currentVersionBody() == null
           || recipe.currentVersionBody().ingredients() == null) {

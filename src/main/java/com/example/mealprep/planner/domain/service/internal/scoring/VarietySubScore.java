@@ -87,8 +87,8 @@ class VarietySubScore implements SubScoreCalculator {
 
   /**
    * The variety sub-score from the three distinct-value counts — the exact mean-of-dimension-scores
-   * the whole-plan {@link #compute} returns, so the incremental scorer finalises identically. {@code
-   * targets} is {@code properties.scoring().variety()}.
+   * the whole-plan {@link #compute} returns, so the incremental scorer finalises identically.
+   * {@code targets} is {@code properties.scoring().variety()}.
    */
   BigDecimal finalScore(
       int cuisineCount,

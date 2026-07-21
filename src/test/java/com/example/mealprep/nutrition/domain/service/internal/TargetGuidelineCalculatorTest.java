@@ -28,14 +28,22 @@ class TargetGuidelineCalculatorTest {
     // BMR 1780 × moderately active 1.55 = 2759 TDEE; MAINTAIN adds 0.
     assertThat(
             calc.targetCalories(
-                BiologicalSex.MALE, 30, bd(80), bd(180),
-                BaselineActivityLevel.MODERATELY_ACTIVE, Goal.MAINTAIN))
+                BiologicalSex.MALE,
+                30,
+                bd(80),
+                bd(180),
+                BaselineActivityLevel.MODERATELY_ACTIVE,
+                Goal.MAINTAIN))
         .isEqualTo(2759);
     // LOSE applies -500.
     assertThat(
             calc.targetCalories(
-                BiologicalSex.MALE, 30, bd(80), bd(180),
-                BaselineActivityLevel.MODERATELY_ACTIVE, Goal.LOSE_WEIGHT))
+                BiologicalSex.MALE,
+                30,
+                bd(80),
+                bd(180),
+                BaselineActivityLevel.MODERATELY_ACTIVE,
+                Goal.LOSE_WEIGHT))
         .isEqualTo(2259);
   }
 
@@ -44,8 +52,12 @@ class TargetGuidelineCalculatorTest {
     // Small sedentary person cutting would compute < 1200 → floored.
     int kcal =
         calc.targetCalories(
-            BiologicalSex.FEMALE, 60, bd(45), bd(150),
-            BaselineActivityLevel.SEDENTARY, Goal.LOSE_WEIGHT);
+            BiologicalSex.FEMALE,
+            60,
+            bd(45),
+            bd(150),
+            BaselineActivityLevel.SEDENTARY,
+            Goal.LOSE_WEIGHT);
     assertThat(kcal).isEqualTo(1200);
   }
 

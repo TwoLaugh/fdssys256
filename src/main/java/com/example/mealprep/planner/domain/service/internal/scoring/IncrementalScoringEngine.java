@@ -23,9 +23,9 @@ import org.springframework.stereotype.Component;
 /**
  * Incremental composite scorer for the Stage-A beam search. Carries {@link IncrementalScoreState}
  * running accumulators on each partial plan; appending one slot derives the child state in
- * O(1)-ish, and {@link #composite} finalises by reproducing each LOCKED sub-score's exact arithmetic
- * from the raw accumulators — so the result is byte-identical (BigDecimal {@code compareTo == 0}) to
- * {@link ScoringEngine#score}{@code .composite()} for the same plan.
+ * O(1)-ish, and {@link #composite} finalises by reproducing each LOCKED sub-score's exact
+ * arithmetic from the raw accumulators — so the result is byte-identical (BigDecimal {@code
+ * compareTo == 0}) to {@link ScoringEngine#score}{@code .composite()} for the same plan.
  *
  * <p>Used ONLY for pruning during the search; {@code BeamSearchEngineImpl.finalise()} re-scores the
  * returned top-N with the exact {@link ScoringEngine}, so the persisted breakdown is always the
@@ -34,9 +34,9 @@ import org.springframework.stereotype.Component;
  * <p>Six contributors are incremental (preference, time, variety, batch, nutrition, nutrition floor
  * gate, plus the variety gate); COST and PROVISIONS remain whole-plan {@code compute(plan, ctx)}
  * calls in {@link #composite} (they early-out cheaply with no budget / empty inventory and are
- * additive-but-fiddly — a later pass). The composite reproduces {@link ScoringEngineImpl}'s weighted
- * sum + the two multiplicative gates exactly, sourced from the state for the incremental sub-scores
- * and from whole-plan {@code compute()} for cost / provisions.
+ * additive-but-fiddly — a later pass). The composite reproduces {@link ScoringEngineImpl}'s
+ * weighted sum + the two multiplicative gates exactly, sourced from the state for the incremental
+ * sub-scores and from whole-plan {@code compute()} for cost / provisions.
  */
 @Component
 public class IncrementalScoringEngine implements BeamCandidateScorer {
@@ -84,8 +84,8 @@ public class IncrementalScoringEngine implements BeamCandidateScorer {
   }
 
   /**
-   * Derive the child state from appending {@code a} to {@code parent}. Each accumulator folds in the
-   * one slot using the SAME formula helper the whole-plan sub-score uses, so the resulting raw
+   * Derive the child state from appending {@code a} to {@code parent}. Each accumulator folds in
+   * the one slot using the SAME formula helper the whole-plan sub-score uses, so the resulting raw
    * accumulators equal a whole-plan walk over the parent's assignments plus this one.
    */
   public IncrementalScoreState append(
@@ -154,9 +154,9 @@ public class IncrementalScoringEngine implements BeamCandidateScorer {
 
   /**
    * Finalise the composite for {@code state} — byte-identical to {@link ScoringEngine#score}{@code
-   * .composite()} for the same plan. Reproduces {@link ScoringEngineImpl}'s weighted sum and the two
-   * multiplicative gates: the incremental sub-scores from the raw accumulators, cost / provisions
-   * from whole-plan {@code compute(plan, ctx)}.
+   * .composite()} for the same plan. Reproduces {@link ScoringEngineImpl}'s weighted sum and the
+   * two multiplicative gates: the incremental sub-scores from the raw accumulators, cost /
+   * provisions from whole-plan {@code compute(plan, ctx)}.
    */
   public BigDecimal composite(
       IncrementalScoreState state, CandidatePlan plan, PlanCompositionContext ctx) {

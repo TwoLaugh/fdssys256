@@ -63,8 +63,8 @@ public class NutritionFloorGate {
    * rollup-build + {@link NutritionFloorGateService#evaluate} the whole-plan {@link #passes} runs.
    * The incremental Stage-A scorer carries the SAME per-day totals (shared {@link
    * DailyMacroAggregator} arithmetic) and supplies the same {@code primary}, so this finalises
-   * byte-identically. {@code primary} must be non-null and {@code byDate} reflects a non-empty plan;
-   * an empty {@code byDate} passes vacuously, matching {@link #passes}.
+   * byte-identically. {@code primary} must be non-null and {@code byDate} reflects a non-empty
+   * plan; an empty {@code byDate} passes vacuously, matching {@link #passes}.
    */
   boolean passesForTotals(UUID primary, Map<LocalDate, DailyMacroTotals> byDate) {
     if (byDate.isEmpty()) {

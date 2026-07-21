@@ -16,10 +16,10 @@ import java.util.Map;
 import org.springframework.stereotype.Service;
 
 /**
- * Assembles a full set of guideline-default targets from demographics: macros + calories from {@link
- * TargetGuidelineCalculator}, and micronutrient floors looked up from the {@code (age_group, sex)}
- * DRI band (the weight-free, age/sex-driven part). Stateless — returns a preview; persistence happens
- * when the user saves the (possibly edited) targets through the normal PUT.
+ * Assembles a full set of guideline-default targets from demographics: macros + calories from
+ * {@link TargetGuidelineCalculator}, and micronutrient floors looked up from the {@code (age_group,
+ * sex)} DRI band (the weight-free, age/sex-driven part). Stateless — returns a preview; persistence
+ * happens when the user saves the (possibly edited) targets through the normal PUT.
  */
 @Service
 public class GuidelineDefaultsServiceImpl implements GuidelineDefaultsService {
@@ -60,7 +60,12 @@ public class GuidelineDefaultsServiceImpl implements GuidelineDefaultsService {
     int bmr = calculator.bmr(req.biologicalSex(), age, req.weightKg(), req.heightCm());
     int calories =
         calculator.targetCalories(
-            req.biologicalSex(), age, req.weightKg(), req.heightCm(), req.activityLevel(), req.goal());
+            req.biologicalSex(),
+            age,
+            req.weightKg(),
+            req.heightCm(),
+            req.activityLevel(),
+            req.goal());
     BigDecimal protein = calculator.proteinFloorG(req.weightKg());
     BigDecimal fat = calculator.fatG(calories);
     BigDecimal fibre = calculator.fibreG(calories);
@@ -95,8 +100,8 @@ public class GuidelineDefaultsServiceImpl implements GuidelineDefaultsService {
   }
 
   /**
-   * Raise an existing micro floor to {@code computed} when that is higher than the DRI value — never
-   * below it (so the DRI safety margin is preserved). No-op if the key isn't in the DRI set.
+   * Raise an existing micro floor to {@code computed} when that is higher than the DRI value —
+   * never below it (so the DRI safety margin is preserved). No-op if the key isn't in the DRI set.
    */
   private static void raiseFloor(Map<String, BigDecimal> micros, String key, double computed) {
     micros.computeIfPresent(

@@ -41,7 +41,17 @@ public record RecipeNutritionResultDto(
       Map<String, BigDecimal> microsPerServing,
       String nutritionStatus,
       List<UnmappedIngredientDto> unmapped) {
-    this(recipeId, caloriesPerServing, proteinPerServingG, carbsPerServingG, fatPerServingG,
-        fibrePerServingG, microsPerServing, nutritionStatus, unmapped, Map.of(), Map.of());
+    this(
+        recipeId,
+        caloriesPerServing,
+        proteinPerServingG,
+        carbsPerServingG,
+        fatPerServingG,
+        fibrePerServingG,
+        microsPerServing,
+        nutritionStatus,
+        unmapped,
+        Map.of(),
+        Map.of());
   }
 }

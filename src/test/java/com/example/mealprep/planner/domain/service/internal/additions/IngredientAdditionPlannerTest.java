@@ -39,7 +39,13 @@ class IngredientAdditionPlannerTest {
   private static NutritionTargetCoverageDocument shortTarget(
       String key, String unit, String target, String projected) {
     return new NutritionTargetCoverageDocument(
-        key, unit, new BigDecimal(target), new BigDecimal(projected), "LOWER_FLOOR", false, "SHORT",
+        key,
+        unit,
+        new BigDecimal(target),
+        new BigDecimal(projected),
+        "LOWER_FLOOR",
+        false,
+        "SHORT",
         "measured");
   }
 
@@ -50,7 +56,11 @@ class IngredientAdditionPlannerTest {
             List.of(
                 shortTarget("vitamin_e_mg", "mg", "15", "5"),
                 shortTarget("magnesium_mg", "mg", "420", "300")),
-            0, 5, 16, 28, 0);
+            0,
+            5,
+            16,
+            28,
+            0);
     return new RollupSummaryDocument(List.of(), null, coverage);
   }
 
@@ -80,10 +90,10 @@ class IngredientAdditionPlannerTest {
 
     // SPREAD: additions do NOT all pile on the dinner carrier — at least one lands on a non-dinner
     // slot (slotIndex < 2), which the old single-carrier behaviour never did.
-    assertThat(withAdditions)
-        .anySatisfy(a -> assertThat(a.slotIndex()).isLessThan(2));
+    assertThat(withAdditions).anySatisfy(a -> assertThat(a.slotIndex()).isLessThan(2));
     // No slot carries more than MAX_ADDITIONS.
-    assertThat(withAdditions).allSatisfy(a -> assertThat(a.additions()).hasSizeLessThanOrEqualTo(3));
+    assertThat(withAdditions)
+        .allSatisfy(a -> assertThat(a.additions()).hasSizeLessThanOrEqualTo(3));
 
     // The gap is still meaningfully closed: each day's additions total real calories.
     java.util.function.Function<LocalDate, Integer> dayKcal =
@@ -113,10 +123,20 @@ class IngredientAdditionPlannerTest {
         new NutritionCoverageDocument(
             List.of(
                 new NutritionTargetCoverageDocument(
-                    "calories", "kcal", new BigDecimal("3600"), new BigDecimal("3590"),
-                    "LOWER_FLOOR", true, "MET", "measured")),
+                    "calories",
+                    "kcal",
+                    new BigDecimal("3600"),
+                    new BigDecimal("3590"),
+                    "LOWER_FLOOR",
+                    true,
+                    "MET",
+                    "measured")),
             List.of(),
-            5, 5, 28, 28, 0);
+            5,
+            5,
+            28,
+            28,
+            0);
     List<SlotAssignment> assignments =
         List.of(PlanTestData.assignment(UUID.randomUUID(), UUID.randomUUID(), WEEK, 0, 2));
     PlanCompositionContext ctx = PlanTestData.minimalContext(List.of(), List.of());
@@ -129,42 +149,89 @@ class IngredientAdditionPlannerTest {
 
   /** Build a snack-tagged (side-proxy) pool recipe carrying the given per-serving nutrition. */
   private static RecipeDto snackSide(UUID id, String name, int kcal, Map<String, String> micros) {
-    RecipeDto base = PlanTestData.scoredRecipe(id, 15, "Generic", "tofu", "roast", List.of("chickpea"));
+    RecipeDto base =
+        PlanTestData.scoredRecipe(id, 15, "Generic", "tofu", "roast", List.of("chickpea"));
     RecipeVersionDto v = base.currentVersionBody();
     RecipeMetadataDto m = v.metadata();
     RecipeMetadataDto snackMeta =
         new RecipeMetadataDto(
-            m.servings(), m.prepTimeMins(), m.cookTimeMins(), m.totalTimeMins(),
-            m.equipmentRequired(), m.fridgeDays(), m.freezerWeeks(), m.packable(), m.cuisine(),
+            m.servings(),
+            m.prepTimeMins(),
+            m.cookTimeMins(),
+            m.totalTimeMins(),
+            m.equipmentRequired(),
+            m.fridgeDays(),
+            m.freezerWeeks(),
+            m.packable(),
+            m.cuisine(),
             List.of("snack"));
     Map<String, BigDecimal> mic = new java.util.LinkedHashMap<>();
     micros.forEach((k, val) -> mic.put(k, new BigDecimal(val)));
     NutritionPerServingDto nut =
         new NutritionPerServingDto(
-            kcal, new BigDecimal("8"), new BigDecimal("20"), new BigDecimal("6"), new BigDecimal("5"), mic);
+            kcal,
+            new BigDecimal("8"),
+            new BigDecimal("20"),
+            new BigDecimal("6"),
+            new BigDecimal("5"),
+            mic);
     RecipeVersionDto sv =
         new RecipeVersionDto(
-            v.id(), v.branchId(), v.versionNumber(), v.parentVersionId(), v.trigger(),
-            v.changeReason(), v.embeddingStatus(), v.createdAt(), v.createdByActor(),
-            v.adapterTraceId(), v.ingredients(), v.methodSteps(), snackMeta, v.tags(),
-            v.appliedSubstitutionIds(), v.embedding(), nut);
+            v.id(),
+            v.branchId(),
+            v.versionNumber(),
+            v.parentVersionId(),
+            v.trigger(),
+            v.changeReason(),
+            v.embeddingStatus(),
+            v.createdAt(),
+            v.createdByActor(),
+            v.adapterTraceId(),
+            v.ingredients(),
+            v.methodSteps(),
+            snackMeta,
+            v.tags(),
+            v.appliedSubstitutionIds(),
+            v.embedding(),
+            nut);
     return new RecipeDto(
-        base.id(), base.userId(), base.catalogue(), name, base.description(), base.currentVersion(),
-        base.currentBranchId(), base.dataQuality(), base.nutritionStatus(), base.forkedFromRecipeId(),
-        base.lastUsedInPlanAt(), base.archivedAt(), base.deletedAt(), base.imageUrl(),
-        base.optimisticVersion(), base.createdAt(), base.updatedAt(), sv, base.branches());
+        base.id(),
+        base.userId(),
+        base.catalogue(),
+        name,
+        base.description(),
+        base.currentVersion(),
+        base.currentBranchId(),
+        base.dataQuality(),
+        base.nutritionStatus(),
+        base.forkedFromRecipeId(),
+        base.lastUsedInPlanAt(),
+        base.archivedAt(),
+        base.deletedAt(),
+        base.imageUrl(),
+        base.optimisticVersion(),
+        base.createdAt(),
+        base.updatedAt(),
+        sv,
+        base.branches());
   }
 
   @Test
   void picks_a_side_recipe_when_it_uniquely_fills_a_short_micro() {
-    // A snack-tagged side recipe carries vitamin_d — no INGREDIENT catalogue candidate has it, so the
+    // A snack-tagged side recipe carries vitamin_d — no INGREDIENT catalogue candidate has it, so
+    // the
     // greedy must reach for the SIDE_RECIPE to close that short micro.
-    RecipeDto side = snackSide(UUID.randomUUID(), "Roasted Chickpea Cup", 220, Map.of("vitamin_d_mcg", "8.0"));
+    RecipeDto side =
+        snackSide(UUID.randomUUID(), "Roasted Chickpea Cup", 220, Map.of("vitamin_d_mcg", "8.0"));
     NutritionCoverageDocument cov =
         new NutritionCoverageDocument(
             List.of(shortTarget("calories", "kcal", "3600", "3200")),
             List.of(shortTarget("vitamin_d_mcg", "mcg", "15", "5")),
-            0, 5, 16, 28, 0);
+            0,
+            5,
+            16,
+            28,
+            0);
     SlotAssignment a = PlanTestData.assignment(UUID.randomUUID(), UUID.randomUUID(), WEEK, 2, 2);
     PlanCompositionContext ctx = PlanTestData.minimalContext(List.of(), List.of(side));
 

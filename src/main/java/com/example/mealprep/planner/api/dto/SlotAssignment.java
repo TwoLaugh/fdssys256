@@ -25,9 +25,9 @@ import java.util.UUID;
  * <p>{@code portionFactor} is the per-person servings of the slot's MAIN recipe, attached ONLY on
  * the chosen plan's assignments by the finalise-time {@code PortionOptimizer} (it solves a per-day
  * portioning optimisation against ALL the user's daily macro targets, not the beam's cheap
- * calorie-only proxy). It is {@code null} during the beam search and on every fresh-built assignment
- * — when {@code null}, {@code DailyMacroAggregator} / {@code PlanPersister} fall back to the
- * existing {@code PortionScaler} computation (so the beam / incremental scoring path is byte
+ * calorie-only proxy). It is {@code null} during the beam search and on every fresh-built
+ * assignment — when {@code null}, {@code DailyMacroAggregator} / {@code PlanPersister} fall back to
+ * the existing {@code PortionScaler} computation (so the beam / incremental scoring path is byte
  * unchanged); when non-null, that optimised factor is used verbatim. Additions are NOT scaled by it
  * (they are pre-sized) — only the main recipe's servings are the optimiser's decision variable.
  */
@@ -52,8 +52,8 @@ public record SlotAssignment(
   /**
    * Back-compat constructor (no additions) — defaults to an empty list and a {@code null} portion
    * factor. Retained so the beam-search / composer / test call sites that predate Phase-2 additions
-   * compile unchanged; only the Phase-2 augmentation step builds assignments carrying additions (via
-   * {@link #withAdditions(List)}).
+   * compile unchanged; only the Phase-2 augmentation step builds assignments carrying additions
+   * (via {@link #withAdditions(List)}).
    */
   public SlotAssignment(
       UUID dayId,

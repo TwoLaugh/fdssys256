@@ -68,7 +68,8 @@ class VarietyGateTest {
 
   @Test
   void batch_cooking_household_lifts_the_cap_to_a_prep_block() {
-    // batchCookingPreferred → cook-once-eat-many: the cap rises to the moderate prep-block size (3).
+    // batchCookingPreferred → cook-once-eat-many: the cap rises to the moderate prep-block size
+    // (3).
     assertThat(gate.maxRepeat(PlanTestData.contextWithLifestyle(null, true))).isEqualTo(3);
   }
 
@@ -83,7 +84,8 @@ class VarietyGateTest {
             PlanTestData.assignment(UUID.randomUUID(), r, WEEK, 2, 2));
     assertThat(
             gate.passes(
-                PlanTestData.candidatePlan(WEEK, as), PlanTestData.contextWithLifestyle(null, true)))
+                PlanTestData.candidatePlan(WEEK, as),
+                PlanTestData.contextWithLifestyle(null, true)))
         .isTrue();
     // ...and the same plan still fails for a non-batch household (default cap of 2).
     assertThat(

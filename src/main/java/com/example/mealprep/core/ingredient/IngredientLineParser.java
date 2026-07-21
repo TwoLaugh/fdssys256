@@ -14,22 +14,25 @@ import java.util.regex.Pattern;
  * quantity, unit, a normalised ingredient name, and a preparation note — so the grocery / pantry
  * subsystem can aggregate demand, match pack sizes, and minimise the shopping list.
  *
- * <p>The datahive import stored each line verbatim (slugified) as the {@code ingredient_mapping_key}
- * with {@code quantity = 1} and an empty {@code unit}, so every quantity/preparation variant of the
- * same ingredient is a distinct key (≈74k keys over ≈133k rows). Stripping the quantity, unit, and
- * preparation collapses "1 tablespoon olive oil" and "2 tablespoons olive oil" to the same name
- * ("olive oil") — the bulk of the de-duplication. Synonym canonicalisation (plum tomatoes → tomato)
- * is a separate refinement layered on the {@code name} this parser produces.
+ * <p>The datahive import stored each line verbatim (slugified) as the {@code
+ * ingredient_mapping_key} with {@code quantity = 1} and an empty {@code unit}, so every
+ * quantity/preparation variant of the same ingredient is a distinct key (≈74k keys over ≈133k
+ * rows). Stripping the quantity, unit, and preparation collapses "1 tablespoon olive oil" and "2
+ * tablespoons olive oil" to the same name ("olive oil") — the bulk of the de-duplication. Synonym
+ * canonicalisation (plum tomatoes → tomato) is a separate refinement layered on the {@code name}
+ * this parser produces.
  *
  * <p>Deterministic and side-effect-free: {@link #parse(String)} is a pure function. Lines it cannot
- * confidently parse return a low {@link Parsed#confidence()} so a downstream AI pass can target only
- * the residual rather than re-doing the whole pool.
+ * confidently parse return a low {@link Parsed#confidence()} so a downstream AI pass can target
+ * only the residual rather than re-doing the whole pool.
  */
 public final class IngredientLineParser {
 
   private IngredientLineParser() {}
 
-  /** Structured result. {@code name} is lower-cased + whitespace-collapsed; never null (may be ""). */
+  /**
+   * Structured result. {@code name} is lower-cased + whitespace-collapsed; never null (may be "").
+   */
   public record Parsed(
       String name, BigDecimal quantity, String unit, String preparation, BigDecimal confidence) {}
 
@@ -37,42 +40,110 @@ public final class IngredientLineParser {
 
   private static final Map<String, String> UNITS =
       Map.ofEntries(
-          Map.entry("cup", "cup"), Map.entry("cups", "cup"), Map.entry("c", "cup"),
-          Map.entry("tablespoon", "tbsp"), Map.entry("tablespoons", "tbsp"),
-          Map.entry("tbsp", "tbsp"), Map.entry("tbs", "tbsp"), Map.entry("tbsp.", "tbsp"),
-          Map.entry("teaspoon", "tsp"), Map.entry("teaspoons", "tsp"),
-          Map.entry("tsp", "tsp"), Map.entry("tsp.", "tsp"),
-          Map.entry("ounce", "oz"), Map.entry("ounces", "oz"), Map.entry("oz", "oz"),
-          Map.entry("pound", "lb"), Map.entry("pounds", "lb"),
-          Map.entry("lb", "lb"), Map.entry("lbs", "lb"),
-          Map.entry("gram", "g"), Map.entry("grams", "g"), Map.entry("g", "g"),
-          Map.entry("kilogram", "kg"), Map.entry("kilograms", "kg"), Map.entry("kg", "kg"),
-          Map.entry("milliliter", "ml"), Map.entry("milliliters", "ml"),
-          Map.entry("millilitre", "ml"), Map.entry("ml", "ml"),
-          Map.entry("liter", "l"), Map.entry("liters", "l"), Map.entry("litre", "l"),
+          Map.entry("cup", "cup"),
+          Map.entry("cups", "cup"),
+          Map.entry("c", "cup"),
+          Map.entry("tablespoon", "tbsp"),
+          Map.entry("tablespoons", "tbsp"),
+          Map.entry("tbsp", "tbsp"),
+          Map.entry("tbs", "tbsp"),
+          Map.entry("tbsp.", "tbsp"),
+          Map.entry("teaspoon", "tsp"),
+          Map.entry("teaspoons", "tsp"),
+          Map.entry("tsp", "tsp"),
+          Map.entry("tsp.", "tsp"),
+          Map.entry("ounce", "oz"),
+          Map.entry("ounces", "oz"),
+          Map.entry("oz", "oz"),
+          Map.entry("pound", "lb"),
+          Map.entry("pounds", "lb"),
+          Map.entry("lb", "lb"),
+          Map.entry("lbs", "lb"),
+          Map.entry("gram", "g"),
+          Map.entry("grams", "g"),
+          Map.entry("g", "g"),
+          Map.entry("kilogram", "kg"),
+          Map.entry("kilograms", "kg"),
+          Map.entry("kg", "kg"),
+          Map.entry("milliliter", "ml"),
+          Map.entry("milliliters", "ml"),
+          Map.entry("millilitre", "ml"),
+          Map.entry("ml", "ml"),
+          Map.entry("liter", "l"),
+          Map.entry("liters", "l"),
+          Map.entry("litre", "l"),
           Map.entry("l", "l"),
-          Map.entry("pint", "pint"), Map.entry("pints", "pint"), Map.entry("pt", "pint"),
-          Map.entry("quart", "quart"), Map.entry("quarts", "quart"), Map.entry("qt", "quart"),
-          Map.entry("gallon", "gallon"), Map.entry("gallons", "gallon"), Map.entry("gal", "gallon"),
-          Map.entry("clove", "clove"), Map.entry("cloves", "clove"),
-          Map.entry("can", "can"), Map.entry("cans", "can"),
-          Map.entry("slice", "slice"), Map.entry("slices", "slice"),
-          Map.entry("sprig", "sprig"), Map.entry("sprigs", "sprig"),
-          Map.entry("stick", "stick"), Map.entry("sticks", "stick"),
-          Map.entry("stalk", "stalk"), Map.entry("stalks", "stalk"),
-          Map.entry("bunch", "bunch"), Map.entry("bunches", "bunch"),
-          Map.entry("head", "head"), Map.entry("heads", "head"),
-          Map.entry("package", "package"), Map.entry("packages", "package"),
-          Map.entry("pkg", "package"), Map.entry("pinch", "pinch"), Map.entry("pinches", "pinch"));
+          Map.entry("pint", "pint"),
+          Map.entry("pints", "pint"),
+          Map.entry("pt", "pint"),
+          Map.entry("quart", "quart"),
+          Map.entry("quarts", "quart"),
+          Map.entry("qt", "quart"),
+          Map.entry("gallon", "gallon"),
+          Map.entry("gallons", "gallon"),
+          Map.entry("gal", "gallon"),
+          Map.entry("clove", "clove"),
+          Map.entry("cloves", "clove"),
+          Map.entry("can", "can"),
+          Map.entry("cans", "can"),
+          Map.entry("slice", "slice"),
+          Map.entry("slices", "slice"),
+          Map.entry("sprig", "sprig"),
+          Map.entry("sprigs", "sprig"),
+          Map.entry("stick", "stick"),
+          Map.entry("sticks", "stick"),
+          Map.entry("stalk", "stalk"),
+          Map.entry("stalks", "stalk"),
+          Map.entry("bunch", "bunch"),
+          Map.entry("bunches", "bunch"),
+          Map.entry("head", "head"),
+          Map.entry("heads", "head"),
+          Map.entry("package", "package"),
+          Map.entry("packages", "package"),
+          Map.entry("pkg", "package"),
+          Map.entry("pinch", "pinch"),
+          Map.entry("pinches", "pinch"));
 
   // Units written attached to the number ("3cm", "15oz") are split before lookup.
   private static final Set<String> PREP_WORDS =
       Set.of(
-          "chopped", "minced", "diced", "sliced", "shredded", "grated", "crushed", "melted",
-          "softened", "divided", "packed", "trimmed", "peeled", "finely", "freshly", "cooked",
-          "drained", "rinsed", "beaten", "sifted", "cubed", "julienned", "halved", "quartered",
-          "toasted", "roasted", "mashed", "pureed", "crumbled", "shaved", "pressed", "ground",
-          "frozen", "thawed", "warmed", "cooled", "boiling");
+          "chopped",
+          "minced",
+          "diced",
+          "sliced",
+          "shredded",
+          "grated",
+          "crushed",
+          "melted",
+          "softened",
+          "divided",
+          "packed",
+          "trimmed",
+          "peeled",
+          "finely",
+          "freshly",
+          "cooked",
+          "drained",
+          "rinsed",
+          "beaten",
+          "sifted",
+          "cubed",
+          "julienned",
+          "halved",
+          "quartered",
+          "toasted",
+          "roasted",
+          "mashed",
+          "pureed",
+          "crumbled",
+          "shaved",
+          "pressed",
+          "ground",
+          "frozen",
+          "thawed",
+          "warmed",
+          "cooled",
+          "boiling");
 
   // Trailing free-text notes that aren't a real ingredient qualifier.
   private static final List<String> TRAILING_NOTES =
@@ -81,9 +152,11 @@ public final class IngredientLineParser {
   private static final Pattern LEADING_NOISE = Pattern.compile("^[\\s*\\-•·]+");
   private static final Pattern TRAILING_PRICE = Pattern.compile("\\$\\s*\\d+(?:[.,]\\d+)?\\s*$");
   private static final Pattern PARENTHETICAL = Pattern.compile("\\([^)]*\\)");
-  // quantity: mixed (1 1/2), fraction (3/4), decimal (1.5), integer (2), optional range hi (2-3 → 2)
+  // quantity: mixed (1 1/2), fraction (3/4), decimal (1.5), integer (2), optional range hi (2-3 →
+  // 2)
   private static final Pattern QTY =
-      Pattern.compile("^(\\d+\\s+\\d+/\\d+|\\d+/\\d+|\\d+\\.\\d+|\\d+)(?:\\s*[-–]\\s*\\d+(?:\\.\\d+)?)?");
+      Pattern.compile(
+          "^(\\d+\\s+\\d+/\\d+|\\d+/\\d+|\\d+\\.\\d+|\\d+)(?:\\s*[-–]\\s*\\d+(?:\\.\\d+)?)?");
   private static final Map<String, String> UNICODE_FRACTIONS =
       Map.of("½", "1/2", "¼", "1/4", "¾", "3/4", "⅓", "1/3", "⅔", "2/3", "⅛", "1/8");
 

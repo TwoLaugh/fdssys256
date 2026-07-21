@@ -424,8 +424,8 @@ class BeamSearchEngineTest {
    * Higher recipe id → higher score, monotonic and tie-broken by recipe-id stable order. Implements
    * both seams: {@link ScoringEngine} (used by {@code finalise()}) re-sums the whole plan, and
    * {@link com.example.mealprep.planner.domain.service.internal.scoring.BeamCandidateScorer} (used
-   * for pruning) carries the running sum as its opaque state so the incremental composite equals the
-   * whole-plan score — keeping the beam-mechanics assertions deterministic and id-ordered.
+   * for pruning) carries the running sum as its opaque state so the incremental composite equals
+   * the whole-plan score — keeping the beam-mechanics assertions deterministic and id-ordered.
    */
   private static final class DeterministicScoringEngine
       implements ScoringEngine,
