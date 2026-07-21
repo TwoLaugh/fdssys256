@@ -1435,7 +1435,7 @@ function Detail({ recipe }: { recipe: RecipeDto }) {
           <div style={{ display: "grid", gap: 6, marginTop: 10, fontSize: 13.5 }}>
             <div>
               <span className="tier-badge">{provenance.sourceType.toLowerCase().replace("_", " ")}</span>
-              {provenance.extractionMethod && (
+              {recipe.dataQuality !== "AI_GENERATED" && provenance.extractionMethod && (
                 <span className="version-meta" style={{ marginLeft: 8 }}>
                   {provenance.extractionMethod === "json_ld"
                     ? "read from the page's recipe data"
@@ -1443,6 +1443,21 @@ function Detail({ recipe }: { recipe: RecipeDto }) {
                 </span>
               )}
             </div>
+            {/* G10: the graph@…+c@… stamp IS the audit trail — verbatim, never paraphrased. */}
+            {recipe.dataQuality === "AI_GENERATED" && provenance.extractionMethod && (
+              <div
+                className="version-meta"
+                style={{ fontFamily: "monospace", fontSize: 12.5 }}
+                title="Generator audit stamp: graph commit + corpus fingerprint"
+              >
+                {provenance.extractionMethod}
+              </div>
+            )}
+            {recipe.dataQuality === "AI_GENERATED" && provenance.sourceKey && (
+              <div className="version-meta" style={{ fontFamily: "monospace", fontSize: 12.5 }}>
+                {provenance.sourceKey}
+              </div>
+            )}
             {provenance.sourceUrl && (
               <a href={provenance.sourceUrl} target="_blank" rel="noopener noreferrer">
                 {provenance.sourceUrl}
