@@ -1290,6 +1290,13 @@ public class RecipeServiceImpl
     UUID traceId = data.traceId();
     String createdByActor = "system-discovery:" + jobId;
 
+    // G10: additive SPI quality — null preserves the pre-G10 WEB_DISCOVERED hardcode for
+    // discovery-crawl callers; the graph ingest runner passes AI_GENERATED (honesty rule).
+    DataQuality quality =
+        data.dataQuality() != null
+            ? DataQuality.valueOf(data.dataQuality().name())
+            : DataQuality.WEB_DISCOVERED;
+
     // Step 2: recipe root.
     Recipe recipe =
         Recipe.builder()
@@ -1300,7 +1307,7 @@ public class RecipeServiceImpl
             .description(data.description())
             .currentVersion(1)
             .currentBranchId(null)
-            .dataQuality(DataQuality.WEB_DISCOVERED)
+            .dataQuality(quality)
             .nutritionStatus(NutritionStatus.PENDING)
             .build();
     recipe = recipeRepository.save(recipe);
@@ -1357,7 +1364,10 @@ public class RecipeServiceImpl
         RecipeImport.builder()
             .id(UUID.randomUUID())
             .recipeId(savedRecipe.getId())
-            .sourceType(ImportSource.WEB_DISCOVERED)
+            .sourceType(
+                quality == DataQuality.AI_GENERATED
+                    ? ImportSource.AI_GENERATED
+                    : ImportSource.WEB_DISCOVERED)
             .sourceUrl(data.canonicalUrl())
             .sourcePayload(null)
             .extractionMethod(data.extractionMethod())

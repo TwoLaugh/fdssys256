@@ -19,6 +19,7 @@ public class RecipeImportMapper {
         entity.getSourceUrl(),
         entity.getSourcePayload(),
         entity.getExtractionMethod(),
+        entity.getSourceKey(),
         entity.getDuplicateOfRecipeId(),
         entity.getImportedAt(),
         entity.getImportedByUserId());
