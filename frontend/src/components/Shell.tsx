@@ -3,6 +3,7 @@ import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { probeAdmin, useStore } from "../mock/store";
 import { FeedbackButton } from "./FeedbackButton";
 import { Rail } from "./Rail";
+import { RouteErrorBoundary } from "./RouteErrorBoundary";
 import { ToastHost } from "./ToastHost";
 
 /**
@@ -32,7 +33,9 @@ export function Shell() {
     <div className="app">
       <Rail showAdmin={adminProbe === "admin"} />
       <main className="app-main">
-        <Outlet />
+        <RouteErrorBoundary key={location.pathname}>
+          <Outlet />
+        </RouteErrorBoundary>
       </main>
       <FeedbackButton />
       <ToastHost />

@@ -17,7 +17,6 @@ import { StatusMark } from "../components/StatusMark";
 import { SegmentBar } from "../components/SegmentBar";
 import { SwapLine } from "../components/SwapLine";
 import { microLabel } from "./nutrition/shared";
-import { KNOWN_WEEKS } from "../mock/plannerSeed";
 // Live-aware date anchors (real clock in live mode) — so the week nav defaults
 // to the week the backend's live plan is in. See src/live/dates.ts.
 import { CURRENT_WEEK_START, MOCK_TODAY_ISO } from "../live/dates";
@@ -825,13 +824,28 @@ export function Plan() {
   const members = useStore((s) => s.household.current?.members ?? null);
   const navigate = useNavigate();
 
-  const [weekIdx, setWeekIdx] = useState(KNOWN_WEEKS.indexOf(CURRENT_WEEK_START));
+  // Week navigation is driven by the weeks that actually have plans/suggestions
+  // (live data), not the mock KNOWN_WEEKS seed — in live mode CURRENT_WEEK_START
+  // is the real this-Monday, which the mock list never contains, so indexing into
+  // KNOWN_WEEKS yielded an undefined week and crashed the page. CURRENT_WEEK_START
+  // is always included so the grid has a home even before any plan exists.
+  const weeks = useMemo(() => {
+    const set = new Set<string>([CURRENT_WEEK_START]);
+    for (const p of planner.plans) set.add(p.weekStartDate);
+    for (const sg of planner.suggestions) set.add(sg.weekStartDate);
+    return Array.from(set).sort();
+  }, [planner.plans, planner.suggestions]);
+
+  const [weekIdx, setWeekIdx] = useState(() =>
+    Math.max(0, weeks.indexOf(CURRENT_WEEK_START)),
+  );
+  const safeWeekIdx = Math.min(weekIdx, weeks.length - 1);
   const [viewPlanId, setViewPlanId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [warningsOpen, setWarningsOpen] = useState(false);
   const [reasonFor, setReasonFor] = useState<"reject" | "abandon" | null>(null);
 
-  const week = KNOWN_WEEKS[weekIdx];
+  const week = weeks[safeWeekIdx];
   const weekPlans = planner.plans
     .filter((p) => p.weekStartDate === week)
     .sort((a, b) => b.generation - a.generation);
@@ -861,8 +875,8 @@ export function Plan() {
       : null;
 
   const changeWeek = (delta: number) => {
-    const next = weekIdx + delta;
-    if (next < 0 || next >= KNOWN_WEEKS.length) return;
+    const next = safeWeekIdx + delta;
+    if (next < 0 || next >= weeks.length) return;
     setWeekIdx(next);
     setViewPlanId(null);
     setWarningsOpen(false);
@@ -875,7 +889,7 @@ export function Plan() {
         <PageHeader
           title={`Week of ${weekRangeLabel(week)}`}
           meta="No plan for this week yet"
-          actions={<WeekNav weekIdx={weekIdx} onStep={changeWeek} />}
+          actions={<WeekNav weekIdx={safeWeekIdx} weekCount={weeks.length} onStep={changeWeek} />}
         />
         <div className="page-loading" style={{ marginTop: 40 }}>
           No plan for this week yet.
@@ -910,7 +924,7 @@ export function Plan() {
 
   const headerActions = (
     <>
-      <WeekNav weekIdx={weekIdx} onStep={changeWeek} />
+      <WeekNav weekIdx={safeWeekIdx} weekCount={weeks.length} onStep={changeWeek} />
       <button
         className="btn"
         onClick={() => setHistoryOpen((v) => !v)}
@@ -942,7 +956,7 @@ export function Plan() {
           <button
             className="btn btn-primary"
             onClick={() =>
-              navigate(`/plan/generate?week=${KNOWN_WEEKS[KNOWN_WEEKS.length - 1]}`)
+              navigate(`/plan/generate?week=${weeks[weeks.length - 1]}`)
             }
           >
             Generate next week
@@ -1081,9 +1095,11 @@ export function Plan() {
 
 function WeekNav({
   weekIdx,
+  weekCount,
   onStep,
 }: {
   weekIdx: number;
+  weekCount: number;
   onStep: (delta: number) => void;
 }) {
   return (
@@ -1099,7 +1115,7 @@ function WeekNav({
       <button
         className="stepper-btn"
         aria-label="Next week"
-        disabled={weekIdx === KNOWN_WEEKS.length - 1}
+        disabled={weekIdx === weekCount - 1}
         onClick={() => onStep(1)}
       >
         ›
