@@ -95,25 +95,24 @@ public class PlanCompositionContextBuilder implements ReoptContextBuilder {
   /**
    * The household's merged soft preferences (lifestyle window / novelty / batch-cooking flags) for
    * the given eaters, or {@code null} when unavailable — read-only and best-effort, so a missing /
-   * empty household never blocks generation. This is the surface the scoring layer reads for
-   * per-household meal-prep behaviour ({@code VarietyGate}, {@code BatchSubScore}); before this it
-   * was always {@code null} (the "no cross-module surface yet" placeholder), so the lifestyle
-   * config never reached the planner.
+   * empty household never blocks generation. Uses the non-throwing merge seam: composition often
+   * runs inside a caller's transaction, and a service exception crossing the proxy would mark it
+   * rollback-only even though absence is expected here.
    */
   private MergedSoftPreferencesDto mergeSoftPrefs(UUID householdId, List<UUID> eaterUserIds) {
     if (householdId == null || eaterUserIds == null || eaterUserIds.isEmpty()) {
       return null;
     }
-    try {
-      return householdMergeService.mergeSoftPreferencesForSlot(householdId, eaterUserIds);
-    } catch (RuntimeException ex) {
-      log.warn(
-          "Merged soft prefs unavailable for household={} ({}); planner runs without the lifestyle"
-              + " merge (meal-prep / novelty preferences will not apply).",
-          householdId,
-          ex.toString());
-      return null;
-    }
+    return householdMergeService
+        .mergeSoftPreferencesForSlotIfResolvable(householdId, eaterUserIds)
+        .orElseGet(
+            () -> {
+              log.warn(
+                  "Merged soft prefs unavailable for household={}; planner runs without the"
+                      + " lifestyle merge (meal-prep / novelty preferences will not apply).",
+                  householdId);
+              return null;
+            });
   }
 
   /**
