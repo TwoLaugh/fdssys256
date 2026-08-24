@@ -75,6 +75,15 @@ ShoppingListLineDto:
       type: string
       format: uuid
       nullable: true
+    leftoverQuantityG:
+      # Grams of the suggested pack(s) left unused this week; null unless the line is
+      # gram-coherent with a suggested gram pack.
+      type: number
+      nullable: true
+    bufferPercent:
+      # leftoverQuantityG as a percentage of the grams bought; null when leftover is null.
+      type: number
+      nullable: true
 
 ShoppingListDto:
   type: object

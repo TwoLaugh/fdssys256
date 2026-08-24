@@ -387,7 +387,9 @@ public record ScheduledRecipeDto(
     UUID id, UUID recipeId, UUID recipeVersionId, UUID recipeBranchId,
     int servings, UUID batchCookSessionId,
     String augmentationNotes, AugmentationSource augmentationSource,
-    boolean phase2Addition) {}
+    boolean phase2Addition,
+    List<Addition> additions,      // Phase-2 in-meal riders; empty until planned
+    BigDecimal portionFactor) {}   // per-person portion scale; 1 when unscaled
 
 public record ScoreBreakdownDocument(
     BigDecimal preference, BigDecimal nutrition, BigDecimal cost,
@@ -400,7 +402,8 @@ public record ScoreBreakdownDocument(
 
 public record RollupSummaryDocument(
     List<DailyRollupDocument> daily,
-    WeeklyRollupDocument weekly) {}
+    WeeklyRollupDocument weekly,
+    NutritionCoverageDocument nutritionCoverage) {}  // null pre-coverage and without targets
 
 public record DailyRollupDocument(
     LocalDate date,

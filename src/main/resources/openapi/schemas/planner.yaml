@@ -100,6 +100,32 @@ WeeklyRollupDocument:
       type: array
       items: { type: string }
 
+NutritionTargetCoverageDocument:
+  type: object
+  required: [key, met]
+  properties:
+    key: { type: string }
+    unit: { type: string, nullable: true }
+    target: { type: number, nullable: true }
+    projectedDailyAvg:
+      # Null when status is NO_DATA (no recipe in the plan carried this nutrient).
+      type: number
+      nullable: true
+    direction:
+      type: string
+      enum: [LOWER_FLOOR, UPPER_LIMIT, BOTH_BOUNDED]
+      nullable: true
+    met: { type: boolean }
+    status:
+      type: string
+      enum: [MET, SHORT, NO_DATA]
+      nullable: true
+    source:
+      # Lowest-trust provenance backing the projection; null when NO_DATA.
+      type: string
+      enum: [measured, derived, estimated]
+      nullable: true
+
 RollupSummaryDocument:
   type: object
   required: [daily, weekly]
@@ -108,6 +134,33 @@ RollupSummaryDocument:
       type: array
       items: { $ref: '#/DailyRollupDocument' }
     weekly: { $ref: '#/WeeklyRollupDocument' }
+    nutritionCoverage:
+      # Inlined nullable object ($ref + nullable gotcha, see scheduledRecipe below). Null on plans
+      # generated before coverage shipped and when the user has no nutrition targets configured.
+      type: object
+      nullable: true
+      required: [macros, micros, macrosMet, macrosTotal, microsMet, microsTotal, microsNoData]
+      properties:
+        macros:
+          type: array
+          items: { $ref: '#/NutritionTargetCoverageDocument' }
+        micros:
+          type: array
+          items: { $ref: '#/NutritionTargetCoverageDocument' }
+        macrosMet: { type: integer }
+        macrosTotal: { type: integer }
+        microsMet: { type: integer }
+        microsTotal: { type: integer }
+        microsNoData: { type: integer }
+        fatBreakdown:
+          # Display-only fatty-acid split (g/day, weekly average); null when the plan carries no
+          # fat-subtype data.
+          type: object
+          nullable: true
+          properties:
+            saturatedG: { type: number, nullable: true }
+            monounsaturatedG: { type: number, nullable: true }
+            polyunsaturatedG: { type: number, nullable: true }
 
 ScoreBreakdownDocument:
   type: object
@@ -136,6 +189,54 @@ ScoreBreakdownDocument:
     varietyGatePassed: { type: boolean }
     weightSchemeVersion: { type: string }
 
+AdditionDto:
+  # One in-meal rider (half avocado, side salad) bolted onto a slot's main recipe by Phase-2
+  # portion scaling — design/nutrition/portion-scaling-and-additions.md. Carries its own nutrition
+  # so the aggregator path is uniform for ingredient- and recipe-backed additions.
+  type: object
+  required: [kind, name]
+  properties:
+    kind:
+      type: string
+      enum: [INGREDIENT, SIDE_RECIPE]
+    name: { type: string }
+    ingredientMappingKey:
+      # INGREDIENT only — allergy check + grocery line.
+      type: string
+      nullable: true
+    recipeId:
+      # SIDE_RECIPE only.
+      type: string
+      format: uuid
+      nullable: true
+    quantity: { type: number, nullable: true }
+    unit: { type: string, nullable: true }
+    grams:
+      # Resolved grams; null when not weight-resolvable.
+      type: number
+      nullable: true
+    nutrition:
+      # Same shape as the recipe module's nutritionPerServing (recipe.yaml).
+      type: object
+      nullable: true
+      required: [calories, proteinG, carbsG, fatG, fibreG, micros]
+      properties:
+        calories: { type: integer, minimum: 0 }
+        proteinG: { type: number, format: double, minimum: 0 }
+        carbsG: { type: number, format: double, minimum: 0 }
+        fatG: { type: number, format: double, minimum: 0 }
+        fibreG: { type: number, format: double, minimum: 0 }
+        micros:
+          type: object
+          additionalProperties: { type: number, format: double, minimum: 0 }
+        microSources:
+          type: object
+          additionalProperties: { type: string, enum: [measured, derived, estimated] }
+        microConfidence:
+          type: object
+          additionalProperties: { type: number, format: double, minimum: 0, maximum: 1 }
+    reasoning: { type: string, nullable: true }
+
 ScheduledRecipeDto:
   type: object
   required: [id, recipeId, recipeVersionId, recipeBranchId, servings, phase2Addition]
@@ -152,6 +253,13 @@ ScheduledRecipeDto:
       enum: [LLM, USER]
       nullable: true
     phase2Addition: { type: boolean }
+    additions:
+      # Phase-2 in-meal riders; empty until additions are planned.
+      type: array
+      items: { $ref: '#/AdditionDto' }
+    portionFactor:
+      # Per-person portion scale applied to the recipe's base serving; 1 when unscaled.
+      type: number
 
 MealSlotDto:
   type: object
@@ -203,6 +311,10 @@ MealSlotDto:
           enum: [LLM, USER]
           nullable: true
         phase2Addition: { type: boolean }
+        additions:
+          type: array
+          items: { $ref: '#/AdditionDto' }
+        portionFactor: { type: number }
     effectiveMealTime:
       # Server-resolved serve time (frontend-gaps: planner-effective-meal-time): the three-level
       # coalesce of slot override -> lifestyle-config meal_timing schedule -> slot-kind default.
