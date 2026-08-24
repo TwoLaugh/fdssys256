@@ -33,6 +33,12 @@ record NotificationDraft(
     String originTrace,
     String metricTag) {
 
+  NotificationDraft {
+    // A draft always targets a concrete user. The resolver returns empty when nobody resolves,
+    // so a null here is a programming error, caught before it becomes a DB constraint violation.
+    java.util.Objects.requireNonNull(userId, "userId");
+  }
+
   CreateNotificationRequest toCreateRequest() {
     return new CreateNotificationRequest(
         userId,

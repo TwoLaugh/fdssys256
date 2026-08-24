@@ -34,7 +34,9 @@ import org.springframework.stereotype.Component;
  *
  * <p>Household routing (v1): when an event is household-scoped, the target user is the household's
  * primary member (per §Household routing); {@code householdId} is still stored on the row so a
- * future "all members" mode is a query change.
+ * future "all members" mode is a query change. Household-routed resolvers return {@link Optional}:
+ * empty means no target user resolves (unknown household, no primary member, no event user) and
+ * nothing is dispatched.
  *
  * <p><b>{@code actionTargetUri} namespace</b> (frontend-gaps P3, notifications page spec §8 Q2):
  * deep links are emitted directly in the frontend IA's route namespace — {@code /pantry}, {@code
@@ -67,28 +69,32 @@ public class NotificationKindResolver {
     this.householdQueryService = householdQueryService;
   }
 
-  public NotificationDraft resolve(ItemNearingExpiryEvent event) {
-    UUID targetUser = resolveTargetUser(event.userId(), event.householdId());
+  public Optional<NotificationDraft> resolve(ItemNearingExpiryEvent event) {
+    Optional<UUID> targetUser = resolveTargetUser(event.userId(), event.householdId());
+    if (targetUser.isEmpty()) {
+      return Optional.empty();
+    }
     List<UUID> itemIds = event.inventoryItemIds() == null ? List.of() : event.inventoryItemIds();
     NotificationKind kind = NotificationKind.PROVISION_ITEM_NEAR_EXPIRY;
     var payload =
         new NotificationPayload.ItemNearExpiryPayload(
             kind, itemIds, event.earliestExpiry(), itemIds.size());
-    return new NotificationDraft(
-        targetUser,
-        event.householdId(),
-        kind,
-        NotificationSeverity.ATTENTION,
-        "Items nearing expiry",
-        itemIds.size() + " item(s) are nearing expiry.",
-        payload,
-        ROUTE_PANTRY,
-        event.traceId(),
-        event.traceId(),
-        null,
-        Origin.SYSTEM_SCHEDULED,
-        null,
-        kind.name());
+    return Optional.of(
+        new NotificationDraft(
+            targetUser.get(),
+            event.householdId(),
+            kind,
+            NotificationSeverity.ATTENTION,
+            "Items nearing expiry",
+            itemIds.size() + " item(s) are nearing expiry.",
+            payload,
+            ROUTE_PANTRY,
+            event.traceId(),
+            event.traceId(),
+            null,
+            Origin.SYSTEM_SCHEDULED,
+            null,
+            kind.name()));
   }
 
   public NotificationDraft resolve(ItemSpoiledEvent event) {
@@ -112,27 +118,31 @@ public class NotificationKindResolver {
         kind.name());
   }
 
-  public NotificationDraft resolve(DefrostReminderEvent event) {
-    UUID targetUser = resolveTargetUser(event.userId(), event.householdId());
+  public Optional<NotificationDraft> resolve(DefrostReminderEvent event) {
+    Optional<UUID> targetUser = resolveTargetUser(event.userId(), event.householdId());
+    if (targetUser.isEmpty()) {
+      return Optional.empty();
+    }
     NotificationKind kind = NotificationKind.PROVISION_DEFROST_REMINDER;
     var payload =
         new NotificationPayload.DefrostReminderPayload(
             kind, event.inventoryItemId(), event.mealSlotId(), event.defrostBy());
-    return new NotificationDraft(
-        targetUser,
-        event.householdId(),
-        kind,
-        NotificationSeverity.ATTENTION,
-        "Defrost reminder",
-        "An item needs defrosting for an upcoming meal.",
-        payload,
-        ROUTE_PANTRY,
-        event.traceId(),
-        event.traceId(),
-        keyOf(event.mealSlotId()),
-        Origin.SYSTEM_SCHEDULED,
-        null,
-        kind.name());
+    return Optional.of(
+        new NotificationDraft(
+            targetUser.get(),
+            event.householdId(),
+            kind,
+            NotificationSeverity.ATTENTION,
+            "Defrost reminder",
+            "An item needs defrosting for an upcoming meal.",
+            payload,
+            ROUTE_PANTRY,
+            event.traceId(),
+            event.traceId(),
+            keyOf(event.mealSlotId()),
+            Origin.SYSTEM_SCHEDULED,
+            null,
+            kind.name()));
   }
 
   public NotificationDraft resolve(NutritionIntakeDivergedEvent event) {
@@ -212,50 +222,58 @@ public class NotificationKindResolver {
         kind.name());
   }
 
-  public NotificationDraft resolve(ReoptSuggestedEvent event) {
-    UUID targetUser = resolveTargetUser(null, event.householdId());
+  public Optional<NotificationDraft> resolve(ReoptSuggestedEvent event) {
+    Optional<UUID> targetUser = resolveTargetUser(null, event.householdId());
+    if (targetUser.isEmpty()) {
+      return Optional.empty();
+    }
     NotificationKind kind = NotificationKind.PLANNER_REOPT_SUGGESTED;
     List<UUID> affected = event.affectedSlotIds() == null ? List.of() : event.affectedSlotIds();
     var payload =
         new NotificationPayload.ReoptSuggestedPayload(
             kind, event.planId(), event.summary(), affected);
-    return new NotificationDraft(
-        targetUser,
-        event.householdId(),
-        kind,
-        NotificationSeverity.ATTENTION,
-        "Re-optimisation suggested",
-        "A re-optimisation is suggested for your plan.",
-        payload,
-        ROUTE_PLAN,
-        event.traceId(),
-        event.traceId(),
-        keyOf(event.planId()),
-        Origin.SYSTEM_REOPT,
-        null,
-        kind.name());
+    return Optional.of(
+        new NotificationDraft(
+            targetUser.get(),
+            event.householdId(),
+            kind,
+            NotificationSeverity.ATTENTION,
+            "Re-optimisation suggested",
+            "A re-optimisation is suggested for your plan.",
+            payload,
+            ROUTE_PLAN,
+            event.traceId(),
+            event.traceId(),
+            keyOf(event.planId()),
+            Origin.SYSTEM_REOPT,
+            null,
+            kind.name()));
   }
 
-  public NotificationDraft resolve(PlanGeneratedEvent event) {
-    UUID targetUser = resolveTargetUser(null, event.householdId());
+  public Optional<NotificationDraft> resolve(PlanGeneratedEvent event) {
+    Optional<UUID> targetUser = resolveTargetUser(null, event.householdId());
+    if (targetUser.isEmpty()) {
+      return Optional.empty();
+    }
     NotificationKind kind = NotificationKind.PLANNER_PLAN_GENERATED;
     var payload =
         new NotificationPayload.PlanGeneratedPayload(kind, event.planId(), event.generation());
-    return new NotificationDraft(
-        targetUser,
-        event.householdId(),
-        kind,
-        NotificationSeverity.INFO,
-        "Plan generated",
-        "Your plan is ready.",
-        payload,
-        ROUTE_PLAN,
-        event.traceId(),
-        event.traceId(),
-        keyOf(event.planId()),
-        Origin.SYSTEM_REOPT,
-        null,
-        kind.name());
+    return Optional.of(
+        new NotificationDraft(
+            targetUser.get(),
+            event.householdId(),
+            kind,
+            NotificationSeverity.INFO,
+            "Plan generated",
+            "Your plan is ready.",
+            payload,
+            ROUTE_PLAN,
+            event.traceId(),
+            event.traceId(),
+            keyOf(event.planId()),
+            Origin.SYSTEM_REOPT,
+            null,
+            kind.name()));
   }
 
   public NotificationDraft resolve(StapleReplenishmentNeededEvent event) {
@@ -328,15 +346,17 @@ public class NotificationKindResolver {
   /**
    * Resolve the dispatch target. When {@code householdId} is set, route to the household's primary
    * member (v1 primary-user-only routing); otherwise dispatch to {@code eventUserId}. Falls back to
-   * {@code eventUserId} when the household has no resolvable primary.
+   * {@code eventUserId} when the household has no resolvable primary. Empty when neither resolves:
+   * there is nobody to notify, so the caller skips the dispatch instead of building a userless
+   * draft.
    */
-  private UUID resolveTargetUser(UUID eventUserId, UUID householdId) {
+  private Optional<UUID> resolveTargetUser(UUID eventUserId, UUID householdId) {
     if (householdId == null) {
-      return eventUserId;
+      return Optional.ofNullable(eventUserId);
     }
     Optional<UUID> primary =
         householdQueryService.getById(householdId).flatMap(NotificationKindResolver::primaryUserId);
-    return primary.orElse(eventUserId);
+    return primary.or(() -> Optional.ofNullable(eventUserId));
   }
 
   private static Optional<UUID> primaryUserId(HouseholdDto household) {
