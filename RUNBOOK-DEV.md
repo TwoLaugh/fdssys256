@@ -1,5 +1,8 @@
 # RUNBOOK-DEV — dogfood stack (dev profile, real persistence, no AI key)
 
+> e2e-profile variant (curated 18-recipe cold-start catalogue, `/test-support` control
+> plane live): see `docs/RUNBOOK-LIVE-STACK.md`.
+
 Verified end-to-end 2026-07-20 on branch `experiment/dataset-recipe-pool`. Brings up the real
 backend on the `dev` profile with a seeded ~54-recipe SYSTEM catalogue, a dogfood user, and plan
 generation that works with NO OpenAI key (Stage C degrades to the deterministic top-composite
