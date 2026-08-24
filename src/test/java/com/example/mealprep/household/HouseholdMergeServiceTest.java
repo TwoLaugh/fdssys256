@@ -258,9 +258,7 @@ class HouseholdMergeServiceTest {
     when(householdRepository.findWithMembersById(hh)).thenReturn(Optional.of(household));
 
     MergedSoftPreferencesDto out =
-        service(List.of())
-            .mergeSoftPreferencesForSlotIfResolvable(hh, List.of(u1))
-            .orElseThrow();
+        service(List.of()).mergeSoftPreferencesForSlotIfResolvable(hh, List.of(u1)).orElseThrow();
 
     assertThat(out.householdId()).isEqualTo(hh);
     assertThat(out.contributingUserIds()).containsExactly(u1);
