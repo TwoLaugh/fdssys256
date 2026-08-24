@@ -11,16 +11,21 @@ import org.springframework.context.annotation.Configuration;
  * the SDK already handles request signing, retries on its own internal layer, and the embeddings
  * response shape (which is structurally heavier than Anthropic's Messages API).
  *
- * <p>The bean is gated on {@code mealprep.ai.openai-api-key} being set. In the test profile {@code
- * TestAiService} replaces the dispatcher entirely so this bean is never exercised; we still
- * conditionally create it so a missing key in test does not fail context startup.
+ * <p>The bean is gated on {@code mealprep.ai.openai-api-key} being set to a NON-BLANK value. In the
+ * test profile {@code TestAiService} replaces the dispatcher entirely so this bean is never
+ * exercised; we still conditionally create it so a missing key in test does not fail context
+ * startup. The blank-check matters in dev: {@code application-dev.properties} maps the key from the
+ * {@code OPENAI_API_KEY} env var with an EMPTY default, and an empty-string property would still
+ * satisfy a plain {@code @ConditionalOnProperty} — creating a client that fires real HTTPS calls
+ * with a garbage key (fatal 401 → {@code AiInvalidRequestException}) instead of the intended
+ * bean-absent → {@code AiUnavailableException} → deterministic-fallback degrade path.
  */
 @Configuration
 public class OpenAiSdkConfig {
 
   @Bean
-  @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
-      name = "mealprep.ai.openai-api-key")
+  @org.springframework.boot.autoconfigure.condition.ConditionalOnExpression(
+      "T(org.springframework.util.StringUtils).hasText('${mealprep.ai.openai-api-key:}')")
   public OpenAIClient openAiClient(AiProperties properties) {
     return OpenAIOkHttpClient.builder().apiKey(properties.openaiApiKey()).build();
   }

@@ -7,3 +7,11 @@ mvnw text eol=lf
 *.sh text eol=lf
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Source files: store and check out as LF on every platform so a Windows checkout
+# (core.autocrlf=true) can't commit CRLF blobs that fail the Linux CI spotless:check
+# (google-java-format; its default GIT_ATTRIBUTES line-ending policy resolves to LF).
+*.java text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.xml text eol=lf

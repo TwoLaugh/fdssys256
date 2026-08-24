@@ -1,0 +1,66 @@
+{
+ "canonicalUrl": null,
+ "contentFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+ "description": "Fixture dish for the G06 ingest IT.",
+ "extractionConfidence": null,
+ "extractionMethod": "graph@1234abc+c@0123456789abcdef",
+ "ingredients": [
+  {
+   "displayName": "rice",
+   "ingredientMappingKey": "rice",
+   "lineOrder": 1,
+   "optional": false,
+   "preparation": null,
+   "quantity": 180,
+   "unit": "g"
+  },
+  {
+   "displayName": "broccoli",
+   "ingredientMappingKey": "broccoli",
+   "lineOrder": 2,
+   "optional": false,
+   "preparation": null,
+   "quantity": 120,
+   "unit": "g"
+  }
+ ],
+ "jobId": "5d8f2c1e-0000-5000-8000-2f6b0e6c9a11",
+ "metadata": {
+  "cookTimeMins": 12,
+  "cuisine": null,
+  "equipmentRequired": [
+   "hob"
+  ],
+  "freezerWeeks": null,
+  "fridgeDays": null,
+  "mealTypes": [
+   "dinner"
+  ],
+  "packable": null,
+  "prepTimeMins": 10,
+  "servings": 1,
+  "totalTimeMins": 22
+ },
+ "method": [
+  {
+   "durationMinutes": 12,
+   "instruction": "Simmer everything gently.",
+   "stepNumber": 1
+  },
+  {
+   "durationMinutes": null,
+   "instruction": "Serve.",
+   "stepNumber": 2
+  }
+ ],
+ "name": "Simmered rice and broccoli",
+ "sourceKey": "graph:camp-it-2026-07",
+ "tags": {
+  "complexity": null,
+  "cookingMethod": "simmer",
+  "dietaryFlags": [],
+  "flavourProfile": null,
+  "protein": null
+ },
+ "traceId": "11111111-1111-5111-8111-111111111111"
+}

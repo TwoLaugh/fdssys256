@@ -8,8 +8,9 @@
  * store accepts expectedVersion as-is (see saveTargets).
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { saveTargets, useStore } from "../../mock/store";
+import { LIVE } from "../../live/flag";
 import type {
   ActivityAdjustmentDto,
   CalorieTargetDto,
@@ -41,6 +42,15 @@ const ENFORCEMENTS = [
 
 type MacroFieldKey = "protein" | "carbs" | "fat" | "fibre" | "satFat";
 
+type DemoState = {
+  biologicalSex: "MALE" | "FEMALE";
+  dateOfBirth: string;
+  weightKg: string;
+  heightCm: string;
+  activityLevel: string;
+  lifeStage: string;
+};
+
 const MACRO_ROWS: Array<{ key: MacroFieldKey; label: string }> = [
   { key: "protein", label: "Protein" },
   { key: "carbs", label: "Carbs" },
@@ -48,6 +58,26 @@ const MACRO_ROWS: Array<{ key: MacroFieldKey; label: string }> = [
   { key: "fibre", label: "Fibre" },
   { key: "satFat", label: "Sat fat" },
 ];
+
+/**
+ * "Fat spread" presets — a friendly saturated-fat preference. Total fat can run high on a
+ * fish/avocado/olive-oil diet and still be healthy; what's worth limiting is the SATURATED share.
+ * Each preset sets the saturated-fat target as an upper limit derived from the calorie target
+ * (≈ pctKcal × kcal / 9 kcal-per-gram); Relaxed clears it so saturated fat floats with total fat.
+ */
+const SAT_FAT_PRESETS: Array<{
+  key: string;
+  label: string;
+  pctKcal: number | null;
+  desc: string;
+}> = [
+  { key: "relaxed", label: "Relaxed", pctKcal: null, desc: "No saturated-fat cap — fat floats freely." },
+  { key: "moderate", label: "Moderate", pctKcal: 0.1, desc: "Cap saturated fat at ~10% of calories (general guideline)." },
+  { key: "strict", label: "Strict", pctKcal: 0.05, desc: "Cap saturated fat at ~5% of calories (heart-health strict)." },
+];
+
+const satFatLimitFor = (pctKcal: number | null, dailyKcal: number): number | null =>
+  pctKcal == null ? null : Math.round((pctKcal * dailyKcal) / 9);
 
 function DirectionSelect({
   value,
@@ -160,8 +190,101 @@ function TargetsEditor({
   const setMacro = (key: MacroFieldKey, patch: Partial<MacroTargetDto>) =>
     setMacros((m) => ({ ...m, [key]: { ...m[key], ...patch } }));
 
-  const save = () => {
-    saveTargets({
+  // "Compute from my details" — demographics drive the guideline defaults (BMR calories, protein
+  // 1.8 g/kg, age/sex/life-stage micro DRI). The computed values fill the editable fields below;
+  // nothing is saved until the user reviews + hits Save, so every default stays overridable. The
+  // demographics themselves are remembered client-side (localStorage) so they don't need re-entering
+  // to recompute — they're personal inputs, not the saved targets.
+  const [demo, setDemo] = useState<DemoState>(() => {
+    const fallback: DemoState = {
+      biologicalSex: "MALE",
+      dateOfBirth: "",
+      weightKg: "",
+      heightCm: "",
+      activityLevel: "MODERATELY_ACTIVE",
+      lifeStage: "NONE",
+    };
+    try {
+      const saved = localStorage.getItem("mp-demographics");
+      return saved
+        ? { ...fallback, ...(JSON.parse(saved) as Partial<DemoState>) }
+        : fallback;
+    } catch {
+      return fallback;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("mp-demographics", JSON.stringify(demo));
+    } catch {
+      /* ignore quota / privacy-mode errors */
+    }
+  }, [demo]);
+  const [computeMsg, setComputeMsg] = useState<string | null>(null);
+  const [computing, setComputing] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  const computeFromDetails = async () => {
+    if (!demo.dateOfBirth || !demo.weightKg || !demo.heightCm) {
+      setComputeMsg("Enter date of birth, weight and height first.");
+      return;
+    }
+    setComputing(true);
+    setComputeMsg(null);
+    try {
+      const res = await fetch("/api/v1/nutrition/targets/compute-defaults", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          biologicalSex: demo.biologicalSex,
+          dateOfBirth: demo.dateOfBirth,
+          weightKg: Number(demo.weightKg),
+          heightCm: Number(demo.heightCm),
+          activityLevel: demo.activityLevel,
+          lifeStage:
+            demo.biologicalSex === "FEMALE" && demo.lifeStage !== "NONE"
+              ? demo.lifeStage
+              : "NONE",
+          goal,
+        }),
+      });
+      if (!res.ok) throw new Error(`compute failed (${res.status})`);
+      const d = await res.json();
+      setCalories((c) => ({ ...c, dailyTarget: Math.round(d.calories) }));
+      // Protein is a SOFT floor by default: a HARD protein floor forces the planner to repeat the
+      // few protein-dense recipes (killing variety + over-shooting fat) to guarantee the minimum,
+      // whereas as a scored target it still lands on the floor while staying varied + macro-balanced.
+      setMacro("protein", {
+        targetG: Number(d.proteinG),
+        floorG: Number(d.proteinG),
+        direction: "LOWER_FLOOR",
+        isHardFloor: false,
+      });
+      setMacro("carbs", { targetG: Number(d.carbsG), direction: "BOTH_BOUNDED" });
+      setMacro("fat", { targetG: Number(d.fatG), direction: "BOTH_BOUNDED" });
+      setMacro("fibre", { targetG: Number(d.fibreG), floorG: Number(d.fibreG), direction: "LOWER_FLOOR" });
+      setMacro("satFat", { targetG: Number(d.satFatG), direction: "UPPER_LIMIT" });
+      const micros = (d.micros ?? {}) as Record<string, number>;
+      setMicroTargets((rows) =>
+        rows.map((r) =>
+          micros[r.nutrientKey] != null
+            ? { ...r, targetValue: Number(micros[r.nutrientKey]) }
+            : r,
+        ),
+      );
+      setComputeMsg(
+        `Filled from guidelines — BMR ${d.bmr} kcal · ${d.ageGroup} DRI band. Review + edit below, then Save.`,
+      );
+    } catch (e) {
+      setComputeMsg(`Couldn't compute (needs the live backend): ${(e as Error).message}`);
+    } finally {
+      setComputing(false);
+    }
+  };
+
+  const save = async () => {
+    const body = {
       goal,
       calories,
       protein: macros.protein,
@@ -174,8 +297,36 @@ function TargetsEditor({
       microTargets,
       eatingWindow,
       activityAdjustments: adjustments,
-      expectedVersion: targets.version,
-    });
+    };
+    if (LIVE) {
+      // Persist to the real backend: read the current version (full-replacement PUT needs the
+      // expectedVersion for optimistic-lock; the PUT upserts when no row exists yet).
+      setSaveMsg(null);
+      try {
+        let expectedVersion = 0;
+        const cur = await fetch("/api/v1/nutrition/targets", {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+        if (cur.ok) {
+          const t = await cur.json();
+          expectedVersion = t.version ?? 0;
+        }
+        const res = await fetch("/api/v1/nutrition/targets", {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ ...body, expectedVersion }),
+        });
+        if (!res.ok) throw new Error(`save failed (${res.status})`);
+        setSaveMsg("Saved to the backend ✓");
+        onSaved();
+      } catch (e) {
+        setSaveMsg(`Save failed: ${(e as Error).message}`);
+      }
+      return;
+    }
+    saveTargets({ ...body, expectedVersion: targets.version });
     onSaved();
   };
 
@@ -195,6 +346,99 @@ function TargetsEditor({
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Compute from my details — demographics drive the guideline defaults */}
+      <div className="mp-card section-card">
+        <span className="mp-label">Compute from my details</span>
+        <div className="inline-note" style={{ marginTop: 4 }}>
+          Fill guideline defaults from your body + activity — calories by Mifflin–St Jeor BMR,
+          protein at 1.8 g/kg, micronutrients by your age/sex DRI band. Everything stays editable
+          below; nothing saves until you hit Save.
+        </div>
+        <div
+          className="targets-row"
+          style={{ marginTop: 10, gap: 10, flexWrap: "wrap", alignItems: "center" }}
+        >
+          <select
+            className="time-select"
+            aria-label="Biological sex"
+            value={demo.biologicalSex}
+            onChange={(e) =>
+              setDemo((d) => ({ ...d, biologicalSex: e.target.value as "MALE" | "FEMALE" }))
+            }
+          >
+            <option value="FEMALE">Female</option>
+            <option value="MALE">Male</option>
+          </select>
+          <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+            <span className="inline-note">born</span>
+            <input
+              type="date"
+              className="time-select"
+              aria-label="Date of birth"
+              value={demo.dateOfBirth}
+              onChange={(e) => setDemo((d) => ({ ...d, dateOfBirth: e.target.value }))}
+            />
+          </label>
+          <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+            <span className="inline-note">weight</span>
+            <input
+              type="number"
+              className="text-input"
+              style={{ width: 78, padding: "6px 10px" }}
+              aria-label="Weight kg"
+              value={demo.weightKg}
+              onChange={(e) => setDemo((d) => ({ ...d, weightKg: e.target.value }))}
+            />
+            <span className="inline-note">kg</span>
+          </label>
+          <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+            <span className="inline-note">height</span>
+            <input
+              type="number"
+              className="text-input"
+              style={{ width: 78, padding: "6px 10px" }}
+              aria-label="Height cm"
+              value={demo.heightCm}
+              onChange={(e) => setDemo((d) => ({ ...d, heightCm: e.target.value }))}
+            />
+            <span className="inline-note">cm</span>
+          </label>
+          <select
+            className="time-select"
+            aria-label="Activity level"
+            value={demo.activityLevel}
+            onChange={(e) => setDemo((d) => ({ ...d, activityLevel: e.target.value }))}
+          >
+            <option value="SEDENTARY">Sedentary</option>
+            <option value="LIGHTLY_ACTIVE">Lightly active</option>
+            <option value="MODERATELY_ACTIVE">Moderately active</option>
+            <option value="VERY_ACTIVE">Very active</option>
+            <option value="EXTRA_ACTIVE">Extra active</option>
+          </select>
+          {demo.biologicalSex === "FEMALE" && (
+            <select
+              className="time-select"
+              aria-label="Life stage"
+              value={demo.lifeStage}
+              onChange={(e) => setDemo((d) => ({ ...d, lifeStage: e.target.value }))}
+              title="Pregnancy + lactation raise several micronutrient floors (folate, iron, iodine…)"
+            >
+              <option value="NONE">Not pregnant</option>
+              <option value="PREGNANT">Pregnant</option>
+              <option value="LACTATING">Lactating</option>
+            </select>
+          )}
+          <button className="btn btn-small" onClick={computeFromDetails} disabled={computing}>
+            {computing ? "Computing…" : "Compute guideline defaults"}
+          </button>
+        </div>
+        {computeMsg && (
+          <div className="inline-note" style={{ marginTop: 8, color: "var(--mp-terra)" }}>
+            {computeMsg}
+          </div>
+        )}
       </div>
 
       {/* Calories */}
@@ -346,6 +590,45 @@ function TargetsEditor({
             })}
           </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Fat spread — saturated-fat preference (a friendly shortcut for the Sat fat row above) */}
+      <div className="mp-card section-card">
+        <span className="mp-label">Fat spread — saturated-fat preference</span>
+        <div className="inline-note" style={{ marginTop: 4 }}>
+          Not all fat is equal. Total fat can run high on a fish, avocado and olive-oil diet and
+          still be healthy — what's worth limiting is the saturated share. This caps saturated fat;
+          unsaturated fat is left to float, so the planner prefers leaner-saturated dishes.
+        </div>
+        <div className="filter-row" style={{ marginTop: 10 }}>
+          {SAT_FAT_PRESETS.map((p) => {
+            const limit = satFatLimitFor(p.pctKcal, calories.dailyTarget);
+            const cur = macros.satFat.targetG ?? null;
+            const active = limit == null ? cur == null : cur != null && Math.abs(cur - limit) <= 2;
+            return (
+              <button
+                key={p.key}
+                className={`filter-chip${active ? " active" : ""}`}
+                title={p.desc}
+                onClick={() =>
+                  setMacro("satFat", {
+                    targetG: limit,
+                    floorG: null,
+                    direction: "UPPER_LIMIT",
+                    isHardFloor: false,
+                  })
+                }
+              >
+                {p.label}
+                {limit != null && (
+                  <span className="inline-note" style={{ marginLeft: 6 }}>
+                    ≤{limit} g
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -602,15 +885,28 @@ function TargetsEditor({
           aria-label="Change note"
         />
         <span className="inline-note">
-          full-replacement PUT · expectedVersion v{targets.version}
+          {LIVE
+            ? "full-replacement PUT to the live backend"
+            : `full-replacement PUT · expectedVersion v${targets.version}`}
         </span>
         <button className="btn btn-primary" onClick={save}>
           Save targets
         </button>
       </div>
+      {saveMsg && (
+        <div
+          className="inline-note"
+          style={{ marginTop: 6, color: "var(--mp-terra)" }}
+          role="status"
+        >
+          {saveMsg}
+        </div>
+      )}
       <div className="inline-note" style={{ marginTop: 6 }}>
-        Hard floors drive the planner's feasibility gate. 409 stale-version
-        conflicts are not simulated in the mock.
+        Hard floors drive the planner's feasibility gate.
+        {LIVE
+          ? " Saving writes to the real backend (live mode)."
+          : " 409 stale-version conflicts are not simulated in the mock."}
       </div>
     </div>
   );

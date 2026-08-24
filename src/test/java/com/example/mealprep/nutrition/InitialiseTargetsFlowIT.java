@@ -158,11 +158,25 @@ class InitialiseTargetsFlowIT {
                     objectMapper.writeValueAsString(NutritionTestData.defaultUpdateRequest(0L))))
         .andExpect(status().isCreated());
 
-    // Request supplied 2 micros (iron_mg, vitamin_d_iu). The 31-50/female DRI band has 7 micros;
-    // iron_mg overlaps (kept from request), so 6 new are seeded → 2 + 6 = 8 total.
+    // Request supplied 2 micros (iron_mg, vitamin_d_iu); initialise seeds every 31-50/female DRI
+    // band micro the request did not supply. Expected count is computed from the seed table
+    // (anchor) rather than hardcoded, so growing the DRI catalogue cannot silently break this.
+    Integer bandMicros =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM nutrition_dri_defaults"
+                + " WHERE age_group = '31-50' AND sex = 'female' AND life_stage = 'NONE'",
+            Integer.class);
+    Integer suppliedOverlap =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM nutrition_dri_defaults"
+                + " WHERE age_group = '31-50' AND sex = 'female' AND life_stage = 'NONE'"
+                + " AND micro_name IN ('iron_mg', 'vitamin_d_iu')",
+            Integer.class);
+    int expectedMicros = 2 + bandMicros - suppliedOverlap;
+
     mvc.perform(get("/api/v1/nutrition/targets").cookie(user.cookie()))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.microTargets.length()").value(8))
+        .andExpect(jsonPath("$.microTargets.length()").value(expectedMicros))
         .andExpect(openApi().isValid(openApiValidator));
   }
 }

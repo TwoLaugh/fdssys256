@@ -142,6 +142,8 @@ import type {
   WasteSummaryDto,
   WeeklyAggregateDto,
 } from "./types";
+import { LIVE } from "../live/flag";
+import { apiSend, LiveApiError } from "../live/client";
 
 /* ---- core ------------------------------------------------------------------ */
 
@@ -162,6 +164,63 @@ function subscribe(listener: () => void): () => void {
 function mutate(producer: (s: StoreState) => StoreState): void {
   state = producer(state);
   listeners.forEach((l) => l());
+}
+
+/**
+ * Live-mode hydration seam: replace store slices with the producer's output and
+ * notify subscribers. The live layer (src/live/) calls this on boot to populate
+ * the store from the real backend; page components read the store either way.
+ */
+export function hydrateStore(producer: (s: StoreState) => StoreState): void {
+  mutate(producer);
+}
+
+/* ---- live mutation seam ---------------------------------------------------- */
+
+/** Re-fetch the live slices into the store after a write lands (the server is
+ *  the source of truth; any optimistic local update is reconciled). */
+function rehydrateLive(): void {
+  void import("../live/hydrate")
+    .then((m) => m.hydrateLive())
+    .catch(() => {});
+}
+
+/** Fire a live write, then reconcile; on failure toast + reconcile (which
+ *  reverts any optimistic local update to the server's truth). */
+function liveMutation(call: Promise<unknown>, errMsg: string): void {
+  call
+    .then(() => rehydrateLive())
+    .catch((e: unknown) => {
+      const status = e instanceof LiveApiError ? ` (${e.status})` : "";
+      pushToast(`${errMsg}${status}`, "warn");
+      rehydrateLive();
+    });
+}
+
+/** Re-fetch one recipe's per-id detail (versions/substitutions/ratings) — the
+ *  slices the boot hydrate leaves empty and the detail page lazy-loads. */
+function rehydrateRecipeDetail(recipeId: string): void {
+  void import("../live/hydrate")
+    .then((m) => m.hydrateRecipeDetail(recipeId))
+    .catch(() => {});
+}
+
+/** Live write on a recipe-detail surface: reconcile BOTH the catalogue (for the
+ *  recipe's optimisticVersion) and the per-id detail slices. */
+function liveRecipeMutation(
+  call: Promise<unknown>,
+  recipeId: string,
+  errMsg: string,
+): void {
+  const reconcile = () => {
+    rehydrateLive();
+    rehydrateRecipeDetail(recipeId);
+  };
+  call.then(reconcile).catch((e: unknown) => {
+    const status = e instanceof LiveApiError ? ` (${e.status})` : "";
+    pushToast(`${errMsg}${status}`, "warn");
+    reconcile();
+  });
 }
 
 /** Read a slice of the store; re-renders when the selected value changes. */
@@ -494,6 +553,14 @@ export function changeSlotState(
       })),
     );
   });
+  if (LIVE) {
+    liveMutation(
+      apiSend("PATCH", `/api/v1/plans/${planId}/slots/${slotId}/state`, {
+        newState,
+      }),
+      "Couldn't update the meal",
+    );
+  }
   return true;
 }
 
@@ -540,6 +607,18 @@ function applyProposal(
 }
 
 export function acceptSuggestion(suggestionId: string): void {
+  if (LIVE) {
+    const sug = state.planner.suggestions.find((x) => x.id === suggestionId);
+    if (!sug) return;
+    liveMutation(
+      apiSend(
+        "POST",
+        `/api/v1/plans/${sug.planId}/reopt-suggestions/${suggestionId}/accept`,
+      ),
+      "Couldn't accept the suggestion",
+    );
+    return;
+  }
   mutate((s) => {
     const suggestion = s.planner.suggestions.find((x) => x.id === suggestionId);
     const proposal = s.planner.proposedBySuggestion[suggestionId];
@@ -626,6 +705,18 @@ export function acceptSuggestion(suggestionId: string): void {
 
 /** Dismiss (#14) — suggestion → REJECTED, strikes clear (they are derived). */
 export function rejectSuggestion(suggestionId: string): void {
+  if (LIVE) {
+    const sug = state.planner.suggestions.find((x) => x.id === suggestionId);
+    if (!sug) return;
+    liveMutation(
+      apiSend(
+        "POST",
+        `/api/v1/plans/${sug.planId}/reopt-suggestions/${suggestionId}/reject`,
+      ),
+      "Couldn't dismiss the suggestion",
+    );
+    return;
+  }
   mutate((s) => {
     if (!s.planner.suggestions.some((x) => x.id === suggestionId)) return s;
     return {
@@ -641,6 +732,13 @@ export function rejectSuggestion(suggestionId: string): void {
 /* ---- planner: plan lifecycle (#7 accept · #8 reject · #9 abandon · #10 revert) ------- */
 
 export function acceptPlan(planId: string): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", `/api/v1/plans/${planId}/accept`),
+      "Couldn't accept the plan",
+    );
+    return;
+  }
   const plan = findPlan(state, planId);
   if (!plan) return;
   if (plan.status !== "GENERATED") {
@@ -688,6 +786,15 @@ export function acceptPlan(planId: string): void {
 
 /** Idempotent: re-rejecting an already-REJECTED plan is a 200 no-op. */
 export function rejectPlan(planId: string, reason?: string): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", `/api/v1/plans/${planId}/reject`, {
+        reason: reason?.trim() ? reason.trim() : null,
+      }),
+      "Couldn't reject the plan",
+    );
+    return;
+  }
   const plan = findPlan(state, planId);
   if (!plan || plan.status === "REJECTED") return;
   if (plan.status !== "GENERATED") {
@@ -721,6 +828,15 @@ export function rejectPlan(planId: string, reason?: string): void {
 }
 
 export function abandonPlan(planId: string, reason?: string): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", `/api/v1/plans/${planId}/abandon`, {
+        reason: reason?.trim() ? reason.trim() : null,
+      }),
+      "Couldn't abandon the plan",
+    );
+    return;
+  }
   const plan = findPlan(state, planId);
   if (!plan) return;
   if (plan.status !== "ACTIVE") {
@@ -751,6 +867,13 @@ export function abandonPlan(planId: string, reason?: string): void {
  * chicken breast) and unfillable slots ship empty with qualityWarning.
  */
 export function revertToPlan(targetHistoricalPlanId: string): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", "/api/v1/plans/revert", { targetHistoricalPlanId }),
+      "Couldn't revert to that plan",
+    );
+    return;
+  }
   const STRIPPED = new Set(["chicken-stir-fry", "chicken-wrap"]);
   mutate((s) => {
     const target = findPlan(s, targetHistoricalPlanId);
@@ -923,6 +1046,7 @@ function generatedSlot(
   recipeId: string | null,
 ): MealSlotDto {
   const shared = kind === "DINNER";
+  const mealTime = kind === "BREAKFAST" ? "08:00" : kind === "DINNER" ? "19:00" : null;
   return {
     id: `${planKey}-${date}-${kind.toLowerCase()}-${slotIndex}`,
     slotIndex,
@@ -933,8 +1057,12 @@ function generatedSlot(
     eaters: shared ? ["m1", "m2", "m3", "m4"] : ["m1"],
     state: "PLANNED",
     pinnedReason: null,
-    mealTime: kind === "BREAKFAST" ? "08:00" : kind === "DINNER" ? "19:00" : null,
+    mealTime,
     prepStepAtTime: null,
+    // effectiveMealTime/mealTimeSource (#258): generated slots use kind-default
+    // serve times, falling back to midday when the kind carries no default.
+    effectiveMealTime: mealTime ?? "12:30",
+    mealTimeSource: "KIND_DEFAULT",
     scheduledRecipe:
       recipeId === null
         ? null
@@ -1084,6 +1212,13 @@ function composePlan(s: StoreState, weekStartDate: string, round: number): PlanD
  * otherwise a blocking ~1.6 s compose → 201 + review.
  */
 export function requestGeneration(): void {
+  if (LIVE) {
+    pushToast(
+      "Plan generation isn't wired to the live backend yet — coming next",
+      "warn",
+    );
+    return;
+  }
   const g = state.planner.generation;
   if (g.status === "generating") {
     pushToast("409 — a generation is already running; try again shortly", "warn");
@@ -1322,6 +1457,15 @@ export function markBoughtLine(
   lineId: string,
   req: Omit<MarkBoughtRequest, "shoppingListLineId">,
 ): void {
+  if (LIVE)
+    liveMutation(
+      apiSend(
+        "POST",
+        `/api/v1/grocery/shopping-lists/${listId}/lines/${lineId}/mark-bought`,
+        req,
+      ),
+      "Couldn't mark bought",
+    );
   const list = findShoppingList(state, listId);
   const line = list?.lines.find((ln) => ln.id === lineId);
   if (!list || !line) {
@@ -1431,6 +1575,20 @@ export function bulkMarkBought(
   totalSpendPence: number | null,
   store: string | null,
 ): void {
+  if (LIVE)
+    liveMutation(
+      apiSend(
+        "POST",
+        `/api/v1/grocery/shopping-lists/${listId}/bulk-mark-bought`,
+        {
+          shoppingListId: listId,
+          shoppingListLineIds: lineIds,
+          totalSpendPence,
+          store,
+        },
+      ),
+      "Couldn't bulk-mark bought",
+    );
   const list = findShoppingList(state, listId);
   if (!list || lineIds.length === 0) return;
   const targets = list.lines.filter(
@@ -1519,6 +1677,14 @@ export function bulkMarkBought(
  * so before this is called.
  */
 export function undoMarkBought(listId: string, lineId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend(
+        "POST",
+        `/api/v1/grocery/shopping-lists/${listId}/lines/${lineId}/undo-mark-bought`,
+      ),
+      "Couldn't undo",
+    );
   const list = findShoppingList(state, listId);
   const line = list?.lines.find((ln) => ln.id === lineId);
   if (!list || !line) {
@@ -1562,6 +1728,18 @@ export function undoMarkBought(listId: string, lineId: string): void {
  * picked up without a new plan generation).
  */
 export function recalculateShoppingList(): void {
+  if (LIVE) {
+    const planId = state.planner.plans.find((p) => p.status === "ACTIVE")?.id;
+    if (planId)
+      liveMutation(
+        apiSend("POST", "/api/v1/grocery/shopping-lists/recalculate", {
+          planId,
+          force: true,
+        }),
+        "Couldn't recalculate the list",
+      );
+    return;
+  }
   const s = state;
   const active = activePlanForWeek(s, CURRENT_WEEK_START);
   if (!active) {
@@ -1668,6 +1846,15 @@ let orderSeq = 110;
 
 /** POST /grocery/orders (#10) — creates a DRAFT from the current list. */
 export function createGroceryOrder(): void {
+  if (LIVE) {
+    const lid = currentShoppingList(state)?.id;
+    if (lid)
+      liveMutation(
+        apiSend("POST", "/api/v1/grocery/orders", { shoppingListId: lid }),
+        "Couldn't create the order",
+      );
+    return;
+  }
   const s = state;
   if (!s.grocery.providerState?.enabled) {
     pushToast("422 — no provider configured; connect one in Settings", "warn");
@@ -1748,6 +1935,11 @@ function illegalTransition(action: string): void {
 
 /** POST …/quote (#12) — DRAFT → QUOTED (also "Try quote again" from PROVIDER_UNAVAILABLE). */
 export function quoteOrder(orderId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/grocery/orders/${orderId}/quote`),
+      "Couldn't quote the order",
+    );
   const order = findOrder(state, orderId);
   if (!order) return;
   if (order.status !== "DRAFT" && order.status !== "PROVIDER_UNAVAILABLE") {
@@ -1784,6 +1976,11 @@ export function quoteOrder(orderId: string): void {
 
 /** POST …/place (#13) — QUOTED → PLACED (slot-required pause). */
 export function placeOrder(orderId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/grocery/orders/${orderId}/place`),
+      "Couldn't place the order",
+    );
   const order = findOrder(state, orderId);
   if (!order) return;
   if (order.status !== "QUOTED") {
@@ -1868,6 +2065,11 @@ function reconcileOrder(s: StoreState, orderId: string): StoreState {
 
 /** POST …/refresh-status (#15) — pulls provider status (the only PLACED advance). */
 export function refreshOrderStatus(orderId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/grocery/orders/${orderId}/refresh-status`),
+      "Couldn't refresh status",
+    );
   const order = findOrder(state, orderId);
   if (!order) return;
   if (ORDER_TERMINAL.includes(order.status)) {
@@ -1919,6 +2121,11 @@ export function refreshOrderStatus(orderId: string): void {
 
 /** POST …/mark-user-confirmed (#14) — AWAITING_USER_CONFIRMATION → CONFIRMED. */
 export function markUserConfirmed(orderId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/grocery/orders/${orderId}/mark-user-confirmed`),
+      "Couldn't confirm the order",
+    );
   const order = findOrder(state, orderId);
   if (!order) return;
   if (order.status !== "AWAITING_USER_CONFIRMATION") {
@@ -1947,6 +2154,11 @@ export function markUserConfirmed(orderId: string): void {
 
 /** POST …/mark-delivered (#16) — CONFIRMED → DELIVERED ("It arrived"). */
 export function markOrderDelivered(orderId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/grocery/orders/${orderId}/mark-delivered`),
+      "Couldn't mark delivered",
+    );
   const order = findOrder(state, orderId);
   if (!order) return;
   if (order.status !== "CONFIRMED") {
@@ -1969,6 +2181,11 @@ export function markOrderDelivered(orderId: string): void {
 
 /** POST …/cancel (#17) — legal from every state until RECONCILED. */
 export function cancelGroceryOrder(orderId: string, reason: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/grocery/orders/${orderId}/cancel`, { reason }),
+      "Couldn't cancel the order",
+    );
   const order = findOrder(state, orderId);
   if (!order) return;
   if (ORDER_TERMINAL.includes(order.status)) {
@@ -2003,6 +2220,15 @@ export function resolveSubstitution(
   proposalId: string,
   decision: "ACCEPTED" | "REJECTED",
 ): void {
+  if (LIVE)
+    liveMutation(
+      apiSend(
+        "POST",
+        `/api/v1/grocery/orders/${orderId}/substitutions/${proposalId}/resolve`,
+        { proposalId, decision },
+      ),
+      "Couldn't resolve the substitution",
+    );
   const proposals = state.grocery.proposalsByOrder[orderId] ?? [];
   const proposal = proposals.find((p) => p.id === proposalId);
   if (!proposal) {
@@ -2153,6 +2379,13 @@ export function recordManualPrice(req: RecordManualPriceRequest): void {
  * provider gate; false = re-read aggregates only (no tokens spent).
  */
 export function refreshPrices(): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", "/api/v1/grocery/price-history/refresh", {}),
+      "Couldn't refresh prices",
+    );
+    return;
+  }
   const s = state;
   const list = currentShoppingList(s);
   const keys = (list?.lines ?? [])
@@ -2322,6 +2555,11 @@ function appendVersion(
 
 /** POST /recipes/{id}/promote — flip-in-place SYSTEM → USER (one tap). */
 export function promoteRecipe(recipeId: string): boolean {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/recipes/${recipeId}/promote`),
+      "Couldn't add to library",
+    );
   const recipe = findRecipe(state, recipeId);
   if (!recipe) {
     pushToast("404 — recipe no longer exists", "warn");
@@ -2354,6 +2592,11 @@ export function promoteRecipe(recipeId: string): boolean {
 
 /** POST /recipes/{id}/demote — flip to SYSTEM; data preserved, not a delete. */
 export function demoteRecipe(recipeId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/recipes/${recipeId}/demote`),
+      "Couldn't remove from library",
+    );
   const recipe = findRecipe(state, recipeId);
   if (!recipe) {
     pushToast("404 — recipe no longer exists", "warn");
@@ -2381,6 +2624,11 @@ export function demoteRecipe(recipeId: string): void {
 
 /** POST /recipes/{id}/archive — idempotent (re-archive is a 204 no-op). */
 export function archiveRecipe(recipeId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/recipes/${recipeId}/archive`),
+      "Couldn't archive recipe",
+    );
   mutate((s) => {
     const r = findRecipe(s, recipeId);
     if (!r || r.archivedAt) return s; // idempotent
@@ -2394,6 +2642,11 @@ export function archiveRecipe(recipeId: string): void {
 }
 
 export function unarchiveRecipe(recipeId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/recipes/${recipeId}/unarchive`),
+      "Couldn't unarchive recipe",
+    );
   mutate((s) => {
     const r = findRecipe(s, recipeId);
     if (!r || !r.archivedAt) return s; // idempotent
@@ -2669,6 +2922,11 @@ export function createVariantBranch(
   recipeId: string,
   req: CreateBranchRequest,
 ): string | null {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/recipes/${recipeId}/branches`, req),
+      "Couldn't create the variant",
+    );
   const recipe = findRecipe(state, recipeId);
   if (!recipe) {
     pushToast("404 — recipe no longer exists", "warn");
@@ -2848,6 +3106,12 @@ export function editRecipe(
     pushToast("400 — nothing changed; no version written", "warn");
     return "noop";
   }
+  if (LIVE)
+    liveRecipeMutation(
+      apiSend("PUT", `/api/v1/recipes/${recipeId}`, req),
+      recipeId,
+      "Couldn't save the recipe edit",
+    );
   mutate((s) => {
     const r = findRecipe(s, recipeId);
     if (!r) return s;
@@ -2891,6 +3155,12 @@ export function revertRecipe(recipeId: string, req: RevertToVersionRequest): boo
     pushToast("400 — that's already the current version; nothing to revert", "warn");
     return false;
   }
+  if (LIVE)
+    liveRecipeMutation(
+      apiSend("POST", `/api/v1/recipes/${recipeId}/versions/revert`, req),
+      recipeId,
+      "Couldn't revert the recipe",
+    );
   mutate((s) => {
     const appended = appendVersion(
       s,
@@ -2961,6 +3231,12 @@ export function proposeSubstitution(
     pushToast("422 — original ingredient isn't on that version", "warn");
     return false;
   }
+  if (LIVE)
+    liveRecipeMutation(
+      apiSend("POST", `/api/v1/recipes/${recipeId}/substitutions`, req),
+      recipeId,
+      "Couldn't propose the substitution",
+    );
   mutate((s) =>
     withSubstitutions(s, recipeId, (rows) => [
       ...rows,
@@ -3019,6 +3295,16 @@ export function actOnSubstitution(
   }
   if (action === "accept") {
     if (sub.state === "ACCEPTED") return; // idempotent 200 no-op, no bump
+    if (LIVE)
+      liveRecipeMutation(
+        apiSend(
+          "POST",
+          `/api/v1/recipes/${recipeId}/substitutions/${subId}/accept`,
+          { expectedVersion: body.expectedVersion },
+        ),
+        recipeId,
+        "Couldn't accept the substitution",
+      );
     mutate((s) =>
       withSubstitutions(s, recipeId, (xs) =>
         xs.map((x) =>
@@ -3032,6 +3318,16 @@ export function actOnSubstitution(
   }
   if (action === "reject") {
     if (sub.state === "REJECTED") return;
+    if (LIVE)
+      liveRecipeMutation(
+        apiSend(
+          "POST",
+          `/api/v1/recipes/${recipeId}/substitutions/${subId}/reject`,
+          { expectedVersion: body.expectedVersion, reason: body.reason ?? null },
+        ),
+        recipeId,
+        "Couldn't reject the substitution",
+      );
     mutate((s) =>
       withSubstitutions(s, recipeId, (xs) =>
         xs.map((x) =>
@@ -3052,6 +3348,16 @@ export function actOnSubstitution(
     pushToast("400 — a change note is required to make a swap permanent", "warn");
     return;
   }
+  if (LIVE)
+    liveRecipeMutation(
+      apiSend(
+        "POST",
+        `/api/v1/recipes/${recipeId}/substitutions/${subId}/promote-to-version`,
+        { expectedVersion: body.expectedVersion, changeReason: body.changeReason },
+      ),
+      recipeId,
+      "Couldn't make the swap permanent",
+    );
   mutate((s) => {
     const recipe = findRecipe(s, recipeId);
     const version = Object.values(s.recipeData.versions[recipeId] ?? {})
@@ -3152,6 +3458,12 @@ export function submitRating(recipeId: string, req: CreateRatingRequest): void {
     pushToast("Already rated this version — updated instead (409 → PUT)");
     return;
   }
+  if (LIVE)
+    liveRecipeMutation(
+      apiSend("POST", `/api/v1/recipes/${recipeId}/ratings`, req),
+      recipeId,
+      "Couldn't save your rating",
+    );
   mutate((s) =>
     withRatings(s, recipeId, (rows) => [
       {
@@ -3193,6 +3505,15 @@ export function updateRating(
     pushToast("409 — your rating changed elsewhere; reloaded", "warn");
     return;
   }
+  if (LIVE)
+    liveRecipeMutation(
+      apiSend("PUT", `/api/v1/recipes/${recipeId}/ratings/${ratingId}`, {
+        ...req,
+        expectedVersion,
+      }),
+      recipeId,
+      "Couldn't update your rating",
+    );
   mutate((s) =>
     withRatings(s, recipeId, (rows) =>
       rows.map((r) =>
@@ -3216,6 +3537,12 @@ export function updateRating(
 
 /** DELETE /recipes/{id}/ratings/{ratingId} → 204. */
 export function deleteRating(recipeId: string, ratingId: string): void {
+  if (LIVE)
+    liveRecipeMutation(
+      apiSend("DELETE", `/api/v1/recipes/${recipeId}/ratings/${ratingId}`),
+      recipeId,
+      "Couldn't delete your rating",
+    );
   mutate((s) =>
     withRatings(s, recipeId, (rows) => rows.filter((r) => r.id !== ratingId)),
   );
@@ -3249,6 +3576,19 @@ export function recalculateNutrition(recipeId: string): RecipeNutritionResultDto
   const recipe = findRecipe(state, recipeId);
   const version = recipe && currentVersionOf(state, recipe);
   if (!recipe || !version) return null;
+  if (LIVE)
+    // The real per-serving numbers come from the response; until a future async
+    // refactor the page shows the deterministic mock numbers optimistically and
+    // the rehydrate reconciles the stored slice.
+    liveRecipeMutation(
+      apiSend(
+        "POST",
+        `/api/v1/recipes/${recipeId}/versions/${version.id}/recalculate-nutrition`,
+        { branchId: version.branchId, versionNumber: version.versionNumber },
+      ),
+      recipeId,
+      "Couldn't recalculate nutrition",
+    );
   const h = hashCode(version.id);
   const unmapped = version.ingredients
     .filter((i) => i.needsReview)
@@ -3398,6 +3738,16 @@ export function acceptPendingChange(
   userEdits?: RecipeDiffDto | null,
   expectedOptimisticVersion?: number,
 ): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", `/api/v1/adaptation/pending-changes/${id}/accept`, {
+        userEdits: userEdits ?? null,
+        expectedOptimisticVersion: expectedOptimisticVersion ?? 0,
+      }),
+      "Couldn't accept the suggestion",
+    );
+    return;
+  }
   const detail = state.adaptation.detailById[id];
   if (!detail || detail.status !== "PENDING") {
     pushToast("422 — this suggestion is no longer pending", "warn");
@@ -3455,6 +3805,15 @@ export function acceptPendingChange(
 
 /** POST /adaptation/pending-changes/{id}/reject (+optional reasonNote). */
 export function rejectPendingChange(id: string, reasonNote?: string): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", `/api/v1/adaptation/pending-changes/${id}/reject`, {
+        reasonNote: reasonNote ?? null,
+      }),
+      "Couldn't reject the suggestion",
+    );
+    return;
+  }
   const detail = state.adaptation.detailById[id];
   if (!detail || detail.status !== "PENDING") {
     pushToast("422 — this suggestion is no longer pending", "warn");
@@ -3536,6 +3895,14 @@ function appendAudit(
  */
 export function adjustItemQuantity(itemId: string, newQuantity: number): void {
   const item = findInventoryItem(state, itemId);
+  if (LIVE && item)
+    liveMutation(
+      apiSend("PATCH", `/api/v1/provisions/inventory/${itemId}/quantity`, {
+        newQuantity,
+        expectedVersion: item.version,
+      }),
+      "Couldn't adjust quantity",
+    );
   if (!item || item.itemStatus !== "ACTIVE") {
     pushToast("404 — no longer in your pantry; re-fetched", "warn");
     return;
@@ -3575,6 +3942,14 @@ export function cycleStapleStatus(itemId: string): void {
     return;
   }
   const next: StapleStatus = item.status === "STOCKED" ? "LOW" : "OUT";
+  if (LIVE)
+    liveMutation(
+      apiSend("PATCH", `/api/v1/provisions/inventory/${itemId}/status`, {
+        newStatus: next,
+        expectedVersion: item.version,
+      }),
+      "Couldn't update the staple",
+    );
   mutate((s) => {
     const it = findInventoryItem(s, itemId);
     if (!it) return s;
@@ -3597,6 +3972,11 @@ let inventorySeqNo = 200;
 
 /** POST /provisions/inventory (#2) — add-item form save (201). */
 export function createInventoryItem(req: CreateInventoryItemRequest): boolean {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", "/api/v1/provisions/inventory", req),
+      "Couldn't add the item",
+    );
   const statusMode = req.storageLocation === "SPICE_RACK";
   if (statusMode && req.trackingMode !== "STATUS") {
     pushToast("400 — spice-rack items must be status-tracked", "warn");
@@ -3650,6 +4030,11 @@ export function updateInventoryItem(
   itemId: string,
   req: UpdateInventoryItemRequest,
 ): boolean {
+  if (LIVE)
+    liveMutation(
+      apiSend("PUT", `/api/v1/provisions/inventory/${itemId}`, req),
+      "Couldn't update the item",
+    );
   const item = findInventoryItem(state, itemId);
   if (!item) {
     pushToast("404 — no longer in your pantry; re-fetched", "warn");
@@ -3698,6 +4083,11 @@ export function updateInventoryItem(
 
 /** DELETE …/inventory/{itemId} (#6) — soft delete, NO waste entry (204). */
 export function removeInventoryItem(itemId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("DELETE", `/api/v1/provisions/inventory/${itemId}`),
+      "Couldn't remove the item",
+    );
   const item = findInventoryItem(state, itemId);
   if (!item) return;
   mutate((s) => {
@@ -3716,6 +4106,11 @@ export function removeInventoryItem(itemId: string): void {
 
 /** POST …/mark-exhausted (#8) — idempotent. Staples fire ItemRanOutEvent. */
 export function markItemExhausted(itemId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/provisions/inventory/${itemId}/mark-exhausted`),
+      "Couldn't mark exhausted",
+    );
   const item = findInventoryItem(state, itemId);
   if (!item) return;
   if (item.itemStatus === "EXHAUSTED") return; // idempotent 200
@@ -3748,6 +4143,14 @@ export function consumePortions(itemId: string, portions: number): void {
     pushToast("404 — row gone elsewhere; re-fetched", "warn");
     return;
   }
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", "/api/v1/provisions/meal-consumption", {
+        inventoryItemId: itemId,
+        portions,
+      }),
+      "Couldn't log the portion",
+    );
   const available = item.quantity ?? 0;
   const next = Math.max(0, available - portions);
   mutate((s) => {
@@ -3784,6 +4187,11 @@ let wasteSeq = 60;
  * WASTED). 422 when the quantity exceeds tracked remainder.
  */
 export function logWaste(req: LogWasteRequest): boolean {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", "/api/v1/provisions/waste", req),
+      "Couldn't log waste",
+    );
   const linked = req.inventoryItemId
     ? findInventoryItem(state, req.inventoryItemId)
     : undefined;
@@ -3886,6 +4294,11 @@ let equipmentSeq = 20;
 
 /** PUT /provisions/equipment/{name} (#15) — upsert (200 update / 201 insert). */
 export function upsertEquipment(name: string, req: UpsertEquipmentRequest): boolean {
+  if (LIVE && /^[a-z0-9_]+$/.test(name))
+    liveMutation(
+      apiSend("PUT", `/api/v1/provisions/equipment/${name}`, req),
+      "Couldn't save equipment",
+    );
   if (!/^[a-z0-9_]+$/.test(name)) {
     pushToast("400 — equipment names are canonical snake_case (e.g. air_fryer)", "warn");
     return false;
@@ -3926,6 +4339,11 @@ export function upsertEquipment(name: string, req: UpsertEquipmentRequest): bool
 
 /** DELETE /provisions/equipment/{name} (#16) — 204; 404 = already gone. */
 export function removeEquipment(name: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("DELETE", `/api/v1/provisions/equipment/${name}`),
+      "Couldn't remove equipment",
+    );
   mutate((s) => ({
     ...s,
     pantry: {
@@ -3981,6 +4399,13 @@ export function saveBudget(req: UpdateBudgetRequest): boolean {
  * plays the confirm dialog's second, independent call.
  */
 export function markSpoiled(id: string, alsoLogWaste = false): void {
+  // The optional "also log waste" leg (a second POST /provisions/waste) is not
+  // wired yet — only the spoil transition. TODO in LIVE-WIRING-LOG.
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/provisions/inventory/${id}/mark-spoiled`),
+      "Couldn't mark spoiled",
+    );
   mutate((s) => {
     const item = s.pantry.items.find((it) => it.id === id);
     if (!item || item.itemStatus !== "ACTIVE") return s;
@@ -4153,6 +4578,13 @@ function confirmSlotIn(
 }
 
 export function confirmSlot(date: string, mealSlot: MealSlot): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", `/api/v1/nutrition/intake/${date}/slots/${mealSlot}/confirm`),
+      "Couldn't log the meal",
+    );
+    return;
+  }
   mutate((s) => confirmSlotIn(s, date, mealSlot));
 }
 
@@ -4235,6 +4667,15 @@ export function overrideSlot(
   mealSlot: MealSlot,
   freeText: string,
 ): void {
+  if (LIVE)
+    liveMutation(
+      apiSend(
+        "POST",
+        `/api/v1/nutrition/intake/${date}/slots/${mealSlot}/override`,
+        { freeText },
+      ),
+      "Couldn't log the meal",
+    );
   const text = freeText.trim().slice(0, 512);
   if (!text) return;
   let slotId: string | undefined;
@@ -4277,6 +4718,15 @@ export function editSlot(
   mealSlot: MealSlot,
   values: IntakeEntryDto,
 ): void {
+  if (LIVE)
+    liveMutation(
+      apiSend(
+        "POST",
+        `/api/v1/nutrition/intake/${date}/slots/${mealSlot}/edit`,
+        values,
+      ),
+      "Couldn't save the edit",
+    );
   mutate((s) => {
     const slot = findIntakeSlot(s, date, mealSlot);
     if (!slot) return s;
@@ -4301,6 +4751,13 @@ export function editSlot(
 }
 
 export function skipSlot(date: string, mealSlot: MealSlot): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", `/api/v1/nutrition/intake/${date}/slots/${mealSlot}/skip`),
+      "Couldn't skip the meal",
+    );
+    return;
+  }
   mutate((s) => {
     const slot = findIntakeSlot(s, date, mealSlot);
     if (!slot || slot.actual.status !== "PENDING") return s; // one-way
@@ -4328,6 +4785,13 @@ let snackSeq = 100;
 export function addSnack(date: string, req: LogSnackRequest): void {
   const text = req.freeText.trim().slice(0, 255);
   if (!text || req.quantityG <= 0) return;
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", `/api/v1/nutrition/intake/${date}/snacks`, req),
+      "Couldn't log the snack",
+    );
+    return;
+  }
   mutate((s) => {
     const dayRec = s.nutrition.intakeDays[date];
     if (!dayRec) return s;
@@ -4368,6 +4832,11 @@ export function addSnack(date: string, req: LogSnackRequest): void {
 }
 
 export function removeSnack(date: string, snackId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("DELETE", `/api/v1/nutrition/intake/${date}/snacks/${snackId}`),
+      "Couldn't remove the snack",
+    );
   mutate((s) => {
     const dayRec = s.nutrition.intakeDays[date];
     if (!dayRec || !dayRec.snacks.some((sn) => sn.id === snackId)) return s;
@@ -4426,6 +4895,11 @@ export function upsertActivity(
  * expectedVersion is accepted as-is.
  */
 export function saveTargets(req: UpdateTargetsRequest): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("PUT", "/api/v1/nutrition/targets", req),
+      "Couldn't save targets",
+    );
   mutate((s) => {
     const macroKeys = ["protein", "carbs", "fat", "fibre", "satFat"] as const;
     const overridden = new Set(s.targets.userOverriddenDirections);
@@ -4467,6 +4941,17 @@ export function addJournalEntry(
   mealSlot: MealSlot | null,
   text: string,
 ): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", "/api/v1/nutrition/journal", {
+        onDate,
+        mealSlot,
+        journalEntry: text,
+        loggedAt: nowIso(),
+        expectedVersion: 0,
+      }),
+      "Couldn't save the journal entry",
+    );
   const trimmed = text.trim().slice(0, 4000);
   if (!trimmed) return;
   mutate((s) => ({
@@ -4497,6 +4982,24 @@ export function updateJournalEntry(
 ): void {
   const trimmed = text.trim().slice(0, 4000);
   if (!trimmed) return;
+  if (LIVE) {
+    const entry = state.nutrition.journal.find((e) => e.id === id);
+    if (entry)
+      liveMutation(
+        apiSend(
+          "PUT",
+          `/api/v1/nutrition/journal/${entry.onDate}/entries/${id}`,
+          {
+            onDate: entry.onDate,
+            mealSlot,
+            journalEntry: trimmed,
+            loggedAt: entry.loggedAt,
+            expectedVersion: entry.optimisticVersion,
+          },
+        ),
+        "Couldn't update the journal entry",
+      );
+  }
   mutate((s) => ({
     ...s,
     nutrition: {
@@ -4516,6 +5019,17 @@ export function updateJournalEntry(
 }
 
 export function deleteJournalEntry(id: string): void {
+  if (LIVE) {
+    const entry = state.nutrition.journal.find((e) => e.id === id);
+    if (entry)
+      liveMutation(
+        apiSend(
+          "DELETE",
+          `/api/v1/nutrition/journal/${entry.onDate}/entries/${id}`,
+        ),
+        "Couldn't delete the journal entry",
+      );
+  }
   mutate((s) => ({
     ...s,
     nutrition: {
@@ -4541,6 +5055,16 @@ export function acceptDirective(
   id: string,
   userModification?: DirectiveUserModification,
 ): void {
+  if (LIVE) {
+    const dir = state.nutrition.directives.find((x) => x.id === id);
+    liveMutation(
+      apiSend("POST", `/api/v1/nutrition/health-directives/${id}/accept`, {
+        userModification: userModification ?? null,
+        expectedVersion: dir?.optimisticVersion ?? 0,
+      }),
+      "Couldn't accept the directive",
+    );
+  }
   mutate((s) => {
     const d = s.nutrition.directives.find((x) => x.id === id);
     if (
@@ -4593,6 +5117,16 @@ export function acceptDirective(
 }
 
 export function rejectDirective(id: string, reason?: string): void {
+  if (LIVE) {
+    const dir = state.nutrition.directives.find((x) => x.id === id);
+    liveMutation(
+      apiSend("POST", `/api/v1/nutrition/health-directives/${id}/reject`, {
+        rejectionReason: reason?.trim() ? reason.trim() : null,
+        expectedVersion: dir?.optimisticVersion ?? 0,
+      }),
+      "Couldn't reject the directive",
+    );
+  }
   mutate((s) => {
     const d = s.nutrition.directives.find((x) => x.id === id);
     if (!d || d.status !== "PENDING_REVIEW") return s;
@@ -4636,6 +5170,21 @@ export function correctIngredient(
   searchTerm: string,
   override: IngredientNutritionDocument,
 ): void {
+  if (LIVE) {
+    const row = state.nutrition.ingredientCache.find(
+      (r) => r.searchTerm === searchTerm,
+    );
+    liveMutation(
+      apiSend(
+        "PUT",
+        `/api/v1/nutrition/ingredients/${encodeURIComponent(
+          searchTerm,
+        )}/correction`,
+        { override, expectedVersion: row?.version ?? 0 },
+      ),
+      "Couldn't correct the ingredient",
+    );
+  }
   mutate((s) => {
     const row = s.nutrition.ingredientCache.find(
       (r) => r.searchTerm === searchTerm,
@@ -4702,9 +5251,10 @@ const round1 = (n: number): number => Math.round(n * 10) / 10;
  * GET intake/{date}/aggregate equivalent. "Remaining" is target-based
  * (vs TargetsDto), matching the backend's daily-aggregate endpoint.
  *
- * Backend gap (flagged in the spec PR): DailyAggregateDto has no satFat
- * aggregate although TargetsDto carries a satFat target — the stat band's
- * sixth cell reads microsActualSoFar["saturated_fat_g"] instead.
+ * satFat aggregate added by backend #247 (TargetsDto already carried a satFat
+ * target). Slots have no per-slot satFat, so the fixture sources its actual
+ * from microsActualSoFar["saturated_fat_g"] and leaves plannedG at 0; the stat
+ * band still reads that micro directly (unchanged here).
  */
 export function computeDailyAggregate(
   day: IntakeDayDto | undefined,
@@ -4747,6 +5297,9 @@ export function computeDailyAggregate(
     actualSoFarG: round1(actual[key]),
     remainingG: remaining(targetG ?? 0, actual[key]),
   });
+  // satFat (#247) has no per-slot planned/actual; its actual is the
+  // saturated_fat_g micro — the same value the stat band reads.
+  const satFatActual = microsActual["saturated_fat_g"] ?? 0;
   return {
     caloriesPlanned,
     caloriesActualSoFar: caloriesActual,
@@ -4755,6 +5308,11 @@ export function computeDailyAggregate(
     carbs: macro("carbs", targets.carbs.targetG),
     fat: macro("fat", targets.fat.targetG),
     fibre: macro("fibre", targets.fibre.targetG),
+    satFat: {
+      plannedG: 0,
+      actualSoFarG: round1(satFatActual),
+      remainingG: remaining(targets.satFat.targetG ?? 0, satFatActual),
+    },
     microsActualSoFar: microsActual,
   };
 }
@@ -4830,15 +5388,27 @@ export function computeWeeklyAggregate(
       actualSoFarG: sum((d) => d.fibre.actualSoFarG),
       remainingG: 0,
     },
+    satFat: {
+      plannedG: sum((d) => d.satFat.plannedG),
+      actualSoFarG: sum((d) => d.satFat.actualSoFarG),
+      remainingG: 0,
+    },
     microsActualSoFar: totalMicros,
   };
-  // Key-only list per the contract (the page derives day chips via
-  // floorViolationDayIndices). Hard-floor macros only — the planner's
-  // multiplicative gate; micro hard floors are possible in the contract but
-  // not simulated here.
+  // floorViolations is now FloorViolationDto[] (date/floor/actual per the
+  // contract). The page still derives its per-day chips via
+  // floorViolationDayIndices, so we surface one weekly-level entry (date: null)
+  // per violated macro to keep that mapping 1:1. Hard-floor macros only — the
+  // planner's multiplicative gate; micro hard floors are possible in the
+  // contract but not simulated here.
   const floorViolations = FLOOR_MACROS.filter(
     (k) => floorViolationDayIndices(n, targets, k).length > 0,
-  );
+  ).map((k) => ({
+    date: null,
+    macroOrMicro: k,
+    floor: targets[k].floorG ?? 0,
+    actual: weeklyTotal[k].actualSoFarG,
+  }));
   return {
     weekStart: WEEK_DATES[0],
     weekEnd: WEEK_DATES[WEEK_DATES.length - 1],
@@ -4971,23 +5541,43 @@ function transitionNotification(
 
 /** POST /notifications/{id}/read (#4) — row click / explicit mark-read. */
 export function markNotificationRead(id: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/notifications/${id}/read`),
+      "Couldn't mark read",
+    );
   mutate((s) => transitionNotification(s, id, "READ", true));
 }
 
 /** POST /notifications/{id}/action (#6) — fired before following the deep
  *  link; a 409 because the row was already ACTIONED is swallowed (§3b). */
 export function actionNotification(id: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/notifications/${id}/action`),
+      "Couldn't action notification",
+    );
   mutate((s) => transitionNotification(s, id, "ACTIONED", true));
 }
 
 /** POST /notifications/{id}/dismiss (#5). */
 export function dismissNotification(id: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/notifications/${id}/dismiss`),
+      "Couldn't dismiss notification",
+    );
   mutate((s) => transitionNotification(s, id, "DISMISSED", false));
 }
 
 /** POST /notifications/bulk/read (#7) — empty kinds = all kinds; only ever
  *  targets UNREAD rows server-side. Returns BulkReadResponse.updated. */
 export function bulkMarkNotificationsRead(kinds: AnyNotificationKind[]): number {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", "/api/v1/notifications/bulk/read", { kinds }),
+      "Couldn't mark all read",
+    );
   let updated = 0;
   mutate((s) => ({
     ...s,
@@ -5038,6 +5628,11 @@ export type SavePrefsOutcome = "ok" | "conflict" | "invalid";
 export function saveNotificationPrefs(
   req: UpdateNotificationPreferenceRequest,
 ): SavePrefsOutcome {
+  if (LIVE)
+    liveMutation(
+      apiSend("PUT", "/api/v1/notifications/preferences", req),
+      "Couldn't save preferences",
+    );
   const cur = state.notifications.prefs;
   if (!cur) return "conflict";
   if (req.expectedVersion !== cur.version) {
@@ -5133,6 +5728,11 @@ function tasteAuditRow(
  */
 export function refreshTasteProfile(): void {
   if (state.preferences.refreshing || !state.preferences.tasteProfile) return;
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", "/api/v1/preferences/taste-profile/refresh-now"),
+      "Couldn't refresh the taste profile",
+    );
   mutate((s) => {
     const tp = s.preferences.tasteProfile;
     if (!tp) return s;
@@ -5238,6 +5838,14 @@ export function saveTasteProfile(
   document: TasteProfileDocument,
   expectedVersion: number,
 ): "ok" | "conflict" {
+  if (LIVE)
+    liveMutation(
+      apiSend("PUT", "/api/v1/preferences/taste-profile", {
+        document,
+        expectedVersion,
+      }),
+      "Couldn't save the taste profile",
+    );
   const tp = state.preferences.tasteProfile;
   if (!tp) return "conflict";
   if (expectedVersion !== tp.optimisticVersion) {
@@ -5305,6 +5913,14 @@ export function rollbackTasteProfile(
   targetDocumentVersion: number,
   expectedVersion: number,
 ): "ok" | "conflict" | "missing" {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", "/api/v1/preferences/taste-profile/rollback", {
+        targetDocumentVersion,
+        expectedVersion,
+      }),
+      "Couldn't roll back",
+    );
   const tp = state.preferences.tasteProfile;
   if (!tp) return "missing";
   const target = state.preferences.versions.find(
@@ -5510,6 +6126,11 @@ export function saveHardConstraints(
 
 /** POST /preferences/lifestyle-config/mark-reviewed (§5a review nudge). */
 export function markLifestyleReviewed(): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", "/api/v1/preferences/lifestyle-config/mark-reviewed"),
+      "Couldn't mark reviewed",
+    );
   mutate((s) =>
     s.preferences.lifestyle
       ? {
@@ -5528,6 +6149,11 @@ export function markLifestyleReviewed(): void {
 export function saveLifestyleConfig(
   req: UpdateLifestyleConfigRequest,
 ): "ok" | "conflict" {
+  if (LIVE)
+    liveMutation(
+      apiSend("PUT", "/api/v1/preferences/lifestyle-config", req),
+      "Couldn't save lifestyle config",
+    );
   const cur = state.preferences.lifestyle;
   if (!cur) return "conflict";
   if (req.expectedVersion !== cur.optimisticVersion) {
@@ -5791,6 +6417,11 @@ function autoRoute(text: string): RoutingDecisionDto {
  * either routes appear, or the whole entry pauses on a clarification.
  */
 export function submitFeedback(text: string, context?: UiContextDto): string {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", "/api/v1/feedback", { text, context }),
+      "Couldn't submit feedback",
+    );
   const id = `fb-${++feedbackSeq}`;
   const entry: FeedbackEntryDto = {
     id,
@@ -5821,6 +6452,7 @@ export function submitFeedback(text: string, context?: UiContextDto): string {
         const query: ClarificationQueryDto = {
           id: queryId,
           feedbackEntryId: id,
+          textExcerpt: cur.text.slice(0, 120),
           questionText: saltY
             ? "Is “too salty” about this one dish, or do you generally prefer less salt?"
             : "Is that about the plan's portions, or a daily nutrition target?",
@@ -5939,6 +6571,7 @@ export function correctRoute(
     const correction: MisclassificationCorrectionDto = {
       id: `corr-${++correctionSeq}`,
       feedbackEntryId: feedbackId,
+      textExcerpt: cur.text.slice(0, 120),
       originalRoutingId: routingId,
       correctedDestination: newDestination,
       originalDestination: route.destination,
@@ -5989,6 +6622,11 @@ export function answerClarification(
   queryId: string,
   req: AnswerClarificationRequest,
 ): AnswerClarificationOutcome {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/feedback/clarifications/${queryId}/answer`, req),
+      "Couldn't submit the answer",
+    );
   const query = state.activity.clarifications.find((c) => c.id === queryId);
   if (!query) return "missing";
   if (query.status === "EXPIRED") return "gone";
@@ -6188,6 +6826,38 @@ export function createHousehold(name: string): boolean {
 export function createInvite(req: CreateInviteRequest): HouseholdInviteDto | null {
   const household = state.household.current;
   if (!household) return null;
+  if (LIVE) {
+    // The invite code is returned ONLY on the 201 (list rows redact it), so we
+    // capture it from the response and stash it under the real id after the
+    // list refreshes. The optimistic mock code below shows until then.
+    apiSend<HouseholdInviteDto>(
+      "POST",
+      "/api/v1/households/current/invites",
+      req,
+    )
+      .then((dto) =>
+        import("../live/hydrate")
+          .then((m) => m.hydrateLive())
+          .then(() => {
+            if (dto?.inviteCode)
+              mutate((s) => ({
+                ...s,
+                household: {
+                  ...s.household,
+                  inviteCodes: {
+                    ...s.household.inviteCodes,
+                    [dto.id]: dto.inviteCode as string,
+                  },
+                },
+              }));
+          }),
+      )
+      .catch((e: unknown) => {
+        const status = e instanceof LiveApiError ? ` (${e.status})` : "";
+        pushToast(`Couldn't create the invite${status}`, "warn");
+        rehydrateLive();
+      });
+  }
   const id = `inv-${++inviteSeq}`;
   // Server caps expiry at now+30d and silently truncates (§8 Q5) — the UI
   // should echo the returned expiresAt, not the requested one.
@@ -6224,6 +6894,11 @@ export function createInvite(req: CreateInviteRequest): HouseholdInviteDto | nul
 
 /** DELETE /households/current/invites/{id} (#9) — 409 if already resolved. */
 export function revokeInvite(inviteId: string): void {
+  if (LIVE)
+    liveMutation(
+      apiSend("DELETE", `/api/v1/households/current/invites/${inviteId}`),
+      "Couldn't revoke the invite",
+    );
   mutate((s) => {
     const inv = s.household.invites.find((i) => i.id === inviteId);
     if (!inv) {
@@ -6261,6 +6936,11 @@ let departedHousehold: StoreState["household"]["current"] = null;
 /** POST /invites/accept (§3d status ladder) — 200 returns the new membership,
  *  NOT the household (follow with #1). */
 export function acceptInvite(code: string): AcceptInviteOutcome {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", "/api/v1/invites/accept", { inviteCode: code.trim() }),
+      "Couldn't accept the invite",
+    );
   const trimmed = code.trim();
   if (!trimmed || trimmed.length > 32) return "badRequest";
   const fresh = state.session.freshSetup;
@@ -6323,6 +7003,11 @@ export function acceptInvite(code: string): AcceptInviteOutcome {
 
 /** PATCH /households/current/members/{id} (#10) — null = no change. */
 export function updateMember(memberId: string, req: UpdateMemberRequest): boolean {
+  if (LIVE)
+    liveMutation(
+      apiSend("PATCH", `/api/v1/households/current/members/${memberId}`, req),
+      "Couldn't update the member",
+    );
   const household = state.household.current;
   const member = household?.members.find((m) => m.id === memberId);
   if (!household || !member) {
@@ -6360,6 +7045,11 @@ export function updateMember(memberId: string, req: UpdateMemberRequest): boolea
 /** POST /households/current/members/{id}/role (#12 — POST, not PUT: §8 Q3).
  *  Demoting the last primary → 409. */
 export function changeMemberRole(memberId: string, req: ChangeRoleRequest): boolean {
+  if (LIVE)
+    liveMutation(
+      apiSend("POST", `/api/v1/households/current/members/${memberId}/role`, req),
+      "Couldn't change the role",
+    );
   const household = state.household.current;
   const member = household?.members.find((m) => m.id === memberId);
   if (!household || !member) {
@@ -6404,6 +7094,11 @@ export function changeMemberRole(memberId: string, req: ChangeRoleRequest): bool
  *  a member may only self-remove ("Leave household"). Removing the last
  *  primary while others remain → 409. Self-removal clears household scope. */
 export function removeMember(memberId: string): "ok" | "left" | "blocked" {
+  if (LIVE)
+    liveMutation(
+      apiSend("DELETE", `/api/v1/households/current/members/${memberId}`),
+      "Couldn't remove the member",
+    );
   const household = state.household.current;
   const member = household?.members.find((m) => m.id === memberId);
   if (!household || !member) {
@@ -6479,6 +7174,14 @@ function settingsFieldPaths(
 /** PUT /households/{id}/settings (#4) — full document replace with
  *  expectedVersion; every changed fieldPath lands an audit row (#5). */
 export function saveHouseholdSettings(req: UpdateHouseholdSettingsRequest): boolean {
+  if (LIVE) {
+    const hid = state.household.current?.id;
+    if (hid)
+      liveMutation(
+        apiSend("PUT", `/api/v1/households/${hid}/settings`, req),
+        "Couldn't save settings",
+      );
+  }
   const cur = state.household.settings;
   const household = state.household.current;
   if (!cur || !household) return false;
@@ -6619,6 +7322,7 @@ export function register(username: string, password: string): RegisterOutcome {
 /** POST /auth/logout — per-device; other sessions survive (GAP-71). The
  *  router guard then redirects every shell route to /login. */
 export function logout(): void {
+  if (LIVE) void apiSend("POST", "/api/v1/auth/logout").catch(() => {});
   mutate((s) => ({ ...s, session: { ...s.session, user: null } }));
 }
 
@@ -6696,6 +7400,15 @@ export function exitOnboarding(): void {
 
 /** PUT /grocery/orders/providers/{key} (#16) — connect / pause / refresh. */
 export function saveProviderConnection(req: ProviderConnectionRequest): void {
+  if (LIVE)
+    liveMutation(
+      apiSend(
+        "PUT",
+        `/api/v1/grocery/orders/providers/${req.providerKey}`,
+        req,
+      ),
+      "Couldn't save the provider connection",
+    );
   mutate((s) => {
     const cur = s.grocery.providerState;
     const next = cur
@@ -7024,6 +7737,13 @@ function runDiscoveryStep(jobId: string, scriptIndex: number): void {
  * snapshot is injected by the CALLER (client-trust hole, §9 Q3).
  */
 export function startDiscoveryJob(req: StartDiscoveryJobRequest): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", "/api/v1/discovery/jobs", req),
+      "Couldn't start discovery",
+    );
+    return;
+  }
   if (hasLiveDiscoveryJob(state)) {
     pushToast("A discovery is already running — wait for it to finish", "warn");
     return;
@@ -7102,6 +7822,13 @@ export function startDiscoveryJob(req: StartDiscoveryJobRequest): void {
  * DTO and a runner flag; terminal → 422 discovery-job-already-terminal.
  */
 export function cancelDiscoveryJob(jobId: string): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", `/api/v1/discovery/jobs/${jobId}/cancel`),
+      "Couldn't cancel the job",
+    );
+    return;
+  }
   const job = findJob(state, jobId);
   if (!job) {
     pushToast("404 — job no longer exists", "warn");

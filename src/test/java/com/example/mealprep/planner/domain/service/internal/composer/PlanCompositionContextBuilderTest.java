@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 import com.example.mealprep.core.types.SlotKind;
 import com.example.mealprep.household.api.dto.PlannerSlotEntryDto;
 import com.example.mealprep.household.api.dto.SlotConfigurationPlannerViewDto;
+import com.example.mealprep.household.domain.service.HouseholdMergeService;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.nutrition.domain.service.NutritionQueryService;
 import com.example.mealprep.planner.api.dto.GeneratePlanRequest;
@@ -49,6 +50,7 @@ class PlanCompositionContextBuilderTest {
   private static final LocalDate WEEK = LocalDate.of(2026, 5, 18);
 
   @Mock private HouseholdQueryService householdQueryService;
+  @Mock private HouseholdMergeService householdMergeService;
   @Mock private PreferenceQueryService preferenceQueryService;
   @Mock private NutritionQueryService nutritionQueryService;
   @Mock private ProvisionForPlannerService provisionForPlannerService;
@@ -75,6 +77,7 @@ class PlanCompositionContextBuilderTest {
     builder =
         new PlanCompositionContextBuilder(
             householdQueryService,
+            householdMergeService,
             preferenceQueryService,
             nutritionQueryService,
             provisionForPlannerService,

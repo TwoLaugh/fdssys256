@@ -399,3 +399,168 @@ discoveryAdminJobsSync:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
 
+
+discoveryAdminGraphBatchIngest:
+  post:
+    tags: [Discovery]
+    operationId: ingestGraphBatch
+    summary: 'Admin: ingest an exported graph-batch directory (G06). Imports only review-approved fingerprints through the RecipeWriteApi seam; fail-closed validation; fingerprint-dedup idempotent; one jobId per batch.'
+    description: 'Body carries a server-local absolute path to the batch dir (D4 option (a), single operator). Non-OK statuses (DISABLED, INVALID_BATCH, ABORTED_MISSING_KEYS, REJECTED_RESTRICTED_DIET) return 409 with the same report shape and zero writes.'
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [batchPath]
+            properties:
+              batchPath: { type: string, minLength: 1 }
+    responses:
+      '200':
+        description: 'Batch processed (per-dish rejections ride in the report).'
+        content:
+          application/json:
+            schema: { $ref: '#/GraphBatchIngestReport' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Authenticated but not on the admin allowlist.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '409':
+        description: 'Flag off, invalid batch/verdicts, unseeded keys, or restricted-diet policy — zero writes; see report.status/errors.'
+        content:
+          application/json:
+            schema: { $ref: '#/GraphBatchIngestReport' }
+
+discoveryAdminGraphBatchWithdraw:
+  post:
+    tags: [Discovery]
+    operationId: withdrawGraphBatch
+    summary: 'Admin: withdraw a live graph batch (G11) — reversibly archive every AI_GENERATED recipe imported under this jobId. Archived rows leave every plannable read immediately; already-generated plans keep their slots. Idempotent.'
+    description: >-
+      One jobId per graph batch (G06 invariant). Only AI_GENERATED import rows match — a graph
+      withdraw never sweeps a discovery crawl's harvest sharing the job_id column. Flipping
+      mealprep.graph.import.enabled=false stops future ingest but does NOT retro-hide dishes;
+      this endpoint is the retro lever. Reverse with /restore.
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: jobId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Batch withdrawn (changedRecipeIds empty on a repeat call — idempotency signal).'
+        content:
+          application/json:
+            schema: { $ref: '#/GraphBatchWithdrawReport' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Authenticated but not on the admin allowlist.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No AI_GENERATED import rows carry this jobId — not a known graph batch.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+discoveryAdminGraphBatchRestore:
+  post:
+    tags: [Discovery]
+    operationId: restoreGraphBatch
+    summary: 'Admin: restore a withdrawn graph batch (G11) — clear archived_at on the same jobId match set. Full restore, embeddings/ratings intact. Idempotent.'
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - in: path
+        name: jobId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      '200':
+        description: 'Batch restored (changedRecipeIds empty on a repeat call — idempotency signal).'
+        content:
+          application/json:
+            schema: { $ref: '#/GraphBatchWithdrawReport' }
+      '401':
+        description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Authenticated but not on the admin allowlist.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '404':
+        description: 'No AI_GENERATED import rows carry this jobId — not a known graph batch.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+
+GraphBatchWithdrawReport:
+  type: object
+  required: [jobId, action, matched, changedRecipeIds, skippedRecipeIds]
+  properties:
+    jobId: { type: string, format: uuid }
+    action:
+      type: string
+      enum: [WITHDRAWN, RESTORED]
+    matched:
+      type: integer
+      description: 'Recipes whose AI_GENERATED import row carries the jobId, regardless of state.'
+    changedRecipeIds:
+      type: array
+      items: { type: string, format: uuid }
+      description: 'Rows actually transitioned by this call; empty on a repeat call.'
+    skippedRecipeIds:
+      type: array
+      items: { type: string, format: uuid }
+      description: 'Matched rows deliberately left alone (soft-deleted, or promoted into a user catalogue).'
+
+GraphBatchIngestReport:
+  type: object
+  additionalProperties: true
+  properties:
+    batchId: { type: string, nullable: true }
+    jobId: { type: string, nullable: true }
+    status:
+      type: string
+      enum: [OK, DISABLED, INVALID_BATCH, ABORTED_MISSING_KEYS, REJECTED_RESTRICTED_DIET]
+    created: { type: integer }
+    dedupSkipped: { type: integer }
+    notApproved: { type: integer }
+    rejected:
+      type: array
+      items:
+        type: object
+        properties:
+          fp: { type: string }
+          reason: { type: string }
+    recipeIds:
+      type: array
+      items:
+        type: object
+        properties:
+          fp: { type: string }
+          recipeId: { type: string, format: uuid }
+          versionId: { type: string, format: uuid, nullable: true }
+          nutritionStatus: { type: string, nullable: true }
+    missingMappingKeys:
+      type: array
+      items: { type: string }
+    errors:
+      type: array
+      items: { type: string }
+    note: { type: string, nullable: true }

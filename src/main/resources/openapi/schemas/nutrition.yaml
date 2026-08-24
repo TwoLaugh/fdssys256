@@ -799,6 +799,14 @@ RecipeNutritionResultDto:
     unmapped:
       type: array
       items: { $ref: '#/UnmappedIngredientDto' }
+    microSources:
+      type: object
+      description: 'Per-micro provenance: measured | derived | estimated. Absent key = unknown.'
+      additionalProperties: { type: string, enum: [measured, derived, estimated] }
+    microConfidence:
+      type: object
+      description: 'Per-micro 0..1 confidence, carried for estimated values.'
+      additionalProperties: { type: number, format: double, minimum: 0, maximum: 1 }
 CandidatePlanRollupDto:
   type: object
   required: [startDate, endDate, perDay]

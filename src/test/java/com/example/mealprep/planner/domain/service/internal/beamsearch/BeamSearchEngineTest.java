@@ -69,7 +69,7 @@ class BeamSearchEngineTest {
     hardFilterRunner = new HardFilterRunner(filterService, properties);
     pruner = new BeamPruner();
     scoring = new DeterministicScoringEngine();
-    engine = new BeamSearchEngineImpl(hardFilterRunner, pruner, scoring, properties);
+    engine = new BeamSearchEngineImpl(hardFilterRunner, pruner, scoring, scoring, properties);
   }
 
   @Test
@@ -187,7 +187,7 @@ class BeamSearchEngineTest {
     PlannerProperties tinyTimeout = newProps(Duration.ofNanos(1));
     HardFilterRunner runner2 = new HardFilterRunner(filterService, tinyTimeout);
     BeamSearchEngine fastTimeoutEngine =
-        new BeamSearchEngineImpl(runner2, pruner, scoring, tinyTimeout);
+        new BeamSearchEngineImpl(runner2, pruner, scoring, scoring, tinyTimeout);
 
     List<MealSlotSkeleton> slots =
         List.of(
@@ -421,21 +421,27 @@ class BeamSearchEngineTest {
 
   /**
    * Deterministic scoring engine: composite = sum of {@code lsb / 1e9} across each assigned recipe.
-   * Higher recipe id → higher score, monotonic and tie-broken by recipe-id stable order. Plan-level
-   * (not per-slot incremental) — the search sums across the assignment list.
+   * Higher recipe id → higher score, monotonic and tie-broken by recipe-id stable order. Implements
+   * both seams: {@link ScoringEngine} (used by {@code finalise()}) re-sums the whole plan, and
+   * {@link com.example.mealprep.planner.domain.service.internal.scoring.BeamCandidateScorer} (used
+   * for pruning) carries the running sum as its opaque state so the incremental composite equals
+   * the whole-plan score — keeping the beam-mechanics assertions deterministic and id-ordered.
    */
-  private static final class DeterministicScoringEngine implements ScoringEngine {
+  private static final class DeterministicScoringEngine
+      implements ScoringEngine,
+          com.example.mealprep.planner.domain.service.internal.scoring.BeamCandidateScorer {
     private final Map<UUID, BigDecimal> scoresByRecipe = new HashMap<>();
+
+    private BigDecimal valueOf(UUID recipeId) {
+      return scoresByRecipe.computeIfAbsent(
+          recipeId, id -> BigDecimal.valueOf(id.getLeastSignificantBits()).movePointLeft(9));
+    }
 
     @Override
     public ScoreResult score(CandidatePlan plan, PlanCompositionContext context) {
       BigDecimal total = BigDecimal.ZERO;
       for (SlotAssignment a : plan.assignments()) {
-        total =
-            total.add(
-                scoresByRecipe.computeIfAbsent(
-                    a.recipeId(),
-                    id -> BigDecimal.valueOf(id.getLeastSignificantBits()).movePointLeft(9)));
+        total = total.add(valueOf(a.recipeId()));
       }
       ScoreBreakdownDocument breakdown =
           new ScoreBreakdownDocument(
@@ -451,6 +457,23 @@ class BeamSearchEngineTest {
               true,
               "v1-uniform-test");
       return new ScoreResult(total, breakdown);
+    }
+
+    // ---- BeamCandidateScorer seam (running-sum opaque state) ----------------------------------
+
+    @Override
+    public Object emptyState(PlanCompositionContext ctx) {
+      return BigDecimal.ZERO;
+    }
+
+    @Override
+    public Object append(Object parentState, SlotAssignment a, PlanCompositionContext ctx) {
+      return ((BigDecimal) parentState).add(valueOf(a.recipeId()));
+    }
+
+    @Override
+    public BigDecimal composite(Object state, CandidatePlan planView, PlanCompositionContext ctx) {
+      return (BigDecimal) state;
     }
   }
 }

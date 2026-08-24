@@ -2,6 +2,7 @@ package com.example.mealprep.household.domain.service;
 
 import com.example.mealprep.household.api.dto.MergedSoftPreferencesDto;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -23,6 +24,16 @@ public interface HouseholdMergeService {
    * current member.
    */
   MergedSoftPreferencesDto mergeSoftPreferencesForSlot(UUID householdId, List<UUID> eaterUserIds);
+
+  /**
+   * Best-effort variant of {@link #mergeSoftPreferencesForSlot} for in-process callers (the
+   * planner): absence is a value, not an exception. Empty when the household is missing, has zero
+   * members, or a supplied {@code eaterUserId} is not a current member. The throwing variant exists
+   * for the REST seam, where those cases map to HTTP errors; this one exists so a caller inside an
+   * open transaction never has an exception cross the service proxy and mark it rollback-only.
+   */
+  Optional<MergedSoftPreferencesDto> mergeSoftPreferencesForSlotIfResolvable(
+      UUID householdId, List<UUID> eaterUserIds);
 
   /**
    * Variant for feasibility checks / tests: bypasses household lookup and uses the supplied

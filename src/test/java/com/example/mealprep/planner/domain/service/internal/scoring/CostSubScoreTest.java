@@ -40,13 +40,14 @@ class CostSubScoreTest {
   }
 
   /**
-   * Zero weekly budget must short-circuit to neutral 0.5 (the {@code weeklyTarget().compareTo(0) <=
-   * 0} guard). Kills the L70 ConditionalsBoundary mutant {@code <= 0} → {@code < 0}: with a zero
-   * target the mutated guard is false and the code divides estimatedCost by a zero budget, throwing
-   * ArithmeticException instead of returning 0.5.
+   * Zero weekly budget must short-circuit past the cost-fit division (the {@code
+   * weeklyTarget().compareTo(0) <= 0} guard) into the no-budget INGREDIENT-REUSE path — NOT divide
+   * by zero. Kills the L70 ConditionalsBoundary mutant {@code <= 0} → {@code < 0}: with the mutant
+   * a zero target falls through and divides estimatedCost by a zero budget, throwing instead of
+   * returning a reuse score. A single recipe shares nothing, so reuse = {@code 1 − 1/1 = 0}.
    */
   @Test
-  void zero_budget_returns_neutral_not_divide_by_zero() {
+  void zero_budget_takes_reuse_path_not_divide_by_zero() {
     UUID id = UUID.randomUUID();
     RecipeDto recipe = PlanTestData.scoredRecipe(id, 20, "Thai", "tofu", "fry", List.of("rice"));
     var bundle =
@@ -56,7 +57,45 @@ class CostSubScoreTest {
     CandidatePlan plan =
         PlanTestData.candidatePlan(
             WEEK, List.of(PlanTestData.assignment(UUID.randomUUID(), id, WEEK, 0, 2)));
-    assertThat(calc.compute(plan, ctx)).isEqualByComparingTo(new BigDecimal("0.5"));
+    assertThat(calc.compute(plan, ctx)).isEqualByComparingTo(BigDecimal.ZERO);
+  }
+
+  /**
+   * No-budget reuse reward: a plan whose distinct recipes SHARE ingredient keys scores higher than
+   * one whose recipes are disjoint (a smaller shopping list). Shared = 4 distinct of 6 total →
+   * {@code 1 − 4/6 ≈ 0.333}; disjoint = 6 of 6 → {@code 0}.
+   */
+  @Test
+  void reuse_rewards_ingredient_overlap() {
+    UUID r1 = UUID.randomUUID();
+    UUID r2 = UUID.randomUUID();
+    UUID r3 = UUID.randomUUID();
+    RecipeDto rec1 =
+        PlanTestData.scoredRecipe(r1, 20, "Thai", "tofu", "fry", List.of("rice", "tofu", "soy"));
+    RecipeDto rec2 =
+        PlanTestData.scoredRecipe(r2, 20, "Thai", "tofu", "fry", List.of("rice", "tofu", "ginger"));
+    RecipeDto rec3 =
+        PlanTestData.scoredRecipe(
+            r3, 20, "Brit", "beef", "roast", List.of("beef", "potato", "carrot"));
+    var bundle = PlanTestData.provisionsBundle(PlanTestData.budget(null), Map.of(), List.of());
+    PlanCompositionContext ctx =
+        PlanTestData.scoringContext(
+            List.of(), List.of(rec1, rec2, rec3), bundle, Map.of(), Map.of());
+    CandidatePlan shared =
+        PlanTestData.candidatePlan(
+            WEEK,
+            List.of(
+                PlanTestData.assignment(UUID.randomUUID(), r1, WEEK, 0, 2),
+                PlanTestData.assignment(UUID.randomUUID(), r2, WEEK, 1, 2)));
+    CandidatePlan disjoint =
+        PlanTestData.candidatePlan(
+            WEEK,
+            List.of(
+                PlanTestData.assignment(UUID.randomUUID(), r1, WEEK, 0, 2),
+                PlanTestData.assignment(UUID.randomUUID(), r3, WEEK, 1, 2)));
+    assertThat(calc.compute(shared, ctx)).isEqualByComparingTo(new BigDecimal("0.333333"));
+    assertThat(calc.compute(disjoint, ctx)).isEqualByComparingTo(BigDecimal.ZERO);
+    assertThat(calc.compute(shared, ctx)).isGreaterThan(calc.compute(disjoint, ctx));
   }
 
   @Test

@@ -29,4 +29,6 @@ public record ShoppingListLineDto(
     Integer boughtPricePence,
     Instant boughtAt,
     BoughtVia boughtVia,
-    UUID groceryOrderId) {}
+    UUID groceryOrderId,
+    BigDecimal leftoverQuantityG,
+    BigDecimal bufferPercent) {}

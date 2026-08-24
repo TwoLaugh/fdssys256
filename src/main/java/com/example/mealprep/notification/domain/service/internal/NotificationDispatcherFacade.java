@@ -10,16 +10,22 @@ import com.example.mealprep.planner.event.ReoptSuggestedEvent;
 import com.example.mealprep.provisions.event.DefrostReminderEvent;
 import com.example.mealprep.provisions.event.ItemNearingExpiryEvent;
 import com.example.mealprep.provisions.event.ItemSpoiledEvent;
+import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
  * Thin public bridge the {@code notification.event} listeners inject. It pairs the package-private
  * {@code NotificationKindResolver} with the package-private {@code NotificationDispatcher} so the
  * dispatcher itself stays internal (listeners-only, per {@code lld/notification.md}). One method
- * per producer event: resolve the event to a draft, then dispatch it.
+ * per producer event: resolve the event to a draft, then dispatch it. Household-routed events can
+ * resolve to no target user (unknown household, no primary member) — those dispatch nothing.
  */
 @Component
 public class NotificationDispatcherFacade {
+
+  private static final Logger log = LoggerFactory.getLogger(NotificationDispatcherFacade.class);
 
   private final NotificationKindResolver resolver;
   private final NotificationDispatcher dispatcher;
@@ -31,7 +37,7 @@ public class NotificationDispatcherFacade {
   }
 
   public void dispatchItemNearingExpiry(ItemNearingExpiryEvent event) {
-    dispatcher.dispatch(resolver.resolve(event));
+    dispatchIfTargeted(resolver.resolve(event), event);
   }
 
   public void dispatchItemSpoiled(ItemSpoiledEvent event) {
@@ -39,7 +45,7 @@ public class NotificationDispatcherFacade {
   }
 
   public void dispatchDefrostReminder(DefrostReminderEvent event) {
-    dispatcher.dispatch(resolver.resolve(event));
+    dispatchIfTargeted(resolver.resolve(event), event);
   }
 
   public void dispatchNutritionIntakeDiverged(NutritionIntakeDivergedEvent event) {
@@ -55,11 +61,11 @@ public class NotificationDispatcherFacade {
   }
 
   public void dispatchReoptSuggested(ReoptSuggestedEvent event) {
-    dispatcher.dispatch(resolver.resolve(event));
+    dispatchIfTargeted(resolver.resolve(event), event);
   }
 
   public void dispatchPlanGenerated(PlanGeneratedEvent event) {
-    dispatcher.dispatch(resolver.resolve(event));
+    dispatchIfTargeted(resolver.resolve(event), event);
   }
 
   public void dispatchStapleReplenishmentNeeded(StapleReplenishmentNeededEvent event) {
@@ -68,5 +74,13 @@ public class NotificationDispatcherFacade {
 
   public void dispatchFeedbackProcessed(FeedbackProcessedEvent event) {
     dispatcher.dispatch(resolver.resolve(event));
+  }
+
+  private void dispatchIfTargeted(Optional<NotificationDraft> draft, Object event) {
+    if (draft.isEmpty()) {
+      log.debug("no target user resolves for event={}; nothing to dispatch", event);
+      return;
+    }
+    dispatcher.dispatch(draft.get());
   }
 }

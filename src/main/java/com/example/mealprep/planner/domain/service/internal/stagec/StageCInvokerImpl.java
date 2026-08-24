@@ -2,6 +2,7 @@ package com.example.mealprep.planner.domain.service.internal.stagec;
 
 import com.example.mealprep.ai.domain.service.AiService;
 import com.example.mealprep.ai.exception.AiCostBudgetExceededException;
+import com.example.mealprep.ai.exception.AiException;
 import com.example.mealprep.ai.exception.AiUnavailableException;
 import com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
@@ -101,6 +102,14 @@ class StageCInvokerImpl implements StageCInvoker {
       return deterministicFallback();
     } catch (AiUnavailableException e) {
       log.warn("Stage C: AI unavailable / transient failure; falling back to deterministic", e);
+      return deterministicFallback();
+    } catch (AiException e) {
+      // Any other AI failure — fatal 4xx (AiInvalidRequestException, e.g. a bad key or a
+      // placeholder model id), unusable payload (AiInvalidResponseException), open breaker,
+      // token-cap rejection. The skip-and-flag contract is "on ANY AI failure fall back to the
+      // deterministic top-scored candidate" — a misconfigured provider must degrade a plan's
+      // ranking, never fail the generation.
+      log.warn("Stage C: AI call failed ({}); falling back to deterministic", e.toString());
       return deterministicFallback();
     }
   }

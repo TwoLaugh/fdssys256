@@ -125,6 +125,11 @@ public class PlanComposer {
   private final RollupBuilder rollupBuilder;
   private final StageCInvoker stageCInvoker;
   private final Phase2Augmenter phase2Augmenter;
+  private final com.example.mealprep.planner.domain.service.internal.additions
+          .IngredientAdditionPlanner
+      additionPlanner;
+  private final com.example.mealprep.planner.domain.service.internal.PortionOptimizer
+      portionOptimizer;
   private final PlanPersister planPersister;
   private final RefineDirectiveMapper refineDirectiveMapper;
   private final AdaptationService adaptationService;
@@ -147,6 +152,9 @@ public class PlanComposer {
       RollupBuilder rollupBuilder,
       StageCInvoker stageCInvoker,
       Phase2Augmenter phase2Augmenter,
+      com.example.mealprep.planner.domain.service.internal.additions.IngredientAdditionPlanner
+          additionPlanner,
+      com.example.mealprep.planner.domain.service.internal.PortionOptimizer portionOptimizer,
       PlanPersister planPersister,
       RefineDirectiveMapper refineDirectiveMapper,
       AdaptationService adaptationService,
@@ -163,6 +171,8 @@ public class PlanComposer {
     this.rollupBuilder = rollupBuilder;
     this.stageCInvoker = stageCInvoker;
     this.phase2Augmenter = phase2Augmenter;
+    this.additionPlanner = additionPlanner;
+    this.portionOptimizer = portionOptimizer;
     this.planPersister = planPersister;
     this.refineDirectiveMapper = refineDirectiveMapper;
     this.adaptationService = adaptationService;
@@ -484,9 +494,31 @@ public class PlanComposer {
       }
     }
 
+    // Phase 2b — additions <-> portioning, as a 2-pass loop so the sides fill the TRUE residual and
+    // the mains are sized net of the sides (rather than the old one-shot: pick sides against the
+    // stale beam coverage, then size mains once).
+    //
+    //   1. size the mains alone to the targets (the optimiser is finalise-only + deterministic),
+    //   2. rebuild coverage from the optimally-sized mains — this is the real residual,
+    //   3. pick in-meal additions against THAT residual (not the pre-optimisation Stage-B rollup),
+    //   4. re-size the mains net of the chosen additions (the optimiser's fixed-additions offset).
+    //
+    // Both optimiser passes + the intermediate rollup are cheap (finalise-only, one chosen plan).
+    List<SlotAssignment> sizedMains = portionOptimizer.optimise(mutatedAssignments, context);
+    RollupSummaryDocument optimisedResidual =
+        rollupBuilder.build(
+            new CandidatePlan(
+                chosen.candidateId(), chosen.weekStartDate(), sizedMains, chosen.scoreResult()),
+            context);
+    List<SlotAssignment> withAdditions =
+        additionPlanner.attach(sizedMains, optimisedResidual, context);
+    List<SlotAssignment> finalAssignments = portionOptimizer.optimise(withAdditions, context);
+
     CandidatePlan mutated =
         new CandidatePlan(
-            chosen.candidateId(), chosen.weekStartDate(), mutatedAssignments, chosen.scoreResult());
+            chosen.candidateId(), chosen.weekStartDate(), finalAssignments, chosen.scoreResult());
+
+    RollupSummaryDocument finalRollup = rollupBuilder.build(mutated, context);
 
     return self.persistAndPublish(
         new PersistInputs(
@@ -494,7 +526,7 @@ public class PlanComposer {
             request,
             context,
             planId,
-            chosenRollup,
+            finalRollup,
             aiAugmented,
             qualityWarning,
             coldStart,

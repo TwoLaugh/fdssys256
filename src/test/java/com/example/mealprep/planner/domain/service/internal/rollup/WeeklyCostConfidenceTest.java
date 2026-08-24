@@ -89,7 +89,8 @@ class WeeklyCostConfidenceTest {
         new PlannerProperties.ScoringTuning(
             PlanTestData.defaultTuning().variety(),
             PlanTestData.defaultTuning().provisions(),
-            new PlannerProperties.ScoringTuning.CostTuning(threshold)),
+            new PlannerProperties.ScoringTuning.CostTuning(threshold),
+            PlanTestData.defaultTuning().nutritionMacroWeights()),
         java.time.Duration.ofSeconds(20),
         3,
         5,

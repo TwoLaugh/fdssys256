@@ -14,9 +14,12 @@ import { PageHeader } from "../components/PageHeader";
 import { StatStrip } from "../components/StatStrip";
 import type { StatStripCell } from "../components/StatStrip";
 import { StatusMark } from "../components/StatusMark";
+import { SegmentBar } from "../components/SegmentBar";
 import { SwapLine } from "../components/SwapLine";
-import { MOCK_TODAY_ISO } from "../mock/nutritionSeed";
-import { CURRENT_WEEK_START, KNOWN_WEEKS } from "../mock/plannerSeed";
+import { microLabel } from "./nutrition/shared";
+// Live-aware date anchors (real clock in live mode) — so the week nav defaults
+// to the week the backend's live plan is in. See src/live/dates.ts.
+import { CURRENT_WEEK_START, MOCK_TODAY_ISO } from "../live/dates";
 import {
   abandonPlan,
   acceptPlan,
@@ -45,6 +48,232 @@ import {
   shortDayLabel,
   weekRangeLabel,
 } from "./plan/shared";
+
+/* ---- plan vs targets: projected nutrition coverage (nutrition-driven planning) ---- */
+
+/** One target's projected coverage in the generated plan. Mirrors the backend
+ *  `NutritionTargetCoverageDocument`; read off `rollupSummary.nutritionCoverage`. */
+type PlanTargetCoverage = {
+  key: string;
+  unit: string;
+  target: number;
+  projectedDailyAvg: number | null;
+  direction: string;
+  met: boolean;
+  // MET | SHORT | NO_DATA — NO_DATA = intake unknown (no recipe carried it), not zero.
+  status?: string;
+  // provenance backing the projection: measured | derived | estimated (null when NO_DATA).
+  source?: string | null;
+};
+
+type PlanNutritionCoverage = {
+  macros: PlanTargetCoverage[];
+  micros: PlanTargetCoverage[];
+  macrosMet: number;
+  macrosTotal: number;
+  microsMet: number;
+  microsTotal: number;
+  microsNoData?: number;
+  fatBreakdown?: {
+    saturatedG: number | null;
+    monounsaturatedG: number | null;
+    polyunsaturatedG: number | null;
+  } | null;
+};
+
+/** Short provenance badge — only shown for non-measured (lossy) sources so the user knows a
+ *  number is USDA-derived or an AI estimate rather than hard recipe data. */
+function SourceBadge({ source }: { source?: string | null }) {
+  if (!source || source === "measured") return null;
+  const label = source === "estimated" ? "est" : "USDA";
+  const title =
+    source === "estimated"
+      ? "AI estimate (low confidence) — no measured or USDA value available"
+      : "derived from USDA by matching ingredients (approximate)";
+  return (
+    <span
+      title={title}
+      style={{
+        marginLeft: 6,
+        fontSize: "0.7em",
+        padding: "0 4px",
+        borderRadius: 3,
+        border: "1px solid var(--mp-line)",
+        color: source === "estimated" ? "var(--mp-amber)" : "var(--mp-ink-soft, #888)",
+        verticalAlign: "middle",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+const MACRO_COVERAGE_LABEL: Record<string, string> = {
+  calories: "Calories",
+  protein: "Protein",
+  carbs: "Carbs",
+  fat: "Fat",
+  fibre: "Fibre",
+  saturated_fat: "Saturated fat",
+};
+
+const fmtCoverageNum = (n: number): string =>
+  n >= 100
+    ? Math.round(n).toLocaleString("en-GB")
+    : String(Math.round(n * 10) / 10);
+
+function CoverageRow({
+  row,
+  label,
+}: {
+  row: PlanTargetCoverage;
+  label: string;
+}) {
+  const denom = row.target > 0 ? row.target : 1;
+  const targetNote =
+    row.direction === "UPPER_LIMIT"
+      ? `≤ ${fmtCoverageNum(row.target)}`
+      : `/ ${fmtCoverageNum(row.target)}`;
+
+  // NO_DATA: intake is UNKNOWN (no recipe carried this nutrient) — render it muted as "no data",
+  // never as a 0 bar or a "short" amber, so an absent data source is not read as a measured zero.
+  if (row.status === "NO_DATA" || row.projectedDailyAvg == null) {
+    return (
+      <div className="micro-row">
+        <span style={{ color: "var(--mp-ink-soft, #999)" }}>{label}</span>
+        <span style={{ color: "var(--mp-ink-soft, #999)", fontStyle: "italic" }}>
+          no data {targetNote}
+        </span>
+        <SegmentBar pct={0} segments={12} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="micro-row">
+      <span>
+        {label}
+        {!row.met && (
+          <span
+            className="hard-floor-mark"
+            style={{ color: "var(--mp-amber)" }}
+            title="short of target"
+          >
+            ▪
+          </span>
+        )}
+      </span>
+      <span
+        style={{
+          fontVariantNumeric: "tabular-nums",
+          color: row.met ? undefined : "var(--mp-amber)",
+          fontWeight: row.met ? 400 : 600,
+        }}
+      >
+        {fmtCoverageNum(row.projectedDailyAvg)} {row.unit} {targetNote}
+        <SourceBadge source={row.source} />
+      </span>
+      <SegmentBar
+        pct={row.projectedDailyAvg / denom}
+        segments={12}
+        tone={row.met ? "olive" : "amber"}
+      />
+    </div>
+  );
+}
+
+/** "Plan vs your targets" — the generated plan's projected daily nutrition for the
+ *  primary eater against each macro + micro target, so a real user can see whether
+ *  the plan actually hits 3.6k kcal / 150 g protein / their micros. */
+function PlanNutritionPanel({
+  coverage,
+}: {
+  coverage: PlanNutritionCoverage;
+}) {
+  const [showAllMicros, setShowAllMicros] = useState(false);
+  const isNoData = (m: PlanTargetCoverage) =>
+    m.status === "NO_DATA" || m.projectedDailyAvg == null;
+  // "Short" excludes no-data — an unknown nutrient is not a failed target, it's unmeasured.
+  const short = coverage.micros.filter((m) => !isNoData(m) && !m.met);
+  const noData = coverage.microsNoData ?? coverage.micros.filter(isNoData).length;
+  const assessed = coverage.microsTotal - noData;
+  const visibleMicros =
+    showAllMicros || short.length === 0 ? coverage.micros : short;
+  const allMet =
+    coverage.macrosMet === coverage.macrosTotal && coverage.microsMet === assessed;
+
+  return (
+    <details className="mp-card micros-details" open style={{ marginTop: 18 }}>
+      <summary>
+        <span className="mp-label" style={{ color: "var(--mp-ink)" }}>
+          Plan vs your targets
+        </span>
+        <span className="inline-note">
+          {coverage.macrosMet}/{coverage.macrosTotal} macros ·{" "}
+          {coverage.microsMet}/{assessed} micros met
+          {noData > 0 ? ` · ${noData} no data` : ""}
+          {allMet ? " — all hit ✓" : ""}
+        </span>
+      </summary>
+
+      {coverage.macros.map((row) => (
+        <CoverageRow
+          key={row.key}
+          row={row}
+          label={MACRO_COVERAGE_LABEL[row.key] ?? row.key}
+        />
+      ))}
+
+      {coverage.fatBreakdown &&
+        (coverage.fatBreakdown.monounsaturatedG != null ||
+          coverage.fatBreakdown.polyunsaturatedG != null) && (
+          <div
+            className="inline-note"
+            style={{ margin: "2px 0 6px", paddingLeft: 2 }}
+            title="USDA-derived fatty-acid split. Saturated is the one worth limiting; mono + poly unsaturated are the healthy fats that float."
+          >
+            Fat spread:{" "}
+            {fmtCoverageNum(coverage.fatBreakdown.saturatedG ?? 0)} g saturated ·{" "}
+            {fmtCoverageNum(
+              (coverage.fatBreakdown.monounsaturatedG ?? 0) +
+                (coverage.fatBreakdown.polyunsaturatedG ?? 0),
+            )}{" "}
+            g unsaturated ({fmtCoverageNum(coverage.fatBreakdown.monounsaturatedG ?? 0)} mono ·{" "}
+            {fmtCoverageNum(coverage.fatBreakdown.polyunsaturatedG ?? 0)} poly)
+          </div>
+        )}
+
+      {coverage.micros.length > 0 && (
+        <div
+          style={{ height: 1, background: "var(--mp-line)", margin: "10px 0" }}
+        />
+      )}
+
+      {visibleMicros.map((row) => (
+        <CoverageRow key={row.key} row={row} label={microLabel(row.key)} />
+      ))}
+
+      {short.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAllMicros((v) => !v)}
+          style={{
+            background: "none",
+            border: "none",
+            color: "var(--mp-terra)",
+            cursor: "pointer",
+            font: "inherit",
+            padding: "6px 0 0",
+          }}
+        >
+          {showAllMicros
+            ? `show only the ${short.length} short`
+            : `show all ${coverage.micros.length} micros`}
+        </button>
+      )}
+    </details>
+  );
+}
 
 /* ---- reason popover (reject #8 / abandon #9, ≤255 chars) ------------------------- */
 
@@ -171,7 +400,13 @@ function SlotDetailModal({
                 .join(", ")})`
             : "Just you",
         )}
-        {sr && row("Servings", `serves ${sr.servings}`)}
+        {sr &&
+          row(
+            "Servings",
+            sr.portionFactor != null && sr.portionFactor !== 1
+              ? `serves ${sr.servings} · ×${sr.portionFactor} per person`
+              : `serves ${sr.servings}`,
+          )}
         {sr?.batchCookSessionId &&
           row("Batch session", sr.batchCookSessionId)}
         {sr?.augmentationNotes &&
@@ -187,6 +422,23 @@ function SlotDetailModal({
             </span>,
           )}
         {sr?.phase2Addition && row("Origin", "added in creative pass")}
+        {sr?.additions != null &&
+          sr.additions.length > 0 &&
+          row(
+            "Additions",
+            <span style={{ display: "grid", gap: 4 }}>
+              {sr.additions.map((a, i) => (
+                <span key={i} className="mp-serif" style={{ fontSize: 15 }}>
+                  + {a.name}
+                  {a.reasoning && (
+                    <span className="mp-label" style={{ marginLeft: 6, fontStyle: "italic" }}>
+                      {a.reasoning}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </span>,
+          )}
       </div>
       <div className="modal-actions" style={{ justifyContent: "space-between" }}>
         {sr ? (
@@ -351,6 +603,19 @@ function WeekGrid({
                             ` · start by ${leadTime(slot.mealTime as string, slot.timeBudgetMin)}`}
                         </span>
                       )}
+                      {slot.scheduledRecipe?.additions != null &&
+                        slot.scheduledRecipe.additions.length > 0 && (
+                          <span
+                            className="plan-cell-additions"
+                            title={slot.scheduledRecipe.additions
+                              .map((a) => a.name)
+                              .join(", ")}
+                          >
+                            {slot.scheduledRecipe.additions
+                              .map((a) => `+ ${a.name}`)
+                              .join(" · ")}
+                          </span>
+                        )}
                     </span>
                     {slot.scheduledRecipe?.batchCookSessionId && (
                       <span className="batch-tag">BATCH</span>
@@ -559,13 +824,28 @@ export function Plan() {
   const members = useStore((s) => s.household.current?.members ?? null);
   const navigate = useNavigate();
 
-  const [weekIdx, setWeekIdx] = useState(KNOWN_WEEKS.indexOf(CURRENT_WEEK_START));
+  // Week navigation is driven by the weeks that actually have plans/suggestions
+  // (live data), not the mock KNOWN_WEEKS seed — in live mode CURRENT_WEEK_START
+  // is the real this-Monday, which the mock list never contains, so indexing into
+  // KNOWN_WEEKS yielded an undefined week and crashed the page. CURRENT_WEEK_START
+  // is always included so the grid has a home even before any plan exists.
+  const weeks = useMemo(() => {
+    const set = new Set<string>([CURRENT_WEEK_START]);
+    for (const p of planner.plans) set.add(p.weekStartDate);
+    for (const sg of planner.suggestions) set.add(sg.weekStartDate);
+    return Array.from(set).sort();
+  }, [planner.plans, planner.suggestions]);
+
+  const [weekIdx, setWeekIdx] = useState(() =>
+    Math.max(0, weeks.indexOf(CURRENT_WEEK_START)),
+  );
+  const safeWeekIdx = Math.min(weekIdx, weeks.length - 1);
   const [viewPlanId, setViewPlanId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [warningsOpen, setWarningsOpen] = useState(false);
   const [reasonFor, setReasonFor] = useState<"reject" | "abandon" | null>(null);
 
-  const week = KNOWN_WEEKS[weekIdx];
+  const week = weeks[safeWeekIdx];
   const weekPlans = planner.plans
     .filter((p) => p.weekStartDate === week)
     .sort((a, b) => b.generation - a.generation);
@@ -595,8 +875,8 @@ export function Plan() {
       : null;
 
   const changeWeek = (delta: number) => {
-    const next = weekIdx + delta;
-    if (next < 0 || next >= KNOWN_WEEKS.length) return;
+    const next = safeWeekIdx + delta;
+    if (next < 0 || next >= weeks.length) return;
     setWeekIdx(next);
     setViewPlanId(null);
     setWarningsOpen(false);
@@ -609,7 +889,7 @@ export function Plan() {
         <PageHeader
           title={`Week of ${weekRangeLabel(week)}`}
           meta="No plan for this week yet"
-          actions={<WeekNav weekIdx={weekIdx} onStep={changeWeek} />}
+          actions={<WeekNav weekIdx={safeWeekIdx} weekCount={weeks.length} onStep={changeWeek} />}
         />
         <div className="page-loading" style={{ marginTop: 40 }}>
           No plan for this week yet.
@@ -628,6 +908,11 @@ export function Plan() {
 
   /* ---- header machinery (§3a + §5) ---- */
   const weekly = viewed.rollupSummary.weekly;
+  const nutritionCoverage = (
+    viewed.rollupSummary as unknown as {
+      nutritionCoverage?: PlanNutritionCoverage | null;
+    }
+  ).nutritionCoverage;
   const metaLine = [
     `generation ${viewed.generation}`,
     TRIGGER_LABEL[viewed.triggerKind],
@@ -639,7 +924,7 @@ export function Plan() {
 
   const headerActions = (
     <>
-      <WeekNav weekIdx={weekIdx} onStep={changeWeek} />
+      <WeekNav weekIdx={safeWeekIdx} weekCount={weeks.length} onStep={changeWeek} />
       <button
         className="btn"
         onClick={() => setHistoryOpen((v) => !v)}
@@ -671,7 +956,7 @@ export function Plan() {
           <button
             className="btn btn-primary"
             onClick={() =>
-              navigate(`/plan/generate?week=${KNOWN_WEEKS[KNOWN_WEEKS.length - 1]}`)
+              navigate(`/plan/generate?week=${weeks[weeks.length - 1]}`)
             }
           >
             Generate next week
@@ -743,6 +1028,8 @@ export function Plan() {
         <StatStrip cells={stats} />
       </div>
 
+      {nutritionCoverage && <PlanNutritionPanel coverage={nutritionCoverage} />}
+
       {reoptOutcome && (
         <AdvisorPanel
           label="Changes applied as a new draft plan"
@@ -808,9 +1095,11 @@ export function Plan() {
 
 function WeekNav({
   weekIdx,
+  weekCount,
   onStep,
 }: {
   weekIdx: number;
+  weekCount: number;
   onStep: (delta: number) => void;
 }) {
   return (
@@ -826,7 +1115,7 @@ function WeekNav({
       <button
         className="stepper-btn"
         aria-label="Next week"
-        disabled={weekIdx === KNOWN_WEEKS.length - 1}
+        disabled={weekIdx === weekCount - 1}
         onClick={() => onStep(1)}
       >
         ›

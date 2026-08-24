@@ -357,6 +357,15 @@ public class NutritionServiceImpl
 
   static final String DEFAULT_DRI_SEX = "female";
 
+  /**
+   * Caps (upper limits) for micronutrients where MORE is harmful, not better — these are SEEDED as
+   * a {@code upperLimit} on the DRI-default micro target so the planner actually penalises
+   * exceeding them (the RDA alone is a floor, so without this a plan piles on sodium with no cost).
+   * Sodium uses the CDRR (chronic-disease-risk-reduction) limit; chloride its UL.
+   */
+  static final Map<String, BigDecimal> MICRO_UPPER_LIMITS =
+      Map.of("sodium_mg", new BigDecimal("2300"), "chloride_mg", new BigDecimal("3600"));
+
   @Override
   @Transactional
   public TargetsDto initialiseTargets(UUID userId, UpdateTargetsRequest request) {
@@ -378,7 +387,12 @@ public class NutritionServiceImpl
             MicroTarget.builder()
                 .id(UUID.randomUUID())
                 .nutrientKey(dri.getMicroName())
-                .targetValue(dri.getRdaValue())
+                // Cap-only micros (sodium/chloride) carry NO floor — the RDA floor is meaningless
+                // (always exceeded) and would mask the cap in coverage; everything else keeps the
+                // RDA as a floor.
+                .targetValue(
+                    MICRO_UPPER_LIMITS.containsKey(dri.getMicroName()) ? null : dri.getRdaValue())
+                .upperLimit(MICRO_UPPER_LIMITS.get(dri.getMicroName())) // cap sodium/chloride
                 .sourcePreference("dri_default")
                 .hardFloor(false) // micros default to warning-only per LLD line 774
                 .build());
@@ -538,17 +552,30 @@ public class NutritionServiceImpl
     aggregate.setSatFatDirection(request.satFat().direction());
     aggregate.setNotes(request.notes());
 
-    // Replace child collections — cascade + orphanRemoval handle delete + insert.
-    aggregate.replacePerMealDistribution(toPerMealEntities(request.perMealDistribution()));
-    aggregate.replaceMicroTargets(toMicroTargetEntities(request.microTargets()));
-    aggregate.replaceActivityAdjustments(toActivityEntities(request.activityAdjustments()));
-    aggregate.replaceEatingWindow(toEatingWindowEntity(request.eatingWindow()));
+    // Reconcile child collections by natural key (update-in-place / delete-removed / insert-new)
+    // rather than clear-and-readd. Clear-and-readd orphan-removes every child and re-inserts a
+    // fresh-UUID copy; Hibernate flushes those INSERTs before the orphan DELETEs, so any child
+    // whose natural key is unchanged collides with the not-yet-deleted old row on the child table's
+    // UNIQUE(targets_id, <natural key>) (SQLState 23505). Merge never delete+inserts a surviving
+    // key, so no collision is possible. (Create/initialise still use replaceX — a fresh aggregate
+    // has no DB rows, so its flush is all INSERTs.)
+    aggregate.mergePerMealDistribution(toPerMealEntities(request.perMealDistribution()));
+    aggregate.mergeMicroTargets(toMicroTargetEntities(request.microTargets()));
+    aggregate.mergeActivityAdjustments(toActivityEntities(request.activityAdjustments()));
+    aggregate.mergeEatingWindow(toEatingWindowEntity(request.eatingWindow()));
 
     Instant now = Instant.now(clock);
     writeAuditRows(aggregate.getId(), actorUserId, changedFields, before, after, now);
 
-    // saveAndFlush so the @Version bump materialises before we map to DTO; otherwise the response
-    // carries the stale version. Same trick as PreferenceServiceImpl.updateHardConstraints and
+    // NOTE on @Version + child-only edits: Hibernate does not dirty the aggregate root when only an
+    // owned child relation (per-meal / micros / activity / eating window) changes, so the root's
+    // @Version does not advance on a child-only PUT — the response and a follow-up GET stay
+    // consistent at the same version. A forced increment (OPTIMISTIC_FORCE_INCREMENT) was rejected
+    // here: it is scheduled as a before-commit process, so it would NOT be visible in this
+    // transaction's response (mapper.toDto reads the pre-increment value) yet WOULD commit the
+    // higher version — leaving the response one behind the row and 409-ing the client's next PUT.
+    // saveAndFlush so any parent-scalar @Version bump (when a scalar also changed) materialises
+    // before we map to DTO. Same trick as PreferenceServiceImpl /
     // HouseholdServiceImpl.createHousehold.
     NutritionTargets saved = targetsRepository.saveAndFlush(aggregate);
     eventPublisher.publishEvent(
@@ -2343,7 +2370,11 @@ public class NutritionServiceImpl
    * IngredientMappingRepository#findBySearchTermIn} (batch, amortises round-trips), multiplies each
    * line's {@code gramsEstimate / 100} by the mapping's per-100g nutrition, sums, then divides by
    * the request's {@code servings}. Status is one of {@code calculated} / {@code partial} / {@code
-   * pending} per LLD §nutritionStatus.
+   * pending} per LLD §nutritionStatus, with the honesty refinement that a line whose gram weight is
+   * unknown ({@code gramsEstimate=null}) contributes zero and therefore caps the status at {@code
+   * partial} (reported in {@code unmapped} with reason {@code grams-unknown}); when no line
+   * contributes any grams at all the status is {@code pending}, never {@code calculated} — a
+   * fully-mapped recipe must not read as measured-complete with zero kcal.
    */
   private RecipeNutritionResultDto computeRecipeNutrition(
       CalculateRecipeNutritionRequest request, String phase) {
@@ -2383,7 +2414,10 @@ public class NutritionServiceImpl
     Map<String, BigDecimal> totalMicros = new LinkedHashMap<>();
     List<UnmappedIngredientDto> unmapped = new ArrayList<>();
     boolean anyNeedsReview = false;
+    boolean anyMappingIssue = false;
     int resolvedCount = 0;
+    int contributingCount = 0;
+    int gramsUnknownCount = 0;
 
     for (int i = 0; i < lines.size(); i++) {
       RecipeIngredientLineDto line = lines.get(i);
@@ -2391,22 +2425,36 @@ public class NutritionServiceImpl
       IngredientMapping mapping = key == null ? null : byKey.get(key);
       if (mapping == null) {
         unmapped.add(new UnmappedIngredientDto(line.name(), "not-in-cache", BigDecimal.ZERO));
+        anyMappingIssue = true;
         continue;
       }
       resolvedCount++;
       if (mapping.isNeedsReview()) {
         anyNeedsReview = true;
       }
-      BigDecimal grams = line.gramsEstimate() != null ? line.gramsEstimate() : BigDecimal.ZERO;
-      // factor = grams/100 — keep 6 d.p. so per-line rounding does not bias the sum.
-      BigDecimal factor = grams.divide(BD_100, 6, RoundingMode.HALF_UP);
       IngredientNutritionDocument doc = mapping.getNutritionPer100g();
       if (doc == null) {
         // The cache row has no nutrition payload — treat as unmapped.
         unmapped.add(new UnmappedIngredientDto(line.name(), "no-nutrition-doc", BigDecimal.ZERO));
+        anyMappingIssue = true;
         resolvedCount--;
         continue;
       }
+      if (line.gramsEstimate() == null) {
+        // Mapped, but no gram weight (count unit / unconvertible unit) — the line contributes
+        // zero to the totals, so the result must not be reported as fully calculated.
+        gramsUnknownCount++;
+        unmapped.add(
+            new UnmappedIngredientDto(
+                line.name(),
+                "grams-unknown",
+                mapping.getConfidence() != null ? mapping.getConfidence() : BigDecimal.ZERO));
+        continue;
+      }
+      contributingCount++;
+      BigDecimal grams = line.gramsEstimate();
+      // factor = grams/100 — keep 6 d.p. so per-line rounding does not bias the sum.
+      BigDecimal factor = grams.divide(BD_100, 6, RoundingMode.HALF_UP);
       if (doc.calories() != null) {
         totalCalories =
             totalCalories.add(BigDecimal.valueOf(doc.calories().longValue()).multiply(factor));
@@ -2443,10 +2491,14 @@ public class NutritionServiceImpl
     totalMicros.forEach(
         (k, v) -> microsPerServing.put(k, v.divide(servings, 2, RoundingMode.HALF_UP)));
 
+    // Honesty rule: "calculated" is reserved for a result where every line was mapped AND carried
+    // a real gram weight. If nothing contributed any grams the totals are all zero — that is an
+    // absence of data, not a measurement, so the status stays "pending". Any line with an unknown
+    // gram weight (count units, unconvertible units) understates the totals → degrade to "partial".
     String status;
-    if (resolvedCount == 0) {
+    if (contributingCount == 0) {
       status = "pending";
-    } else if (unmapped.isEmpty() && !anyNeedsReview) {
+    } else if (!anyMappingIssue && !anyNeedsReview && gramsUnknownCount == 0) {
       status = "calculated";
     } else {
       status = "partial";
@@ -2465,11 +2517,14 @@ public class NutritionServiceImpl
             List.copyOf(unmapped));
 
     log.debug(
-        "nutrition calc phase={} recipeId={} servings={} resolved={} unmapped={} status={}",
+        "nutrition calc phase={} recipeId={} servings={} resolved={} contributing={}"
+            + " gramsUnknown={} unmapped={} status={}",
         phase,
         request.recipeId(),
         request.servings(),
         resolvedCount,
+        contributingCount,
+        gramsUnknownCount,
         unmapped.size(),
         status);
 

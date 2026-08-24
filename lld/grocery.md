@@ -402,7 +402,8 @@ public record ShoppingListLineDto(
     BigDecimal estimatedConfidence, boolean isStaleEstimate,
     LineFulfilmentStatus fulfilmentStatus,
     BigDecimal boughtQuantity, String boughtUnit, Integer boughtPricePence,
-    Instant boughtAt, BoughtVia boughtVia, UUID groceryOrderId
+    Instant boughtAt, BoughtVia boughtVia, UUID groceryOrderId,
+    BigDecimal leftoverQuantityG, BigDecimal bufferPercent   // pack leftover; null unless gram-coherent
 ) {}
 
 public enum ExportFormat { PRINTABLE_HTML, PLAIN_TEXT, MARKDOWN, CSV }

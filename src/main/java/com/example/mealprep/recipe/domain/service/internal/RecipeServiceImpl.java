@@ -11,6 +11,7 @@ import com.example.mealprep.recipe.api.dto.CreateRecipeRequest;
 import com.example.mealprep.recipe.api.dto.CreateRecipeTagsRequest;
 import com.example.mealprep.recipe.api.dto.CreateSubstitutionRequest;
 import com.example.mealprep.recipe.api.dto.DedupCandidateDto;
+import com.example.mealprep.recipe.api.dto.ImportJobArchiveResult;
 import com.example.mealprep.recipe.api.dto.ImportRecipeFromHtmlRequest;
 import com.example.mealprep.recipe.api.dto.ImportRecipeFromUrlRequest;
 import com.example.mealprep.recipe.api.dto.MethodOverlayLineRequest;
@@ -260,6 +261,27 @@ public class RecipeServiceImpl
     List<Recipe> recipes =
         recipeRepository.findPlannableForUser(
             userId, org.springframework.data.domain.PageRequest.of(0, limit));
+    List<RecipeDto> dtos = new ArrayList<>(recipes.size());
+    for (Recipe recipe : recipes) {
+      dtos.add(hydrate(recipe));
+    }
+    return dtos;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<RecipeDto> findPlannableCandidatesByKind(
+      UUID userId, String mealType, int limit, String tasteVectorLiteral) {
+    if (userId == null || mealType == null || mealType.isBlank() || limit <= 0) {
+      return List.of();
+    }
+    // Taste-ranked when the household has an embedded vector; createdAt fallback otherwise. Both
+    // reads are per-kind so a kind-skewed catalogue can't starve rare slot kinds (snack/breakfast).
+    List<Recipe> recipes =
+        (tasteVectorLiteral != null && !tasteVectorLiteral.isBlank())
+            ? recipeRepository.findPlannableByKindRankedByTaste(
+                userId, mealType, tasteVectorLiteral, limit)
+            : recipeRepository.findPlannableByKind(userId, mealType, limit);
     List<RecipeDto> dtos = new ArrayList<>(recipes.size());
     for (Recipe recipe : recipes) {
       dtos.add(hydrate(recipe));
@@ -1269,6 +1291,13 @@ public class RecipeServiceImpl
     UUID traceId = data.traceId();
     String createdByActor = "system-discovery:" + jobId;
 
+    // G10: additive SPI quality — null preserves the pre-G10 WEB_DISCOVERED hardcode for
+    // discovery-crawl callers; the graph ingest runner passes AI_GENERATED (honesty rule).
+    DataQuality quality =
+        data.dataQuality() != null
+            ? DataQuality.valueOf(data.dataQuality().name())
+            : DataQuality.WEB_DISCOVERED;
+
     // Step 2: recipe root.
     Recipe recipe =
         Recipe.builder()
@@ -1279,7 +1308,7 @@ public class RecipeServiceImpl
             .description(data.description())
             .currentVersion(1)
             .currentBranchId(null)
-            .dataQuality(DataQuality.WEB_DISCOVERED)
+            .dataQuality(quality)
             .nutritionStatus(NutritionStatus.PENDING)
             .build();
     recipe = recipeRepository.save(recipe);
@@ -1336,7 +1365,10 @@ public class RecipeServiceImpl
         RecipeImport.builder()
             .id(UUID.randomUUID())
             .recipeId(savedRecipe.getId())
-            .sourceType(ImportSource.WEB_DISCOVERED)
+            .sourceType(
+                quality == DataQuality.AI_GENERATED
+                    ? ImportSource.AI_GENERATED
+                    : ImportSource.WEB_DISCOVERED)
             .sourceUrl(data.canonicalUrl())
             .sourcePayload(null)
             .extractionMethod(data.extractionMethod())
@@ -2813,6 +2845,79 @@ public class RecipeServiceImpl
     recipeRepository.saveAndFlush(recipe);
 
     log.info("recipe unarchive recipeId={} actorUserId={}", recipe.getId(), actorUserId);
+  }
+
+  @Override
+  @Transactional
+  public ImportJobArchiveResult archiveByImportJobId(UUID jobId, UUID actorUserId) {
+    return bulkArchiveByImportJobId(jobId, actorUserId, true);
+  }
+
+  @Override
+  @Transactional
+  public ImportJobArchiveResult unarchiveByImportJobId(UUID jobId, UUID actorUserId) {
+    return bulkArchiveByImportJobId(jobId, actorUserId, false);
+  }
+
+  /**
+   * G11 withdraw/restore lever. Matches AI_GENERATED import rows only (a graph-batch operation must
+   * never sweep a discovery crawl sharing the {@code job_id} column); skips soft-deleted rows and
+   * rows a user promoted out of the SYSTEM catalogue (an explicit adoption is not clawed back).
+   * Idempotent per row; atomic across the batch. Archive transitions publish {@code
+   * RecipeArchivedEvent(cause=MANUAL_ADMIN)} mirroring {@link #archive}; restore publishes nothing,
+   * mirroring {@link #unarchive}.
+   */
+  private ImportJobArchiveResult bulkArchiveByImportJobId(
+      UUID jobId, UUID actorUserId, boolean archiving) {
+    List<UUID> matched =
+        importRepository.findRecipeIdsByJobIdAndSourceType(jobId, ImportSource.AI_GENERATED);
+    List<UUID> changed = new ArrayList<>();
+    List<UUID> skipped = new ArrayList<>();
+    Instant now = Instant.now(clock);
+    UUID traceId = currentTraceId();
+    for (UUID recipeId : matched) {
+      Optional<Recipe> maybe = recipeRepository.findById(recipeId);
+      if (maybe.isEmpty()) {
+        // FK cascade makes this unreachable in practice; skip-and-report beats aborting a
+        // withdrawal over one phantom row.
+        skipped.add(recipeId);
+        continue;
+      }
+      Recipe recipe = maybe.get();
+      if (recipe.getDeletedAt() != null || recipe.getCatalogue() != Catalogue.SYSTEM) {
+        skipped.add(recipeId);
+        continue;
+      }
+      if (archiving) {
+        if (recipe.getArchivedAt() != null) {
+          continue; // idempotent no-op — no new event
+        }
+        recipe.setArchivedAt(now);
+        recipeRepository.saveAndFlush(recipe);
+        changed.add(recipeId);
+        eventPublisher.publishEvent(
+            new RecipeArchivedEvent(recipe.getId(), ArchiveCause.MANUAL_ADMIN, traceId, now));
+      } else {
+        if (recipe.getArchivedAt() == null) {
+          continue; // idempotent no-op
+        }
+        recipe.setArchivedAt(null);
+        recipeRepository.saveAndFlush(recipe);
+        changed.add(recipeId);
+      }
+    }
+    log.info(
+        "recipe {}ByImportJobId jobId={} actorUserId={} matched={} changed={} skipped={}"
+            + " traceId={}",
+        archiving ? "archive" : "unarchive",
+        jobId,
+        actorUserId,
+        matched.size(),
+        changed.size(),
+        skipped.size(),
+        traceId);
+    return new ImportJobArchiveResult(
+        List.copyOf(matched), List.copyOf(changed), List.copyOf(skipped));
   }
 
   @Override

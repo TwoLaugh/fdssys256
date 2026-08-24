@@ -53,29 +53,35 @@ class TimeSubScore implements SubScoreCalculator {
     BigDecimal sum = BigDecimal.ZERO;
     int counted = 0;
     for (SlotAssignment a : plan.assignments()) {
-      MealSlotSkeleton skel = bySlotId.get(a.slotId());
-      RecipeDto recipe = ScoringSupport.findRecipe(recipes, a.recipeId()).orElse(null);
-      if (skel == null || recipe == null || recipe.currentVersionBody() == null) {
-        sum = sum.add(BigDecimal.ONE);
-        counted++;
-        continue;
-      }
-      int total = recipe.currentVersionBody().metadata().totalTimeMins();
-      int budget = skel.timeBudgetMin();
-      BigDecimal slotScore;
-      if (budget <= 0 || total <= budget) {
-        slotScore = BigDecimal.ONE;
-      } else {
-        BigDecimal overshoot =
-            BigDecimal.valueOf((long) total - budget)
-                .divide(BigDecimal.valueOf(budget), 6, RoundingMode.HALF_UP);
-        slotScore = BigDecimal.ONE.subtract(overshoot).max(BigDecimal.ZERO);
-      }
-      sum = sum.add(slotScore);
+      sum = sum.add(perSlotScore(a, bySlotId, recipes));
       counted++;
     }
     return counted == 0
         ? BigDecimal.ONE
         : sum.divide(BigDecimal.valueOf(counted), 6, RoundingMode.HALF_UP);
+  }
+
+  /**
+   * The per-slot time-fit score for one assignment — the exact value the whole-plan {@link
+   * #compute} sums, so the incremental Stage-A scorer accumulates the SAME per-slot values and
+   * finalises with the identical {@code sum/count scale-6 HALF_UP} mean. {@code bySlotId} / {@code
+   * recipes} are the per-generation skeleton + pool indexes.
+   */
+  static BigDecimal perSlotScore(
+      SlotAssignment a, Map<UUID, MealSlotSkeleton> bySlotId, Map<UUID, RecipeDto> recipes) {
+    MealSlotSkeleton skel = bySlotId.get(a.slotId());
+    RecipeDto recipe = ScoringSupport.findRecipe(recipes, a.recipeId()).orElse(null);
+    if (skel == null || recipe == null || recipe.currentVersionBody() == null) {
+      return BigDecimal.ONE;
+    }
+    int total = recipe.currentVersionBody().metadata().totalTimeMins();
+    int budget = skel.timeBudgetMin();
+    if (budget <= 0 || total <= budget) {
+      return BigDecimal.ONE;
+    }
+    BigDecimal overshoot =
+        BigDecimal.valueOf((long) total - budget)
+            .divide(BigDecimal.valueOf(budget), 6, RoundingMode.HALF_UP);
+    return BigDecimal.ONE.subtract(overshoot).max(BigDecimal.ZERO);
   }
 }

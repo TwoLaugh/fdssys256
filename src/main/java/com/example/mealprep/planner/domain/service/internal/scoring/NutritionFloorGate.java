@@ -22,13 +22,13 @@ import org.springframework.stereotype.Component;
  * (shipped by nutrition-01g) — builds a {@link CandidatePlanRollupDto} (per-day macro totals) and
  * reads {@link FloorGateResultDto#passed()}.
  *
- * <p><b>planner-01f refactor</b>: the per-day macro aggregation that 01e built ad-hoc inside this
- * gate is now delegated to the shared {@link DailyMacroAggregator} (also used by 01f's {@code
- * RollupBuilder}) so the two never drift. <b>Behaviour is byte-identical</b> to 01e: {@code
- * RecipeVersionDto} carries no per-serving nutrition in this codebase, so the aggregator returns a
- * zeroed {@link DailyMacroTotals} bucket per date — exactly the all-zero {@link
- * CandidateDailyRollupDto} the old hand-rolled {@code dailyRollup} produced. The macro→DTO mapping
- * below is the single seam to surface real macros once recipe-01h's pipeline exposes them.
+ * <p><b>planner-01f refactor</b>: the per-day macro aggregation is delegated to the shared {@link
+ * DailyMacroAggregator} (also used by 01f's {@code RollupBuilder}) so the gate and the rollup never
+ * drift. Now that {@code RecipeVersionDto.nutritionPerServing} is wired, the aggregator returns the
+ * day's real macro + micro totals (per-serving, one serving per slot), so the gate enforces hard
+ * floors against actual nutrition. A failed gate collapses the candidate's composite to 0 (it is a
+ * 0/1 multiplier) rather than removing it — an unreachable hard floor degrades to a best-effort
+ * plan, it does not zero out generation.
  *
  * <p>The service returns {@code passed=true} when the user has no targets row (nutrition-01g spec).
  * An empty / null plan passes vacuously (no rollup days → cannot build a {@code @Size(min=1)}
@@ -55,8 +55,18 @@ public class NutritionFloorGate {
     if (primary == null) {
       return true; // no user to evaluate against
     }
+    return passesForTotals(primary, macroAggregator.aggregateByDate(plan, ctx));
+  }
 
-    Map<LocalDate, DailyMacroTotals> byDate = macroAggregator.aggregateByDate(plan, ctx);
+  /**
+   * Run the floor gate against already-aggregated per-day totals for {@code primary} — the exact
+   * rollup-build + {@link NutritionFloorGateService#evaluate} the whole-plan {@link #passes} runs.
+   * The incremental Stage-A scorer carries the SAME per-day totals (shared {@link
+   * DailyMacroAggregator} arithmetic) and supplies the same {@code primary}, so this finalises
+   * byte-identically. {@code primary} must be non-null and {@code byDate} reflects a non-empty
+   * plan; an empty {@code byDate} passes vacuously, matching {@link #passes}.
+   */
+  boolean passesForTotals(UUID primary, Map<LocalDate, DailyMacroTotals> byDate) {
     if (byDate.isEmpty()) {
       return true;
     }
@@ -79,9 +89,8 @@ public class NutritionFloorGate {
   }
 
   private CandidateDailyRollupDto toDailyRollupDto(LocalDate date, DailyMacroTotals totals) {
-    // Recipe nutrition is not exposed on RecipeVersionDto in this codebase, so the aggregator's
-    // totals are all 0 — identical to 01e's hand-rolled all-zero rollup. The multiply-by-servings
-    // seam lives in DailyMacroAggregator; this maps the shared totals shape onto the gate's DTO.
+    // Maps the shared per-day totals (real per-serving macros + micros, summed in
+    // DailyMacroAggregator) onto the gate service's DTO.
     Map<String, BigDecimal> micros = totals.micros() == null ? Map.of() : totals.micros();
     return new CandidateDailyRollupDto(
         date,

@@ -204,10 +204,31 @@ public class HouseholdExceptionHandler {
    * UNIQUE (user_id)} constraint on {@code household_member}) to HTTP 409. Lives here rather than
    * in {@code GlobalExceptionHandler} so the global advice stays module-agnostic — matches the
    * nutrition module's precedent (see {@code NutritionExceptionHandler}).
+   *
+   * <p><b>Scoped to household constraints.</b> This advice, {@code NutritionExceptionHandler} and
+   * {@code PlannerExceptionHandler} each register a {@code DataIntegrityViolationException} handler
+   * at {@link Order#HIGHEST_PRECEDENCE}, so whichever Spring orders first would otherwise claim
+   * EVERY {@code DataIntegrityViolationException} app-wide — which is how a nutrition micro-target
+   * / per-meal 23505 was being mislabelled as a "household integrity violation". We therefore only
+   * emit the household-specific response when the violated constraint is household-owned (its name
+   * mentions {@code household}); any other constraint gets a module-neutral {@code
+   * data-integrity-violation} 409 instead of a misleading household label.
    */
   @ExceptionHandler(DataIntegrityViolationException.class)
   public ResponseEntity<ProblemDetail> handleDataIntegrityViolation(
       DataIntegrityViolationException ex, HttpServletRequest req) {
+    if (!isHouseholdConstraint(ex)) {
+      ProblemDetail pd =
+          ProblemDetailSupport.build(
+              HttpStatus.CONFLICT,
+              "A database integrity constraint was violated.",
+              "data-integrity-violation",
+              "Data integrity violation",
+              req.getRequestURI());
+      return ResponseEntity.status(HttpStatus.CONFLICT)
+          .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+          .body(pd);
+    }
     ProblemDetail pd =
         ProblemDetailSupport.build(
             HttpStatus.CONFLICT,
@@ -218,5 +239,30 @@ public class HouseholdExceptionHandler {
     return ResponseEntity.status(HttpStatus.CONFLICT)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
+  }
+
+  /**
+   * Whether {@code ex}'s underlying constraint violation is household-owned. Prefers the constraint
+   * name reported by Hibernate's {@link org.hibernate.exception.ConstraintViolationException} (a
+   * definitive non-household name returns {@code false} immediately); falls back to scanning the
+   * exception-chain messages for the {@code household} token when no named constraint is present
+   * (e.g. a {@code DataIntegrityViolationException} constructed only from a SQL message).
+   */
+  private static boolean isHouseholdConstraint(Throwable ex) {
+    for (Throwable t = ex; t != null; t = t.getCause()) {
+      if (t instanceof org.hibernate.exception.ConstraintViolationException cve) {
+        String name = cve.getConstraintName();
+        if (name != null) {
+          return name.toLowerCase(java.util.Locale.ROOT).contains("household");
+        }
+      }
+    }
+    for (Throwable t = ex; t != null; t = t.getCause()) {
+      String msg = t.getMessage();
+      if (msg != null && msg.toLowerCase(java.util.Locale.ROOT).contains("household")) {
+        return true;
+      }
+    }
+    return false;
   }
 }

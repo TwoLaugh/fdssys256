@@ -62,7 +62,7 @@ class ScoringEngineImpl implements ScoringEngine {
       raw.put(c.name(), s);
     }
 
-    BigDecimal unweighted = weightedSum(raw);
+    BigDecimal unweighted = weightedSum(raw, ctx);
     boolean floorPassed = nutritionFloorGate.passes(plan, ctx);
     boolean varietyPassed = varietyGate.passes(plan, ctx);
     BigDecimal gateFactor = (floorPassed && varietyPassed) ? BigDecimal.ONE : BigDecimal.ZERO;
@@ -85,7 +85,7 @@ class ScoringEngineImpl implements ScoringEngine {
     return new ScoreResult(composite, breakdown);
   }
 
-  private BigDecimal weightedSum(Map<String, BigDecimal> raw) {
+  private BigDecimal weightedSum(Map<String, BigDecimal> raw, PlanCompositionContext ctx) {
     PlannerProperties.ScoringWeights w = properties.weights();
     return safe(raw.get("preference"))
         .multiply(w.preference())
@@ -93,7 +93,7 @@ class ScoringEngineImpl implements ScoringEngine {
         .add(safe(raw.get("cost")).multiply(w.cost()))
         .add(safe(raw.get("variety")).multiply(w.variety()))
         .add(safe(raw.get("time")).multiply(w.time()))
-        .add(safe(raw.get("batch")).multiply(w.batch()))
+        .add(safe(raw.get("batch")).multiply(BatchSubScore.effectiveWeight(w.batch(), ctx)))
         .add(safe(raw.get("provisions")).multiply(w.provisions()));
   }
 

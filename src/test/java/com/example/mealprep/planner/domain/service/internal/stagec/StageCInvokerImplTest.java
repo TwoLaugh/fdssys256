@@ -8,7 +8,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.mealprep.ai.domain.service.AiService;
+import com.example.mealprep.ai.exception.AiCircuitOpenException;
 import com.example.mealprep.ai.exception.AiCostBudgetExceededException;
+import com.example.mealprep.ai.exception.AiInvalidRequestException;
 import com.example.mealprep.ai.exception.AiUnavailableException;
 import com.example.mealprep.ai.spi.AiTask;
 import com.example.mealprep.nutrition.api.dto.CandidatePlanRollupDto;
@@ -94,6 +96,43 @@ class StageCInvokerImplTest {
                 new BigDecimal("1000"),
                 Duration.ofDays(30),
                 Duration.ofHours(1)));
+
+    StageCResult result =
+        invoker()
+            .pickOne(
+                PlanTestData.twoCandidates(WEEK),
+                PlanTestData.twoRollups(WEEK),
+                ctx(),
+                UUID.randomUUID());
+
+    assertThat(result.fallback()).isTrue();
+    assertThat(result.chosenIndex()).isZero();
+  }
+
+  @Test
+  void invalid_request_falls_back_to_deterministic() {
+    // Fatal 4xx — e.g. a bad/garbage API key (401) or a placeholder model id (404). A provider
+    // misconfiguration must degrade the ranking, never fail the generation.
+    when(aiService.execute(any()))
+        .thenThrow(new AiInvalidRequestException("OpenAI 401 (AUTH): invalid api key"));
+
+    StageCResult result =
+        invoker()
+            .pickOne(
+                PlanTestData.twoCandidates(WEEK),
+                PlanTestData.twoRollups(WEEK),
+                ctx(),
+                UUID.randomUUID());
+
+    assertThat(result.fallback()).isTrue();
+    assertThat(result.chosenIndex()).isZero();
+    assertThat(result.reasoning())
+        .isEqualTo("AI ranking unavailable; deterministic top-scored candidate selected.");
+  }
+
+  @Test
+  void circuit_open_falls_back_to_deterministic() {
+    when(aiService.execute(any())).thenThrow(new AiCircuitOpenException("breaker open"));
 
     StageCResult result =
         invoker()

@@ -54,30 +54,58 @@ class VarietySubScore implements SubScoreCalculator {
     if (plan.assignments() != null) {
       for (SlotAssignment a : plan.assignments()) {
         RecipeDto recipe = ScoringSupport.findRecipe(recipes, a.recipeId()).orElse(null);
-        if (recipe == null || recipe.currentVersionBody() == null) {
-          continue;
-        }
-        RecipeVersionDto v = recipe.currentVersionBody();
-        if (v.metadata() != null && v.metadata().cuisine() != null) {
-          cuisines.add(v.metadata().cuisine());
-        }
-        RecipeTagsDto tags = v.tags();
-        if (tags != null && tags.protein() != null) {
-          proteins.add(tags.protein());
-        }
-        if (tags != null && tags.cookingMethod() != null) {
-          methods.add(tags.cookingMethod());
-        }
+        addSlotDimensions(recipe, cuisines, proteins, methods);
       }
     }
 
-    BigDecimal cuisineScore = dimensionScore(cuisines.size(), targets.cuisine());
-    BigDecimal proteinScore = dimensionScore(proteins.size(), targets.protein());
-    BigDecimal methodScore = dimensionScore(methods.size(), targets.cookingMethod());
+    return finalScore(cuisines.size(), proteins.size(), methods.size(), targets);
+  }
+
+  /**
+   * Fold one resolved recipe's distinct cuisine / protein / cooking-method values into the running
+   * sets — the exact null-handling the whole-plan {@link #compute} loop does, so the incremental
+   * Stage-A scorer's three running sets are byte-identical to a whole-plan walk. A null / bodiless
+   * recipe contributes nothing.
+   */
+  static void addSlotDimensions(
+      RecipeDto recipe, Set<String> cuisines, Set<String> proteins, Set<String> methods) {
+    if (recipe == null || recipe.currentVersionBody() == null) {
+      return;
+    }
+    RecipeVersionDto v = recipe.currentVersionBody();
+    if (v.metadata() != null && v.metadata().cuisine() != null) {
+      cuisines.add(v.metadata().cuisine());
+    }
+    RecipeTagsDto tags = v.tags();
+    if (tags != null && tags.protein() != null) {
+      proteins.add(tags.protein());
+    }
+    if (tags != null && tags.cookingMethod() != null) {
+      methods.add(tags.cookingMethod());
+    }
+  }
+
+  /**
+   * The variety sub-score from the three distinct-value counts — the exact mean-of-dimension-scores
+   * the whole-plan {@link #compute} returns, so the incremental scorer finalises identically.
+   * {@code targets} is {@code properties.scoring().variety()}.
+   */
+  BigDecimal finalScore(
+      int cuisineCount,
+      int proteinCount,
+      int methodCount,
+      PlannerProperties.ScoringTuning.VarietyTargets targets) {
+    BigDecimal cuisineScore = dimensionScore(cuisineCount, targets.cuisine());
+    BigDecimal proteinScore = dimensionScore(proteinCount, targets.protein());
+    BigDecimal methodScore = dimensionScore(methodCount, targets.cookingMethod());
     return cuisineScore
         .add(proteinScore)
         .add(methodScore)
         .divide(BigDecimal.valueOf(3), 6, RoundingMode.HALF_UP);
+  }
+
+  PlannerProperties.ScoringTuning.VarietyTargets varietyTargets() {
+    return properties.scoring().variety();
   }
 
   private static BigDecimal dimensionScore(int distinct, int target) {

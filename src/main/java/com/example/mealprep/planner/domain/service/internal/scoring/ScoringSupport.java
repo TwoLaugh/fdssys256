@@ -19,8 +19,29 @@ final class ScoringSupport {
 
   private ScoringSupport() {}
 
-  /** Build a {@code recipeId -> RecipeDto} index over the frozen pool snapshot. */
+  // Single-entry memo of the recipe index, keyed by composition-context IDENTITY. The beam scores
+  // tens of thousands of candidates per generation and EACH of the seven sub-scores called
+  // recipeIndex(ctx), rebuilding the same pool-sized HashMap every time (the "deferred until
+  // profiling" optimisation noted below). The ctx is one immutable instance for the whole
+  // generation, so an identity-keyed last-value cache collapses those rebuilds to one per
+  // generation. The {ctx, index} pair lives behind ONE volatile reference so a reader never sees a
+  // ctx paired with another generation's index (the torn-read a two-field cache would allow under
+  // concurrent household generations); a generation that misses simply rebuilds and replaces the
+  // holder — always correct, never stale.
+  private record IndexMemo(PlanCompositionContext ctx, Map<UUID, RecipeDto> index) {}
+
+  private static volatile IndexMemo memo;
+
+  /**
+   * Build (or return the memoised) {@code recipeId -> RecipeDto} index over the frozen pool
+   * snapshot. Memoised per composition-context identity so the seven sub-scores share one build per
+   * generation instead of rebuilding it for every candidate scored.
+   */
   static Map<UUID, RecipeDto> recipeIndex(PlanCompositionContext ctx) {
+    IndexMemo current = memo;
+    if (current != null && current.ctx() == ctx) {
+      return current.index();
+    }
     Map<UUID, RecipeDto> index = new HashMap<>();
     if (ctx.recipePool() == null || ctx.recipePool().recipes() == null) {
       return index;
@@ -30,6 +51,7 @@ final class ScoringSupport {
         index.putIfAbsent(r.id(), r);
       }
     }
+    memo = new IndexMemo(ctx, index);
     return index;
   }
 

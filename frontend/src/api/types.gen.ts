@@ -237,7 +237,10 @@ export interface paths {
         };
         /** Read the calling user's hard-constraints aggregate. */
         get: operations["getHardConstraints"];
-        /** Replace the calling user's hard-constraints aggregate. */
+        /**
+         * Replace the calling user's hard-constraints aggregate; a first write (expectedVersion 0, no aggregate yet) creates it.
+         * @description Full-replace with optimistic locking. Upsert-on-first-PUT (onboarding G1): when no aggregate exists and expectedVersion is 0, the aggregate is initialised (omnivore defaults) and the document applied in one transaction — insert and update both return 200 (matching the provisions budget upsert precedent). The first write is addition-only, so the GAP-04 Tier-1-removal interstitial never triggers on it.
+         */
         put: operations["updateHardConstraints"];
         post?: never;
         delete?: never;
@@ -272,7 +275,10 @@ export interface paths {
         };
         /** Read the calling user's lifestyle config. */
         get: operations["getLifestyleConfig"];
-        /** Replace the calling user's lifestyle config. */
+        /**
+         * Replace the calling user's lifestyle config; a first write (expectedVersion 0, no config yet) creates it.
+         * @description Full-replace with optimistic locking. Upsert-on-first-PUT (onboarding G1): when no config exists and expectedVersion is 0, the aggregate is created with the inbound document via the initialise internals — insert and update both return 200 (matching the provisions budget upsert precedent).
+         */
         put: operations["updateLifestyleConfig"];
         post?: never;
         delete?: never;
@@ -324,7 +330,10 @@ export interface paths {
         };
         /** Read the calling user's taste profile. */
         get: operations["getTasteProfile"];
-        /** Replace the calling user's taste profile document (manual override). */
+        /**
+         * Replace the calling user's taste profile document (manual override).
+         * @description Full-document replace. Server-managed scalars inside the document are RE-STAMPED server-side and any client-supplied values for them are ignored: `version` and `lastUpdated` are bumped in lock-step with the entity's `documentVersion`, and `basedOnFeedbackCount` / `feedbackCursor` are copied from the server's own state (the delta-pipeline bookkeeping a manual override must not be able to drift). The ~2500-token document budget is enforced on this path exactly as on the AI delta path — an oversized pasted document is rejected 422 with no write.
+         */
         put: operations["updateTasteProfile"];
         post?: never;
         delete?: never;
@@ -548,7 +557,10 @@ export interface paths {
         /** List the calling user's household's pending invites (codes redacted). */
         get: operations["listPendingHouseholdInvites"];
         put?: never;
-        /** Create an invite for the calling user's household (PRIMARY only). */
+        /**
+         * Create an invite for the calling user's household (PRIMARY only).
+         * @description A requested `expiresAt` beyond now+30 days is SILENTLY CAPPED to now+30 days (settings page spec §8 Q5 — pinned): the response's `expiresAt` is authoritative and may be earlier than requested; clients must echo the returned value, not the requested one.
+         */
         post: operations["createHouseholdInvite"];
         delete?: never;
         options?: never;
@@ -634,7 +646,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Change a member's role (PRIMARY only). */
+        /**
+         * Change a member's role (PRIMARY only).
+         * @description Deliberately a POST verb, not an idempotent resource PUT (settings page spec §8 Q3 — pinned): callers must NOT blind-retry on failure; the request's `expectedVersion` guards the retry (a replayed request against a moved row 409s). The operation name stays as-is.
+         */
         post: operations["changeHouseholdMemberRole"];
         delete?: never;
         options?: never;
@@ -683,7 +698,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the calling user's active pantry items. */
+        /** List the calling user's pantry items. itemStatus defaults to ACTIVE (the pre-P2 view); expiringWithinDays narrows to items whose non-null expiryDate is on or before today + N (null-expiry items never match; 0 = expiring today). */
         get: operations["listInventory"];
         put?: never;
         /** Create a new pantry item. */
@@ -728,6 +743,23 @@ export interface paths {
         head?: never;
         /** Adjust a pantry item's quantity (focused edit; expectedVersion required). */
         patch: operations["adjustInventoryItemQuantity"];
+        trace?: never;
+    };
+    "/api/v1/provisions/inventory/{itemId}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Adjust a pantry item's staple status (focused edit; expectedVersion required; status-tracked items only). A staple transitioning to OUT publishes ItemRanOutEvent exactly as the full PUT path does. */
+        patch: operations["adjustInventoryStatus"];
         trace?: never;
     };
     "/api/v1/provisions/inventory/{itemId}/mark-spoiled": {
@@ -1021,7 +1053,7 @@ export interface paths {
         put?: never;
         /**
          * Bootstrap the calling user's nutrition targets at onboarding.
-         * @description Creates the targets aggregate from the onboarding-computed request and DRI-seeds any micronutrient the request omits (from the nutrition_dri_defaults seed table). 409 if a targets row already exists for the user.
+         * @description Creates the targets aggregate from the onboarding-computed request and DRI-seeds any micronutrient the request omits (from the nutrition_dri_defaults seed table). 409 if a targets row already exists for the user. The body reuses UpdateTargetsRequest (onboarding G2, accepted as a cosmetic reuse): `expectedVersion` is meaningless on this create operation and is ignored server-side — send 0 (the shared schema still requires the field); it must not be treated as load-bearing here.
          */
         post: operations["initialiseNutritionTargets"];
         delete?: never;
@@ -1158,7 +1190,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Manually set a slot's actual values. */
+        /**
+         * Manually set a slot's actual values.
+         * @description Structured edit of a slot's actuals. Legal from PENDING, and — as the repair path — from OVERRIDDEN when needsAiParse=true (parse-failed override). Transitions the slot to EDITED and clears needsAiParse; overrideFreeText is retained for provenance. 422 from any other decided state.
+         */
         post: operations["editIntakeSlot"];
         delete?: never;
         options?: never;
@@ -1378,6 +1413,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nutrition/admin/ingredient-mappings/seed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin: seed the ingredient-mapping cache from the spike-canon graph seed artifact (G05). Idempotent, first-writer-wins; any collision => status FAILED + 409, existing rows never overwritten. */
+        post: operations["seedIngredientMappings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nutrition/health-directives": {
         parameters: {
             query?: never;
@@ -1547,7 +1599,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Paginated library list/search: caller-private USER rows + shared SYSTEM rows.
+         * @description The recipes-page library read. Visibility: the caller's own USER-catalogue rows plus the shared SYSTEM catalogue — another user's USER rows never appear. Soft-deleted rows are never returned; archived rows only with includeArchived=true. minDataQuality is an ordinal floor, not equality, over the pinned ordering USER_VERIFIED > IMPORTED ≈ AI_GENERATED > WEB_DISCOVERED (IMPORTED and AI_GENERATED are tied — a floor at either admits both; only WEB_DISCOVERED falls below them). Sort is pinned updatedAt DESC. Each row is the standard RecipeDto plus the list-only avgTaste/ratingCount rating aggregate, computed by one batched query per page (no per-card summary N+1); unrated rows carry avgTaste=null / ratingCount=0.
+         */
+        get: operations["listRecipes"];
         put?: never;
         /** Create a new user-catalogue recipe (manual_create trigger). */
         post: operations["createRecipe"];
@@ -1770,7 +1826,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List substitutions for a specific version (state filter: ACCEPTED). */
+        /** List substitutions for a specific version, filtered by state (default ACCEPTED). */
         get: operations["getSubstitutionsForVersion"];
         put?: never;
         /** Propose a new substitution; state = PROPOSED. */
@@ -2099,7 +2155,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Compose + persist a new plan (Stage A->D). 201 + Location; 200 + cached body on an Idempotency-Key replay. */
+        /**
+         * Compose + persist a new plan (Stage A->D). 201 + Location; 200 + cached body on an Idempotency-Key replay.
+         * @description Generating against a week that already has an ACTIVE plan never 409s and never mutates the ACTIVE plan: the new plan lands as a parallel GENERATED generation (generation = count+1, `replacesPlanId` pointing at the current ACTIVE plan) and supersedes it only when the user accepts it (the accept transition moves the old plan to SUPERSEDED in the same transaction). `forceRegenerateIfActive` is accepted but UNREAD in v1 — reserved for a future force path; sending either value does not change behaviour (frontend-gaps P3, plan page spec §8 Q6).
+         */
         post: operations["generatePlan"];
         delete?: never;
         options?: never;
@@ -2207,6 +2266,26 @@ export interface paths {
         head?: never;
         /** Transition a single slot's state. */
         patch: operations["changeSlotState"];
+        trace?: never;
+    };
+    "/api/v1/plans/{planId}/reopt-suggestions/{suggestionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Single re-opt suggestion with its proposed slot assignments (pre-accept diff preview).
+         * @description Side-effect-free read of the STORED proposal as persisted when the suggestion was raised — not a recomputation — so the UI can render the before/after diff (proposedAssignments.changes[]) before the user accepts. The proposal may be stale against later slot-state drift (e.g. a slot eaten after the suggestion was raised); accept-time validation stays authoritative. Any status is readable (PENDING for the preview; ACCEPTED/REJECTED/EXPIRED for history/back navigation).
+         */
+        get: operations["getReoptSuggestion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/plans/{planId}/reopt-suggestions/{suggestionId}/accept": {
@@ -2427,7 +2506,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Cancel a queued discovery job. Idempotent for terminal states (returns 422). */
+        /**
+         * Cancel a discovery job. QUEUED flips atomically to CANCELLED; RUNNING cancels are honoured asynchronously.
+         * @description QUEUED → flipped atomically to CANCELLED, returned immediately (200). RUNNING → 200 with the still-RUNNING DTO; an in-memory cancellation flag stops the runner between candidates, which then finalises the job as CANCELLED keeping all counters and the already-ingested harvest (cancellation keeps the harvest). Terminal states (SUCCEEDED, FAILED, PARTIAL, CANCELLED) → 422 discovery-job-already-terminal. CANCELLED status is the contract; errorSummary keeps "cancelled by user" for one release for consumers still string-matching. FAILED is reserved for genuine failures.
+         */
         post: operations["cancelDiscoveryJob"];
         delete?: never;
         options?: never;
@@ -2486,6 +2568,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/discovery/sources/{sourceKey}/user-disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * User: disable a discovery source (idempotent). Sets userDisabled; the admin enabled flag is untouched.
+         * @description Sets `userDisabled = true` on the source (idempotent — re-disabling returns 200 unchanged). Effective availability for job-source resolution becomes `enabled && !userDisabled`: the default "all enabled sources" set excludes user-disabled rows, and naming a user-disabled source in sourceKeys[] yields 422 with a "disabled by you" message (distinct from the admin-disabled "unknown or disabled" message). User endpoint — any authenticated user.
+         */
+        post: operations["userDisableDiscoverySource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/sources/{sourceKey}/user-enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * User: re-enable a discovery source (idempotent). Clears userDisabled only.
+         * @description Clears `userDisabled` (idempotent). An admin-disabled source stays unavailable — `enabled` wins; the DTO carries both flags so the panel can caption correctly. User endpoint — any authenticated user.
+         */
+        post: operations["userEnableDiscoverySource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/discovery/admin/sources/{sourceKey}/enable": {
         parameters: {
             query?: never;
@@ -2495,7 +2617,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Admin: enable a discovery source (idempotent). */
+        /** Admin: enable a discovery source (idempotent). Also clears userDisabled so a re-enabled source is visible again. */
         post: operations["enableDiscoverySource"];
         delete?: never;
         options?: never;
@@ -2551,6 +2673,63 @@ export interface paths {
          * @description Planner cold-start path. Returns the terminal DTO on completion or the partial DTO on timeout. Use strictTimeout=true to receive 408 instead of 200 on deadline expiry.
          */
         post: operations["runDiscoveryJobSync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/admin/graph-batches/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin: ingest an exported graph-batch directory (G06). Imports only review-approved fingerprints through the RecipeWriteApi seam; fail-closed validation; fingerprint-dedup idempotent; one jobId per batch.
+         * @description Body carries a server-local absolute path to the batch dir (D4 option (a), single operator). Non-OK statuses (DISABLED, INVALID_BATCH, ABORTED_MISSING_KEYS, REJECTED_RESTRICTED_DIET) return 409 with the same report shape and zero writes.
+         */
+        post: operations["ingestGraphBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/admin/graph-batches/{jobId}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin: withdraw a live graph batch (G11) — reversibly archive every AI_GENERATED recipe imported under this jobId. Archived rows leave every plannable read immediately; already-generated plans keep their slots. Idempotent.
+         * @description One jobId per graph batch (G06 invariant). Only AI_GENERATED import rows match — a graph withdraw never sweeps a discovery crawl's harvest sharing the job_id column. Flipping mealprep.graph.import.enabled=false stops future ingest but does NOT retro-hide dishes; this endpoint is the retro lever. Reverse with /restore.
+         */
+        post: operations["withdrawGraphBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/admin/graph-batches/{jobId}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin: restore a withdrawn graph batch (G11) — clear archived_at on the same jobId match set. Full restore, embeddings/ratings intact. Idempotent. */
+        post: operations["restoreGraphBatch"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3077,7 +3256,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Undo a Tier-2 mark-bought (line back to UNFILLED + compensating price note; inventory corrected manually). */
+        /**
+         * Undo a Tier-2 mark-bought (line back to UNFILLED + compensating price note + best-effort pantry reversal).
+         * @description Reverses the grocery-side state (line back to UNFILLED, bought-* cleared, compensating price note appended — the original observation is never deleted) AND best-effort reverses the pantry add the mark-bought made: the linked inventory item is decremented by the added amount, floored at zero (never negative); an item consumed/spoiled/removed since is a no-op. Every reversal branch is audited in the pantry item history (actor GROCERY_IMPORT). Lines whose mark-bought wrote no inventory (pantry tracking off) skip the reversal. The reversal outcome is observable in the provisions audit log; the response stays 204.
+         */
         post: operations["undoMarkBought"];
         delete?: never;
         options?: never;
@@ -3250,6 +3432,26 @@ export interface paths {
         put?: never;
         /** Place a quoted order (drives to checkout; auto-advances to AWAITING_USER_CONFIRMATION; never auto-confirms). A partial place returns 200 with PLACED_PARTIAL. */
         post: operations["placeGroceryOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/grocery/orders/{orderId}/back-to-draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revert a quoted order back to draft for re-editing (QUOTED → DRAFT); discards the stale quote.
+         * @description The re-edit edge of the order state machine (groceries §8 Q3). Only legal from QUOTED — any other state returns 422. Clears the provider order id, the quoted total, and the per-line quoted prices (line statuses reset to QUEUED) so a later re-quote starts clean; QUOTE price observations already written are append-only history and remain. The transition is audited (statusReason = reverted_from_quoted + a lifecycle event).
+         */
+        post: operations["revertGroceryOrderToDraft"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3770,6 +3972,8 @@ export interface components {
             userId: string;
             role: components["schemas"]["HouseholdRole"];
             displayName?: string | null;
+            /** @description Login username (read-only, joined from auth). Null only when the user no longer resolves (soft-deleted). */
+            username?: string | null;
             priority: number;
             /** Format: date-time */
             joinedAt: string;
@@ -5150,8 +5354,11 @@ export interface components {
             summary: string;
         };
         FloorViolationDto: {
-            /** Format: date */
-            date: string;
+            /**
+             * Format: date
+             * @description Violating day for daily-enforcement floors; null for weekly-average floors (floor-gate results always set it).
+             */
+            date: string | null;
             macroOrMicro: string;
             /** Format: double */
             floor: number;
@@ -5166,6 +5373,7 @@ export interface components {
             carbs: components["schemas"]["MacroAggregateDto"];
             fat: components["schemas"]["MacroAggregateDto"];
             fibre: components["schemas"]["MacroAggregateDto"];
+            satFat: components["schemas"]["MacroAggregateDto"];
             microsActualSoFar: {
                 [key: string]: number;
             };
@@ -5196,8 +5404,8 @@ export interface components {
             weekEnd: string;
             perDay: components["schemas"]["DailyAggregateDto"][];
             weeklyTotal: components["schemas"]["DailyAggregateDto"];
-            /** @description List of macro/micro keys whose weekly total fell below 7-day-summed floor. */
-            floorViolations: string[];
+            /** @description Floor violations for the week. date set for daily-enforcement floors; null for weekly-average floors (floor = 7-day-summed floor, actual = weekly total). */
+            floorViolations: components["schemas"]["FloorViolationDto"][];
         };
         /** @enum {string} */
         Catalogue: "USER" | "SYSTEM";
@@ -5299,6 +5507,21 @@ export interface components {
             } | null;
             /** @description Populated only by GET /versions/{versionId}/with-substitutions; null on every other read. */
             appliedSubstitutionIds?: string[] | null;
+            /** @description Computed by the nutrition module; null until nutritionStatus leaves PENDING. */
+            nutritionPerServing?: {
+                calories: number;
+                /** Format: double */
+                proteinG: number;
+                /** Format: double */
+                carbsG: number;
+                /** Format: double */
+                fatG: number;
+                /** Format: double */
+                fibreG: number;
+                micros: {
+                    [key: string]: number;
+                };
+            } | null;
         };
         RecipeDto: {
             /** Format: uuid */
@@ -5372,8 +5595,47 @@ export interface components {
                 } | null;
                 /** @description Populated only by GET /versions/{versionId}/with-substitutions; null on every other read. */
                 appliedSubstitutionIds?: string[] | null;
+                /** @description Computed by the nutrition module; null until nutritionStatus leaves PENDING. */
+                nutritionPerServing?: {
+                    calories: number;
+                    /** Format: double */
+                    proteinG: number;
+                    /** Format: double */
+                    carbsG: number;
+                    /** Format: double */
+                    fatG: number;
+                    /** Format: double */
+                    fibreG: number;
+                    micros: {
+                        [key: string]: number;
+                    };
+                } | null;
             } | null;
             branches: components["schemas"]["RecipeBranchDto"][];
+            /**
+             * Format: double
+             * @description Recipe-level average taste rating. Populated ONLY by the GET /api/v1/recipes list read (one batched aggregate per page); null on every other read and on unrated list rows.
+             */
+            avgTaste?: number | null;
+            /**
+             * Format: int64
+             * @description Recipe-level rating count. Populated ONLY by the GET /api/v1/recipes list read (0 on unrated list rows); null on every other read.
+             */
+            ratingCount?: number | null;
+        };
+        RecipeDtoPage: {
+            content: components["schemas"]["RecipeDto"][];
+            /** Format: int64 */
+            totalElements: number;
+            totalPages: number;
+            number: number;
+            size: number;
+            first?: boolean;
+            last?: boolean;
+            empty?: boolean;
+            numberOfElements?: number;
+        } & {
+            [key: string]: unknown;
         };
         CreateIngredientRequest: {
             lineOrder: number;
@@ -5424,6 +5686,11 @@ export interface components {
                 flavourProfile?: string[];
                 dietaryFlags?: string[];
             } | null;
+            /**
+             * Format: uuid
+             * @description Dedup override: persist despite an ingredient-overlap collision with exactly this recipe. A collision with any other recipe still returns 422 recipe-import-duplicate.
+             */
+            ignoreDuplicateOfRecipeId?: string | null;
         };
         /** @enum {string} */
         ImportSource: "MANUAL" | "URL" | "AI_GENERATED" | "WEB_DISCOVERED";
@@ -5435,6 +5702,11 @@ export interface components {
              * @enum {string|null}
              */
             catalogue?: "USER" | "SYSTEM" | null;
+            /**
+             * Format: uuid
+             * @description Dedup override: persist despite an ingredient-overlap collision with exactly this recipe. A collision with any other recipe still returns 422 recipe-import-duplicate. The one-shot path runs the same dedup gate as preview-confirm (recipe-import-dedup-consistency).
+             */
+            ignoreDuplicateOfRecipeId?: string | null;
         };
         /** @description Frontend in-app browser supplies pre-rendered markup plus the source URL for a preview-html import (recipe-3 / LLD Flow 2). Extraction runs against html; url is carried for provenance + base-URI resolution. */
         ImportRecipeFromHtmlRequest: {
@@ -5476,6 +5748,11 @@ export interface components {
             sourceUrl: string;
             extractionMethod?: string | null;
             recipe: components["schemas"]["CreateRecipeRequest"];
+            /**
+             * Format: uuid
+             * @description Dedup override: persist despite an ingredient-overlap collision with exactly this recipe (the candidateRecipeId from the 422). A collision with any other recipe still returns 422 recipe-import-duplicate. The honoured override is recorded as duplicateOfRecipeId on the import-provenance row.
+             */
+            ignoreDuplicateOfRecipeId?: string | null;
         };
         RecipeVersionDtoPage: {
             content: components["schemas"]["RecipeVersionDto"][];
@@ -5501,6 +5778,8 @@ export interface components {
             sourceUrl?: string | null;
             sourcePayload?: unknown;
             extractionMethod?: string | null;
+            /** @description Discovery/graph source key persisted on the import row (e.g. "bbcgoodfood-sitemap", "graph:<campaign-id>"). Null for plain URL imports. Additive per G10 so the detail page can show the campaign id. */
+            sourceKey?: string | null;
             /** Format: uuid */
             duplicateOfRecipeId?: string | null;
             /** Format: date-time */
@@ -5967,7 +6246,25 @@ export interface components {
                 /** @enum {string|null} */
                 augmentationSource?: "LLM" | "USER" | null;
                 phase2Addition: boolean;
+                /** In-meal additions (Phase 2) — small whole-food riders on the slot's main. */
+                additions?: {
+                    /** @enum {string} */
+                    kind?: "INGREDIENT" | "SIDE_RECIPE";
+                    name?: string;
+                    ingredientMappingKey?: string | null;
+                    grams?: number | null;
+                    reasoning?: string | null;
+                    nutrition?: {
+                        calories?: number;
+                    } | null;
+                }[] | null;
+                /** Per-person servings of the main, sized to the meal's calorie target (Phase 1b). */
+                portionFactor?: number;
             } | null;
+            /** Format: time */
+            effectiveMealTime: string;
+            /** @enum {string} */
+            mealTimeSource: "SLOT_OVERRIDE" | "LIFESTYLE_SCHEDULE" | "KIND_DEFAULT";
         };
         DayDto: {
             /** Format: uuid */
@@ -6073,7 +6370,10 @@ export interface components {
             householdId: string;
             /** Format: date */
             weekStartDate: string;
-            /** @default false */
+            /**
+             * @description Reserved — UNREAD by the v1 composer (either value behaves identically). Generation against an ACTIVE week always produces a parallel GENERATED generation that supersedes only on accept; see the generatePlan operation description.
+             * @default false
+             */
             forceRegenerateIfActive: boolean;
         };
         RejectPlanRequest: {
@@ -6164,6 +6464,8 @@ export interface components {
             id: string;
             /** Format: uuid */
             feedbackEntryId: string;
+            /** @description Leading excerpt of the originating feedback text (display context). */
+            textExcerpt: string;
             questionText: string;
             options: components["schemas"]["ClarificationOptionDto"][];
             status: components["schemas"]["ClarificationStatus"];
@@ -6199,6 +6501,8 @@ export interface components {
             id: string;
             /** Format: uuid */
             feedbackEntryId: string;
+            /** @description Leading excerpt of the originating feedback text (display context). */
+            textExcerpt: string;
             /** Format: uuid */
             originalRoutingId: string;
             correctedDestination: components["schemas"]["Destination"];
@@ -6392,6 +6696,7 @@ export interface components {
             requiredCuisines?: string[] | null;
             requiredMealTypes?: string[] | null;
             maxTotalTimeMins?: number | null;
+            /** @description Additive-only client exclusions (pre-normalised ingredient mapping keys: lowercase, trimmed). On job creation the SERVER derives the caller's hard-constraint exclusion snapshot (allergies including their derivative expansion, intolerances, medical diets, dietary-identity base exclusions) and persists the union of that snapshot with any keys supplied here — client keys can only narrow results further, never replace or weaken the server snapshot. The persisted job (and its read-back constraints recap) carries the effective union, frozen at enqueue. */
             mustExcludeIngredientMappingKeys?: string[] | null;
             dietaryFlags?: string[] | null;
             preferenceHints?: string[] | null;
@@ -6440,7 +6745,7 @@ export interface components {
             [key: string]: unknown;
         };
         /** @enum {string} */
-        DiscoveryJobStatus: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "PARTIAL";
+        DiscoveryJobStatus: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "PARTIAL" | "CANCELLED";
         /** @enum {string} */
         DiscoveryJobTrigger: "COLD_START" | "USER_INITIATED" | "SCHEDULED";
         DiscoveryScrapeLogEntryDto: {
@@ -6489,6 +6794,8 @@ export interface components {
             kind: components["schemas"]["DiscoverySourceKind"];
             baseUrl: string;
             enabled: boolean;
+            /** @description User-driven disable flag (Settings toggle), distinct from the admin `enabled` flag. Effective availability for job-source resolution is `enabled && !userDisabled`; the DTO carries both flags so the sources panel can caption "disabled by you" vs "unavailable (admin)". */
+            userDisabled: boolean;
             requestsPerMinute: number;
             requestsPerDay: number;
             respectRobotsTxt: boolean;
@@ -6546,7 +6853,7 @@ export interface components {
             baseVersionId: string;
             /** Format: uuid */
             baseBranchId: string;
-            /** @description Opaque diff JSON; shape governed by the adaptation pipeline. */
+            /** @description Diff JSON (published shape, frontend-gaps P3 / recipe-detail page spec §11 Q6): the canonical shape is the RecipeDiffDto change-array family from schemas/recipe.yaml — `ingredientChanges[]` / `methodChanges[]` / `metadataChanges[]` / `tagChanges[]`, each entry an object with `changeType` (ADDED|REMOVED|MODIFIED) and `from`/`to` snapshots (ingredient entries carry `to.ingredientMappingKey`). The pipeline's LLM leg may extend entries with extra annotation keys (e.g. quantity refinements from `refinedDiff`); renderers MUST tolerate unknown keys and unknown top-level arrays by falling back to raw display. The server's safety filter reads only `ingredientChanges[].to.ingredientMappingKey` (plus the legacy op-entry forms), so that path is the stable, load-bearing part of the shape. */
             proposedDiff: {
                 [key: string]: unknown;
             };
@@ -6562,7 +6869,7 @@ export interface components {
             supersededBy?: string | null;
             /** Format: uuid */
             acceptedVersionId?: string | null;
-            /** @description Optional user-supplied diff overlay applied at accept time. */
+            /** @description Optional user-supplied diff overlay applied at accept time. Same change-array shape as proposedDiff (RecipeDiffDto family); entries here win over the proposal's on conflict. */
             userEdits?: {
                 [key: string]: unknown;
             } | null;
@@ -6575,7 +6882,7 @@ export interface components {
             /** Format: int64 */
             optimisticVersion: number;
         };
-        /** @description List-row projection of a pending change. */
+        /** @description List-row projection of a pending change. `status`, `resolvedAt`, and `optimisticVersion` ride on the row so both the top-3 surface and the pending-history surface render lifecycle without a follow-up single-row read per card. The top-3 read returns only PENDING rows (`resolvedAt` null); the pending-history read spans the full lifecycle including EXPIRED/SUPERSEDED. `optimisticVersion` lets an accept/reject call carry `expectedVersion` straight from the list. */
         PendingChangeListItemDto: {
             /** Format: uuid */
             id: string;
@@ -6591,6 +6898,11 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             expiresAt: string;
+            status: components["schemas"]["PendingChangeStatus"];
+            /** Format: date-time */
+            resolvedAt?: string | null;
+            /** Format: int64 */
+            optimisticVersion: number;
         };
         /** @description Paged response of PendingChangeListItemDto rows. */
         PendingChangeListItemDtoPage: {
@@ -6747,7 +7059,7 @@ export interface components {
             touched: number;
         };
         /** @enum {string} */
-        NotificationKind: "PROVISION_ITEM_NEAR_EXPIRY" | "PROVISION_ITEM_SPOILED" | "PROVISION_DEFROST_REMINDER" | "NUTRITION_INTAKE_DIVERGED" | "HEALTH_DIRECTIVE_RECEIVED" | "PLANNER_PREP_REMINDER" | "PLANNER_REOPT_SUGGESTED" | "PLANNER_PLAN_GENERATED";
+        NotificationKind: "PROVISION_ITEM_NEAR_EXPIRY" | "PROVISION_ITEM_SPOILED" | "PROVISION_DEFROST_REMINDER" | "NUTRITION_INTAKE_DIVERGED" | "HEALTH_DIRECTIVE_RECEIVED" | "PLANNER_PREP_REMINDER" | "PLANNER_REOPT_SUGGESTED" | "PLANNER_PLAN_GENERATED" | "STAPLE_REPLENISHMENT_NEEDED" | "FEEDBACK_CONFIRMATION";
         /** @enum {string} */
         NotificationSeverity: "INFO" | "ATTENTION" | "URGENT";
         /** @enum {string} */
@@ -6777,6 +7089,7 @@ export interface components {
             body: string;
             payload: components["schemas"]["NotificationPayload"];
             status: components["schemas"]["NotificationStatus"];
+            /** @description Frontend deep link in the IA route namespace (/pantry, /nutrition, /plan, /activity); entity context (item ids, plan id, date, feedback id) rides the typed payload. Rows created before 2026-06 may still carry legacy /app/* URIs. */
             actionTargetUri?: string | null;
             bundleCount: number;
             bundleKeys?: string[] | null;
@@ -6833,19 +7146,20 @@ export interface components {
             /** Format: int64 */
             version: number;
         };
+        /** @description Full-replace document — always send every field. quietHoursEnabled, debounceWindowMinutes and expectedVersion bind to Java primitives: omitting them silently defaults false/0/0, and an omitted expectedVersion 409s against any previously-edited row, so they are contractually required (notifications page spec §8 Q5 contract alignment). Only the quiet-hours window times stay optional (nullable; required as a pair when quietHoursEnabled=true). */
         UpdateNotificationPreferenceRequest: {
             enabledKinds: {
                 [key: string]: boolean;
             };
-            quietHoursEnabled?: boolean;
+            quietHoursEnabled: boolean;
             /** Format: time */
             quietHoursStart?: string | null;
             /** Format: time */
             quietHoursEnd?: string | null;
             timezone: string;
-            debounceWindowMinutes?: number;
+            debounceWindowMinutes: number;
             /** Format: int64 */
-            expectedVersion?: number;
+            expectedVersion: number;
         };
         DeliveryLogEntryDto: {
             /** Format: uuid */
@@ -6920,6 +7234,8 @@ export interface components {
             /** Format: date-time */
             supersededAt?: string | null;
             estimatedTotalPence?: number | null;
+            estimatedTotalMinPence?: number | null;
+            estimatedTotalMaxPence?: number | null;
             estimatedTotalCurrency: string;
             costConfidence?: number | null;
             staleIngredientCount: number;
@@ -6947,6 +7263,11 @@ export interface components {
             /** Format: uuid */
             planId: string;
             planGeneration?: number | null;
+            /**
+             * @description Rebuild lines for the existing (planId, planGeneration) list, picking up pantry/provisions drift within the generation. Decided lines (bought/substituted/dropped) are preserved by mapping key; only UNFILLED lines without new demand are dropped. Default false keeps the idempotent cached-list behaviour.
+             * @default false
+             */
+            force: boolean;
         };
         ShoppingListExportDto: {
             /** Format: uuid */
@@ -7315,6 +7636,15 @@ export interface components {
              */
             ingredientOverlap: number;
         };
+        /** @description Session-probe projection (`GET /auth/me`): UserDto plus `isAdmin` — whether the caller is on the project-wide admin allowlist. Display-only signal for admin-nav visibility; every admin endpoint still enforces the allowlist server-side (403). */
+        CurrentUserDto: {
+            /** Format: uuid */
+            userId: string;
+            username: string;
+            /** Format: date-time */
+            createdAt: string;
+            isAdmin: boolean;
+        };
         /**
          * @description The safety-critical Tier-1 hard-constraint category whose removal is gated (GAP-04).
          * @enum {string}
@@ -7531,6 +7861,11 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        AdjustInventoryStatusRequest: {
+            newStatus: components["schemas"]["StapleStatus"];
+            /** Format: int64 */
+            expectedVersion: number;
+        };
         NutritionTargetsAuditEntryDtoPage: {
             content?: components["schemas"]["NutritionTargetsAuditEntryDto"][];
             /** Format: int64 */
@@ -7544,6 +7879,35 @@ export interface components {
             empty?: boolean;
         } & {
             [key: string]: unknown;
+        };
+        /** @description RFC 9457 ProblemDetail returned by POST .../slots/{mealSlot}/edit (422) when the slot has no legal edit transition (decided state other than OVERRIDDEN+needsAiParse=true). It is a self-contained superset of ProblemDetail (not an allOf composition) because the contract validator injects additionalProperties:false into every object schema and evaluates each allOf branch independently — same convention as common.yaml#/RecipeImportFailure. Keep the shared members in sync with ProblemDetail; the additions are the machine-readable currentStatus + needsAiParse extension members so the UI can refresh the slot row. */
+        IntakeSlotNotEditableProblem: {
+            /**
+             * Format: uri
+             * @description A URI identifying the problem type.
+             * @example https://mealprep.example.com/problems/intake-slot-not-editable
+             */
+            type: string;
+            /**
+             * @description Short human-readable summary.
+             * @example Intake slot not editable
+             */
+            title: string;
+            /**
+             * @description HTTP status code.
+             * @example 422
+             */
+            status: number;
+            /** @description Human-readable explanation specific to this occurrence. */
+            detail?: string;
+            /**
+             * Format: uri
+             * @description A URI identifying the specific occurrence.
+             */
+            instance?: string;
+            currentStatus: components["schemas"]["IntakeSlotStatus"];
+            /** @description The slot's needsAiParse flag at rejection time (false for a parsed override). */
+            needsAiParse: boolean;
         };
         /** @description Flat read shape for an intake-slot search result. Returned by GET /api/v1/nutrition/intake/search. */
         IntakeSlotSearchResultDto: {
@@ -7574,9 +7938,69 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        IngredientMappingSeedReport: {
+            inserted?: number;
+            skippedIdentical?: number;
+            rejected?: {
+                searchTerm?: string | null;
+                reason?: string;
+            }[];
+            collisions?: {
+                searchTerm?: string;
+                existingSource?: string | null;
+                existingExternalId?: string | null;
+                firstDivergingField?: string;
+                note?: string;
+            }[];
+            /** @enum {string} */
+            status?: "OK" | "FAILED";
+            meta?: {
+                [key: string]: unknown;
+            } | null;
+        } & {
+            [key: string]: unknown;
+        };
         RevertToPlanRequest: {
             /** Format: uuid */
             targetHistoricalPlanId: string;
+        };
+        GraphBatchIngestReport: {
+            batchId?: string | null;
+            jobId?: string | null;
+            /** @enum {string} */
+            status?: "OK" | "DISABLED" | "INVALID_BATCH" | "ABORTED_MISSING_KEYS" | "REJECTED_RESTRICTED_DIET";
+            created?: number;
+            dedupSkipped?: number;
+            notApproved?: number;
+            rejected?: {
+                fp?: string;
+                reason?: string;
+            }[];
+            recipeIds?: {
+                fp?: string;
+                /** Format: uuid */
+                recipeId?: string;
+                /** Format: uuid */
+                versionId?: string | null;
+                nutritionStatus?: string | null;
+            }[];
+            missingMappingKeys?: string[];
+            errors?: string[];
+            note?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        GraphBatchWithdrawReport: {
+            /** Format: uuid */
+            jobId: string;
+            /** @enum {string} */
+            action: "WITHDRAWN" | "RESTORED";
+            /** @description Recipes whose AI_GENERATED import row carries the jobId, regardless of state. */
+            matched: number;
+            /** @description Rows actually transitioned by this call; empty on a repeat call. */
+            changedRecipeIds: string[];
+            /** @description Matched rows deliberately left alone (soft-deleted, or promoted into a user catalogue). */
+            skippedRecipeIds: string[];
         };
         /** @enum {string} */
         ChangeDimension: "SALT_LEVEL" | "PROTEIN" | "METHOD_SIMPLIFICATION" | "PORTION_SIZE" | "FLAVOUR_BALANCE" | "ACID_BALANCE" | "TEXTURE" | "COOKING_TIME" | "SUBSTITUTION_PROMOTION" | "GENERAL";
@@ -7827,13 +8251,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Authenticated user details. */
+            /** @description Authenticated user details, including the admin-allowlist flag. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserDto"];
+                    "application/json": components["schemas"]["CurrentUserDto"];
                 };
             };
             /** @description Missing or invalid authentication. */
@@ -8301,7 +8725,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The updated hard-constraints aggregate. */
+            /** @description The updated (or, on first write, newly created) hard-constraints aggregate. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8328,7 +8752,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
-            /** @description Resource not found. */
+            /** @description No aggregate exists and expectedVersion is greater than 0 — a stale client, not a create intent. A first write must send expectedVersion 0. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -8337,7 +8761,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
-            /** @description Conflict. Either an optimistic-lock failure (stale expectedVersion) or — per GAP-04 — the request would remove a Tier-1 hard constraint (allergy / medical diet / severe intolerance / dietary-identity base) without confirmTier1Removals=true. The latter carries reason=TIER1_REMOVAL_REQUIRES_CONFIRMATION and the removedConstraints the UI names in the confirmation interstitial. */
+            /** @description Conflict. Either an optimistic-lock failure (stale expectedVersion, including the losing side of a concurrent first-write double-submit) or — per GAP-04 — the request would remove a Tier-1 hard constraint (allergy / medical diet / severe intolerance / dietary-identity base) without confirmTier1Removals=true. The latter carries reason=TIER1_REMOVAL_REQUIRES_CONFIRMATION and the removedConstraints the UI names in the confirmation interstitial. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8446,7 +8870,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The updated lifestyle config. */
+            /** @description The updated (or, on first write, newly created) lifestyle config. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8473,7 +8897,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
-            /** @description Resource not found. */
+            /** @description No config exists and expectedVersion is greater than 0 — a stale client, not a create intent. A first write must send expectedVersion 0. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -8482,7 +8906,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
-            /** @description Conflict. */
+            /** @description Optimistic-lock conflict (stale expectedVersion, including the losing side of a concurrent first-write double-submit). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8668,6 +9092,15 @@ export interface operations {
             };
             /** @description Stale expectedVersion. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Document exceeds the ~2500-token taste-profile budget; nothing was written. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9866,6 +10299,8 @@ export interface operations {
             query?: {
                 storageLocation?: components["schemas"]["StorageLocation"];
                 isStaple?: boolean;
+                itemStatus?: "ACTIVE" | "EXHAUSTED" | "SPOILED" | "WASTED";
+                expiringWithinDays?: number;
                 page?: number;
                 size?: number;
             };
@@ -10103,6 +10538,68 @@ export interface operations {
                 };
             };
             /** @description Validation error (e.g. status-tracked item, negative quantity). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Not found or not owned. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Stale expectedVersion. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    adjustInventoryStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdjustInventoryStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InventoryItemDto"];
+                };
+            };
+            /** @description Validation error (e.g. QUANTITY-mode item, missing newStatus). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -11524,6 +12021,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
+            /** @description No legal edit transition — slot is already decided (CONFIRMED / EDITED / SKIPPED, or OVERRIDDEN with a successful parse). Only PENDING and OVERRIDDEN with needsAiParse=true accept an edit. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["IntakeSlotNotEditableProblem"];
+                };
+            };
         };
     };
     skipIntakeSlot: {
@@ -12144,6 +12650,73 @@ export interface operations {
             };
         };
     };
+    seedIngredientMappings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    _meta?: {
+                        [key: string]: unknown;
+                    } | null;
+                    rows: ({
+                        searchTerm: string;
+                        /** @enum {string} */
+                        source: "USDA" | "OPEN_FOOD_FACTS" | "MANUAL";
+                        externalId?: string | null;
+                        basisNote?: string | null;
+                        nutritionPer100g: {
+                            [key: string]: unknown;
+                        };
+                    } & {
+                        [key: string]: unknown;
+                    })[];
+                };
+            };
+        };
+        responses: {
+            /** @description Seed run completed with no collisions (inserted / skippedIdentical / rejected in the report). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngredientMappingSeedReport"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Authenticated but not on the admin allowlist. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Collision(s): existing rows differ from the seed and were NOT overwritten — hard stop, human adjudication required. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngredientMappingSeedReport"];
+                };
+            };
+        };
+    };
     listHealthDirectives: {
         parameters: {
             query?: {
@@ -12579,6 +13152,59 @@ export interface operations {
             };
         };
     };
+    listRecipes: {
+        parameters: {
+            query?: {
+                /** @description Restrict to one catalogue; absent → the caller's USER rows + all SYSTEM rows. */
+                catalogue?: components["schemas"]["Catalogue"];
+                /** @description Case-insensitive substring match on name. */
+                namePattern?: string;
+                /** @description Exact match on the current version's metadata.cuisine. */
+                cuisine?: string;
+                /** @description Current version's metadata.totalTimeMins <= value. */
+                maxTotalTimeMins?: number;
+                /** @description Ordinal data-quality floor (USER_VERIFIED > IMPORTED ≈ AI_GENERATED > WEB_DISCOVERED; the IMPORTED/AI_GENERATED tie means a floor at either admits both). */
+                minDataQuality?: components["schemas"]["DataQuality"];
+                /** @description Include archived (archivedAt non-null) rows; default false. */
+                includeArchived?: boolean;
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Page of library recipes, updatedAt DESC. Empty result is an empty page, not 404. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDtoPage"];
+                };
+            };
+            /** @description Invalid enum value, negative maxTotalTimeMins, namePattern/cuisine too long, or size > 100. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     createRecipe: {
         parameters: {
             query?: never;
@@ -12783,13 +13409,13 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
-            /** @description Import failed (fetch error or extraction failure). */
+            /** @description Import failed (fetch error or extraction failure → RecipeImportFailure), or the imported recipe duplicates an existing library recipe (recipe-2 dedup → RecipeImportDuplicate; one-shot now runs the same dedup gate as preview-confirm and honours the same ignoreDuplicateOfRecipeId override). */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["RecipeImportFailure"];
+                    "application/problem+json": components["schemas"]["RecipeImportFailure"] | components["schemas"]["RecipeImportDuplicate"];
                 };
             };
         };
@@ -13354,6 +13980,8 @@ export interface operations {
         parameters: {
             query: {
                 versionId: string;
+                /** @description Substitution-state filter (recipe-substitution-state-filter). Default ACCEPTED preserves the pre-filter behaviour; ALL returns every state. PROPOSED makes pending proposals listable so the recipe-detail panel survives a reload. */
+                state?: "PROPOSED" | "ACCEPTED" | "REJECTED" | "SUPERSEDED" | "ALL";
             };
             header?: never;
             path: {
@@ -13363,7 +13991,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Active substitutions on the given version. */
+            /** @description Substitutions on the given version in the requested state(s). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -13372,7 +14000,7 @@ export interface operations {
                     "application/json": components["schemas"]["RecipeSubstitutionDto"][];
                 };
             };
-            /** @description versionId query param missing. */
+            /** @description versionId query param missing or unknown state value. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -14840,6 +15468,56 @@ export interface operations {
             };
         };
     };
+    getReoptSuggestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                planId: string;
+                suggestionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The suggestion, including its proposed slot assignments. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanReoptSuggestionDto"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Plan not found, unknown suggestion, or not a suggestion of this plan. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     acceptReoptSuggestion: {
         parameters: {
             query?: never;
@@ -15462,7 +16140,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Cancelled job DTO (status flipped to FAILED). */
+            /** @description Job DTO: CANCELLED (was QUEUED) or still-RUNNING (cancel honoured asynchronously). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -15489,7 +16167,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
-            /** @description Already terminal or in-flight (01b limitation). */
+            /** @description Job already in a terminal state (SUCCEEDED, FAILED, PARTIAL, CANCELLED). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -15602,6 +16280,86 @@ export interface operations {
                 };
             };
             /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    userDisableDiscoverySource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sourceKey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Source user-disabled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoverySourceDto"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Source not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    userEnableDiscoverySource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sourceKey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Source user-enabled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoverySourceDto"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Source not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -15784,6 +16542,157 @@ export interface operations {
             };
             /** @description All discovery sources unavailable. */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    ingestGraphBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    batchPath: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Batch processed (per-dish rejections ride in the report). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphBatchIngestReport"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Authenticated but not on the admin allowlist. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Flag off, invalid batch/verdicts, unseeded keys, or restricted-diet policy — zero writes; see report.status/errors. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphBatchIngestReport"];
+                };
+            };
+        };
+    };
+    withdrawGraphBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Batch withdrawn (changedRecipeIds empty on a repeat call — idempotency signal). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphBatchWithdrawReport"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Authenticated but not on the admin allowlist. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No AI_GENERATED import rows carry this jobId — not a known graph batch. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    restoreGraphBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Batch restored (changedRecipeIds empty on a repeat call — idempotency signal). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphBatchWithdrawReport"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Authenticated but not on the admin allowlist. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No AI_GENERATED import rows carry this jobId — not a known graph batch. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17723,6 +18632,55 @@ export interface operations {
             };
             /** @description Provider unavailable, or AI features paused (reverts to DRAFT). */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    revertGroceryOrderToDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The reverted order (status DRAFT, quote fields cleared). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroceryOrderDto"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No such order. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Order is not currently QUOTED — nothing to revert. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

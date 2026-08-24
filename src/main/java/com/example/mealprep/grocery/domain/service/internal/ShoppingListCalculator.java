@@ -1,6 +1,7 @@
 package com.example.mealprep.grocery.domain.service.internal;
 
 import com.example.mealprep.core.ingredient.IngredientMappingKeys;
+import com.example.mealprep.core.ingredient.IngredientUnitConverter;
 import com.example.mealprep.grocery.api.dto.PriceAggregateDto;
 import com.example.mealprep.grocery.domain.entity.LineFulfilmentStatus;
 import com.example.mealprep.grocery.domain.entity.PackSizeHeuristic;
@@ -10,6 +11,8 @@ import com.example.mealprep.grocery.domain.entity.ShoppingListLineType;
 import com.example.mealprep.grocery.domain.service.PriceHistoryService;
 import com.example.mealprep.household.api.dto.HouseholdDto;
 import com.example.mealprep.household.domain.service.HouseholdQueryService;
+import com.example.mealprep.planner.api.dto.Addition;
+import com.example.mealprep.planner.api.dto.AdditionKind;
 import com.example.mealprep.planner.api.dto.DayDto;
 import com.example.mealprep.planner.api.dto.MealSlotDto;
 import com.example.mealprep.planner.api.dto.PlanDto;
@@ -32,6 +35,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
@@ -188,6 +192,11 @@ class ShoppingListCalculator {
         if (scheduled == null || scheduled.recipeId() == null) {
           continue; // empty slot (eating out / fasting)
         }
+        // In-meal ingredient additions are extra shopping lines (their own USDA-resolved grams),
+        // independent of whether the main recipe resolves below.
+        accumulateAdditions(demand, scheduled.additions());
+        // SIDE_RECIPE additions: buy the side dish's own ingredients (one serving each).
+        accumulateSideRecipeAdditions(demand, scheduled.additions(), recipeCache);
         RecipeDto recipe =
             recipeCache.computeIfAbsent(
                 scheduled.recipeId(), id -> recipeQueryService.getById(id).orElse(null));
@@ -222,8 +231,13 @@ class ShoppingListCalculator {
       base = 1;
     }
     int slotServings = scheduled.servings() > 0 ? scheduled.servings() : base;
+    // Phase 1b: also scale by the per-person portion factor (the main is eaten at N servings/person
+    // to hit the calorie target), so we buy enough food for the scaled plate.
+    BigDecimal portion =
+        scheduled.portionFactor() == null ? BigDecimal.ONE : scheduled.portionFactor();
     return BigDecimal.valueOf(slotServings)
-        .divide(BigDecimal.valueOf(base), 6, RoundingMode.HALF_UP);
+        .divide(BigDecimal.valueOf(base), 6, RoundingMode.HALF_UP)
+        .multiply(portion);
   }
 
   private static void accumulate(
@@ -233,11 +247,76 @@ class ShoppingListCalculator {
       return;
     }
     BigDecimal scaled = ing.quantity().multiply(scale);
+    // Convert to grams so heterogeneous recipe units (2 tbsp + 1 cup + 1 clove) aggregate
+    // coherently per canonical ingredient and the pack optimiser can compute a real purchase +
+    // leftover. Falls back to the raw unit when the amount cannot be confidently converted
+    // (unknown count-ingredient / unrecognised unit) — those keys just won't pack-match.
+    Optional<BigDecimal> grams = IngredientUnitConverter.toGrams(scaled, ing.unit(), key);
+    BigDecimal qty = grams.orElse(scaled);
+    String unit = grams.isPresent() ? "g" : ing.unit();
     IngredientDemand existing = demand.get(key);
     if (existing == null) {
-      demand.put(key, new IngredientDemand(key, ing.displayName(), scaled, ing.unit(), null, null));
+      demand.put(key, new IngredientDemand(key, ing.displayName(), qty, unit, null, null));
     } else {
-      demand.put(key, existing.add(scaled));
+      demand.put(key, existing.add(qty));
+    }
+  }
+
+  /**
+   * Accumulate in-meal INGREDIENT additions as shopping demand by their USDA-resolved grams (one
+   * portion per attached slot — so a week's worth sums across the seven carrier slots). SIDE_RECIPE
+   * additions are recipe-backed — see {@link #accumulateSideRecipeAdditions}.
+   */
+  private static void accumulateAdditions(
+      Map<String, IngredientDemand> demand, List<Addition> additions) {
+    if (additions == null) {
+      return;
+    }
+    for (Addition a : additions) {
+      if (a == null || a.kind() != AdditionKind.INGREDIENT) {
+        continue;
+      }
+      String key = IngredientMappingKeys.normalise(a.ingredientMappingKey());
+      if (key == null || key.isEmpty() || a.grams() == null) {
+        continue;
+      }
+      IngredientDemand existing = demand.get(key);
+      if (existing == null) {
+        demand.put(key, new IngredientDemand(key, a.name(), a.grams(), "g", null, null));
+      } else {
+        demand.put(key, existing.add(a.grams()));
+      }
+    }
+  }
+
+  /**
+   * Accumulate SIDE_RECIPE additions by buying their underlying recipe's ingredients (one serving
+   * each), reusing the same recipe cache as the main walk so each recipe is read at most once.
+   */
+  private void accumulateSideRecipeAdditions(
+      Map<String, IngredientDemand> demand,
+      List<Addition> additions,
+      Map<UUID, RecipeDto> recipeCache) {
+    if (additions == null) {
+      return;
+    }
+    for (Addition a : additions) {
+      if (a == null || a.kind() != AdditionKind.SIDE_RECIPE || a.recipeId() == null) {
+        continue;
+      }
+      RecipeDto recipe =
+          recipeCache.computeIfAbsent(
+              a.recipeId(), id -> recipeQueryService.getById(id).orElse(null));
+      if (recipe == null
+          || recipe.currentVersionBody() == null
+          || recipe.currentVersionBody().ingredients() == null) {
+        continue;
+      }
+      for (IngredientDto ing : recipe.currentVersionBody().ingredients()) {
+        if (!ing.optional()) {
+          accumulate(demand, ing, BigDecimal.ONE); // one serving of the side
+        }
+      }
     }
   }
 

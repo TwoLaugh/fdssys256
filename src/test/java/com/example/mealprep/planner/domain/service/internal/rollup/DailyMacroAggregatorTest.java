@@ -2,11 +2,15 @@ package com.example.mealprep.planner.domain.service.internal.rollup;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.example.mealprep.planner.api.dto.Addition;
+import com.example.mealprep.planner.api.dto.AdditionKind;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
 import com.example.mealprep.planner.testdata.PlanTestData;
+import com.example.mealprep.recipe.api.dto.NutritionPerServingDto;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -84,6 +88,41 @@ class DailyMacroAggregatorTest {
     assertThat(
             agg.aggregateByDate(plan, PlanTestData.minimalContext(List.of(), List.of())).keySet())
         .containsExactly(WEEK, WEEK.plusDays(1), WEEK.plusDays(3));
+  }
+
+  @Test
+  void additions_contribute_their_own_nutrition_even_without_a_main_recipe() {
+    // An ingredient addition carries its own per-portion nutrition; the aggregator sums it directly
+    // (NOT portion-scaled) and counts it even though the slot's main recipe is absent from the
+    // pool.
+    Addition oil =
+        new Addition(
+            AdditionKind.INGREDIENT,
+            "1 tbsp olive oil",
+            "olive_oil",
+            null,
+            new BigDecimal("1"),
+            "tbsp",
+            new BigDecimal("13.5"),
+            new NutritionPerServingDto(
+                119,
+                new BigDecimal("0.0"),
+                new BigDecimal("0.0"),
+                new BigDecimal("13.5"),
+                new BigDecimal("0.0"),
+                Map.of("vitamin_e_mg", new BigDecimal("1.9"))),
+            "drizzle on the salad");
+    SlotAssignment a =
+        PlanTestData.assignment(UUID.randomUUID(), UUID.randomUUID(), WEEK, 0, 2)
+            .withAdditions(List.of(oil));
+    PlanCompositionContext ctx = PlanTestData.minimalContext(List.of(), List.of());
+
+    DailyMacroTotals totals =
+        agg.aggregateByDate(PlanTestData.candidatePlan(WEEK, List.of(a)), ctx).get(WEEK);
+
+    assertThat(totals.kcal()).isEqualTo(119);
+    assertThat(totals.fatG()).isEqualByComparingTo(new BigDecimal("13.5"));
+    assertThat(totals.proteinG()).isEqualByComparingTo(BigDecimal.ZERO);
   }
 
   @Test

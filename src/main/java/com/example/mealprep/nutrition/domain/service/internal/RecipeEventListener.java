@@ -3,13 +3,12 @@ package com.example.mealprep.nutrition.domain.service.internal;
 import com.example.mealprep.nutrition.api.dto.CalculateRecipeNutritionRequest;
 import com.example.mealprep.nutrition.api.dto.RecipeIngredientLineDto;
 import com.example.mealprep.nutrition.api.dto.RecipeNutritionResultDto;
+import com.example.mealprep.nutrition.api.mapper.RecipeNutritionLineMapper;
 import com.example.mealprep.nutrition.domain.service.NutritionCalculationService;
 import com.example.mealprep.nutrition.spi.RecipeNutritionWriter;
-import com.example.mealprep.recipe.api.dto.IngredientDto;
 import com.example.mealprep.recipe.api.dto.RecipeVersionDto;
 import com.example.mealprep.recipe.domain.service.RecipeQueryService;
 import com.example.mealprep.recipe.event.RecipeUpdatedEvent;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -97,7 +96,8 @@ public class RecipeEventListener {
       return;
     }
 
-    List<RecipeIngredientLineDto> lines = mapLines(version.ingredients());
+    List<RecipeIngredientLineDto> lines =
+        RecipeNutritionLineMapper.toCalcLines(version.ingredients());
     if (lines.isEmpty()) {
       log.info(
           "RecipeEventListener: version has zero ingredients — recipeId={} versionId={}; skipping"
@@ -143,18 +143,5 @@ public class RecipeEventListener {
   private int resolveServings(RecipeVersionDto version) {
     // metadata may carry servings in a later recipe ticket; today the field doesn't exist.
     return 1;
-  }
-
-  private static List<RecipeIngredientLineDto> mapLines(List<IngredientDto> ingredients) {
-    if (ingredients == null || ingredients.isEmpty()) {
-      return List.of();
-    }
-    List<RecipeIngredientLineDto> out = new ArrayList<>(ingredients.size());
-    for (IngredientDto in : ingredients) {
-      out.add(
-          new RecipeIngredientLineDto(
-              in.displayName(), in.ingredientMappingKey(), in.quantity(), in.unit(), null, null));
-    }
-    return out;
   }
 }

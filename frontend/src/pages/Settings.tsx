@@ -12,7 +12,8 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { PageHeader } from "../components/PageHeader";
-import { MOCK_NOW_MS, KIND_TIME_DEFAULT } from "../mock/settingsAdminSeed";
+import { KIND_TIME_DEFAULT } from "../mock/settingsAdminSeed";
+import { MOCK_NOW_MS } from "../live/dates";
 import {
   changeMemberRole,
   changePassword,

@@ -1067,6 +1067,7 @@ function makeProvenance(args: {
   sourceType: RecipeImportDto["sourceType"];
   sourceUrl?: string | null;
   extractionMethod?: string | null;
+  sourceKey?: string | null;
   importedAt: string;
   duplicateOfRecipeId?: string | null;
 }): RecipeImportDto {
@@ -1077,6 +1078,7 @@ function makeProvenance(args: {
     sourceUrl: args.sourceUrl ?? null,
     sourcePayload: null,
     extractionMethod: args.extractionMethod ?? null,
+    sourceKey: args.sourceKey ?? null,
     duplicateOfRecipeId: args.duplicateOfRecipeId ?? null,
     importedAt: args.importedAt,
     importedByUserId: MOCK_USER_ID,
@@ -1300,8 +1302,13 @@ export function createRecipeSeed(): {
       sourceUrl: "https://www.bbcgoodfood.com/recipes/lemon-orzo-chicken",
       extractionMethod: "json_ld", importedAt: T("2026-06-09", "19:30"),
     }),
+    // Graph-batch dish (G10): carries the 32-char generator audit stamp + campaign sourceKey the
+    // detail page renders verbatim. black-bean-tacos below stays stamp-less — the no-provenance-
+    // detail edge (chip renders, stamp line omitted, no error).
     "chickpea-spinach-curry": makeProvenance({
       recipeId: "chickpea-spinach-curry", sourceType: "AI_GENERATED",
+      extractionMethod: "graph@395c11a+c@c81a2e87dacf339f",
+      sourceKey: "graph:camp-2026-07-dinner1",
       importedAt: T("2026-05-20"),
     }),
     "black-bean-tacos": makeProvenance({
@@ -1525,6 +1532,10 @@ export function createAdaptationSeed(): AdaptationState {
     impactScore: d.impactScore,
     createdAt: d.createdAt,
     expiresAt: d.expiresAt,
+    // status/optimisticVersion (#257) — carried straight from the detail DTO.
+    status: d.status,
+    resolvedAt: d.resolvedAt,
+    optimisticVersion: d.optimisticVersion,
   });
   return {
     // Server-ranked best-first by impact × confidence (activity.md §3a).
@@ -1563,6 +1574,7 @@ function makeSource(args: {
   kind: DiscoverySourceDto["kind"];
   baseUrl: string;
   enabled?: boolean;
+  userDisabled?: boolean;
   rpm?: number;
   rpd?: number;
   robots?: boolean;
@@ -1578,6 +1590,8 @@ function makeSource(args: {
     kind: args.kind,
     baseUrl: args.baseUrl,
     enabled: args.enabled ?? true,
+    // userDisabled — user-driven Settings toggle, distinct from admin `enabled`.
+    userDisabled: args.userDisabled ?? false,
     requestsPerMinute: args.rpm ?? 10,
     requestsPerDay: args.rpd ?? 500,
     respectRobotsTxt: args.robots ?? true,

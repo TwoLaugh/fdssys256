@@ -15,6 +15,7 @@ import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.testdata.AuthTestData;
+import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.domain.entity.EnforcementDirection;
 import com.example.mealprep.nutrition.domain.entity.Goal;
@@ -378,6 +379,110 @@ class TargetsFlowIT {
             seeded.getId());
     assertThat(auditCountAfterNoOp).isEqualTo(auditCountAfterFirst);
     assertThat(eventCapture.events()).isEmpty();
+  }
+
+  @Test
+  void put_updatesOverlappingMicroKeys_changedPlusAdded_returns200_notConflict() throws Exception {
+    // Regression for the targets-update 23505: PUT-updating an INITIALISED row whose new child set
+    // shares natural keys with the existing rows used to fail with 409
+    // "household-integrity-violation".
+    // Clear-and-readd orphan-removed iron_mg / vitamin_d_iu and re-inserted fresh-UUID rows for the
+    // SAME (targets_id, nutrient_key); Hibernate flushed those INSERTs before the orphan DELETEs,
+    // so
+    // the unchanged-key rows collided with the not-yet-deleted old rows on
+    // uq_nutrition_micro_targets_key.
+    // The fix reconciles children by natural key (update-in-place / delete-removed / insert-new).
+    AuthedUser user = registerUser();
+    NutritionTargets seeded = seedTargetsForUser(user.userId());
+
+    // First PUT initialises the children: micros [iron_mg=18, vitamin_d_iu=800], version 0 -> 1.
+    mvc.perform(
+            put("/api/v1/nutrition/targets")
+                .cookie(user.cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(NutritionTestData.defaultUpdateRequest(0L))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(1))
+        .andExpect(jsonPath("$.microTargets.length()").value(2));
+
+    // Second PUT: change an OVERLAPPING micro key's value (iron_mg 18 -> 25), keep the other
+    // overlapping key (vitamin_d_iu), and ADD a new key (calcium_mg). Everything else identical to
+    // the first PUT, so per-meal / activities / eating-window are in-place no-ops.
+    UpdateTargetsRequest base = NutritionTestData.defaultUpdateRequest(1L);
+    List<MicroTargetDto> micros =
+        List.of(
+            new MicroTargetDto("iron_mg", BigDecimal.valueOf(25.0), null, null, null, false),
+            new MicroTargetDto("vitamin_d_iu", BigDecimal.valueOf(800.0), null, null, null, false),
+            new MicroTargetDto("calcium_mg", BigDecimal.valueOf(1000.0), null, null, null, false));
+    UpdateTargetsRequest req =
+        new UpdateTargetsRequest(
+            base.goal(),
+            base.calories(),
+            base.protein(),
+            base.carbs(),
+            base.fat(),
+            base.fibre(),
+            base.satFat(),
+            base.notes(),
+            base.perMealDistribution(),
+            micros,
+            base.eatingWindow(),
+            base.activityAdjustments(),
+            1L);
+
+    // Before the fix this 409'd ("household-integrity-violation"); now it succeeds.
+    MvcResult putResult =
+        mvc.perform(
+                put("/api/v1/nutrition/targets")
+                    .cookie(user.cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(req)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.microTargets.length()").value(3))
+            .andExpect(openApi().isValid(openApiValidator))
+            .andReturn();
+    int putVersion =
+        objectMapper.readTree(putResult.getResponse().getContentAsString()).get("version").asInt();
+
+    // The overlapping key was UPDATED in place (not delete+reinsert), the unchanged key survives,
+    // and the new key was inserted — exactly three rows.
+    Long microCount =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM nutrition_micro_target WHERE targets_id = ?",
+            Long.class,
+            seeded.getId());
+    assertThat(microCount).isEqualTo(3L);
+
+    BigDecimal ironValue =
+        jdbcTemplate.queryForObject(
+            "SELECT target_value FROM nutrition_micro_target WHERE targets_id = ? AND nutrient_key = 'iron_mg'",
+            BigDecimal.class,
+            seeded.getId());
+    assertThat(ironValue).isEqualByComparingTo("25.0");
+
+    Long vitaminDCount =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM nutrition_micro_target WHERE targets_id = ? AND nutrient_key = 'vitamin_d_iu'",
+            Long.class,
+            seeded.getId());
+    assertThat(vitaminDCount).isEqualTo(1L);
+
+    Long calciumCount =
+        jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM nutrition_micro_target WHERE targets_id = ? AND nutrient_key = 'calcium_mg'",
+            Long.class,
+            seeded.getId());
+    assertThat(calciumCount).isEqualTo(1L);
+
+    // GET-after-PUT reflects the persisted change AND reports the SAME version the PUT returned.
+    // This guards the optimistic-locking contract: the PUT response version must not lag the
+    // committed row version (a child-only edit does not advance @Version, but response and row must
+    // agree, or the client's next PUT with the returned version would 409).
+    mvc.perform(get("/api/v1/nutrition/targets").cookie(user.cookie()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.microTargets.length()").value(3))
+        .andExpect(jsonPath("$.version").value(putVersion));
   }
 
   // ---------------- GET /api/v1/nutrition/targets/audit-log ----------------

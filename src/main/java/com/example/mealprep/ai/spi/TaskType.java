@@ -19,8 +19,18 @@ public enum TaskType {
   DISCOVERY_FILTERING,
   NUTRITION_INGREDIENT_PARSE,
   NUTRITION_INGREDIENT_MATCH,
+  // Estimate micronutrients a data source could not supply (no USDA/recipe value), from the
+  // recipe's name + ingredients. Low-trust by design — the result is tagged source="estimated"
+  // + a confidence, never blended with measured/derived data without that flag.
+  NUTRIENT_ESTIMATION,
   PLANNER_STAGE_C,
   PLANNER_PHASE2_AUGMENTATION,
+  // Culinary-appropriateness gate for in-meal additions (Phase 2): the deterministic planner picks
+  // WHICH whole foods close the day's gap; this assigns each to the most sensible meal slot +
+  // writes
+  // the pairing note ("½ avocado on the taco salad"). Skippable — falls back to deterministic
+  // placement when the AI is unavailable.
+  PLANNER_ADDITION_PAIRING,
   // Embedding sources — one per EmbeddingTaskType. Stored on ai_call_log.task_type so 01b's
   // budget guard sums embedding spend alongside completion spend. The mapping is owned by
   // AiServiceImpl.toTaskType(EmbeddingTaskType).

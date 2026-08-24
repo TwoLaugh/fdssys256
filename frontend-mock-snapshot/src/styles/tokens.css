@@ -1,0 +1,43 @@
+/*
+ * D6 Hybrid design tokens.
+ * Full spec: design/frontend/design-language.md (separate PR).
+ * Reference: directions/d6-hybrid.jsx in the design mockups.
+ */
+:root {
+  /* Surfaces */
+  --mp-bg: #faf6ec; /* warm paper canvas */
+  --mp-card: #fffdf6;
+
+  /* Ink */
+  --mp-ink: #262019;
+  --mp-muted: #6f6553; /* AA on bg */
+
+  /* Lines */
+  --mp-line: #e6decb;
+  --mp-line-hi: #cfc4a9;
+
+  /* Accents */
+  --mp-terra: #c14e28; /* primary action / suggestion accent */
+  --mp-terra-dark: #9c3c1d;
+  --mp-red: #b3261e; /* danger ONLY */
+  --mp-olive: #5f7036; /* done / on-track */
+  --mp-amber: #9a6a1c; /* time-sensitive / behind */
+
+  /* Tints + supporting */
+  --mp-terra-tint: #f6e3d9; /* active rail pill */
+  --mp-olive-tint: #eef0e2; /* batch / on-track note pill */
+  --mp-olive-deep: #41502a; /* text on olive tint (AA) */
+  --mp-olive-line: #d4d8b8; /* border on olive tint */
+  --mp-mark-planned: #9c9077; /* planned status mark */
+  --mp-on-terra: #fff7ef; /* text on filled terra */
+  --mp-photo-fallback: #e8dcc8; /* warm swatch behind food photos */
+
+  /* Type */
+  --mp-font-body: "Instrument Sans", sans-serif;
+  --mp-font-display: "Schibsted Grotesk", sans-serif;
+  --mp-font-advisor: "Instrument Serif", serif;
+
+  /* Shape */
+  --mp-radius: 8px;
+  --mp-radius-card: 12px;
+}

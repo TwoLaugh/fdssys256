@@ -387,7 +387,9 @@ public record ScheduledRecipeDto(
     UUID id, UUID recipeId, UUID recipeVersionId, UUID recipeBranchId,
     int servings, UUID batchCookSessionId,
     String augmentationNotes, AugmentationSource augmentationSource,
-    boolean phase2Addition) {}
+    boolean phase2Addition,
+    List<Addition> additions,      // Phase-2 in-meal riders; empty until planned
+    BigDecimal portionFactor) {}   // per-person portion scale; 1 when unscaled
 
 public record ScoreBreakdownDocument(
     BigDecimal preference, BigDecimal nutrition, BigDecimal cost,
@@ -400,7 +402,8 @@ public record ScoreBreakdownDocument(
 
 public record RollupSummaryDocument(
     List<DailyRollupDocument> daily,
-    WeeklyRollupDocument weekly) {}
+    WeeklyRollupDocument weekly,
+    NutritionCoverageDocument nutritionCoverage) {}  // null pre-coverage and without targets
 
 public record DailyRollupDocument(
     LocalDate date,
@@ -1042,10 +1045,10 @@ All endpoints under `/api/v1/plans/...` and `/api/v1/meal-slots/...`. `userId` r
 
 | Method | Path | Request | Response | Status |
 |---|---|---|---|---|
-| GET    | `/active?householdId=&weekStartDate=` | — | `PlanDto` | 200 / 404 |
-| GET    | `/history?householdId=&weekStartDate=` | — | `List<PlanDto>` | 200 |
-| GET    | `?householdId=&from=&to=&page=&size=` | — | `Page<PlanDto>` | 200 |
-| GET    | `/{planId}` | — | `PlanDto` | 200 / 404 |
+| GET    | `/active?householdId=&weekStartDate=` | — | `PlanDto` | 200 / 403 / 404 |
+| GET    | `/history?householdId=&weekStartDate=` | — | `List<PlanDto>` | 200 / 403 |
+| GET    | `?householdId=&from=&to=&page=&size=` | — | `Page<PlanDto>` | 200 / 403 |
+| GET    | `/{planId}` | — | `PlanDto` | 200 / 403 / 404 |
 | POST   | `/generate` | `GeneratePlanRequest` | `PlanDto` | 201 / 400 / 409 / 422 |
 | POST   | `/{planId}/accept` | — | `PlanDto` | 200 / 404 / 409 |
 | POST   | `/{planId}/reject` | `RejectPlanRequest` | `PlanDto` | 200 / 404 / 409 |
@@ -1061,7 +1064,10 @@ All endpoints under `/api/v1/plans/...` and `/api/v1/meal-slots/...`. `userId` r
 > raised (no recomputation, no side effects — no decision-log write). Any status is readable;
 > staleness against later slot-state drift is resolved by accept-time validation, not the read.
 | GET    | `/feasibility?householdId=&weekStartDate=` | — | `FeasibilityCheckResultDto` | 200 / 401 / 403 |
-| GET    | `/suggestions?householdId=&page=&size=` | — | `Page<ReoptSuggestionDto>` | 200 |
+| GET    | `/suggestions?householdId=&page=&size=` | — | `Page<ReoptSuggestionDto>` | 200 / 403 |
+
+> All endpoints are household-scoped: a caller who is not a member of the target household (or of
+> the plan's household for `{planId}` routes) gets 403. The v1 open-reads deferral is closed.
 
 > **Reconciled (planner-12).** `POST /reoptimise` was **removed** — mid-week re-opt is the
 > `reopt-suggestions/{id}/accept|reject` pair above (the suggestion-accept flow writes the new

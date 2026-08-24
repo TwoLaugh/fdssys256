@@ -12,12 +12,10 @@ import java.util.Map;
  * public} only so the refactored gate (in the sibling {@code scoring} package) can iterate the
  * returned map; the {@link Builder} stays package-private.
  *
- * <p><b>01f codebase divergence — recipe nutrition not exposed</b>: {@code RecipeVersionDto}
- * carries no {@code nutritionPerServing} JsonNode in this codebase (the ticket's verbatim snippet
- * assumed an idealised LLD shape). 01e established that every per-day macro total is therefore
- * {@code 0}; 01f preserves that exactly so {@code NutritionFloorGateTest} stays byte-identical. The
- * {@code DailyMacroAggregator} is still the single seam to plug real per-serving macros into when
- * recipe-01h's nutrition pipeline exposes them — see {@code DailyMacroAggregator}.
+ * <p>Per-day macro + micro totals are summed by {@link DailyMacroAggregator} from each recipe's
+ * {@code RecipeVersionDto.nutritionPerServing} (one serving per slot, per the primary eater). A
+ * recipe with no computed nutrition contributes 0. The {@code micros} map carries the per-serving
+ * micronutrient totals keyed by source nutrient key.
  *
  * <p>Built via the static nested mutable {@link Builder} (Lombok's {@code @Builder} does not work
  * on records; the ticket gotcha #7 calls for a hand-rolled builder).
@@ -30,14 +28,35 @@ public record DailyMacroTotals(
     BigDecimal carbsG,
     BigDecimal fibreG,
     BigDecimal saturatedFatG,
-    Map<String, BigDecimal> micros) {
+    Map<String, BigDecimal> micros,
+    // Per-micro lowest-trust provenance for this day: measured < derived < estimated. Mirrors the
+    // `micros` keys; used by RollupBuilder to surface how each coverage figure was sourced.
+    Map<String, String> microSources) {
+
+  /**
+   * Wire keys for the fatty-acid breakdown. Saturated/mono/poly fat are USDA-derived per serving
+   * and ride the per-serving {@code micros} map (same provenance pipeline as the micronutrients),
+   * but saturated fat is a MACRO — {@link DailyMacroAggregator} bridges {@link #SATURATED_FAT_KEY}
+   * into the dedicated {@link #saturatedFatG()} total so it steers scoring + portioning, while
+   * mono/poly are carried in {@code micros} for display. These literals are the contract with the
+   * offline importer ({@code build_usda_fill.py}).
+   */
+  public static final String SATURATED_FAT_KEY = "saturated_fat_g";
+
+  public static final String MONOUNSATURATED_FAT_KEY = "monounsaturated_fat_g";
+  public static final String POLYUNSATURATED_FAT_KEY = "polyunsaturated_fat_g";
 
   static Builder builder(LocalDate date) {
     return new Builder(date);
   }
 
+  /** Provenance trust rank — higher = lower trust; the "worst" source wins a blend. */
+  static int trustRank(String source) {
+    return "estimated".equals(source) ? 2 : ("derived".equals(source) ? 1 : 0);
+  }
+
   /** Mutable accumulator; one instance per date bucket while walking assignments. */
-  static final class Builder {
+  public static final class Builder {
 
     private final LocalDate date;
     private int kcal;
@@ -47,9 +66,30 @@ public record DailyMacroTotals(
     private BigDecimal fibreG = BigDecimal.ZERO;
     private BigDecimal saturatedFatG = BigDecimal.ZERO;
     private final Map<String, BigDecimal> micros = new LinkedHashMap<>();
+    private final Map<String, String> microSources = new LinkedHashMap<>();
 
     Builder(LocalDate date) {
       this.date = date;
+    }
+
+    /**
+     * Deep copy of this builder's running accumulators — used by the incremental Stage-A scorer so
+     * each beam child folds a slot into its OWN copy of the parent's per-day totals instead of
+     * sharing (and corrupting) sibling children's accumulators. The copied {@code micros} / {@code
+     * microSources} maps preserve insertion order, so a later {@code build()} on the copy is
+     * byte-identical to building the original after the same delta sequence.
+     */
+    Builder copy() {
+      Builder b = new Builder(date);
+      b.kcal = this.kcal;
+      b.proteinG = this.proteinG;
+      b.fatG = this.fatG;
+      b.carbsG = this.carbsG;
+      b.fibreG = this.fibreG;
+      b.saturatedFatG = this.saturatedFatG;
+      b.micros.putAll(this.micros);
+      b.microSources.putAll(this.microSources);
+      return b;
     }
 
     Builder addKcal(int delta) {
@@ -87,9 +127,24 @@ public record DailyMacroTotals(
       return this;
     }
 
+    /** Record a micro's provenance, keeping the lowest-trust source seen for that key this day. */
+    Builder addMicroSource(String key, String source) {
+      String s = source == null ? "measured" : source;
+      this.microSources.merge(key, s, (a, b) -> trustRank(b) > trustRank(a) ? b : a);
+      return this;
+    }
+
     DailyMacroTotals build() {
       return new DailyMacroTotals(
-          date, kcal, proteinG, fatG, carbsG, fibreG, saturatedFatG, Map.copyOf(micros));
+          date,
+          kcal,
+          proteinG,
+          fatG,
+          carbsG,
+          fibreG,
+          saturatedFatG,
+          Map.copyOf(micros),
+          Map.copyOf(microSources));
     }
   }
 }

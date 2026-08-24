@@ -869,11 +869,7 @@ public class HouseholdServiceImpl
       throw new EmptyHouseholdMergeException(householdId);
     }
 
-    Map<UUID, Integer> priorityByUser =
-        members.stream()
-            .collect(
-                Collectors.toMap(
-                    HouseholdMember::getUserId, HouseholdMember::getPriority, (a, b) -> a));
+    Map<UUID, Integer> priorityByUser = priorityByUser(members);
 
     List<UUID> resolved;
     if (eaterUserIds == null || eaterUserIds.isEmpty()) {
@@ -890,9 +886,49 @@ public class HouseholdServiceImpl
       }
       resolved = List.copyOf(eaterUserIds);
     }
+    return mergeResolved(householdId, priorityByUser, resolved);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<MergedSoftPreferencesDto> mergeSoftPreferencesForSlotIfResolvable(
+      UUID householdId, List<UUID> eaterUserIds) {
+    // Same resolution as the throwing variant, but every absence case is a value: the planner
+    // calls this inside an open transaction, and an exception thrown through this proxy would
+    // mark that transaction rollback-only even when the caller treats absence as "run without".
+    Optional<Household> household = householdRepository.findWithMembersById(householdId);
+    if (household.isEmpty()) {
+      return Optional.empty();
+    }
+    List<HouseholdMember> members = household.get().getMembers();
+    if (members == null || members.isEmpty()) {
+      return Optional.empty();
+    }
+    Map<UUID, Integer> priorityByUser = priorityByUser(members);
+    List<UUID> resolved;
+    if (eaterUserIds == null || eaterUserIds.isEmpty()) {
+      resolved = members.stream().map(HouseholdMember::getUserId).toList();
+    } else {
+      // Non-member eaters keep the Flow 7 guard: nobody's preferences are blended, empty result.
+      if (!eaterUserIds.stream().allMatch(priorityByUser::containsKey)) {
+        return Optional.empty();
+      }
+      resolved = List.copyOf(eaterUserIds);
+    }
+    return Optional.of(mergeResolved(householdId, priorityByUser, resolved));
+  }
+
+  private static Map<UUID, Integer> priorityByUser(List<HouseholdMember> members) {
+    return members.stream()
+        .collect(
+            Collectors.toMap(
+                HouseholdMember::getUserId, HouseholdMember::getPriority, (a, b) -> a));
+  }
+
+  private MergedSoftPreferencesDto mergeResolved(
+      UUID householdId, Map<UUID, Integer> priorityByUser, List<UUID> resolved) {
     List<Integer> priorities =
         resolved.stream().map(u -> priorityByUser.getOrDefault(u, 100)).toList();
-
     List<SoftPreferenceBundleDto> bundles =
         resolveSoftPreferencesReader().getSoftPreferencesByUserIds(resolved);
     return softPreferenceMerger.merge(bundles, priorities, householdId, resolved);

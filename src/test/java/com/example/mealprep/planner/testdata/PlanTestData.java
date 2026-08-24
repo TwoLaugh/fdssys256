@@ -302,6 +302,41 @@ public final class PlanTestData {
         Map.of());
   }
 
+  /**
+   * A {@link PlanCompositionContext} carrying a merged lifestyle config, for variety-cap tests.
+   * Only {@code mergedLifestyleConfig} (novelty %, batch-cooking flag) is populated; everything
+   * else mirrors {@link #minimalContext}.
+   */
+  public static PlanCompositionContext contextWithLifestyle(
+      Integer noveltyTolerancePercent, boolean batchCookingPreferred) {
+    com.example.mealprep.household.api.dto.LifestyleConfigDocument lifestyle =
+        new com.example.mealprep.household.api.dto.LifestyleConfigDocument(
+            null, null, noveltyTolerancePercent, batchCookingPreferred);
+    com.example.mealprep.household.api.dto.MergedSoftPreferencesDto merged =
+        new com.example.mealprep.household.api.dto.MergedSoftPreferencesDto(
+            UUID.randomUUID(),
+            List.of(),
+            null,
+            lifestyle,
+            List.of(),
+            null,
+            Instant.parse("2026-01-01T00:00:00Z"));
+    return new PlanCompositionContext(
+        UUID.randomUUID(),
+        LocalDate.of(2026, 1, 5),
+        List.of(),
+        Map.<UUID, com.example.mealprep.preference.api.dto.HardConstraintsDto>of(),
+        Map.<UUID, com.example.mealprep.household.api.dto.SoftPreferenceBundleDto>of(),
+        merged,
+        null,
+        null,
+        new RecipePoolSnapshot(List.of(), Instant.parse("2026-01-01T00:00:00Z")),
+        List.of(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        Map.of());
+  }
+
   // ---- planner-01e scoring fixture builders ---------------------------------------------------
 
   /**
@@ -318,7 +353,17 @@ public final class PlanTestData {
         new PlannerProperties.ScoringTuning.ProvisionsTuning(
             new PlannerProperties.ScoringTuning.ProvisionsTuning.WasteValueTiers(
                 new BigDecimal("1.0"), new BigDecimal("2.0"), new BigDecimal("3.0"))),
-        new PlannerProperties.ScoringTuning.CostTuning(new BigDecimal("0.1")));
+        new PlannerProperties.ScoringTuning.CostTuning(new BigDecimal("0.1")),
+        // Neutral-ish fixture weights (calories/protein 1.5, others 1.0) — matches the optimiser's
+        // original hardcoded importances so PortionOptimizerTest assertions stay valid; the live
+        // production default (carbs/fat ~0.2) lives in application.properties, not here.
+        new PlannerProperties.ScoringTuning.NutritionMacroWeights(
+            new BigDecimal("1.5"),
+            new BigDecimal("1.5"),
+            new BigDecimal("1.0"),
+            new BigDecimal("1.0"),
+            new BigDecimal("1.0"),
+            new BigDecimal("1.0")));
   }
 
   /** Default mid-week sub-config (planner-01i): lock=24h, maxSuggestionsPerPlan=3. */
@@ -492,6 +537,64 @@ public final class PlanTestData {
         base.createdAt(),
         base.updatedAt(),
         withEmbedding,
+        base.branches());
+  }
+
+  /**
+   * A {@link RecipeDto} like {@link #scoredRecipe} but whose current-version body carries the
+   * supplied per-serving {@code nutrition} AND {@code embedding} — used by the incremental-scoring
+   * oracle so preference (cosine), nutrition (per-day macros/micros), variety, and time sub-scores
+   * all produce non-trivial, recipe-dependent values.
+   */
+  public static RecipeDto scoredRecipeFull(
+      UUID id,
+      int totalTimeMins,
+      String cuisine,
+      String protein,
+      String cookingMethod,
+      float[] embedding,
+      com.example.mealprep.recipe.api.dto.NutritionPerServingDto nutrition) {
+    RecipeDto base =
+        scoredRecipe(id, totalTimeMins, cuisine, protein, cookingMethod, List.of("rice", "oil"));
+    RecipeVersionDto v = base.currentVersionBody();
+    RecipeVersionDto withBody =
+        new RecipeVersionDto(
+            v.id(),
+            v.branchId(),
+            v.versionNumber(),
+            v.parentVersionId(),
+            v.trigger(),
+            v.changeReason(),
+            v.embeddingStatus(),
+            v.createdAt(),
+            v.createdByActor(),
+            v.adapterTraceId(),
+            v.ingredients(),
+            v.methodSteps(),
+            v.metadata(),
+            v.tags(),
+            v.appliedSubstitutionIds(),
+            embedding,
+            nutrition);
+    return new RecipeDto(
+        base.id(),
+        base.userId(),
+        base.catalogue(),
+        base.name(),
+        base.description(),
+        base.currentVersion(),
+        base.currentBranchId(),
+        base.dataQuality(),
+        base.nutritionStatus(),
+        base.forkedFromRecipeId(),
+        base.lastUsedInPlanAt(),
+        base.archivedAt(),
+        base.deletedAt(),
+        base.imageUrl(),
+        base.optimisticVersion(),
+        base.createdAt(),
+        base.updatedAt(),
+        withBody,
         base.branches());
   }
 

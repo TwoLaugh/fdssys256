@@ -6,7 +6,7 @@
 
 import { useState } from "react";
 import { Modal } from "../../components/Modal";
-import { MOCK_TODAY_ISO } from "../../mock/seed";
+import { MOCK_TODAY_ISO } from "../../live/dates";
 import { logWaste, useStore } from "../../mock/store";
 import type { InventoryItemDto, WasteReason } from "../../mock/types";
 

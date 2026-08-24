@@ -56,7 +56,7 @@ class NotificationKindResolverTest {
             UUID.randomUUID(),
             Instant.now());
 
-    NotificationDraft draft = resolver().resolve(event);
+    NotificationDraft draft = resolver().resolve(event).orElseThrow();
 
     assertThat(draft.kind()).isEqualTo(NotificationKind.PROVISION_ITEM_NEAR_EXPIRY);
     assertThat(draft.severity()).isEqualTo(NotificationSeverity.ATTENTION);
@@ -87,7 +87,7 @@ class NotificationKindResolverTest {
         new DefrostReminderEvent(
             user, null, UUID.randomUUID(), slot, Instant.now(), UUID.randomUUID(), Instant.now());
 
-    NotificationDraft draft = resolver().resolve(event);
+    NotificationDraft draft = resolver().resolve(event).orElseThrow();
 
     assertThat(draft.kind()).isEqualTo(NotificationKind.PROVISION_DEFROST_REMINDER);
     assertThat(draft.bundlingKey()).isEqualTo(slot.toString());
@@ -190,7 +190,7 @@ class NotificationKindResolverTest {
             UUID.randomUUID(),
             Instant.now());
 
-    NotificationDraft draft = resolver().resolve(event);
+    NotificationDraft draft = resolver().resolve(event).orElseThrow();
 
     assertThat(draft.kind()).isEqualTo(NotificationKind.PLANNER_REOPT_SUGGESTED);
     assertThat(draft.userId()).isEqualTo(primaryUser);
@@ -218,12 +218,114 @@ class NotificationKindResolverTest {
             UUID.randomUUID(),
             Instant.now());
 
-    NotificationDraft draft = resolver().resolve(event);
+    NotificationDraft draft = resolver().resolve(event).orElseThrow();
 
     assertThat(draft.kind()).isEqualTo(NotificationKind.PLANNER_PLAN_GENERATED);
     assertThat(draft.severity()).isEqualTo(NotificationSeverity.INFO);
     assertThat(draft.userId()).isEqualTo(primaryUser);
     assertThat(draft.actionTargetUri()).isEqualTo("/plan");
+  }
+
+  @Test
+  void resolve_planGenerated_unknownHousehold_resolvesNobody() {
+    // Pins the CI failure class: a PlanGeneratedEvent whose household cannot be resolved must
+    // dispatch nothing, not insert a null-user preference row.
+    UUID household = UUID.randomUUID();
+    when(householdQueryService.getById(household)).thenReturn(Optional.empty());
+    var event =
+        new PlanGeneratedEvent(
+            UUID.randomUUID(),
+            household,
+            LocalDate.now(),
+            1,
+            null,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            false,
+            false,
+            false,
+            UUID.randomUUID(),
+            Instant.now());
+
+    assertThat(resolver().resolve(event)).isEmpty();
+  }
+
+  @Test
+  void resolve_planGenerated_householdWithoutPrimary_resolvesNobody() {
+    UUID household = UUID.randomUUID();
+    HouseholdMemberDto plainMember =
+        new HouseholdMemberDto(
+            UUID.randomUUID(),
+            household,
+            UUID.randomUUID(),
+            HouseholdRole.member,
+            "Member",
+            null,
+            1,
+            Instant.now(),
+            0L);
+    HouseholdDto dto =
+        new HouseholdDto(household, "Home", null, List.of(plainMember), Instant.now(), 0L);
+    when(householdQueryService.getById(household)).thenReturn(Optional.of(dto));
+    var event =
+        new PlanGeneratedEvent(
+            UUID.randomUUID(),
+            household,
+            LocalDate.now(),
+            1,
+            null,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            false,
+            false,
+            false,
+            UUID.randomUUID(),
+            Instant.now());
+
+    assertThat(resolver().resolve(event)).isEmpty();
+  }
+
+  @Test
+  void resolve_reoptSuggested_unknownHousehold_resolvesNobody() {
+    UUID household = UUID.randomUUID();
+    when(householdQueryService.getById(household)).thenReturn(Optional.empty());
+    var event =
+        new ReoptSuggestedEvent(
+            UUID.randomUUID(),
+            household,
+            LocalDate.now(),
+            UUID.randomUUID(),
+            null,
+            UUID.randomUUID(),
+            List.of(UUID.randomUUID()),
+            "summary",
+            UUID.randomUUID(),
+            Instant.now());
+
+    assertThat(resolver().resolve(event)).isEmpty();
+  }
+
+  @Test
+  void draft_rejectsNullUser() {
+    // The record is the last line of defence: no code path may build a userless draft.
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () ->
+                new NotificationDraft(
+                    null,
+                    null,
+                    NotificationKind.PLANNER_PLAN_GENERATED,
+                    NotificationSeverity.INFO,
+                    "t",
+                    "b",
+                    null,
+                    "/plan",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    "tag"))
+        .isInstanceOf(NullPointerException.class);
   }
 
   @Test

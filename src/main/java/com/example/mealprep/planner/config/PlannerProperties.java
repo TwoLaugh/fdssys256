@@ -158,7 +158,27 @@ public record PlannerProperties(
   public record ScoringTuning(
       @NotNull VarietyTargets variety,
       @NotNull ProvisionsTuning provisions,
-      @NotNull CostTuning cost) {
+      @NotNull CostTuning cost,
+      @NotNull NutritionMacroWeights nutritionMacroWeights) {
+
+    /**
+     * Per-macro importance weights for the finalise-time {@code PortionOptimizer} — how much each
+     * macro target matters when sizing servings to minimise deviation. This is the user-facing
+     * "what do you care about" knob: raise calories/protein, drop carbs/fat toward 0 to stop the
+     * optimiser fighting them. The default is calories/protein-primary (calories 2.0, protein 1.5)
+     * with carbs/fat a minor nudge (0.2) — for a goal-driven meal planner calories + protein are
+     * the levers the user actually steers, and over-constraining carbs/fat with a fatty pool just
+     * starves calories. (Per-user weights on the nutrition targets are the productionised layer;
+     * this is the global default knob.) A weight of 0 removes the macro from the objective
+     * entirely.
+     */
+    public record NutritionMacroWeights(
+        @NotNull @DecimalMin("0.0") BigDecimal calories,
+        @NotNull @DecimalMin("0.0") BigDecimal protein,
+        @NotNull @DecimalMin("0.0") BigDecimal carbs,
+        @NotNull @DecimalMin("0.0") BigDecimal fat,
+        @NotNull @DecimalMin("0.0") BigDecimal fibre,
+        @NotNull @DecimalMin("0.0") BigDecimal satFat) {}
 
     public record VarietyTargets(
         @Min(1) int cuisine, // default 5

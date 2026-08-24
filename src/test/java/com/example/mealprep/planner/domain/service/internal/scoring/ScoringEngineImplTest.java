@@ -37,7 +37,8 @@ class ScoringEngineImplTest {
     return List.of(
         new PreferenceSubScore(
             Mockito.mock(com.example.mealprep.preference.PreferenceModule.class)),
-        new NutritionSubScore(),
+        new NutritionSubScore(
+            new com.example.mealprep.planner.domain.service.internal.rollup.DailyMacroAggregator()),
         new CostSubScore(
             props,
             new com.example.mealprep.planner.domain.service.internal.rollup.DailyCostAggregator(),

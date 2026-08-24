@@ -104,7 +104,8 @@ class VarietySubScoreTest {
             new PlannerProperties.ScoringTuning(
                 new PlannerProperties.ScoringTuning.VarietyTargets(0, 0, 0, 0),
                 PlanTestData.defaultTuning().provisions(),
-                PlanTestData.defaultTuning().cost()),
+                PlanTestData.defaultTuning().cost(),
+                PlanTestData.defaultTuning().nutritionMacroWeights()),
             java.time.Duration.ofSeconds(20),
             3,
             5,
@@ -138,7 +139,8 @@ class VarietySubScoreTest {
             new PlannerProperties.ScoringTuning(
                 new PlannerProperties.ScoringTuning.VarietyTargets(2, 2, 2, 2),
                 PlanTestData.defaultTuning().provisions(),
-                PlanTestData.defaultTuning().cost()),
+                PlanTestData.defaultTuning().cost(),
+                PlanTestData.defaultTuning().nutritionMacroWeights()),
             java.time.Duration.ofSeconds(20),
             3,
             5,

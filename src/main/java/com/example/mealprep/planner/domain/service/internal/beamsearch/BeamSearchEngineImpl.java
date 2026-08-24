@@ -4,11 +4,12 @@ import com.example.mealprep.planner.api.dto.BeamSearchOutcome;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
-import com.example.mealprep.planner.api.dto.ScoreResult;
 import com.example.mealprep.planner.api.dto.SlotAssignment;
 import com.example.mealprep.planner.config.PlannerProperties;
+import com.example.mealprep.planner.domain.service.internal.scoring.BeamCandidateScorer;
 import com.example.mealprep.planner.domain.service.internal.scoring.ScoringEngine;
 import com.example.mealprep.recipe.api.dto.RecipeDto;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -46,16 +47,19 @@ class BeamSearchEngineImpl implements BeamSearchEngine {
   private final HardFilterRunner hardFilterRunner;
   private final BeamPruner beamPruner;
   private final ScoringEngine scoringEngine;
+  private final BeamCandidateScorer candidateScorer;
   private final PlannerProperties properties;
 
   BeamSearchEngineImpl(
       HardFilterRunner hardFilterRunner,
       BeamPruner beamPruner,
       ScoringEngine scoringEngine,
+      BeamCandidateScorer candidateScorer,
       PlannerProperties properties) {
     this.hardFilterRunner = hardFilterRunner;
     this.beamPruner = beamPruner;
     this.scoringEngine = scoringEngine;
+    this.candidateScorer = candidateScorer;
     this.properties = properties;
   }
 
@@ -100,7 +104,8 @@ class BeamSearchEngineImpl implements BeamSearchEngine {
       List<MealSlotSkeleton> orderedSlots) {
     long startNanos = System.nanoTime();
     long timeoutNanos = properties.stageATimeout().toNanos();
-    List<PartialPlan> beam = List.of(PartialPlan.empty(ctx.weekStartDate()));
+    List<PartialPlan> beam =
+        List.of(PartialPlan.empty(ctx.weekStartDate(), candidateScorer.emptyState(ctx)));
     for (MealSlotSkeleton skel : orderedSlots) {
       long elapsedNanos = System.nanoTime() - startNanos;
       if (elapsedNanos > timeoutNanos) {
@@ -134,7 +139,11 @@ class BeamSearchEngineImpl implements BeamSearchEngine {
                 .findFirst();
     if (pinned.isPresent()) {
       SlotAssignment a = pinned.get();
-      return beam.stream().map(p -> p.append(a)).toList();
+      // Pinned slots skip re-scoring (currentScore unchanged, per the re-opt path) but MUST still
+      // fold into the incremental accumulators so a later scored slot builds on a correct state.
+      return beam.stream()
+          .map(p -> p.append(a, candidateScorer.append(p.incrementalState(), a, ctx)))
+          .toList();
     }
 
     List<RecipeDto> slotPool = pool.getOrDefault(skel.slotId(), List.of());
@@ -147,9 +156,12 @@ class BeamSearchEngineImpl implements BeamSearchEngine {
     for (PartialPlan p : beam) {
       for (RecipeDto r : slotPool) {
         SlotAssignment assignment = toAssignment(skel, r, defaultServings);
-        PartialPlan candidate = p.append(assignment);
-        ScoreResult sr = scoringEngine.score(candidate.toCandidatePlanView(UUID.randomUUID()), ctx);
-        expanded.add(candidate.withScore(sr.composite()));
+        Object nextState = candidateScorer.append(p.incrementalState(), assignment, ctx);
+        PartialPlan candidate = p.append(assignment, nextState);
+        BigDecimal composite =
+            candidateScorer.composite(
+                nextState, candidate.toCandidatePlanView(UUID.randomUUID()), ctx);
+        expanded.add(candidate.withScore(composite));
       }
     }
     return beamPruner.retainTop(expanded, config.width());

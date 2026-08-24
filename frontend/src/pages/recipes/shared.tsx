@@ -61,13 +61,28 @@ export const QUALITY_ORDER: DataQuality[] = [
 export const QUALITY_LABEL: Record<DataQuality, string> = {
   USER_VERIFIED: "User verified",
   IMPORTED: "imported",
-  AI_GENERATED: "ai generated",
+  AI_GENERATED: "generated",
   WEB_DISCOVERED: "web discovered",
 };
 
+/**
+ * One-sentence honesty tooltip for the `generated` chip (G10): what a generated
+ * dish is + what its numbers mean. Rendered as a `title` attr on cards and detail.
+ */
+export const GENERATED_TOOLTIP =
+  "Created by MealPrep's recipe generator from learned cooking knowledge, then " +
+  "human-reviewed. Nutrition is computed by MealPrep from the ingredient list.";
+
 export function QualityBadge({ quality }: { quality: DataQuality }) {
   if (quality === "USER_VERIFIED") return <TintChip>User verified</TintChip>;
-  return <span className="tier-badge">{QUALITY_LABEL[quality]}</span>;
+  return (
+    <span
+      className="tier-badge"
+      title={quality === "AI_GENERATED" ? GENERATED_TOOLTIP : undefined}
+    >
+      {QUALITY_LABEL[quality]}
+    </span>
+  );
 }
 
 export function needsReviewCountOf(recipe: RecipeDto): number {

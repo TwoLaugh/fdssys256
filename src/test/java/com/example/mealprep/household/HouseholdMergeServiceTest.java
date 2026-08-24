@@ -208,6 +208,63 @@ class HouseholdMergeServiceTest {
   }
 
   @Test
+  void mergeSoftPreferencesForSlotIfResolvable_absenceIsEmpty_neverThrows() {
+    // The planner calls this inside an open transaction; a thrown-and-caught service exception
+    // would mark that transaction rollback-only, so every absence case must be a value.
+    UUID missing = UUID.randomUUID();
+    when(householdRepository.findWithMembersById(missing)).thenReturn(Optional.empty());
+    assertThat(service(List.of()).mergeSoftPreferencesForSlotIfResolvable(missing, null)).isEmpty();
+
+    UUID empty = UUID.randomUUID();
+    when(householdRepository.findWithMembersById(empty))
+        .thenReturn(Optional.of(HouseholdTestData.household().withId(empty).build()));
+    assertThat(service(List.of()).mergeSoftPreferencesForSlotIfResolvable(empty, null)).isEmpty();
+
+    UUID hh = UUID.randomUUID();
+    UUID member = UUID.randomUUID();
+    UUID stranger = UUID.randomUUID();
+    when(householdRepository.findWithMembersById(hh))
+        .thenReturn(
+            Optional.of(
+                HouseholdTestData.household()
+                    .withId(hh)
+                    .withMember(
+                        HouseholdTestData.member()
+                            .withUserId(member)
+                            .withRole(HouseholdRole.primary)
+                            .withPriority(100)
+                            .build())
+                    .build()));
+    assertThat(
+            service(List.of())
+                .mergeSoftPreferencesForSlotIfResolvable(hh, List.of(member, stranger)))
+        .isEmpty();
+  }
+
+  @Test
+  void mergeSoftPreferencesForSlotIfResolvable_resolvableHousehold_matchesThrowingVariant() {
+    UUID hh = UUID.randomUUID();
+    UUID u1 = UUID.randomUUID();
+    Household household =
+        HouseholdTestData.household()
+            .withId(hh)
+            .withMember(
+                HouseholdTestData.member()
+                    .withUserId(u1)
+                    .withRole(HouseholdRole.primary)
+                    .withPriority(100)
+                    .build())
+            .build();
+    when(householdRepository.findWithMembersById(hh)).thenReturn(Optional.of(household));
+
+    MergedSoftPreferencesDto out =
+        service(List.of()).mergeSoftPreferencesForSlotIfResolvable(hh, List.of(u1)).orElseThrow();
+
+    assertThat(out.householdId()).isEqualTo(hh);
+    assertThat(out.contributingUserIds()).containsExactly(u1);
+  }
+
+  @Test
   void mergeSoftPreferencesForUsers_mismatchedLengths_throws() {
     UUID u1 = UUID.randomUUID();
     UUID u2 = UUID.randomUUID();

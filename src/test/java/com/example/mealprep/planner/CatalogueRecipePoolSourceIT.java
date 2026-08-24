@@ -266,6 +266,22 @@ class CatalogueRecipePoolSourceIT {
     };
   }
 
+  /**
+   * A single-slot skeleton of the given kind for {@code userId} (per-kind pool reads key off it).
+   */
+  private MealSlotSkeleton slot(SlotKind kind, UUID userId) {
+    return new MealSlotSkeleton(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        0,
+        WEEK,
+        kind,
+        kind.name().toLowerCase(java.util.Locale.ROOT),
+        60,
+        true,
+        List.of(userId));
+  }
+
   // ============================================================================================
   // 1. The pool source returns the seeded catalogue, fully hydrated.
   // ============================================================================================
@@ -278,23 +294,19 @@ class CatalogueRecipePoolSourceIT {
         seedCatalogue(userId, 3, SlotKind.BREAKFAST, SlotKind.LUNCH, SlotKind.DINNER);
     stubHousehold(household, userId);
 
+    // Candidate selection is now PER-KIND: the pool reads candidates for each distinct slot kind in
+    // the run (no taste vector for this never-seeded test user, so it uses the createdAt-ordered
+    // per-kind fallback). Pass one skeleton per seeded kind so all three kinds' candidates surface.
     List<MealSlotSkeleton> skeletons =
         List.of(
-            new MealSlotSkeleton(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                0,
-                WEEK,
-                SlotKind.DINNER,
-                "dinner",
-                60,
-                true,
-                List.of(userId)));
+            slot(SlotKind.BREAKFAST, userId),
+            slot(SlotKind.LUNCH, userId),
+            slot(SlotKind.DINNER, userId));
 
     List<RecipeDto> pool =
         tx().execute(t -> recipePoolSource.fetchPool(household, skeletons, UUID.randomUUID()));
 
-    // All 9 seeded recipes are returned (kind filtering is the planner's job, not the pool's).
+    // All 9 seeded recipes are returned — three per kind, fetched by the three per-kind reads.
     assertThat(pool).extracting(RecipeDto::id).containsExactlyInAnyOrderElementsOf(seeded);
     // Every candidate is hydrated: current-version body + the fields Stage A's HardFilterRunner
     // reads (mealTypes, totalTimeMins) + the ids the beam search schedules.

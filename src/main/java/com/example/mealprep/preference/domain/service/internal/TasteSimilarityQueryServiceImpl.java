@@ -43,6 +43,15 @@ public class TasteSimilarityQueryServiceImpl implements TasteSimilarityQueryServ
 
   @Override
   @Transactional(readOnly = true)
+  public Optional<String> getTasteVectorLiteral(UUID userId) {
+    // Reuse the exact same float[] → "[v0,v1,...]" serialisation findSimilarUsers binds, so the
+    // planner's recipe query casts a byte-identical literal. No raw vector or dimension leaves the
+    // module — only the opaque text literal the recipe side will CAST(... AS vector).
+    return getTasteVector(userId).map(TasteProfileServiceImpl::formatPgVector);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
   public List<TasteSimilarUserDto> findSimilarUsers(UUID userId, int limit) {
     if (limit <= 0) {
       return List.of();
