@@ -57,7 +57,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * Complements {@code PlansControllerIT}/{@code PlansControllerReadIT}: the 4xx + idempotency edges
  * those leave uncovered — {@code authPlan}'s 404 (plan missing before the 403 auth check), {@code
- * GET /{planId}} 200/404, revert's 400 problem+json body, the re-opt-suggestion not-found and
+ * GET /{planId}} 200/403/404, revert's 400 problem+json body, the re-opt-suggestion not-found and
  * cross-plan-mismatch 404s, the already-ACCEPTED re-accept idempotent replay, the already-REJECTED
  * re-reject idempotent replay, and accept-suggestion on a non-reoptable (SUPERSEDED) plan → 400.
  * Plans are seeded directly through {@link PlanRepository} (no composer / async runner racing the
@@ -203,6 +203,7 @@ class PlansControllerEdgeCasesIT {
   void getPlanById_returns200_withHydratedAggregate() throws Exception {
     AuthedUser user = registerUser();
     UUID household = UUID.randomUUID();
+    grantMembership(household, user.userId());
     Plan plan = seed(household, PlanStatus.ACTIVE);
 
     mvc.perform(get("/api/v1/plans/{id}", plan.getId()).cookie(user.cookie()))
@@ -210,6 +211,23 @@ class PlansControllerEdgeCasesIT {
         .andExpect(jsonPath("$.id").value(plan.getId().toString()))
         .andExpect(jsonPath("$.days.length()").value(1))
         .andExpect(jsonPath("$.days[0].slots.length()").value(2))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void getPlanById_returns403_whenCrossHousehold() throws Exception {
+    AuthedUser user = registerUser();
+    UUID household = UUID.randomUUID();
+    Plan plan = seed(household, PlanStatus.ACTIVE);
+    // user is NOT a member: empty household membership.
+    when(householdQueryService.getById(eq(household)))
+        .thenReturn(
+            Optional.of(
+                new HouseholdDto(household, "h", UUID.randomUUID(), List.of(), Instant.now(), 0L)));
+
+    mvc.perform(get("/api/v1/plans/{id}", plan.getId()).cookie(user.cookie()))
+        .andExpect(status().isForbidden())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
         .andExpect(openApi().isValid(openApiValidator));
   }
 

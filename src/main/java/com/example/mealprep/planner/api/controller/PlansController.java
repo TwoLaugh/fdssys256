@@ -59,9 +59,11 @@ import org.springframework.web.server.ResponseStatusException;
  * locked {@code OrderBy} clause per the LLD (sort order is part of the contract — frontend re-sort
  * is not supported).
  *
- * <p>Household-scoped authorisation deferred per LLD §Out of Scope — in v1 any authenticated caller
- * can read any household's plans; the auth module's deny-by-default chain enforces the {@code 401}
- * on missing cookies.
+ * <p>Every endpoint is household-scoped: the auth module's deny-by-default chain enforces the
+ * {@code 401} on missing cookies, and {@link PlannerAuth} maps a non-member caller to {@code 403},
+ * reads included. This closes the v1 deferral that let any authenticated caller read any
+ * household's plans. Role rules within a household stay out of scope per the LLD (any member may
+ * act).
  */
 @RestController
 @RequestMapping("/api/v1/plans")
@@ -110,9 +112,7 @@ public class PlansController {
       @Valid @RequestBody GeneratePlanRequest request,
       @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey) {
     UUID userId = requireUser();
-    if (!plannerAuth.canAccessHousehold(userId, request.householdId())) {
-      throw forbidden();
-    }
+    authHousehold(userId, request.householdId());
     Optional<UUID> cached = planComposer.cachedPlanIdFor(userId, idempotencyKey);
     if (cached.isPresent()) {
       PlanDto dto =
@@ -292,6 +292,17 @@ public class PlansController {
         .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
   }
 
+  /** 401 if anon; 403 if the caller is not a member of the household. */
+  private void authHousehold(UUID userId, UUID householdId) {
+    if (!plannerAuth.canAccessHousehold(userId, householdId)) {
+      throw forbidden();
+    }
+  }
+
+  private void authHousehold(UUID householdId) {
+    authHousehold(requireUser(), householdId);
+  }
+
   /** 401 if anon; 404 if the plan doesn't exist; 403 if the caller is not in its household. */
   private void authPlan(UUID planId) {
     UUID userId = requireUser();
@@ -318,6 +329,7 @@ public class PlansController {
   public ResponseEntity<PlanDto> getActive(
       @RequestParam UUID householdId,
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate weekStartDate) {
+    authHousehold(householdId);
     return planQueryService
         .getActivePlan(householdId, weekStartDate)
         .map(ResponseEntity::ok)
@@ -336,6 +348,7 @@ public class PlansController {
   public ResponseEntity<List<PlanDto>> getHistory(
       @RequestParam UUID householdId,
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate weekStartDate) {
+    authHousehold(householdId);
     return ResponseEntity.ok(planQueryService.getPlanHistory(householdId, weekStartDate));
   }
 
@@ -350,6 +363,7 @@ public class PlansController {
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    authHousehold(householdId);
     return ResponseEntity.ok(
         planQueryService.getPlansBetween(householdId, from, to, PageRequest.of(page, size)));
   }
@@ -360,6 +374,7 @@ public class PlansController {
       @RequestParam UUID householdId,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    authHousehold(householdId);
     return ResponseEntity.ok(
         planQueryService.getPendingSuggestions(householdId, PageRequest.of(page, size)));
   }
@@ -372,10 +387,7 @@ public class PlansController {
   public ResponseEntity<FeasibilityCheckResultDto> getFeasibility(
       @RequestParam UUID householdId,
       @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate weekStartDate) {
-    UUID userId = requireUser();
-    if (!plannerAuth.canAccessHousehold(userId, householdId)) {
-      throw forbidden();
-    }
+    authHousehold(householdId);
     return ResponseEntity.ok(planQueryService.checkFeasibility(householdId, weekStartDate));
   }
 
@@ -385,8 +397,7 @@ public class PlansController {
           "Fetch a plan by id; returns the full hydrated aggregate (days + slots + scheduled"
               + " recipes).")
   public ResponseEntity<PlanDto> getPlan(@PathVariable UUID planId) {
-    PlanDto plan =
-        planQueryService.getPlanById(planId).orElseThrow(() -> new PlanNotFoundException(planId));
-    return ResponseEntity.ok(plan);
+    authPlan(planId);
+    return ResponseEntity.ok(reload(planId));
   }
 }

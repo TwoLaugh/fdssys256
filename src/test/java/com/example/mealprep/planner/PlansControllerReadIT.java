@@ -2,6 +2,8 @@ package com.example.mealprep.planner;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -14,6 +16,9 @@ import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.testdata.AuthTestData;
+import com.example.mealprep.household.api.dto.HouseholdDto;
+import com.example.mealprep.household.api.dto.HouseholdMemberDto;
+import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.planner.api.dto.PlanDto;
 import com.example.mealprep.planner.domain.entity.Plan;
 import com.example.mealprep.planner.domain.entity.PlanStatus;
@@ -28,15 +33,18 @@ import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.Cookie;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -49,8 +57,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * End-to-end HTTP flow over 01c's read endpoints (active / history / range / suggestions). Seeds
  * fixtures through the real {@link PlanRepository} and {@link ReoptSuggestionRepository}, then
- * asserts the HTTP/JSON surface: status codes, body shape, pagination metadata, sort order, and
- * OpenAPI contract validity.
+ * asserts the HTTP/JSON surface: status codes, body shape, pagination metadata, sort order,
+ * household-membership auth (cross-household reads 403), and OpenAPI contract validity.
  *
  * <p>The {@code MultipleBagFetchException} / {@code LazyInitializationException} traps from 01a's
  * deep aggregate are re-verified here for the new read paths — if the lazy-touch pattern in {@link
@@ -73,6 +81,18 @@ class PlansControllerReadIT {
   @Autowired private ReoptSuggestionRepository reoptSuggestionRepository;
   @Autowired private PlanQueryService planQueryService;
   @Autowired private PlatformTransactionManager transactionManager;
+
+  @MockBean private HouseholdQueryService householdQueryService;
+
+  // HouseholdServiceImpl implements HouseholdQueryService + HouseholdUpdateService +
+  // HouseholdMergeService; @MockBean on one evicts the single shared impl (wave-3 retro:
+  // multi-interface @Service @MockBean eviction). Mock the siblings too so the context loads.
+  @MockBean
+  private com.example.mealprep.household.domain.service.HouseholdUpdateService
+      householdUpdateService;
+
+  @MockBean
+  private com.example.mealprep.household.domain.service.HouseholdMergeService householdMergeService;
 
   private TransactionTemplate txTemplate() {
     return new TransactionTemplate(transactionManager);
@@ -105,6 +125,36 @@ class PlansControllerReadIT {
     String userIdJson =
         objectMapper.readTree(result.getResponse().getContentAsString()).get("userId").asText();
     return new AuthedUser(UUID.fromString(userIdJson), cookie);
+  }
+
+  /** Make {@code userId} a member of {@code householdId} for PlannerAuth. */
+  private void grantMembership(UUID householdId, UUID userId) {
+    HouseholdMemberDto member =
+        new HouseholdMemberDto(
+            UUID.randomUUID(),
+            householdId,
+            userId,
+            com.example.mealprep.household.domain.entity.HouseholdRole.primary,
+            "owner",
+            null,
+            0,
+            Instant.now(),
+            0L);
+    when(householdQueryService.getById(eq(householdId)))
+        .thenReturn(
+            Optional.of(
+                new HouseholdDto(householdId, "h", userId, List.of(member), Instant.now(), 0L)));
+  }
+
+  /** A household the caller is NOT a member of (membership lookup finds nobody). */
+  private UUID foreignHousehold() {
+    UUID householdId = UUID.randomUUID();
+    when(householdQueryService.getById(eq(householdId)))
+        .thenReturn(
+            Optional.of(
+                new HouseholdDto(
+                    householdId, "h", UUID.randomUUID(), List.of(), Instant.now(), 0L)));
+    return householdId;
   }
 
   private Plan persist(Plan plan) {
@@ -143,9 +193,27 @@ class PlansControllerReadIT {
   }
 
   @Test
+  void getActive_returns403_whenCallerNotHouseholdMember() throws Exception {
+    AuthedUser user = registerUser();
+    UUID householdId = foreignHousehold();
+    LocalDate week = LocalDate.of(2026, 5, 11);
+    persist(PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.ACTIVE, 1, 1));
+
+    mvc.perform(
+            get("/api/v1/plans/active")
+                .param("householdId", householdId.toString())
+                .param("weekStartDate", week.toString())
+                .cookie(user.cookie()))
+        .andExpect(status().isForbidden())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
   void getActive_returns404_whenNoActivePlan() throws Exception {
     AuthedUser user = registerUser();
     UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
     mvc.perform(
             get("/api/v1/plans/active")
                 .param("householdId", householdId.toString())
@@ -161,6 +229,7 @@ class PlansControllerReadIT {
   void getActive_returns404_whenOnlyGeneratedExists() throws Exception {
     AuthedUser user = registerUser();
     UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
     LocalDate week = LocalDate.of(2026, 5, 11);
     persist(PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.GENERATED, 1, 1));
 
@@ -176,6 +245,7 @@ class PlansControllerReadIT {
   void getActive_returns200_withHydratedActivePlan() throws Exception {
     AuthedUser user = registerUser();
     UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
     LocalDate week = LocalDate.of(2026, 5, 11);
     // Mix: gen 1 SUPERSEDED, gen 2 ACTIVE — getActive returns gen 2 only.
     persist(PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.SUPERSEDED, 2, 2));
@@ -211,11 +281,30 @@ class PlansControllerReadIT {
   // ============================================================================================
 
   @Test
-  void getHistory_returns200_emptyArray_whenNoPlans() throws Exception {
+  void getHistory_returns403_whenCallerNotHouseholdMember() throws Exception {
     AuthedUser user = registerUser();
+    UUID householdId = foreignHousehold();
+    LocalDate week = LocalDate.of(2026, 5, 11);
+    persist(PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.ACTIVE, 1, 1));
+
     mvc.perform(
             get("/api/v1/plans/history")
-                .param("householdId", UUID.randomUUID().toString())
+                .param("householdId", householdId.toString())
+                .param("weekStartDate", week.toString())
+                .cookie(user.cookie()))
+        .andExpect(status().isForbidden())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void getHistory_returns200_emptyArray_whenNoPlans() throws Exception {
+    AuthedUser user = registerUser();
+    UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
+    mvc.perform(
+            get("/api/v1/plans/history")
+                .param("householdId", householdId.toString())
                 .param("weekStartDate", "2026-05-11")
                 .cookie(user.cookie()))
         .andExpect(status().isOk())
@@ -228,6 +317,7 @@ class PlansControllerReadIT {
   void getHistory_returnsAllGenerations_inDescendingOrder() throws Exception {
     AuthedUser user = registerUser();
     UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
     LocalDate week = LocalDate.of(2026, 5, 11);
     persist(PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.SUPERSEDED, 1, 1));
     persist(PlanTestData.newPlanGraph(householdId, week, 2, PlanStatus.SUPERSEDED, 1, 1));
@@ -250,11 +340,31 @@ class PlansControllerReadIT {
   // ============================================================================================
 
   @Test
-  void getRange_returns200_emptyPage_whenNoPlans() throws Exception {
+  void getRange_returns403_whenCallerNotHouseholdMember() throws Exception {
     AuthedUser user = registerUser();
+    UUID householdId = foreignHousehold();
+    LocalDate week = LocalDate.of(2026, 5, 11);
+    persist(PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.ACTIVE, 1, 1));
+
     mvc.perform(
             get("/api/v1/plans")
-                .param("householdId", UUID.randomUUID().toString())
+                .param("householdId", householdId.toString())
+                .param("from", "2026-05-04")
+                .param("to", "2026-05-18")
+                .cookie(user.cookie()))
+        .andExpect(status().isForbidden())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void getRange_returns200_emptyPage_whenNoPlans() throws Exception {
+    AuthedUser user = registerUser();
+    UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
+    mvc.perform(
+            get("/api/v1/plans")
+                .param("householdId", householdId.toString())
                 .param("from", "2026-05-04")
                 .param("to", "2026-05-18")
                 .cookie(user.cookie()))
@@ -269,6 +379,7 @@ class PlansControllerReadIT {
   void getRange_returnsPlans_sortedByWeekDesc_thenGenerationDesc() throws Exception {
     AuthedUser user = registerUser();
     UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
     LocalDate w1 = LocalDate.of(2026, 5, 4);
     LocalDate w2 = LocalDate.of(2026, 5, 11);
     LocalDate w3 = LocalDate.of(2026, 5, 18);
@@ -298,9 +409,11 @@ class PlansControllerReadIT {
   @Test
   void getRange_returns400_whenFromAfterTo() throws Exception {
     AuthedUser user = registerUser();
+    UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
     mvc.perform(
             get("/api/v1/plans")
-                .param("householdId", UUID.randomUUID().toString())
+                .param("householdId", householdId.toString())
                 .param("from", "2026-05-18")
                 .param("to", "2026-05-04")
                 .cookie(user.cookie()))
@@ -312,6 +425,7 @@ class PlansControllerReadIT {
   void getRange_inclusive_whenFromEqualsTo() throws Exception {
     AuthedUser user = registerUser();
     UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
     LocalDate week = LocalDate.of(2026, 5, 11);
     persist(PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.ACTIVE, 1, 1));
 
@@ -328,9 +442,11 @@ class PlansControllerReadIT {
   @Test
   void getRange_returns400_whenSizeExceedsMax() throws Exception {
     AuthedUser user = registerUser();
+    UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
     mvc.perform(
             get("/api/v1/plans")
-                .param("householdId", UUID.randomUUID().toString())
+                .param("householdId", householdId.toString())
                 .param("from", "2026-05-04")
                 .param("to", "2026-05-18")
                 .param("size", "101")
@@ -342,6 +458,7 @@ class PlansControllerReadIT {
   void getRange_paginates() throws Exception {
     AuthedUser user = registerUser();
     UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
     LocalDate base = LocalDate.of(2026, 5, 11);
     // 5 distinct weeks of single-generation plans
     for (int i = 0; i < 5; i++) {
@@ -369,11 +486,30 @@ class PlansControllerReadIT {
   // ============================================================================================
 
   @Test
-  void getSuggestions_returns200_emptyPage_whenNoPending() throws Exception {
+  void getSuggestions_returns403_whenCallerNotHouseholdMember() throws Exception {
     AuthedUser user = registerUser();
+    UUID householdId = foreignHousehold();
+    LocalDate week = LocalDate.of(2026, 5, 11);
+    Plan plan = persist(PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.ACTIVE, 1, 1));
+    persistSuggestion(householdId, plan.getId(), week, ReoptStatus.PENDING);
+
     mvc.perform(
             get("/api/v1/plans/suggestions")
-                .param("householdId", UUID.randomUUID().toString())
+                .param("householdId", householdId.toString())
+                .cookie(user.cookie()))
+        .andExpect(status().isForbidden())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(openApi().isValid(openApiValidator));
+  }
+
+  @Test
+  void getSuggestions_returns200_emptyPage_whenNoPending() throws Exception {
+    AuthedUser user = registerUser();
+    UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
+    mvc.perform(
+            get("/api/v1/plans/suggestions")
+                .param("householdId", householdId.toString())
                 .cookie(user.cookie()))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.content.length()").value(0))
@@ -385,6 +521,7 @@ class PlansControllerReadIT {
   void getSuggestions_returnsOnlyPending_excludingResolvedStatuses() throws Exception {
     AuthedUser user = registerUser();
     UUID householdId = UUID.randomUUID();
+    grantMembership(householdId, user.userId());
     LocalDate week = LocalDate.of(2026, 5, 11);
     Plan plan = persist(PlanTestData.newPlanGraph(householdId, week, 1, PlanStatus.ACTIVE, 1, 1));
     persistSuggestion(householdId, plan.getId(), week, ReoptStatus.PENDING);

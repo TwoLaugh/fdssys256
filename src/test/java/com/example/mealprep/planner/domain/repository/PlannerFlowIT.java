@@ -2,6 +2,8 @@ package com.example.mealprep.planner.domain.repository;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -14,6 +16,9 @@ import com.example.mealprep.auth.config.AuthProperties;
 import com.example.mealprep.auth.domain.repository.SessionRepository;
 import com.example.mealprep.auth.domain.repository.UserRepository;
 import com.example.mealprep.auth.testdata.AuthTestData;
+import com.example.mealprep.household.api.dto.HouseholdDto;
+import com.example.mealprep.household.api.dto.HouseholdMemberDto;
+import com.example.mealprep.household.domain.service.HouseholdQueryService;
 import com.example.mealprep.planner.domain.entity.Day;
 import com.example.mealprep.planner.domain.entity.MealSlot;
 import com.example.mealprep.planner.domain.entity.Plan;
@@ -22,15 +27,18 @@ import com.example.mealprep.testsupport.OpenApiValidatorConfig;
 import com.example.mealprep.testsupport.TestContainersConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.Cookie;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -71,8 +79,39 @@ class PlannerFlowIT {
   @Autowired private PlanRepository planRepository;
   @Autowired private PlatformTransactionManager transactionManager;
 
+  @MockBean private HouseholdQueryService householdQueryService;
+
+  // HouseholdServiceImpl implements HouseholdQueryService + HouseholdUpdateService +
+  // HouseholdMergeService; @MockBean on one evicts the single shared impl (wave-3 retro:
+  // multi-interface @Service @MockBean eviction). Mock the siblings too so the context loads.
+  @MockBean
+  private com.example.mealprep.household.domain.service.HouseholdUpdateService
+      householdUpdateService;
+
+  @MockBean
+  private com.example.mealprep.household.domain.service.HouseholdMergeService householdMergeService;
+
   private TransactionTemplate txTemplate() {
     return new TransactionTemplate(transactionManager);
+  }
+
+  /** Make {@code userId} a member of {@code householdId} for PlannerAuth. */
+  private void grantMembership(UUID householdId, UUID userId) {
+    HouseholdMemberDto member =
+        new HouseholdMemberDto(
+            UUID.randomUUID(),
+            householdId,
+            userId,
+            com.example.mealprep.household.domain.entity.HouseholdRole.primary,
+            "owner",
+            null,
+            0,
+            Instant.now(),
+            0L);
+    when(householdQueryService.getById(eq(householdId)))
+        .thenReturn(
+            Optional.of(
+                new HouseholdDto(householdId, "h", userId, List.of(member), Instant.now(), 0L)));
   }
 
   @AfterEach
@@ -132,6 +171,7 @@ class PlannerFlowIT {
     for (Day day : plan.getDays()) {
       day.getSlots().sort(Comparator.comparingInt(MealSlot::getSlotIndex).reversed());
     }
+    grantMembership(plan.getHouseholdId(), user.userId());
 
     UUID planId = plan.getId();
     txTemplate().executeWithoutResult(tx -> planRepository.save(plan));
@@ -162,6 +202,7 @@ class PlannerFlowIT {
     Plan plan = PlanTestData.newPlanGraph(LocalDate.of(2026, 5, 4), 1, 2);
     // Detach the scheduled recipe on the first slot — simulating an eating-out / fasting slot.
     plan.getDays().get(0).getSlots().get(0).setScheduledRecipe(null);
+    grantMembership(plan.getHouseholdId(), user.userId());
 
     UUID planId = plan.getId();
     txTemplate().executeWithoutResult(tx -> planRepository.save(plan));

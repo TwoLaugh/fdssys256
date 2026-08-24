@@ -21,6 +21,11 @@ planById:
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: "Caller is not a member of the plan's household."
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '404':
         description: 'Plan not found.'
         content:
@@ -51,6 +56,11 @@ plansActive:
             schema: { $ref: '../schemas/planner.yaml#/PlanDto' }
       '401':
         description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Caller is not a member of the target household.'
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
@@ -86,6 +96,11 @@ plansHistory:
               items: { $ref: '../schemas/planner.yaml#/PlanDto' }
       '401':
         description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Caller is not a member of the target household.'
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
@@ -131,6 +146,11 @@ plansRange:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
       '401':
         description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Caller is not a member of the target household.'
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
@@ -596,6 +616,11 @@ plansSuggestions:
             schema: { $ref: '../schemas/planner.yaml#/ReoptSuggestionDtoPage' }
       '401':
         description: 'Unauthenticated.'
+        content:
+          application/problem+json:
+            schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
+      '403':
+        description: 'Caller is not a member of the target household.'
         content:
           application/problem+json:
             schema: { $ref: '../schemas/common.yaml#/ProblemDetail' }
