@@ -1178,13 +1178,18 @@ function MicrosPanel({
   agg: DailyAggregateDto;
   targets: TargetsDto;
 }) {
+  // Status rows are the source of truth (DailyAggregateDto.micros): NO_DATA
+  // means no decided slot or snack carried the key — unmeasured, never zero
+  // (t5 B5). Rendered inline in nutrient order (FC5): target keys first, then
+  // measured untargeted keys, same order as the projection panel's grammar.
   // Sat fat lives in the stat band, not here.
+  const byKey = new Map(agg.micros.map((m) => [m.key, m]));
   const keys = [
     ...targets.microTargets.map((t) => t.nutrientKey),
-    ...Object.keys(agg.microsActualSoFar).filter(
-      (k) => !targets.microTargets.some((t) => t.nutrientKey === k),
-    ),
-  ].filter((k) => k !== "saturated_fat_g");
+    ...agg.micros
+      .map((m) => m.key)
+      .filter((k) => !targets.microTargets.some((t) => t.nutrientKey === k)),
+  ].filter((k) => k !== "saturated_fat_g" && byKey.has(k));
 
   return (
     <details className="mp-card micros-details">
@@ -1198,8 +1203,13 @@ function MicrosPanel({
       </summary>
       {keys.map((key) => {
         const mt = targets.microTargets.find((t) => t.nutrientKey === key);
-        const actual = agg.microsActualSoFar[key] ?? 0;
-        const over = mt?.upperLimit != null && actual > mt.upperLimit;
+        const row = byKey.get(key);
+        // Null value = NO_DATA: muted row, target kept, empty bar, never a
+        // zero and never the warn treatment (the row is unmeasured, not
+        // short — same exclusion the projection lens applies).
+        const actual = row?.status === "NO_DATA" ? null : (row?.actualSoFar ?? null);
+        const over =
+          actual != null && mt?.upperLimit != null && actual > mt.upperLimit;
         const tooltip =
           [mt?.notes, mt?.sourcePreference].filter(Boolean).join(" · ") ||
           undefined;
@@ -1222,9 +1232,8 @@ function MicrosPanel({
         );
       })}
       <div className="inline-note" style={{ marginTop: 8 }}>
-        0 can mean unmeasured: the intake aggregate cannot distinguish a
-        micro no logged food carried from a measured zero (backend gap G1,
-        t5 spec; B5 waived until resolved).
+        "no data" means no logged food carried the nutrient — unmeasured, not
+        zero.
       </div>
     </details>
   );

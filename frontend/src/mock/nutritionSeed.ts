@@ -412,6 +412,10 @@ export const targetsSeed: TargetsDto = {
     { nutrientKey: "magnesium_mg", targetValue: 400, upperLimit: null, sourcePreference: null, notes: null, isHardFloor: false },
     { nutrientKey: "calcium_mg", targetValue: 1000, upperLimit: null, sourcePreference: null, notes: null, isHardFloor: false },
     { nutrientKey: "sodium_mg", targetValue: null, upperLimit: 2300, sourcePreference: null, notes: "NHS guideline ceiling", isHardFloor: false },
+    // Tracked but never carried by any seeded slot or snack: every day's
+    // aggregate gets a NO_DATA status row, so the retrospective lens's
+    // unmeasured rendering (t5 B5 / FC5) is verifiable in mock mode.
+    { nutrientKey: "selenium_mcg", targetValue: 55, upperLimit: null, sourcePreference: null, notes: null, isHardFloor: false },
   ],
   eatingWindow: {
     enabled: false,

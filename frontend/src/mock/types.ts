@@ -407,6 +407,7 @@ export type IntakeEntryDto = Schemas["IntakeEntryDto"];
 export type LogSnackRequest = Schemas["LogSnackRequest"];
 
 export type DailyAggregateDto = Schemas["DailyAggregateDto"];
+export type MicroIntakeStatusDto = Schemas["MicroIntakeStatusDto"];
 export type MacroAggregateDto = Schemas["MacroAggregateDto"];
 export type WeeklyAggregateDto = Schemas["WeeklyAggregateDto"];
 export type FloorViolationDto = Schemas["FloorViolationDto"];

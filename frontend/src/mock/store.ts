@@ -89,6 +89,7 @@ import type {
   MealSlot,
   MealSlotDto,
   MealSlotKey,
+  MicroIntakeStatusDto,
   MisclassificationCorrectionDto,
   MockNotificationDto,
   NotificationSeverity,
@@ -5280,6 +5281,43 @@ function addMicros(
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
+/** Display-hint unit from the key suffix, same derivation as the backend. */
+const microUnitFromKey = (key: string): string =>
+  key.endsWith("_mcg") ? "mcg" : key.endsWith("_mg") ? "mg" : "";
+
+/**
+ * Contract-equivalent DailyAggregateDto.micros (D-0008 / t5 B5): every merged
+ * key is a MEASURED row (a present zero stays MEASURED), then each tracked
+ * micro target (one carrying a floor or cap) the merge never saw becomes a
+ * NO_DATA row with a null value — no decided source wrote the key, so intake
+ * is unknown, not zero. Measured keys in merge order, then unmeasured tracked
+ * keys in target order, mirroring IntakeAggregator.microStatuses.
+ */
+function microStatuses(
+  measured: Record<string, number>,
+  targets: TargetsDto,
+): MicroIntakeStatusDto[] {
+  const rows: MicroIntakeStatusDto[] = Object.entries(measured).map(
+    ([key, v]) => ({
+      key,
+      unit: microUnitFromKey(key),
+      actualSoFar: v,
+      status: "MEASURED",
+    }),
+  );
+  for (const t of targets.microTargets) {
+    if (t.targetValue == null && t.upperLimit == null) continue;
+    if (measured[t.nutrientKey] !== undefined) continue;
+    rows.push({
+      key: t.nutrientKey,
+      unit: microUnitFromKey(t.nutrientKey),
+      actualSoFar: null,
+      status: "NO_DATA",
+    });
+  }
+  return rows;
+}
+
 /**
  * GET intake/{date}/aggregate equivalent. "Remaining" is target-based
  * (vs TargetsDto), matching the backend's daily-aggregate endpoint.
@@ -5347,6 +5385,7 @@ export function computeDailyAggregate(
       remainingG: remaining(targets.satFat.targetG ?? 0, satFatActual),
     },
     microsActualSoFar: microsActual,
+    micros: microStatuses(microsActual, targets),
   };
 }
 
@@ -5405,6 +5444,7 @@ export function computeWeeklyAggregate(
       remainingG: 0,
     },
     microsActualSoFar: totalMicros,
+    micros: microStatuses(totalMicros, targets),
   };
   // Contract-shaped floorViolations (nutrition.md §10 (b), resolved): daily-
   // enforcement hard floors emit one dated entry per violating settled day;
