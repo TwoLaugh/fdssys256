@@ -107,6 +107,14 @@ vars unset the frontend falls back to `iren-demo` / `demo-password-123`
 (`AuthController.java:71`) by setting the `AUTH_SESSION` cookie (`AuthProperties.java:42`), so
 a cookie jar carried across the curl calls is all the auth you need.
 
+Admin access: the e2e profile allowlists the `dogfood` and `iren-demo` usernames
+(`application-e2e.properties`, `mealprep.admin.usernames`), so the seeded user reaches the
+admin surfaces (AI observability, ops status, graph batch ingest) with no extra step. The
+username key exists because the seed user's UUID is minted at registration and cannot be
+pinned in config; `mealprep.admin.user-ids` stays the production mechanism and both keys are
+empty (fail-closed) outside e2e. Register a different username and admin calls 403 — either
+use one of the two above or add yours to the property and restart.
+
 ## 4. AI stub: optional, not required for a plan
 
 `POST /test-support/ai/canned {taskType, responseJson}` seeds a canned model response;

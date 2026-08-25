@@ -1,6 +1,8 @@
 package com.example.mealprep.auth.api;
 
+import com.example.mealprep.auth.api.dto.UserDto;
 import com.example.mealprep.auth.config.AdminAccessProperties;
+import com.example.mealprep.auth.domain.service.AuthQueryService;
 import com.example.mealprep.auth.domain.service.CurrentUserResolver;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -38,16 +40,23 @@ public class AdminAccessGuard {
 
   private final CurrentUserResolver currentUserResolver;
   private final AdminAccessProperties adminProperties;
+  private final AuthQueryService authQueryService;
 
   public AdminAccessGuard(
-      CurrentUserResolver currentUserResolver, AdminAccessProperties adminProperties) {
+      CurrentUserResolver currentUserResolver,
+      AdminAccessProperties adminProperties,
+      AuthQueryService authQueryService) {
     this.currentUserResolver = currentUserResolver;
     this.adminProperties = adminProperties;
+    this.authQueryService = authQueryService;
   }
 
   /**
    * Enforce that the current request is from an authenticated admin user. Throws {@link
    * ResponseStatusException} 401 if anonymous, 403 if authenticated but not on the admin allowlist.
+   *
+   * <p>The id allowlist is checked first; the username allowlist (environments whose seed user has
+   * no stable id, e.g. the e2e stack) costs one user lookup and only runs when configured.
    */
   public void requireAdmin() {
     UUID userId =
@@ -57,9 +66,16 @@ public class AdminAccessGuard {
                 () ->
                     new ResponseStatusException(
                         HttpStatus.UNAUTHORIZED, "Authentication required."));
-    if (!adminProperties.isAdmin(userId)) {
-      throw new ResponseStatusException(
-          HttpStatus.FORBIDDEN, "Admin privileges required for this endpoint.");
+    if (adminProperties.isAdmin(userId)) {
+      return;
     }
+    if (!adminProperties.usernames().isEmpty()) {
+      String username = authQueryService.getUser(userId).map(UserDto::username).orElse(null);
+      if (adminProperties.isAdminUsername(username)) {
+        return;
+      }
+    }
+    throw new ResponseStatusException(
+        HttpStatus.FORBIDDEN, "Admin privileges required for this endpoint.");
   }
 }

@@ -1,6 +1,7 @@
 package com.example.mealprep.auth.config;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -26,18 +27,37 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * configures {@code mealprep.admin.user-ids=<uuid>,<uuid>}. This is fail-closed: an unset allowlist
  * denies everyone (403) rather than admitting everyone.
  *
+ * <p>{@code usernames} is the same allowlist keyed by username instead of id, for environments
+ * whose admin user is created at runtime with an unpredictable id (the e2e/dogfood stack registers
+ * its seed user over REST, so its UUID cannot be pinned in config but the username can). Matched
+ * case-insensitively against the same trim+lowercase normalisation registration uses. Empty by
+ * default, so production stays fail-closed on ids alone.
+ *
  * <p>Supersedes the AI module's earlier {@code mealprep.ai.admin.user-ids} key (ai-10), which was a
  * single-module precursor; the AI + ops surfaces now read this shared key.
  */
 @ConfigurationProperties(prefix = "mealprep.admin")
-public record AdminAccessProperties(List<UUID> userIds) {
+public record AdminAccessProperties(List<UUID> userIds, List<String> usernames) {
 
   public AdminAccessProperties {
     userIds = userIds == null ? List.of() : List.copyOf(userIds);
+    usernames =
+        usernames == null
+            ? List.of()
+            : usernames.stream().map(AdminAccessProperties::normalise).toList();
   }
 
   /** True when {@code userId} is in the configured admin allowlist. */
   public boolean isAdmin(UUID userId) {
     return userId != null && Set.copyOf(userIds).contains(userId);
+  }
+
+  /** True when {@code username} (normalised) is in the configured admin username allowlist. */
+  public boolean isAdminUsername(String username) {
+    return username != null && usernames.contains(normalise(username));
+  }
+
+  private static String normalise(String username) {
+    return username == null ? "" : username.trim().toLowerCase(Locale.ROOT);
   }
 }

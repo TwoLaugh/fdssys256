@@ -123,7 +123,11 @@ public class AuthController {
     // round trip to decide admin-nav visibility. Same allowlist the AdminAccessGuard enforces —
     // a stale-positive here still 403s at the admin endpoints (display-only signal).
     return new CurrentUserDto(
-        user.userId(), user.username(), user.createdAt(), adminAccessProperties.isAdmin(userId));
+        user.userId(),
+        user.username(),
+        user.createdAt(),
+        adminAccessProperties.isAdmin(userId)
+            || adminAccessProperties.isAdminUsername(user.username()));
   }
 
   @PutMapping(
