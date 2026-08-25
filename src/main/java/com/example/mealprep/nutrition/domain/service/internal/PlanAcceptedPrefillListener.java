@@ -30,8 +30,11 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Wires plan acceptance into intake pre-fill (D-0008): the production caller the {@code
@@ -56,10 +59,13 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * ones in place, so re-accepting or re-optimising never duplicates slots or clobbers user-entered
  * actuals.
  *
- * <p>No listener-level transaction: the publisher's transaction is already committed and every
- * read/write here goes through a {@code @Transactional} service proxy, so each (eater, day)
- * pre-fill runs in its own transaction and one failure never rolls back the others. Nothing is ever
- * re-thrown.
+ * <p>No listener-level transaction, but the writes need an explicit new one: in the AFTER_COMMIT
+ * phase the publisher's finished transaction is still bound to the thread, so a plain REQUIRED
+ * service call joins it and fails at flush with "no transaction is in progress" (found by {@code
+ * PlanAcceptedPrefillSeamIT}; the mocked unit tests could not see it). Each (eater, day) pre-fill
+ * therefore runs through a REQUIRES_NEW {@link TransactionTemplate}, which also keeps one failure
+ * from rolling back the others. Reads stay as they are: read-only queries never flush. Nothing is
+ * ever re-thrown.
  */
 @Component
 public class PlanAcceptedPrefillListener {
@@ -73,16 +79,20 @@ public class PlanAcceptedPrefillListener {
   private final RecipeQueryService recipeQueryService;
   private final NutritionUpdateService nutritionUpdateService;
   private final ObjectMapper objectMapper;
+  private final TransactionTemplate newTransaction;
 
   public PlanAcceptedPrefillListener(
       PlanQueryService planQueryService,
       RecipeQueryService recipeQueryService,
       NutritionUpdateService nutritionUpdateService,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      PlatformTransactionManager transactionManager) {
     this.planQueryService = planQueryService;
     this.recipeQueryService = recipeQueryService;
     this.nutritionUpdateService = nutritionUpdateService;
     this.objectMapper = objectMapper;
+    this.newTransaction = new TransactionTemplate(transactionManager);
+    this.newTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
   }
 
   @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -135,8 +145,11 @@ public class PlanAcceptedPrefillListener {
       for (Map.Entry<LocalDate, Map<MealSlot, PlannedSlotInputDto>> day :
           eater.getValue().entrySet()) {
         try {
-          nutritionUpdateService.prefillFromPlan(
-              eater.getKey(), day.getKey(), plan.id(), List.copyOf(day.getValue().values()));
+          List<PlannedSlotInputDto> inputs = List.copyOf(day.getValue().values());
+          newTransaction.executeWithoutResult(
+              status ->
+                  nutritionUpdateService.prefillFromPlan(
+                      eater.getKey(), day.getKey(), plan.id(), inputs));
         } catch (RuntimeException ex) {
           // Own transaction per call; skip this day and keep pre-filling the rest.
           log.warn(
