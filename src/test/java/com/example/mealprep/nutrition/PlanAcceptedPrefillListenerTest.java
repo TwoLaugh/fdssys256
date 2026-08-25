@@ -55,6 +55,11 @@ class PlanAcceptedPrefillListenerTest {
   @Mock private RecipeQueryService recipeQueryService;
   @Mock private NutritionUpdateService nutritionUpdateService;
 
+  // Mocked manager: the REQUIRES_NEW template still runs its callback inline, so the write-path
+  // stubs below see the same calls. The real after-commit transaction semantics are covered by
+  // PlanAcceptedPrefillSeamIT.
+  @Mock private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
   private final ObjectMapper objectMapper = new ObjectMapper();
 
   private static final UUID PLAN_ID = UUID.randomUUID();
@@ -63,7 +68,11 @@ class PlanAcceptedPrefillListenerTest {
 
   private PlanAcceptedPrefillListener listener() {
     return new PlanAcceptedPrefillListener(
-        planQueryService, recipeQueryService, nutritionUpdateService, objectMapper);
+        planQueryService,
+        recipeQueryService,
+        nutritionUpdateService,
+        objectMapper,
+        transactionManager);
   }
 
   private static PlanAcceptedEvent event() {

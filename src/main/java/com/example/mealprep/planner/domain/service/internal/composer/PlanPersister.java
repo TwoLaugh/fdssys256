@@ -2,6 +2,7 @@ package com.example.mealprep.planner.domain.service.internal.composer;
 
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.GeneratePlanRequest;
+import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.RollupSummaryDocument;
 import com.example.mealprep.planner.api.dto.ScoreBreakdownDocument;
@@ -123,6 +124,14 @@ class PlanPersister {
     Map<UUID, Integer> recipeKcal = recipeKcalById(context);
     Map<UUID, BigDecimal> recipeProtein = recipeProteinById(context);
 
+    // An assignment carries only the slot ids; eaters, shared flag, label and time budget live on
+    // the context's skeletons. Persist them from there, keyed by slotId, so slot rows leave here
+    // with the real composition. Empty eaters on a persisted slot broke every downstream reader at
+    // once: the intake prefill listener saw nobody to prefill, the UI showed "0 eating", and the
+    // re-opt context rebuild (which reads these rows back into skeletons) lost the household.
+    Map<UUID, MealSlotSkeleton> skeletonsBySlotId = skeletonsBySlotId(context);
+    List<UUID> allEaters = eaterUnion(context);
+
     Map<java.time.LocalDate, Day> daysByDate = new LinkedHashMap<>();
     List<SlotAssignment> assignments =
         chosen.assignments() == null ? List.of() : chosen.assignments();
@@ -147,6 +156,9 @@ class PlanPersister {
                 return d;
               });
 
+      // No matching skeleton should not happen on the compose path; degrade to a shared slot
+      // eaten by everyone the context knows rather than an empty row.
+      MealSlotSkeleton skel = skeletonsBySlotId.get(a.slotId());
       MealSlot slot =
           MealSlot.builder()
               .id(UUID.randomUUID())
@@ -154,10 +166,16 @@ class PlanPersister {
               .plan(plan)
               .slotIndex(a.slotIndex())
               .kind(a.kind())
-              .label(a.kind() != null ? a.kind().name() : "MEAL")
-              .timeBudgetMin(0)
-              .shared(true)
-              .eaters(new ArrayList<>())
+              .label(
+                  skel != null && skel.label() != null
+                      ? skel.label()
+                      : (a.kind() != null ? a.kind().name() : "MEAL"))
+              .timeBudgetMin(skel != null ? skel.timeBudgetMin() : 0)
+              .shared(skel == null || skel.shared())
+              .eaters(
+                  skel != null && skel.eaters() != null
+                      ? new ArrayList<>(skel.eaters())
+                      : new ArrayList<>(allEaters))
               .state(SlotState.PLANNED)
               .build();
 
@@ -199,6 +217,34 @@ class PlanPersister {
     plan.setStatus(PlanStatus.GENERATED);
 
     return planRepository.save(plan);
+  }
+
+  /** slotId → skeleton, so each persisted slot can pick up its configured composition. */
+  private static Map<UUID, MealSlotSkeleton> skeletonsBySlotId(PlanCompositionContext ctx) {
+    Map<UUID, MealSlotSkeleton> out = new LinkedHashMap<>();
+    if (ctx == null || ctx.slotSkeletons() == null) {
+      return out;
+    }
+    for (MealSlotSkeleton sk : ctx.slotSkeletons()) {
+      if (sk != null && sk.slotId() != null) {
+        out.putIfAbsent(sk.slotId(), sk);
+      }
+    }
+    return out;
+  }
+
+  /** Every eater seen across the context's skeletons, in first-seen order. */
+  private static List<UUID> eaterUnion(PlanCompositionContext ctx) {
+    java.util.LinkedHashSet<UUID> out = new java.util.LinkedHashSet<>();
+    if (ctx == null || ctx.slotSkeletons() == null) {
+      return List.of();
+    }
+    for (MealSlotSkeleton sk : ctx.slotSkeletons()) {
+      if (sk != null && sk.eaters() != null) {
+        out.addAll(sk.eaters());
+      }
+    }
+    return new ArrayList<>(out);
   }
 
   /** recipeId → per-serving calories from the composition pool, for the portion-factor maths. */

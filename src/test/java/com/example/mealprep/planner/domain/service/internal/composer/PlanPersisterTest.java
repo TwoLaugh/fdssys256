@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 import com.example.mealprep.core.types.SlotKind;
 import com.example.mealprep.planner.api.dto.CandidatePlan;
 import com.example.mealprep.planner.api.dto.GeneratePlanRequest;
+import com.example.mealprep.planner.api.dto.MealSlotSkeleton;
 import com.example.mealprep.planner.api.dto.PlanCompositionContext;
 import com.example.mealprep.planner.api.dto.ScoreBreakdownDocument;
 import com.example.mealprep.planner.api.dto.ScoreResult;
@@ -337,6 +338,118 @@ class PlanPersisterTest {
             false);
 
     assertThat(result.getDays().get(0).getSlots().get(0).getScheduledRecipe()).isNull();
+  }
+
+  @Test
+  void persist_slotWithMatchingSkeleton_carriesEatersSharedLabelAndTimeBudget() {
+    UUID householdId = UUID.randomUUID();
+    when(planRepository.countByHouseholdIdAndWeekStartDate(householdId, WEEK)).thenReturn(0);
+    when(planRepository.findFirstByHouseholdIdAndWeekStartDateAndStatus(any(), any(), any()))
+        .thenReturn(Optional.empty());
+
+    UUID eaterA = UUID.randomUUID();
+    UUID eaterB = UUID.randomUUID();
+    UUID sharedSlotId = UUID.randomUUID();
+    UUID soloSlotId = UUID.randomUUID();
+    MealSlotSkeleton sharedDinner =
+        new MealSlotSkeleton(
+            UUID.randomUUID(),
+            sharedSlotId,
+            1,
+            WEEK,
+            SlotKind.DINNER,
+            "family-dinner",
+            45,
+            true,
+            List.of(eaterA, eaterB));
+    MealSlotSkeleton soloLunch =
+        new MealSlotSkeleton(
+            UUID.randomUUID(),
+            soloSlotId,
+            0,
+            WEEK,
+            SlotKind.LUNCH,
+            "packed-lunch",
+            25,
+            false,
+            List.of(eaterA));
+    PlanCompositionContext context =
+        PlanTestData.minimalContext(List.of(sharedDinner, soloLunch), List.of());
+
+    CandidatePlan chosen =
+        new CandidatePlan(
+            UUID.randomUUID(),
+            WEEK,
+            List.of(
+                assignment(soloSlotId, UUID.randomUUID(), WEEK, 0, 1),
+                assignment(sharedSlotId, UUID.randomUUID(), WEEK, 1, 2)),
+            new ScoreResult(null, null));
+
+    Plan result =
+        persister.persist(
+            chosen,
+            req(householdId),
+            context,
+            UUID.randomUUID(),
+            PlanTestData.emptyRollup(),
+            false,
+            false,
+            false);
+
+    var slots = result.getDays().get(0).getSlots();
+    var lunch = slots.get(0);
+    assertThat(lunch.getEaters()).containsExactly(eaterA);
+    assertThat(lunch.isShared()).isFalse();
+    assertThat(lunch.getLabel()).isEqualTo("packed-lunch");
+    assertThat(lunch.getTimeBudgetMin()).isEqualTo(25);
+    var dinner = slots.get(1);
+    assertThat(dinner.getEaters()).containsExactly(eaterA, eaterB);
+    assertThat(dinner.isShared()).isTrue();
+    assertThat(dinner.getLabel()).isEqualTo("family-dinner");
+    assertThat(dinner.getTimeBudgetMin()).isEqualTo(45);
+  }
+
+  @Test
+  void persist_assignmentWithoutSkeleton_fallsBackToSharedSlotWithEaterUnion() {
+    UUID householdId = UUID.randomUUID();
+    when(planRepository.countByHouseholdIdAndWeekStartDate(householdId, WEEK)).thenReturn(0);
+    when(planRepository.findFirstByHouseholdIdAndWeekStartDateAndStatus(any(), any(), any()))
+        .thenReturn(Optional.empty());
+
+    UUID eaterA = UUID.randomUUID();
+    UUID eaterB = UUID.randomUUID();
+    // Two skeletons whose slot ids do NOT match the assignment; eaterA appears in both so the
+    // fallback union must de-duplicate.
+    MealSlotSkeleton skelOne =
+        PlanTestData.skeletonWithEaters(UUID.randomUUID(), WEEK, 0, List.of(eaterA));
+    MealSlotSkeleton skelTwo =
+        PlanTestData.skeletonWithEaters(UUID.randomUUID(), WEEK, 1, List.of(eaterA, eaterB));
+    PlanCompositionContext context =
+        PlanTestData.minimalContext(List.of(skelOne, skelTwo), List.of());
+
+    CandidatePlan chosen =
+        new CandidatePlan(
+            UUID.randomUUID(),
+            WEEK,
+            List.of(assignment(UUID.randomUUID(), UUID.randomUUID(), WEEK, 0, 2)),
+            new ScoreResult(null, null));
+
+    Plan result =
+        persister.persist(
+            chosen,
+            req(householdId),
+            context,
+            UUID.randomUUID(),
+            PlanTestData.emptyRollup(),
+            false,
+            false,
+            false);
+
+    var slot = result.getDays().get(0).getSlots().get(0);
+    assertThat(slot.getEaters()).containsExactly(eaterA, eaterB);
+    assertThat(slot.isShared()).isTrue();
+    assertThat(slot.getLabel()).isEqualTo(SlotKind.DINNER.name());
+    assertThat(slot.getTimeBudgetMin()).isEqualTo(0);
   }
 
   @Test
