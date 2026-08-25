@@ -1464,18 +1464,32 @@ public class NutritionServiceImpl
     // Force lazy load before mutating (avoid unique-constraint flush race for already-prefilled).
     day.getSlots().size();
 
-    // Replace slots wholesale: delete existing, insert new. Compute change-set from the desired
-    // slots' meal-slot keys; we don't need a sophisticated diff because pre-fill is a system-only
-    // path with planner-controlled inputs.
     Map<MealSlot, IntakeSlot> existing = new LinkedHashMap<>();
     for (IntakeSlot s : day.getSlots()) {
       existing.put(s.getMealSlot(), s);
     }
-    // Wipe current slots; the planner snapshot is authoritative.
-    day.getSlots().clear();
+    int previousSlotCount = existing.size();
+
+    // Re-prefill (re-accepted or re-optimised plan) must never touch user-entered actuals:
+    // decided slots (anything not PENDING) are kept verbatim. PENDING slots are updated in place
+    // (not delete+insert, so the (day, meal_slot) unique index never sees a transient duplicate),
+    // stale PENDING slots are removed, and new meal slots are added. Inputs are planner-controlled
+    // and keyed by meal slot; a duplicate key keeps the first entry.
+    Map<MealSlot, PlannedSlotInputDto> desired = new LinkedHashMap<>();
     if (slots != null) {
       for (PlannedSlotInputDto in : slots) {
-        IntakeSlot slot =
+        desired.putIfAbsent(in.mealSlot(), in);
+      }
+    }
+    day.getSlots()
+        .removeIf(
+            s ->
+                s.getActualStatus() == IntakeSlotStatus.PENDING
+                    && !desired.containsKey(s.getMealSlot()));
+    for (PlannedSlotInputDto in : desired.values()) {
+      IntakeSlot current = existing.get(in.mealSlot());
+      if (current == null) {
+        day.addSlot(
             IntakeSlot.builder()
                 .id(UUID.randomUUID())
                 .mealSlot(in.mealSlot())
@@ -1488,9 +1502,20 @@ public class NutritionServiceImpl
                 .plannedMicros(in.plannedMicros())
                 .actualStatus(IntakeSlotStatus.PENDING)
                 .needsAiParse(false)
-                .build();
-        day.addSlot(slot);
+                .build());
+        continue;
       }
+      if (current.getActualStatus() != IntakeSlotStatus.PENDING) {
+        continue; // decided: the user's record stands
+      }
+      current.setPlannedRecipeId(in.plannedRecipeId());
+      current.setPlannedCalories(in.plannedCalories());
+      current.setPlannedProteinG(in.plannedProteinG());
+      current.setPlannedCarbsG(in.plannedCarbsG());
+      current.setPlannedFatG(in.plannedFatG());
+      current.setPlannedFibreG(in.plannedFibreG());
+      current.setPlannedMicros(in.plannedMicros());
+      current.setNeedsAiParse(false);
     }
 
     intakeDayRepository.saveAndFlush(day);
@@ -1501,7 +1526,7 @@ public class NutritionServiceImpl
         IntakeAuditAction.PREFILL,
         null,
         null,
-        objectMapper.valueToTree(Map.of("slotCount", existing.size())),
+        objectMapper.valueToTree(Map.of("slotCount", previousSlotCount)),
         objectMapper.valueToTree(Map.of("slotCount", day.getSlots().size(), "planId", planId)),
         now);
     publishIntakeEvent(userId, day, IntakeAuditAction.PREFILL, null, null, now);

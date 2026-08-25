@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 
 import com.example.mealprep.nutrition.api.dto.DailyAggregateDto;
 import com.example.mealprep.nutrition.api.dto.FloorViolationDto;
+import com.example.mealprep.nutrition.api.dto.MicroIntakeStatusDto;
 import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
 import com.example.mealprep.nutrition.domain.entity.IntakeDay;
 import com.example.mealprep.nutrition.domain.entity.IntakeSlot;
@@ -383,6 +384,185 @@ class IntakeAggregatorTest {
     // Weekly remaining = 7×20 - 5 = 135, zero-floored target basis like the other macros.
     assertThat(out.weeklyTotal().satFat().remainingG())
         .isEqualByComparingTo(new BigDecimal("135.00"));
+  }
+
+  // ---------------- per-micro status (D-0008 / t5 gap G1) ----------------
+
+  @Test
+  void aggregateDay_measuredZero_isMeasuredWithValueZero_notNoData() {
+    UUID userId = UUID.randomUUID();
+    IntakeSlot slot = confirmedSlot(MealSlot.BREAKFAST, 500, 30, 60, 15, 8);
+    slot.setActualMicros(micros("iron_mg", "0"));
+    IntakeDay d = day(userId, DAY, slot);
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, DAY)).thenReturn(Optional.of(d));
+    when(targetsRepository.findByUserId(userId))
+        .thenReturn(
+            Optional.of(
+                NutritionTestData.targets()
+                    .withUserId(userId)
+                    .withMicro("iron_mg", BigDecimal.valueOf(18.0))
+                    .build()));
+
+    DailyAggregateDto agg = aggregator().aggregateDay(userId, DAY);
+
+    assertThat(agg.micros()).hasSize(1);
+    MicroIntakeStatusDto row = agg.micros().get(0);
+    assertThat(row.key()).isEqualTo("iron_mg");
+    assertThat(row.unit()).isEqualTo("mg");
+    assertThat(row.status()).isEqualTo(MicroIntakeStatusDto.STATUS_MEASURED);
+    assertThat(row.actualSoFar()).isEqualByComparingTo(BigDecimal.ZERO);
+    assertThat(agg.microsActualSoFar().get("iron_mg")).isEqualByComparingTo(BigDecimal.ZERO);
+  }
+
+  @Test
+  void aggregateDay_trackedMicroNeverWritten_isNoDataWithNullValue() {
+    UUID userId = UUID.randomUUID();
+    IntakeDay d = day(userId, DAY, confirmedSlot(MealSlot.BREAKFAST, 500, 30, 60, 15, 8));
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, DAY)).thenReturn(Optional.of(d));
+    when(targetsRepository.findByUserId(userId))
+        .thenReturn(
+            Optional.of(
+                NutritionTestData.targets()
+                    .withUserId(userId)
+                    .withMicro("iron_mg", BigDecimal.valueOf(18.0))
+                    .withMicroCap("sodium_mg", BigDecimal.valueOf(2300.0))
+                    .build()));
+
+    DailyAggregateDto agg = aggregator().aggregateDay(userId, DAY);
+
+    // Floor-bearing and cap-only targets are both tracked; neither was written.
+    assertThat(agg.micros())
+        .extracting(
+            MicroIntakeStatusDto::key,
+            MicroIntakeStatusDto::actualSoFar,
+            MicroIntakeStatusDto::status)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(
+                "iron_mg", null, MicroIntakeStatusDto.STATUS_NO_DATA),
+            org.assertj.core.groups.Tuple.tuple(
+                "sodium_mg", null, MicroIntakeStatusDto.STATUS_NO_DATA));
+    assertThat(agg.microsActualSoFar()).doesNotContainKey("iron_mg");
+  }
+
+  @Test
+  void aggregateDay_unboundedMicroTarget_getsNoRow() {
+    UUID userId = UUID.randomUUID();
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, DAY)).thenReturn(Optional.empty());
+    NutritionTargets targets = NutritionTestData.targets().withUserId(userId).build();
+    targets
+        .getMicroTargets()
+        .add(
+            com.example.mealprep.nutrition.domain.entity.MicroTarget.builder()
+                .id(UUID.randomUUID())
+                .nutrientKey("biotin_mcg")
+                .build());
+    when(targetsRepository.findByUserId(userId)).thenReturn(Optional.of(targets));
+
+    DailyAggregateDto agg = aggregator().aggregateDay(userId, DAY);
+
+    // No floor, no cap: not tracked, so no NO_DATA row either.
+    assertThat(agg.micros()).isEmpty();
+  }
+
+  @Test
+  void aggregateDay_untargetedMeasuredMicro_getsMeasuredRow_mergedAcrossSlotAndSnack() {
+    UUID userId = UUID.randomUUID();
+    IntakeSlot slot = confirmedSlot(MealSlot.BREAKFAST, 500, 30, 60, 15, 8);
+    slot.setActualMicros(micros("vitamin_c_mg", "41.234"));
+    IntakeDay d = day(userId, DAY, slot);
+    IntakeSnack s = snack(180, 7, 6, 15, 3);
+    s.setMicros(micros("vitamin_c_mg", "8.521"));
+    d.addSnack(s);
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, DAY)).thenReturn(Optional.of(d));
+    when(targetsRepository.findByUserId(userId)).thenReturn(Optional.empty());
+
+    DailyAggregateDto agg = aggregator().aggregateDay(userId, DAY);
+
+    // 41.234 + 8.521 = 49.755, scaled to 2dp HALF_UP like the map entries.
+    assertThat(agg.micros()).hasSize(1);
+    MicroIntakeStatusDto row = agg.micros().get(0);
+    assertThat(row.key()).isEqualTo("vitamin_c_mg");
+    assertThat(row.status()).isEqualTo(MicroIntakeStatusDto.STATUS_MEASURED);
+    assertThat(row.actualSoFar()).isEqualByComparingTo(new BigDecimal("49.76"));
+    assertThat(row.actualSoFar()).isEqualTo(agg.microsActualSoFar().get("vitamin_c_mg"));
+  }
+
+  @Test
+  void aggregateDay_unitDerivedFromKeySuffix() {
+    UUID userId = UUID.randomUUID();
+    IntakeSlot slot = confirmedSlot(MealSlot.BREAKFAST, 500, 30, 60, 15, 8);
+    ObjectNode m = OM.createObjectNode();
+    m.put("selenium_mcg", new BigDecimal("55"));
+    m.put("iron_mg", new BigDecimal("9"));
+    m.put("saturated_fat_g", new BigDecimal("4"));
+    slot.setActualMicros(m);
+    IntakeDay d = day(userId, DAY, slot);
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, DAY)).thenReturn(Optional.of(d));
+    when(targetsRepository.findByUserId(userId)).thenReturn(Optional.empty());
+
+    DailyAggregateDto agg = aggregator().aggregateDay(userId, DAY);
+
+    assertThat(agg.micros())
+        .extracting(MicroIntakeStatusDto::key, MicroIntakeStatusDto::unit)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple("selenium_mcg", "mcg"),
+            org.assertj.core.groups.Tuple.tuple("iron_mg", "mg"),
+            org.assertj.core.groups.Tuple.tuple("saturated_fat_g", ""));
+  }
+
+  @Test
+  void aggregateWeek_microMeasuredOneDay_weeklyTotalMeasured_otherDaysNoData() {
+    UUID userId = UUID.randomUUID();
+    IntakeSlot slot = confirmedSlot(MealSlot.BREAKFAST, 500, 30, 60, 15, 8);
+    slot.setActualMicros(micros("iron_mg", "5.0"));
+    IntakeDay only = day(userId, MONDAY, slot);
+    when(intakeDayRepository.findByUserIdAndOnDateBetween(eq(userId), any(), any()))
+        .thenReturn(List.of(only));
+    when(targetsRepository.findByUserId(userId))
+        .thenReturn(
+            Optional.of(
+                NutritionTestData.targets()
+                    .withUserId(userId)
+                    .withMicro("iron_mg", BigDecimal.valueOf(18.0))
+                    .withMicro("zinc_mg", BigDecimal.valueOf(11.0))
+                    .build()));
+
+    WeeklyAggregateDto out = aggregator().aggregateWeek(userId, MONDAY);
+
+    // Monday: iron measured, zinc unwritten.
+    assertThat(out.perDay().get(0).micros())
+        .extracting(MicroIntakeStatusDto::key, MicroIntakeStatusDto::status)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple("iron_mg", MicroIntakeStatusDto.STATUS_MEASURED),
+            org.assertj.core.groups.Tuple.tuple("zinc_mg", MicroIntakeStatusDto.STATUS_NO_DATA));
+    // Tuesday has no intake row: both tracked micros are NO_DATA, none measured.
+    assertThat(out.perDay().get(1).micros())
+        .extracting(MicroIntakeStatusDto::status)
+        .containsExactly(MicroIntakeStatusDto.STATUS_NO_DATA, MicroIntakeStatusDto.STATUS_NO_DATA);
+    // Weekly total: measured on any day reads MEASURED with the summed value; never-written
+    // stays NO_DATA.
+    assertThat(out.weeklyTotal().micros())
+        .extracting(
+            MicroIntakeStatusDto::key,
+            MicroIntakeStatusDto::actualSoFar,
+            MicroIntakeStatusDto::status)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(
+                "iron_mg", new BigDecimal("5.00"), MicroIntakeStatusDto.STATUS_MEASURED),
+            org.assertj.core.groups.Tuple.tuple(
+                "zinc_mg", null, MicroIntakeStatusDto.STATUS_NO_DATA));
+  }
+
+  @Test
+  void aggregateDay_noTargetsNoData_emptyStatusList() {
+    UUID userId = UUID.randomUUID();
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, DAY)).thenReturn(Optional.empty());
+    when(targetsRepository.findByUserId(userId)).thenReturn(Optional.empty());
+
+    DailyAggregateDto agg = aggregator().aggregateDay(userId, DAY);
+
+    assertThat(agg.micros()).isEmpty();
+    assertThat(agg.microsActualSoFar()).isEmpty();
   }
 
   // ---------------- fixtures ----------------

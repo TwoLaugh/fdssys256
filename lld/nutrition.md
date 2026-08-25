@@ -454,13 +454,23 @@ public record IntakeSnackDto(UUID id, String ingredientMappingKey, String freeTe
 // Per macro: planned, actualSoFar, remaining triple. Plus micros actual-so-far map.
 // satFat is summed from the slot/snack micros documents' "saturated_fat_g" entries
 // (no dedicated slot columns); the map entry is retained alongside it.
+// micros adds per-micro status on top of the map (D-0008 / t5 gap G1): one MEASURED row per
+// merged key (a present zero stays MEASURED with value 0) and one NO_DATA row (null value) per
+// tracked micro target no decided source wrote. Tracked = the user's micro targets carrying a
+// floor or cap. Mirrors the planner's NutritionTargetCoverageDocument semantics so both lenses
+// share a row grammar. The map convention stays for existing consumers.
 public record DailyAggregateDto(
     int caloriesPlanned, int caloriesActualSoFar, int caloriesRemaining,
     MacroAggregateDto protein, MacroAggregateDto carbs, MacroAggregateDto fat, MacroAggregateDto fibre,
     MacroAggregateDto satFat,
-    Map<String, BigDecimal> microsActualSoFar
+    Map<String, BigDecimal> microsActualSoFar,
+    List<MicroIntakeStatusDto> micros
 ) {}
 public record MacroAggregateDto(BigDecimal plannedG, BigDecimal actualSoFarG, BigDecimal remainingG) {}
+
+// status: MEASURED | NO_DATA. actualSoFar null iff NO_DATA. unit derived from the key suffix
+// (mg / mcg; empty otherwise), same derivation as the planner coverage rows.
+public record MicroIntakeStatusDto(String key, String unit, BigDecimal actualSoFar, String status) {}
 
 // floorViolations: daily-enforcement floors emit one dated entry per violating tracked day;
 // weekly-average floors emit a single date=null entry (floor = 7-day-summed floor).
@@ -876,6 +886,7 @@ Custom validators in `validation/`:
 - **`@ValidPerMealDistribution`**: no duplicate meal slots; per-meal calorie sum within ±100 of daily target (planner can redistribute; 50%+ mismatch is almost certainly a UI bug — warn-log; reject only when sum exceeds 2× the daily target).
 - **`@ValidActivityProfile`**: no duplicate activity levels.
 - **`@ValidDirectiveInstruction`**: `action` in known set; `target` non-blank for `restrict_ingredient` / `adjust_target`; `staged_protocol` phases are ordered, non-overlapping, weeks sum > 0.
+- **`@ValidMicros`**: request-side micros JSONB documents (`IntakeEntryDto.micros`, `LogSnackRequest.micros`) must be an object of non-negative numbers, matching the contract's `additionalProperties: number, minimum: 0` (D-0008 contract hardening). Null passes; the field is nullable.
 
 Validation failures bubble up as `MethodArgumentNotValidException` → 400 ProblemDetail.
 
@@ -934,10 +945,11 @@ mealprep.nutrition.divergence.minimum-planned-floor-kcal: 200    # avoid noise o
 
 ### Consumed
 
-Two `@TransactionalEventListener(phase = AFTER_COMMIT)` listeners:
+Three `@TransactionalEventListener(phase = AFTER_COMMIT)` listeners:
 
 - **`MealCookedEvent`** → auto-confirms the matching planned slot per [technical-architecture.md §Flow 4](../design/technical-architecture.md#flow-4-cook-event). The listener calls `confirmFromPlan(userId, onDate, mealSlot)` resolved from the payload. Duplicate events (same `(userId, planId, mealSlotId)`) no-op idempotently because the slot is already `CONFIRMED`.
 - **`RecipeEvolvedEvent`** → triggers `NutritionCalculationService.recalculateForEvolvedRecipe`. The recipe module passes the updated ingredient list via `CalculateRecipeNutritionRequest`; the result is returned to the recipe module, which owns recipe storage and decides whether to overwrite or version the nutrition record.
+- **`PlanAcceptedEvent`** → `PlanAcceptedPrefillListener` (D-0008) fetches the accepted plan via `PlanQueryService`, derives per-slot planned figures (recipe per-serving nutrition × portion factor + Phase-2 additions, per person, breakfast/lunch/dinner only per the CUSTOM/SNACK join rule) and calls `prefillFromPlan` per eater per day of the plan's week. Re-accepting or re-optimising is idempotent: `prefillFromPlan` preserves decided slots and updates `PENDING` ones in place, so user-entered actuals are never clobbered. Micros a recipe did not measure stay absent in `planned_micros`, never zero-filled. No listener-level transaction; each per-day pre-fill runs in its own service transaction and failures are logged, never re-thrown.
 
 The HLD does not specify whether `MealCookedEvent` listening lives in the planner or the nutrition module. Per [technical-architecture.md §Flow 4](../design/technical-architecture.md#flow-4-cook-event) ("Nutrition Logger listener auto-confirms planned nutrition for that meal slot"), it lives here. **Worth user review.**
 
@@ -964,7 +976,7 @@ The propose/accept flow ensures a directive never auto-applies. Once accepted (F
 1. Load the day's `IntakeDay` (404 if missing — pre-fill should have created it) and slot.
 2. Store the verbatim `freeText` into `IntakeSlot.overrideFreeText` immediately — preserved even if AI parsing fails.
 3. Call `IntakeOverrideParserTask` via `AiService`. Tool-use response is either `parsed` (`{ ingredient_lines: [...] }`, each with mapping key, quantity, unit, grams) or `unparseable` (slot marked `OVERRIDDEN` with zero-nutrition actuals; verbatim preserved; UI banner invites manual edit). Prompt text is **out of scope** (see Out of Scope).
-4. For each ingredient line, call `IngredientMappingPipeline.resolve` (Flow 6) and sum into the slot's actual columns. Set `actualStatus = OVERRIDDEN`, `overriddenAt = now`.
+4. For each ingredient line, call `IngredientMappingPipeline.resolve` (Flow 6) and sum into the slot's actual columns. Set `actualStatus = OVERRIDDEN`, `overriddenAt = now`. When building `actual_micros`, a micro the pipeline could not resolve for any line is **omitted from the document, never written as 0** — the aggregate's MEASURED/NO_DATA split (Flow 9, D-0008) depends on absent-means-unmeasured, so zero-filling here would fabricate measured zeros.
 5. Audit (`IntakeAuditLog(action = OVERRIDE)`) with the parsed structure as `new_value_json` — the AI's interpretation is auditable.
 6. Run `DivergenceDetector`.
 7. Publish `IntakeLoggedEvent(action=OVERRIDE)` after commit.
@@ -1048,6 +1060,8 @@ The second safety surface. **Directives are NEVER auto-applied** per [nutrition-
 ### Flow 9: Daily and weekly aggregation
 
 `getDailyAggregate(userId, onDate)` is a pure-read flow. `@Transactional(readOnly = true)`. Loads the day with details and the user's targets. Sums actuals across all `IntakeSlot`s and `IntakeSnack`s, ignoring `PENDING` slots (their actual columns are null). Computes `remaining = target - actualSoFar` per macro, floored at zero. Micros aggregated similarly from the JSONB columns; `actualMicros` is a `Map<String, BigDecimal>` keyed by `nutrient_key`.
+
+**Per-micro status (D-0008).** Alongside the map, the aggregate emits `micros`: MEASURED rows for every merged key and NO_DATA rows (null value) for tracked-but-unwritten micro targets. The invariant this rests on: every intake writer omits a micro it did not measure, and preserves a measured zero as a present `0` entry. No writer may zero-fill absent micros; the deferred AI parse (Flow 4 step 4, nutrition-01k) is bound by the same rule when it sums parsed lines into `actual_micros`. Absent key = unmeasured, present zero = measured, structurally distinct end to end. The weekly total's rows derive from the summed map, so a micro measured on any day of the week reads MEASURED in the total.
 
 `getWeeklyAggregate(userId, weekStart)` calls `getDailyAggregate` for each of the seven days, sums weekly totals, and walks each day's macros against `MacroTargetDto.floorG` for the floors-list. Because each daily fetch is one query (`@EntityGraph`), the weekly aggregate is exactly seven queries plus one for targets — fine for the dashboard endpoint, no caching needed in v1.
 

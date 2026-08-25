@@ -98,6 +98,8 @@ class DailyAggregateFlowIT {
         .andExpect(jsonPath("$.satFat.plannedG").value(0.0))
         .andExpect(jsonPath("$.satFat.actualSoFarG").value(0.0))
         .andExpect(jsonPath("$.satFat.remainingG").value(0.0))
+        // No targets and no intake: nothing measured, nothing tracked, so no status rows.
+        .andExpect(jsonPath("$.micros").isEmpty())
         .andExpect(openApi().isValid(openApiValidator));
   }
 
@@ -134,6 +136,13 @@ class DailyAggregateFlowIT {
         .andExpect(jsonPath("$.satFat.remainingG").value(18.5))
         // Map-convention entry retained alongside the first-class aggregate.
         .andExpect(jsonPath("$.microsActualSoFar.saturated_fat_g").value(1.5))
+        // Status rows (D-0008): the written key reads MEASURED with its value; the DRI-seeded
+        // micro targets the snack never touched read NO_DATA with a null value.
+        .andExpect(jsonPath("$.micros[0].key").value("saturated_fat_g"))
+        .andExpect(jsonPath("$.micros[0].status").value("MEASURED"))
+        .andExpect(jsonPath("$.micros[0].actualSoFar").value(1.5))
+        .andExpect(jsonPath("$.micros[?(@.status=='NO_DATA')].actualSoFar").exists())
+        .andExpect(jsonPath("$.micros[?(@.key=='iron_mg')].status").value("NO_DATA"))
         .andExpect(openApi().isValid(openApiValidator));
   }
 

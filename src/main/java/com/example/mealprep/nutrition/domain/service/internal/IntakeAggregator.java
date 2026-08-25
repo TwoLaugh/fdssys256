@@ -3,6 +3,7 @@ package com.example.mealprep.nutrition.domain.service.internal;
 import com.example.mealprep.nutrition.api.dto.DailyAggregateDto;
 import com.example.mealprep.nutrition.api.dto.FloorViolationDto;
 import com.example.mealprep.nutrition.api.dto.MacroAggregateDto;
+import com.example.mealprep.nutrition.api.dto.MicroIntakeStatusDto;
 import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
 import com.example.mealprep.nutrition.domain.entity.IntakeDay;
 import com.example.mealprep.nutrition.domain.entity.IntakeSlot;
@@ -49,6 +50,10 @@ import org.springframework.stereotype.Component;
  *       microsActualSoFar["saturated_fat_g"]} entry is retained for map-convention consumers.
  *   <li>{@code microsActualSoFar} merges the slot.actualMicros JSONB objects + snack.micros JSONB
  *       objects, summing numeric values per key.
+ *   <li>{@code micros} adds per-micro status on top of the map: every merged key becomes a MEASURED
+ *       row (a present zero stays MEASURED with value 0), and each tracked micro target (one
+ *       carrying a floor or cap) that no decided source wrote becomes a NO_DATA row with a null
+ *       value. Mirrors the planner-side coverage semantics in {@code RollupBuilderImpl}.
  *   <li>{@code aggregateWeek} is Monday-anchored; missing days contribute a zero-valued daily
  *       aggregate. Per-day {@code remaining} uses the daily target; the weekly total's remaining is
  *       the zero-floored 7×-target less the weekly actual. {@code floorViolations} is structured
@@ -137,6 +142,7 @@ public class IntakeAggregator {
       mergeMicros(micros, snack.getMicros());
     }
 
+    Map<String, BigDecimal> scaled = scaleMicros(micros);
     return new DailyAggregateDto(
         caloriesPlanned,
         caloriesActual,
@@ -146,7 +152,8 @@ public class IntakeAggregator {
         macroAgg(targets == null ? null : targets.fat(), fatPlanned, fatActual),
         macroAgg(targets == null ? null : targets.fibre(), fibrePlanned, fibreActual),
         macroAgg(targets == null ? null : targets.satFat(), satFatPlanned, satFatActual),
-        scaleMicros(micros));
+        scaled,
+        microStatuses(scaled, targets));
   }
 
   /** Weekly rollup, Monday-anchored. Caller validates {@code weekStart} is a Monday. */
@@ -197,7 +204,8 @@ public class IntakeAggregator {
         macroAgg(targets == null ? null : targets.fat(), BigDecimal.ZERO, BigDecimal.ZERO),
         macroAgg(targets == null ? null : targets.fibre(), BigDecimal.ZERO, BigDecimal.ZERO),
         macroAgg(targets == null ? null : targets.satFat(), BigDecimal.ZERO, BigDecimal.ZERO),
-        new LinkedHashMap<>());
+        new LinkedHashMap<>(),
+        microStatuses(Map.of(), targets));
   }
 
   /**
@@ -275,6 +283,48 @@ public class IntakeAggregator {
     return out;
   }
 
+  /**
+   * Per-micro status rows for one aggregate. Every measured key gets a MEASURED row carrying its
+   * (already scaled) sum, so a present zero reads MEASURED with value 0, never NO_DATA. Then each
+   * tracked micro target the merge never saw gets a NO_DATA row with a null value: no decided
+   * source wrote the key, so intake is unknown, not zero (same rule as the planner's coverage in
+   * RollupBuilderImpl). Ordering is deterministic: measured keys in merge order, then unmeasured
+   * tracked keys in target order.
+   */
+  private static List<MicroIntakeStatusDto> microStatuses(
+      Map<String, BigDecimal> measured, DailyTargets targets) {
+    List<MicroIntakeStatusDto> out = new ArrayList<>();
+    for (Map.Entry<String, BigDecimal> e : measured.entrySet()) {
+      out.add(
+          new MicroIntakeStatusDto(
+              e.getKey(),
+              microUnit(e.getKey()),
+              e.getValue(),
+              MicroIntakeStatusDto.STATUS_MEASURED));
+    }
+    if (targets != null) {
+      for (String key : targets.trackedMicroKeys()) {
+        if (!measured.containsKey(key)) {
+          out.add(
+              new MicroIntakeStatusDto(
+                  key, microUnit(key), null, MicroIntakeStatusDto.STATUS_NO_DATA));
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Display-hint unit from the key suffix. Same derivation as the planner's coverage rows. */
+  private static String microUnit(String key) {
+    if (key.endsWith("_mcg")) {
+      return "mcg";
+    }
+    if (key.endsWith("_mg")) {
+      return "mg";
+    }
+    return "";
+  }
+
   private static DailyAggregateDto sumDailies(List<DailyAggregateDto> days, DailyTargets targets) {
     int caloriesPlanned = 0;
     int caloriesActual = 0;
@@ -310,6 +360,7 @@ public class IntakeAggregator {
 
     // Weekly basis is 7× the daily target (or null → planned-based per-macro fallback).
     DailyTargets weekly = targets == null ? null : targets.times(7);
+    Map<String, BigDecimal> scaled = scaleMicros(micros);
     return new DailyAggregateDto(
         caloriesPlanned,
         caloriesActual,
@@ -319,7 +370,8 @@ public class IntakeAggregator {
         macroAgg(weekly == null ? null : weekly.fat(), fatPlanned, fatActual),
         macroAgg(weekly == null ? null : weekly.fibre(), fibrePlanned, fibreActual),
         macroAgg(weekly == null ? null : weekly.satFat(), satFatPlanned, satFatActual),
-        scaleMicros(micros));
+        scaled,
+        microStatuses(scaled, targets));
   }
 
   /**
@@ -465,6 +517,10 @@ public class IntakeAggregator {
    * The user's daily target basis for the "remaining" computation: calories + the five macro target
    * grams. {@code remaining} is computed against these (zero-floored). {@code null} macro targets
    * fall back to the planned basis per-macro.
+   *
+   * <p>{@code trackedMicroKeys} lists the micro targets that carry a floor or cap, in target order.
+   * They drive the NO_DATA rows of {@link #microStatuses}; a keyless or unbounded micro target is
+   * not tracked (same filter as the planner's coverage).
    */
   record DailyTargets(
       int calories,
@@ -472,16 +528,25 @@ public class IntakeAggregator {
       BigDecimal carbs,
       BigDecimal fat,
       BigDecimal fibre,
-      BigDecimal satFat) {
+      BigDecimal satFat,
+      List<String> trackedMicroKeys) {
 
     static DailyTargets of(NutritionTargets t) {
+      List<String> tracked = new ArrayList<>();
+      for (MicroTarget m : t.getMicroTargets()) {
+        if (m.getNutrientKey() != null
+            && (m.getTargetValue() != null || m.getUpperLimit() != null)) {
+          tracked.add(m.getNutrientKey());
+        }
+      }
       return new DailyTargets(
           t.getDailyCalorieTarget(),
           t.getProteinTargetG(),
           t.getCarbsTargetG(),
           t.getFatTargetG(),
           t.getFibreTargetG(),
-          t.getSatFatTargetG());
+          t.getSatFatTargetG(),
+          tracked);
     }
 
     /** Scale every target by {@code factor} (used to derive the weekly-total basis = daily × 7). */
@@ -493,7 +558,8 @@ public class IntakeAggregator {
           carbs == null ? null : carbs.multiply(f),
           fat == null ? null : fat.multiply(f),
           fibre == null ? null : fibre.multiply(f),
-          satFat == null ? null : satFat.multiply(f));
+          satFat == null ? null : satFat.multiply(f),
+          trackedMicroKeys);
     }
   }
 }

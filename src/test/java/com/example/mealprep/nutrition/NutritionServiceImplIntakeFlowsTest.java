@@ -34,6 +34,7 @@ import com.example.mealprep.nutrition.api.dto.LogSnackRequest;
 import com.example.mealprep.nutrition.api.dto.MacroTargetDto;
 import com.example.mealprep.nutrition.api.dto.MicroTargetDto;
 import com.example.mealprep.nutrition.api.dto.PerMealDistributionDto;
+import com.example.mealprep.nutrition.api.dto.PlannedSlotInputDto;
 import com.example.mealprep.nutrition.api.dto.SafetyGateVerdict;
 import com.example.mealprep.nutrition.api.dto.UpdateTargetsRequest;
 import com.example.mealprep.nutrition.api.mapper.DailyActivityMapper;
@@ -96,6 +97,7 @@ import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.testdata.NutritionTestData;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.IntNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -893,28 +895,111 @@ class NutritionServiceImplIntakeFlowsTest {
   }
 
   @Test
-  void prefillFromPlan_existingDay_replacesSlotsWholesale() {
+  void prefillFromPlan_existingDay_updatesPendingSlotInPlace() {
     UUID userId = UUID.randomUUID();
     UUID planId = UUID.randomUUID();
-    IntakeSlot stale =
+    IntakeSlot pending =
         IntakeSlot.builder()
             .id(UUID.randomUUID())
             .mealSlot(MealSlot.BREAKFAST)
             .plannedCalories(400)
             .actualStatus(IntakeSlotStatus.PENDING)
             .build();
-    IntakeDay day = day(userId, stale);
+    IntakeDay day = day(userId, pending);
     when(intakeDayRepository.findByUserIdAndOnDate(userId, ON_DATE)).thenReturn(Optional.of(day));
 
     service().prefillFromPlan(userId, ON_DATE, planId, NutritionTestData.defaultPlannedSlots());
 
     assertThat(day.getSlots()).hasSize(3);
-    assertThat(day.getSlots()).noneMatch(s -> s == stale);
+    // The PENDING breakfast row is the SAME entity, refreshed to the new snapshot (no
+    // delete+insert on the (day, meal_slot) unique index).
+    assertThat(day.getSlots()).contains(pending);
+    assertThat(pending.getPlannedCalories()).isEqualTo(500);
+    assertThat(pending.getPlannedProteinG()).isEqualByComparingTo("30.0");
+    assertThat(pending.getPlannedCarbsG()).isEqualByComparingTo("60.0");
+    assertThat(pending.getPlannedFatG()).isEqualByComparingTo("15.0");
+    assertThat(pending.getPlannedFibreG()).isEqualByComparingTo("8.0");
+    assertThat(pending.getPlannedMicros()).isNull();
+    assertThat(pending.getPlannedRecipeId()).isNull();
+    assertThat(pending.isNeedsAiParse()).isFalse();
+    assertThat(pending.getActualStatus()).isEqualTo(IntakeSlotStatus.PENDING);
     assertThat(day.getPlanId()).isEqualTo(planId);
 
     ArgumentCaptor<IntakeAuditLog> auditCaptor = ArgumentCaptor.forClass(IntakeAuditLog.class);
     verify(intakeAuditRepository).save(auditCaptor.capture());
     assertThat(auditCaptor.getValue().getPreviousValueJson().get("slotCount").asInt()).isEqualTo(1);
+    assertThat(auditCaptor.getValue().getNewValueJson().get("slotCount").asInt()).isEqualTo(3);
+  }
+
+  @Test
+  void prefillFromPlan_rePrefill_preservesDecidedSlotVerbatim() {
+    // D-0008 idempotency pin: re-accepting or re-optimising must not clobber user actuals.
+    UUID userId = UUID.randomUUID();
+    UUID planId = UUID.randomUUID();
+    ObjectNode eatenMicros = objectMapper.createObjectNode().put("iron_mg", 4.2);
+    IntakeSlot decided =
+        IntakeSlot.builder()
+            .id(UUID.randomUUID())
+            .mealSlot(MealSlot.BREAKFAST)
+            .plannedRecipeId(UUID.randomUUID())
+            .plannedCalories(400)
+            .actualStatus(IntakeSlotStatus.EDITED)
+            .actualCalories(450)
+            .actualProteinG(BigDecimal.valueOf(28.0))
+            .actualMicros(eatenMicros)
+            .build();
+    UUID decidedPlannedRecipe = decided.getPlannedRecipeId();
+    IntakeDay day = day(userId, decided);
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, ON_DATE)).thenReturn(Optional.of(day));
+
+    service().prefillFromPlan(userId, ON_DATE, planId, NutritionTestData.defaultPlannedSlots());
+
+    assertThat(day.getSlots()).hasSize(3);
+    assertThat(day.getSlots()).contains(decided);
+    // The decided slot is untouched, planned fields included: the user's record stands.
+    assertThat(decided.getActualStatus()).isEqualTo(IntakeSlotStatus.EDITED);
+    assertThat(decided.getActualCalories()).isEqualTo(450);
+    assertThat(decided.getActualProteinG()).isEqualByComparingTo("28.0");
+    assertThat(decided.getActualMicros()).isSameAs(eatenMicros);
+    assertThat(decided.getPlannedCalories()).isEqualTo(400);
+    assertThat(decided.getPlannedRecipeId()).isEqualTo(decidedPlannedRecipe);
+    // No duplicate breakfast row was added alongside it.
+    assertThat(day.getSlots()).filteredOn(s -> s.getMealSlot() == MealSlot.BREAKFAST).hasSize(1);
+  }
+
+  @Test
+  void prefillFromPlan_stalePendingRemoved_staleDecidedKept() {
+    UUID userId = UUID.randomUUID();
+    IntakeSlot stalePending =
+        IntakeSlot.builder()
+            .id(UUID.randomUUID())
+            .mealSlot(MealSlot.LUNCH)
+            .plannedCalories(600)
+            .actualStatus(IntakeSlotStatus.PENDING)
+            .build();
+    IntakeSlot staleDecided =
+        IntakeSlot.builder()
+            .id(UUID.randomUUID())
+            .mealSlot(MealSlot.DINNER)
+            .plannedCalories(700)
+            .actualStatus(IntakeSlotStatus.CONFIRMED)
+            .actualCalories(700)
+            .build();
+    IntakeDay day = day(userId, stalePending);
+    day.addSlot(staleDecided);
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, ON_DATE)).thenReturn(Optional.of(day));
+
+    // New snapshot carries breakfast only: lunch and dinner dropped from the plan.
+    List<PlannedSlotInputDto> breakfastOnly =
+        List.of(NutritionTestData.defaultPlannedSlots().get(0));
+    service().prefillFromPlan(userId, ON_DATE, UUID.randomUUID(), breakfastOnly);
+
+    // Stale PENDING lunch goes; the decided dinner stays with its actuals.
+    assertThat(day.getSlots())
+        .extracting(IntakeSlot::getMealSlot)
+        .containsExactlyInAnyOrder(MealSlot.DINNER, MealSlot.BREAKFAST);
+    assertThat(day.getSlots()).contains(staleDecided);
+    assertThat(staleDecided.getActualCalories()).isEqualTo(700);
   }
 
   // ---------------- confirmFromPlan ----------------

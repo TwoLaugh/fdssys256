@@ -8,8 +8,11 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
- * Per-slot input to {@code prefillFromPlan}. Used in-process only by the (deferred) planner module;
- * no HTTP endpoint accepts this in 01b.
+ * Per-slot input to {@code prefillFromPlan}. In-process only; no HTTP endpoint accepts this. The
+ * production caller is {@code PlanAcceptedPrefillListener}, which assembles one per planner
+ * breakfast/lunch/dinner slot on plan acceptance. All nutrition fields are nullable: null means the
+ * plan carried no computed figure, and micros a recipe did not measure are omitted from {@code
+ * plannedMicros}, never written as 0.
  */
 public record PlannedSlotInputDto(
     @NotNull MealSlot mealSlot,

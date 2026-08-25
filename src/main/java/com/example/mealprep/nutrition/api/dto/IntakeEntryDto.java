@@ -1,5 +1,6 @@
 package com.example.mealprep.nutrition.api.dto;
 
+import com.example.mealprep.nutrition.validation.ValidMicros;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
@@ -12,4 +13,4 @@ public record IntakeEntryDto(
     @NotNull @Min(0) BigDecimal carbsG,
     @NotNull @Min(0) BigDecimal fatG,
     @Min(0) BigDecimal fibreG,
-    JsonNode micros) {}
+    @ValidMicros JsonNode micros) {}
