@@ -1013,7 +1013,7 @@ The pipeline runs inside the caller's transaction by default. The HLD does not s
 2. Resolve nutrition: if `ingredientMappingKey` is present, look it up directly; otherwise `IngredientMappingPipeline.resolve` on the free text.
 3. Write a new `IntakeSnack` row.
 4. Audit (`SNACK_ADD`).
-5. **If `deductFromPantry == true`**: call `provisionUpdateService.deductFromInventoryByMappingKey(userId, mappingKey, quantityG)` — same-JVM DI call, joins this transaction. Optimistic-lock failure on the provisions side rolls back the whole flow (409). User retries without `deductFromPantry` if needed.
+5. **If `deductFromPantry == true`**: requires `ingredientMappingKey` (400 without it; the deduction must never silently no-op). Call `provisionUpdateService.applyStandaloneConsumption(userId, command)` with `userConfirmedDeduction = true` — same-JVM DI call, joins this transaction; the provisions side decrements the oldest-expiry active row matching the key, floored at zero. A key matching no row deducts nothing (line 646 — unrelated logged item, no error). Optimistic-lock failure on the provisions side rolls back the whole flow (409). User retries without `deductFromPantry` if needed.
 6. Run `DivergenceDetector`.
 7. Publish `IntakeLoggedEvent(SNACK_ADD)` after commit. Provisions publishes its own `ProvisionChangedEvent`; the planner sees both.
 

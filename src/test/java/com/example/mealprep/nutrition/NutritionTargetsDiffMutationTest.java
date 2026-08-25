@@ -140,6 +140,8 @@ class NutritionTargetsDiffMutationTest {
             new BigDecimal("0.05"), new BigDecimal("0.10"), new BigDecimal("0.20"), 1000),
         org.mockito.Mockito.mock(
             com.example.mealprep.nutrition.domain.repository.DriDefaultRepository.class),
+        org.mockito.Mockito.mock(
+            com.example.mealprep.provisions.domain.service.ProvisionUpdateService.class),
         eventPublisher,
         objectMapper,
         fixedClock);

@@ -359,7 +359,10 @@ LogSnackRequest:
       type: boolean
       default: false
       nullable: true
-      description: Reserved for nutrition-01l. Currently a no-op.
+      description: >-
+        When true, deducts quantityG from the active pantry row matching
+        ingredientMappingKey (oldest expiry first). Requires ingredientMappingKey,
+        else 400. A key matching no pantry row deducts nothing.
 IntakeAuditEntryDto:
   type: object
   required: [id, intakeDayId, actorUserId, action, occurredAt]

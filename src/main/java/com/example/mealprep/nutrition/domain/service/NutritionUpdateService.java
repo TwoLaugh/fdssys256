@@ -129,8 +129,11 @@ public interface NutritionUpdateService {
   IntakeDayDto skipMeal(UUID userId, LocalDate onDate, MealSlot mealSlot);
 
   /**
-   * Log a snack on a date. Auto-creates the day row if missing. {@code deductFromPantry} flag is
-   * accepted but a no-op in 01b (deferred to nutrition-01l).
+   * Log a snack on a date. Auto-creates the day row if missing. {@code deductFromPantry = true}
+   * hands off to {@code ProvisionUpdateService.applyStandaloneConsumption} in the same transaction
+   * (nutrition-01l); it requires {@code ingredientMappingKey}, else {@code
+   * SnackDeductWithoutMappingKeyException} (400). A key matching no pantry row deducts nothing, by
+   * design.
    */
   IntakeDayDto logSnack(UUID userId, LocalDate onDate, LogSnackRequest request);
 

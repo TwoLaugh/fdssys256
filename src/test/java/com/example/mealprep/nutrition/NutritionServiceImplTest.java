@@ -63,6 +63,10 @@ class NutritionServiceImplTest {
   private com.example.mealprep.nutrition.domain.repository.HealthDirectiveRepository
       healthDirectiveRepository;
 
+  @Mock
+  private com.example.mealprep.provisions.domain.service.ProvisionUpdateService
+      provisionUpdateService;
+
   @Mock private ApplicationEventPublisher eventPublisher;
 
   private final TargetsMapper mapper =
@@ -138,6 +142,7 @@ class NutritionServiceImplTest {
             1000),
         org.mockito.Mockito.mock(
             com.example.mealprep.nutrition.domain.repository.DriDefaultRepository.class),
+        provisionUpdateService,
         eventPublisher,
         objectMapper,
         fixedClock);
@@ -529,5 +534,81 @@ class NutritionServiceImplTest {
     }
     verify(intakeDayRepository, never()).saveAndFlush(any());
     verifyNoInteractions(intakeAuditRepository, eventPublisher);
+  }
+
+  // ---------------- logSnack pantry deduction (nutrition-01l) ----------------
+
+  private static com.example.mealprep.nutrition.api.dto.LogSnackRequest snackRequest(
+      String mappingKey, Boolean deductFromPantry) {
+    return new com.example.mealprep.nutrition.api.dto.LogSnackRequest(
+        "protein bar",
+        mappingKey,
+        java.math.BigDecimal.valueOf(60),
+        240,
+        java.math.BigDecimal.valueOf(20),
+        java.math.BigDecimal.valueOf(20),
+        java.math.BigDecimal.valueOf(8),
+        null,
+        null,
+        com.example.mealprep.nutrition.domain.entity.IntakeSource.MANUAL,
+        deductFromPantry);
+  }
+
+  private com.example.mealprep.nutrition.domain.entity.IntakeDay stubSnackDay(
+      UUID userId, java.time.LocalDate onDate) {
+    com.example.mealprep.nutrition.domain.entity.IntakeDay day =
+        com.example.mealprep.nutrition.domain.entity.IntakeDay.builder()
+            .id(UUID.randomUUID())
+            .userId(userId)
+            .onDate(onDate)
+            .build();
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, onDate)).thenReturn(Optional.of(day));
+    when(intakeDayRepository.saveAndFlush(day)).thenReturn(day);
+    return day;
+  }
+
+  @Test
+  void logSnack_deductFromPantry_deductsViaProvisionsInTheSameFlow() {
+    UUID userId = UUID.randomUUID();
+    java.time.LocalDate onDate = java.time.LocalDate.of(2026, 5, 9);
+    stubSnackDay(userId, onDate);
+
+    service().logSnack(userId, onDate, snackRequest("chicken_breast", true));
+
+    ArgumentCaptor<com.example.mealprep.provisions.api.dto.StandaloneConsumptionCommand> captor =
+        ArgumentCaptor.forClass(
+            com.example.mealprep.provisions.api.dto.StandaloneConsumptionCommand.class);
+    verify(provisionUpdateService)
+        .applyStandaloneConsumption(org.mockito.ArgumentMatchers.eq(userId), captor.capture());
+    assertThat(captor.getValue().ingredientMappingKey()).isEqualTo("chicken_breast");
+    assertThat(captor.getValue().quantity()).isEqualByComparingTo("60");
+    assertThat(captor.getValue().userConfirmedDeduction()).isTrue();
+    // The snack itself still persists.
+    verify(intakeDayRepository).saveAndFlush(any());
+  }
+
+  @Test
+  void logSnack_deductFromPantryWithoutMappingKey_rejectsLoudly() {
+    UUID userId = UUID.randomUUID();
+    java.time.LocalDate onDate = java.time.LocalDate.of(2026, 5, 9);
+
+    assertThatThrownBy(() -> service().logSnack(userId, onDate, snackRequest(null, true)))
+        .isInstanceOf(
+            com.example.mealprep.nutrition.exception.SnackDeductWithoutMappingKeyException.class);
+
+    // Nothing persisted, nothing deducted — the request failed whole.
+    verifyNoInteractions(provisionUpdateService, intakeDayRepository, intakeAuditRepository);
+  }
+
+  @Test
+  void logSnack_withoutDeductFlag_neverTouchesProvisions() {
+    UUID userId = UUID.randomUUID();
+    java.time.LocalDate onDate = java.time.LocalDate.of(2026, 5, 9);
+    stubSnackDay(userId, onDate);
+
+    service().logSnack(userId, onDate, snackRequest("chicken_breast", false));
+    service().logSnack(userId, onDate, snackRequest("chicken_breast", null));
+
+    verifyNoInteractions(provisionUpdateService);
   }
 }

@@ -138,6 +138,8 @@ class JournalServiceTest {
             1000),
         org.mockito.Mockito.mock(
             com.example.mealprep.nutrition.domain.repository.DriDefaultRepository.class),
+        org.mockito.Mockito.mock(
+            com.example.mealprep.provisions.domain.service.ProvisionUpdateService.class),
         eventPublisher,
         objectMapper,
         fixedClock);
