@@ -1,10 +1,10 @@
 # MealPrep AI — Project Status & Backlog
 
-**As of:** main `17e726d` (2026-06-13) · 15 feature modules · 1,595 main Java files · 609 test files · 114 Flyway migrations · 78 `@RestController` classes · React/Vite frontend under `frontend/`.
+**As of:** main `b466d73` (2026-08-25) · 15 feature modules · 1,653 main Java files · 625 test files (+20 e2e) · 117 Flyway migrations · 85 `@RestController` classes · React/Vite frontend under `frontend/`.
 
 This is a living doc. It answers: *does what's in the backend let us do what the HLD wants?* + tracks the testing work + logs what's deferred/probable. Regenerate the metrics sections from `target/site/jacoco/jacoco.csv` + the Pitest report on each main run.
 
-**Revision note (2026-08-24):** the previous revision was anchored to `4d0958d` (2026-05-19) and had silently expired — 186 commits behind (`git log 4d0958d..17e726d --oneline`). Every §1 row and §3 item below was re-verified against the tree at `17e726d`; anything not re-verifiable is labelled UNVERIFIED. Note main itself is not the tip of development any more — see §4.
+**Revision note (2026-08-25):** re-anchored from `17e726d` to `b466d73` after D-0006 merged the experiment branch into main (see §4, now resolved history). Mechanical check at write time: `git log b466d73..main --oneline` is empty. The previous revision (2026-08-24) had itself re-anchored from a silently expired `4d0958d`; the lesson stands — always run the delta log before trusting this file.
 
 ---
 
@@ -31,14 +31,14 @@ Legend: ✅ works · ◐ wired-but-dormant (by milestone design) · ✗ broken/s
 | Feedback: retry stuck classifications | ✅ | Was ✗ (threw `UnsupportedOperationException`, nothing called it). #134 landed the real sweep: `FeedbackServiceImpl.java:433` + `StuckClassificationRetrier` on an `@Scheduled` cadence (`FeedbackRetrySweepProperties.java:17`) | no | — |
 | Nutrition: targets/intake/journal/floor-gate/directives | ✅ | nutrition module + ITs; upsert targets on PUT (#156), directive-expiry sweep + daily aggregate + DRI initialise (#205) | yes | — |
 | Nutrition: manual intake override macros | ◐ | Was ⚠ (zero macros persisted until async AI parse). The parse is now wired end-to-end (nutrition-01k, #221 `66471e6`), and #244 (`be3d65b`) added a structured-edit repair path for failed parses (`NutritionServiceImpl.java:1557-1590`). An overridden slot still carries zeroed actuals in the pre-parse window by design — narrowed, no longer silent-dead-end | no | — |
-| Nutrition: `logSnack(deductFromPantry=true)` | ⚠ | **Still a silent no-op**: `NutritionServiceImpl.java:1650-1653` logs and drops the deduction; flag reserved for nutrition-01l (`LogSnackRequest.java:14`) | data-integrity | provisions deduction wiring (nutrition-01l) |
+| Nutrition: `logSnack(deductFromPantry=true)` | ✅ | Was ⚠ silent no-op. Wired in the same PR as this revision (fix/trial-readiness): `NutritionServiceImpl.logSnack` hands off to `ProvisionUpdateService.applyStandaloneConsumption` in the same tx; `deductFromPantry` without an `ingredientMappingKey` is now a 400 (`SnackDeductWithoutMappingKeyException`), so the silent path is gone | yes | — |
 | Nutrition: GET intake audit-log | ✅ | Was ✗ (HTTP 500, bad derived query over a lazy assoc). Fixed in #100 (`bbd5c64`, pinning regression test flipped): `NutritionServiceImpl.java:1372-1381` resolves the day row first, then queries `findByIntakeDay_IdOrderByOccurredAtDesc` by id | yes | — |
 | Provisions / household / preference / adaptation core | ✅ | implemented + IT-covered; since extended: taste-vector embeddings via pgvector (#216), AI taste-profile delta pipeline (#142), adaptation triggers 1/3 wired (#170/#172), worker apply paths fixed (CRITICAL, #190) | yes | — |
 | Grocery module (shopping list → provider orders) | ✅ | **New since previous anchor.** 01a-01g complete (#174-#186): Tier-1 shopping-list calc + recalc listeners, manual fulfilment, price history, provider SPI + order state machine, substitution review + reconciliation, scheduled jobs + cost-cap guardrails; mutation-hardened (#181) | yes | — |
 | Notification module | ✅ | **New since previous anchor.** Core entity/service/REST/listeners (#128) + scheduled scanners (expiry, defrost, prep, nutrition, staples) (#131); feedback-confirmation NOTIF-16 (#165) | yes | — |
 | `PlanGeneratedEvent` / `PlanAcceptedEvent` consumers | ✅ | Was ✗ (published, no consumer). Now consumed in production by notification (`PlannerEventListener.java:54`) and grocery recalc (`ShoppingListRecalcListener.java:89`) | yes | — |
-| Household-scoped read authorization | ⚠ (security) | **Still open — the one surviving P0.** `PlansController.java:60` javadoc: household-scoped read authz deferred, "any authenticated caller". Writes and feasibility check `plannerAuth.canAccessHousehold` (`:108,:327`), but `getActivePlan` (`:270`), `getPlanHistory` (`:288`), `getPlansBetween` (`:299`), `getPendingSuggestions` (`:311`) take a raw `householdId` with no membership check | **security** | household authz follow-up (task T2 in flight) |
-| Admin endpoints role auth | ✅ (imperative) | Was ⚠. Enforced project-wide in #215 (`b785f1b`) via `AdminAccessGuard.requireAdmin()` against the `mealprep.admin.user-ids` allowlist — fail-closed: anonymous → 401, non-allowlisted → 403, default empty allowlist denies everyone (`AdminAccessGuard.java:30-34`). Nuance: the `@PreAuthorize("hasRole('ADMIN')")` annotations on admin controllers (e.g. `AdaptationAdminController.java:65`, from #213 `fa282dd`) are the *published contract* but **inert** — no `@EnableMethodSecurity`, no `ROLE_ADMIN` in the flat v1 user model (`AdminAccessGuard.java:21-28`). Deploy note: prod config must populate the allowlist or no one can use admin endpoints | security | — |
+| Household-scoped read authorization | ✅ | **Closed.** PR #263 (`397d383`, merged 2026-08-25): household-membership check on all plan read endpoints (`2230c6e`), plus the T8 review fixes that rode the same PR — notification dispatch only when a target user resolves (`460cc81`), non-throwing soft-prefs merge seam for the planner (`0f89da3`), drifted plan/shopping-list response fields declared in the contract (`2a4e982`) | yes | — |
+| Admin endpoints role auth | ✅ (imperative) | Was ⚠. Enforced project-wide in #215 (`b785f1b`) via `AdminAccessGuard.requireAdmin()` against the `mealprep.admin.user-ids` allowlist — fail-closed: anonymous → 401, non-allowlisted → 403, default empty allowlist denies everyone (`AdminAccessGuard.java:30-34`). Nuance: the `@PreAuthorize("hasRole('ADMIN')")` annotations on admin controllers (e.g. `AdaptationAdminController.java:65`, from #213 `fa282dd`) are the *published contract* but **inert** — no `@EnableMethodSecurity`, no `ROLE_ADMIN` in the flat v1 user model (`AdminAccessGuard.java:21-28`). Deploy note: prod config must populate the allowlist or no one can use admin endpoints. The e2e/dev dogfood stacks now allowlist the seed user by username instead (`mealprep.admin.usernames`, same PR as this revision) because its UUID is minted at registration; prod stays id-keyed and fail-closed | security | — |
 | AI cost budget enforcement | ✅ | Was ◐ UNVERIFIED. #213 (`fa282dd`) landed the two-scope pre-call gate: `CostBudgetGuard` ("Pre-call gate", `:22`; hard breach rejects before dispatch, `:109`, `AiCostBudgetExceededException`), plus per-task token caps (`TokenCapGuard`) and retry backoff | medium | — |
 | Frontend | ✅ (against backend contract) | **New since previous anchor.** Vite/React app under `frontend/` built page-by-page to contract specs (#225-#240), responsive degradation pass (#230), backend gap tickets driven from the page-spec programme all resolved (#241 → #260 ledger close) | yes | — |
 
@@ -46,10 +46,10 @@ Legend: ✅ works · ◐ wired-but-dormant (by milestone design) · ✗ broken/s
 
 ## 2. Testing state & roadmap
 
-**Metrics — STALE, carried not regenerated.** No build was run for this revision. Last measured numbers, anchored to the post-12-module-mutation-campaign CI run on main at `52d094b` (#112, GH Actions run 26191394397 — the run the pom gate comments cite, `pom.xml:470-474,542-545`):
+**Metrics — STALE, carried not regenerated.** No build was run for this revision either; refresh from the post-merge CI run's report. Last measured numbers, anchored to the post-12-module-mutation-campaign CI run on main at `52d094b` (#112, GH Actions run 26191394397 — the run the pom gate comments cite, `pom.xml:470-474,542-545`):
 
 - Line **93.4%** (17,691/18,951) · Branch **79.5%** (4,747/5,968) · Mutation **78% killed** (5,960/7,661), test-strength **95%**.
-- That run predates ~40 commits of grocery/discovery/frontend-gap work up to `17e726d`. One `mvnw verify` on this anchor regenerates the merged JaCoCo + Pitest reports and refreshes these numbers.
+- That run predates ~40 commits to `17e726d` plus the 63-commit experiment-branch merge and the #263 wave to `b466d73` — a much larger drift than at the previous revision. The first CI run on merged main regenerates JaCoCo + Pitest; take the numbers from there.
 - (The previous revision's 89.1/70.8/62 figures were an even older anchor and are superseded.)
 
 **Systemic issues from the previous revision — all closed:**
@@ -67,19 +67,22 @@ Legend: ✅ works · ◐ wired-but-dormant (by milestone design) · ✗ broken/s
 ## 3. Backlog (prioritised)
 
 ### P0 — MVP-blocking / broken in production
-- [ ] **Household-scoped read authz** (`PlansController.java:270-315`) — cross-tenant read exposure; close before any real deploy. Sweep other controllers for the same raw-`householdId` read pattern. *(The only P0 that survived re-verification; worker T2 is on it.)*
 
-Struck on re-verification (all previously listed here):
+None open.
+
+- [x] **Household-scoped read authz — CLOSED.** Merged in PR #263 (`397d383`): membership check on all plan read endpoints (`2230c6e`) plus the T8 review fixes riding the same PR (notification null-target dispatch guard `460cc81`, planner soft-prefs merge seam `0f89da3`, contract-drift alignment `2a4e982`).
+
+Struck on earlier re-verification (all previously listed here):
 - ~~`saveImportedRecipe` SPI~~ — landed #122; and D-0004 resolved discovery OUT of trial scope anyway.
 - ~~Nutrition audit-log 500~~ — fixed #100.
 - ~~#90 test-side fix + merge~~ — merged `8fd0442`.
 - ~~Admin endpoint authorization~~ — enforced imperatively #215 (see §1 nuance; populate the prod allowlist at deploy time).
 
 ### P1 — data integrity / correctness / quality
-- [ ] `logSnack` silent pantry no-op (`NutritionServiceImpl.java:1650`) — wire the nutrition-01l deduction or surface a clear "not supported" error.
+- [x] ~~`logSnack` silent pantry no-op~~ — wired in the same PR as this revision; missing mapping key now 400s (see §1 row).
 - [ ] Manual-override pre-parse zero-macro window — narrowed (#221 parse, #244 repair), decide whether the residual window needs a UI signal; add a rollup assertion.
-- [ ] Endpoint-vs-contract-asserting-IT inventory — never done; #90 covered the 7 known stragglers only.
-- [ ] Regenerate coverage/mutation numbers at `17e726d` (one `mvnw verify`) and re-check headroom against the 88/74/73 gates.
+- [ ] Endpoint-vs-contract-asserting-IT inventory — never done; #90 covered the 7 known stragglers only (#263's `2a4e982` closed two more drift instances found by hand).
+- [ ] Refresh coverage/mutation numbers from the first post-merge CI run on `b466d73`-or-later and re-check headroom against the 88/74/73 gates.
 
 ### P2 — deferred-by-design / hardening
 - [ ] Login throttle/lockout under concurrency (read-modify-write without row lock) — UNVERIFIED whether the #197 hardening sweep addressed the row-lock specifically; re-check `LoginThrottleService` before shipping auth standalone.
@@ -96,9 +99,9 @@ Struck on re-verification (all previously listed here):
 
 ---
 
-## 4. Where development went after main (`17e726d`, 2026-06-13)
+## 4. The experiment branch (resolved history)
 
-Main is not the live line. Development continued on **`experiment/dataset-recipe-pool`** — HEAD `1bf366d` (2026-07-24), **63 commits ahead of main, 0 behind** (main `17e726d` is its merge-base, i.e. a clean fast-forward ancestor). The shared checkout at `C:\Users\irenv\Claude\claudeTest` has this branch checked out: **`experiment/dataset-recipe-pool` is the live line**; main is the last stable/merged baseline. Themes, one line each:
+**Resolved by D-0006 (2026-08-24, executed 2026-08-24/25): merged.** `experiment/dataset-recipe-pool` (HEAD `1bf366d`, 63 commits ahead / 0 behind) was fast-forwarded into main — no merge commit needed, `17e726d` was a clean ancestor. The docs/fix wave that followed (T1 truth-up `e513403`, T6 runbook `61f58bf`, T2 read-authz PR #263) brings main to `b466d73`. **Main is the live line and the trial baseline again**; the "experiment" label was outgrown, exactly as the D-0006 record argued. What the branch delivered, one line each (branch-level evidence, verified at commit-log level):
 
 - **Nutrition-driven planning:** coverage reports met/short/NO_DATA instead of scoring unknown micros as 0 (`bd149c3`); per-micro provenance (measured/derived/estimated) through to coverage; real NUTRIENT_ESTIMATION AI task for residual micros.
 - **Portion optimisation + in-meal additions:** portion-scaling toward per-meal calorie targets, deterministic addition gap-fill + LLM addition-pairing gate, SIDE_RECIPE additions, per-day portion optimiser with per-macro weights, additions spread/rotated across the week.
@@ -107,12 +110,10 @@ Main is not the live line. Development continued on **`experiment/dataset-recipe
 - **Live frontend wiring:** Today page live against the real backend (`3a91595`), live targets save, Plan page derives weeks from live plans + route error boundary (`1bf366d`).
 - **Culinary-graph Phase 0 integration (G04-G11):** graph-batch ingest entrypoint (admin path), spike-canon IngredientMapping seed, engine-side nutrient-key contract pin, additive dataQuality + provenance chips, batch withdraw/restore by jobId, spike-vs-engine nutrition comparison harness.
 - **Dogfood support:** dev profile with seeded recipe pool + graceful no-key AI degrade; zero-kcal "calculated" recalc bug fixed.
-- Caveat: the branch carries one explicit WIP snapshot commit (`e7a0476`, batch-cooking scoring / cost-reuse / pack-size heuristics) — not everything on it is finished work.
-
-This revision of the status doc describes **main at `17e726d`**; the experiment branch's capabilities above are listed for orientation and were verified only at commit-log level, not row-by-row (label: branch-level evidence, not file:line).
+- Caveat: the history carries one explicit WIP snapshot commit (`e7a0476`, batch-cooking scoring / cost-reuse / pack-size heuristics) — reviewed at D-0006 execution time as a descriptive snapshot and kept in history; not everything in it is finished work.
 
 ---
 
 ## 5. Net assessment
 
-The trial slice — **planner + user-initiated import + grocery + notifications + live frontend** — is a conditional go, with automated discovery explicitly out of scope per D-0004 (implemented but unsupported for the trial) and Stage-D refinement now active. The single remaining P0 is household-scoped read authorization; close it (plus the same-pattern sweep) before any real deploy, and populate the admin allowlist in prod config. The engineering quality of what exists is high, the previous revision's seam-stub risks have materially closed; the live risk has shifted from "stubbed seams" to **doc/anchor rot and a 63-commit experiment branch that is the de-facto live line without a merge decision** — decide whether `experiment/dataset-recipe-pool` merges to main before the trial baseline is cut.
+The trial slice — **planner + user-initiated import + grocery + notifications + live frontend** — is a go on the P0/P1 ledger: the last P0 (household read authz) closed in #263, the logSnack silent no-op is wired, the dogfood stack can reach its admin surfaces, and D-0006 put the trial baseline back on main. Automated discovery stays explicitly out of scope per D-0004 (implemented but unsupported for the trial). Remaining conditions are operational, not code: populate the prod admin allowlist at deploy time, and refresh the STALE §2 metrics from the first post-merge CI run before leaning on them. The prior revision's headline risk (an unmerged 63-commit de-facto live line) is resolved history — the residual risk worth watching is anchor rot in this very file; run the §0 delta check.
