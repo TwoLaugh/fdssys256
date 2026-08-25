@@ -16,6 +16,7 @@ import {
   RECIPE_NAME_FALLBACK,
   addDaysIso,
   buildPlan,
+  planCoverage,
 } from "./plannerSeed";
 import {
   computeDiff,
@@ -1141,6 +1142,24 @@ function composePlan(s: StoreState, weekStartDate: string, round: number): PlanD
     Math.round((base + (((round * 7) % (spread * 2 + 1)) - spread) / 100) * 100) /
     100;
 
+  const generatedWeekly = {
+    kcalTotal: 15050,
+    proteinAvgG: infeasible ? 158 : 174,
+    fatAvgG: 67,
+    carbsAvgG: 218,
+    costEstimateGbp: wobble(53, 0) + ((round * 2) % 5) - 2,
+    costConfidence: 0.83,
+    staleIngredientCount: 2,
+    varietyIndex: wobble(0.81, 4),
+    batchCookSessions: source ? 2 : 1,
+    constraintViolations: infeasible
+      ? [
+          "Protein floor 120 g unmet on Tue and Thu within the £55 budget",
+          "Thu dinner unfilled — no feasible recipe under current constraints",
+        ]
+      : [],
+  };
+
   return buildPlan({
     id: `plan-${planKey}`,
     generation: latestGen + 1,
@@ -1184,23 +1203,8 @@ function composePlan(s: StoreState, weekStartDate: string, round: number): PlanD
               ? ["Protein 112 g vs 120 g floor"]
               : [],
       })),
-      weekly: {
-        kcalTotal: 15050,
-        proteinAvgG: infeasible ? 158 : 174,
-        fatAvgG: 67,
-        carbsAvgG: 218,
-        costEstimateGbp: wobble(53, 0) + ((round * 2) % 5) - 2,
-        costConfidence: 0.83,
-        staleIngredientCount: 2,
-        varietyIndex: wobble(0.81, 4),
-        batchCookSessions: source ? 2 : 1,
-        constraintViolations: infeasible
-          ? [
-              "Protein floor 120 g unmet on Tue and Thu within the £55 budget",
-              "Thu dinner unfilled — no feasible recipe under current constraints",
-            ]
-          : [],
-      },
+      weekly: generatedWeekly,
+      nutritionCoverage: planCoverage(generatedWeekly),
     },
     days,
   });
