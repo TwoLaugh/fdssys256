@@ -81,6 +81,16 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * {@code EXTRACTION_FAILED} rows are therefore written only on genuine scrape / extraction /
  * persist failures — there is no longer any stub that flags every candidate as unimplemented.
  *
+ * <p>Known IT-lifecycle race, accepted for now: {@code run()} outlives the test that triggered it,
+ * and suite cleanup deletes the {@code discovery_jobs} parents with bare DELETEs (see {@code
+ * DiscoveryRunnerPhasesIT}, {@code PlannerColdStartIT} and siblings). A late per-step tx then hits
+ * the missing parent: FK violations on {@code discovery_scrape_log} inserts and {@code
+ * StaleObjectStateException} on job saves. WARN-level noise only, no test failures. The await seams
+ * already exist ({@link #registerSyncWaiter}, {@link #requestCancellation}); wiring them into every
+ * IT lifecycle was deliberately deferred while discovery is out of the trial scope. If the noise
+ * ever starts failing builds, drain running jobs through those seams in test teardown before
+ * deleting rows.
+ *
  * <p>Package-private — the listener method is the only externally visible surface.
  */
 @Component
