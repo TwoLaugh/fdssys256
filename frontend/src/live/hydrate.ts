@@ -54,7 +54,7 @@ import type {
   WasteEntryDto,
 } from "../mock/types";
 import { apiGetOrNull } from "./client";
-import { CURRENT_WEEK_START, MOCK_TODAY_ISO } from "./dates";
+import { CURRENT_WEEK_START, MOCK_TODAY_ISO, WEEK_DATES } from "./dates";
 
 interface Page<T> {
   content: T[];
@@ -184,7 +184,9 @@ export async function hydrateLive(): Promise<HydrationResult> {
     soft<HealthDirectiveDto[]>("/api/v1/nutrition/health-directives"),
     soft<FoodMoodEntryDto[]>("/api/v1/nutrition/journal"),
     soft<IngredientNutritionDto[]>("/api/v1/nutrition/ingredients/needs-review"),
-    soft<DailyActivityDto[]>("/api/v1/nutrition/targets/activity"),
+    soft<DailyActivityDto[]>(
+      `/api/v1/nutrition/targets/activity?from=${CURRENT_WEEK_START}&to=${WEEK_DATES[6]}`,
+    ),
     soft<TasteProfileDto>("/api/v1/preferences/taste-profile"),
     soft<TasteProfileVersionDto[]>("/api/v1/preferences/taste-profile/versions"),
     soft<TasteProfileAuditEntryDto[]>(

@@ -13,7 +13,9 @@ seeding fixtures.
 
 Citation convention: a `(file[:line])` reference means the step was checked against this
 branch's files on 2026-08-24. **UNVERIFIED** marks host state or observed timings that cannot
-be confirmed from the repo; check them on the box before relying on them.
+be confirmed from the repo; check them on the box before relying on them. A trial rehearsal on
+main 81f8b8b (2026-08-25) resolved most of the original UNVERIFIED markers; entries citing it
+are measured, not guessed.
 
 ## Which compose file, and why neither boots this stack
 
@@ -23,9 +25,9 @@ be confirmed from the repo; check them on the box before relying on them.
   image lacks (`e2e/docker-compose.yml:4-6` says the same).
 - `docker compose -f e2e/docker-compose.yml up -d --build` is the prod-parity dockerised
   stack, but its own header warns against running it on a memory-constrained box
-  (`e2e/docker-compose.yml:15`), and it maps its Postgres to host :5433
-  (`e2e/docker-compose.yml:30`), which collides with `busapiprep-postgres-1` when that is up
-  (UNVERIFIED, host state, check `docker ps`).
+  (`e2e/docker-compose.yml:15`). It maps its Postgres to host :5433
+  (`e2e/docker-compose.yml:30`); nothing squats that port on this host any more (verified,
+  2026-08-25 rehearsal), so the memory warning is the operative reason to avoid it.
 
 So on this box: DB in docker (below), app on the host JVM.
 
@@ -38,13 +40,16 @@ Same drill as `RUNBOOK-DEV.md` §0:
 - If the CKAD kind cluster is running: `docker stop ckad-control-plane` (reversible:
   `docker start ckad-control-plane`).
 - One JVM at a time; do not run the dev stack simultaneously.
-- Port check: `docker ps --format "{{.Names}} {{.Ports}}"`. Expected squatters: host :5432 =
-  `infra-postgres-1`, :5433 = `busapiprep-postgres-1` (UNVERIFIED, host state; last seen
-  2026-07). That is why this stack uses :5434.
-- A heap that stays resident beats a bigger one that swaps: `-Xmx768m` completed a full
-  width-20 beam here where `-Xmx1g` swapped (observed 2026-06, UNVERIFIED; same guidance in
-  `RUNBOOK-DEV.md` §3). If generation logs `qualityWarning=true` (greedy fallback), suspect
-  swapping first: free RAM, then restart with the small heap.
+- Port check: `docker ps --format "{{.Names}} {{.Ports}}"`. The old squatters
+  (`infra-postgres-1` on :5432, `busapiprep-postgres-1` on :5433) are gone from this host
+  (verified, 2026-08-25 rehearsal); expect no conflicts. The stack stays on :5434 so it also
+  clears anything that reappears.
+- A heap that stays resident beats a bigger one that swaps: `-Xmx768m` ran a full bring-up,
+  seed, generate and accept cleanly from only 351 MB free (verified, 2026-08-25 rehearsal —
+  the ≥1 GB line above is guidance, not a gate). The other half of the claim, that `-Xmx1g`
+  swaps where 768m holds, is still the 2026-06 observation and was not retested (UNVERIFIED;
+  same guidance in `RUNBOOK-DEV.md` §3). If generation logs `qualityWarning=true` (greedy
+  fallback), suspect swapping first: free RAM, then restart with the small heap.
 
 ## 1. Postgres (pgvector) on :5434
 
@@ -84,7 +89,7 @@ USDA_API_KEY=DEMO_KEY \
 - Cold-start discovery is pinned to the deterministic `e2e_curated_seed` source
   (`application-e2e.properties:58`), 18 curated recipes (`E2eSeedDiscoverySource.java:56`).
   The catalogue is EMPTY until the first plan generation triggers that ingest.
-- Boot ≈ 2-5 min on this box (observed, UNVERIFIED). Poll:
+- Boot ≈ 2 min on this box (measured on main 81f8b8b, 2026-08-25 rehearsal). Poll:
   `curl -s localhost:8080/actuator/health` → `{"status":"UP"}` (`/actuator/health` is
   permit-all, `AuthSecurityConfig.java:143`).
 
@@ -141,11 +146,12 @@ Task-type names: `TaskType.java:19,26,27`.
 
 ```bash
 MON=$(python -c "import datetime as d;t=d.date.today();print(t-d.timedelta(days=t.weekday()))")
-curl -s -b $CJ -H 'Content-Type: application/json' -H "Idempotency-Key: $(uuidgen)" \
+IK=$(python -c "import uuid;print(uuid.uuid4())")   # this git-bash has no uuidgen
+curl -s -b $CJ -H 'Content-Type: application/json' -H "Idempotency-Key: $IK" \
   -X POST http://localhost:8080/api/v1/plans/generate \
   -d "{\"householdId\":\"$HH_ID\",\"weekStartDate\":\"$MON\",\"forceRegenerateIfActive\":true}"
 # → 201 + PlanDto, status GENERATED. First run also ingests the 18 e2e_curated recipes
-#   (cold-start), so expect minutes on this box (observed ~2 min at best, UNVERIFIED).
+#   (cold-start); ~30 s all-in (measured on main 81f8b8b, 2026-08-25 rehearsal).
 curl -s -b $CJ -X POST http://localhost:8080/api/v1/plans/<planId>/accept   # → ACTIVE
 ```
 
@@ -174,6 +180,24 @@ cmd /c "set VITE_LIVE=1&& npm run dev -- --port 5176"
 - On boot the app probes `/api/v1/auth/me` and, if anonymous, logs in with the
   `VITE_DEV_USER`/`VITE_DEV_PASS` credentials (`frontend/src/live/session.ts:16-27`), then
   hydrates. Today renders the real plan; actions like "Start cooking" persist.
+
+## 7. Teardown
+
+As executed in the 2026-08-25 rehearsal, in order:
+
+1. Stop the frontend dev server (stop the preview / kill the npm dev process tree).
+2. Kill the backend as a tree, not a shell: find the `java` PID under the mvnw launch
+   (`Get-Process java` in PowerShell, or the PID Spring logged at boot) and
+   `taskkill /PID <pid> /T /F`. Killing only the git-bash shell orphans the `mvnw → java`
+   children (host constraint: kill process trees).
+3. `docker stop mealprep-e2e-db`. Keep the container — do not `rm` it: an exited container
+   is the `docker start mealprep-e2e-db` fast path next time, seeded data intact. Only `rm`
+   when you want a from-scratch re-seed (§1).
+4. Quit Docker Desktop, and check its background processes actually exited:
+   `Docker Desktop.exe`, `com.docker.backend.exe` and `com.docker.build.exe` all have to be
+   gone before the RAM comes back.
+5. Sanity: no stray `java`/`node`/`docker` processes remain; free RAM recovers (~1.2 GB
+   observed post-teardown, 2026-08-25 rehearsal).
 
 ## Troubleshooting
 
