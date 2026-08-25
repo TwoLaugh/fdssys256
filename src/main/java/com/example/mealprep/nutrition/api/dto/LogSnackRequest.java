@@ -11,8 +11,10 @@ import java.math.BigDecimal;
 /**
  * Request body for {@code POST /api/v1/nutrition/intake/{date}/snacks}.
  *
- * <p>{@code deductFromPantry} is reserved for nutrition-01l (cross-module pantry-deduct hook). 01b
- * accepts the flag in the contract but treats it as a no-op (see ticket §LLD divergence #2).
+ * <p>{@code deductFromPantry = true} deducts {@code quantityG} from the pantry row matching {@code
+ * ingredientMappingKey} (nutrition-01l, via the provisions standalone-consumption path). The key is
+ * required when the flag is set; without it the request fails with 400 rather than silently
+ * skipping the deduction.
  */
 public record LogSnackRequest(
     @NotBlank @Size(min = 1, max = 255) String freeText,

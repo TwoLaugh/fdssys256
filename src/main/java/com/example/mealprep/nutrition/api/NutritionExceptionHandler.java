@@ -21,6 +21,7 @@ import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
 import com.example.mealprep.nutrition.exception.RecipeNutritionWriteFailedException;
 import com.example.mealprep.nutrition.exception.RecipeVersionLookupFailedException;
+import com.example.mealprep.nutrition.exception.SnackDeductWithoutMappingKeyException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -120,6 +121,21 @@ public class NutritionExceptionHandler {
             "Intake snack not found",
             req.getRequestURI());
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(pd);
+  }
+
+  @ExceptionHandler(SnackDeductWithoutMappingKeyException.class)
+  public ResponseEntity<ProblemDetail> handleSnackDeductWithoutMappingKey(
+      SnackDeductWithoutMappingKeyException ex, HttpServletRequest req) {
+    ProblemDetail pd =
+        ProblemDetailSupport.build(
+            HttpStatus.BAD_REQUEST,
+            ex.getMessage(),
+            "snack-deduct-without-mapping-key",
+            "Snack pantry deduction needs a mapping key",
+            req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(pd);
   }

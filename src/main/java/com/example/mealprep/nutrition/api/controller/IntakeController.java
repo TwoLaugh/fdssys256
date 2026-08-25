@@ -48,8 +48,8 @@ import org.springframework.web.server.ResponseStatusException;
  * writes, and the audit log. {@link CurrentUserResolver} resolves {@code userId} server-side; the
  * controller never accepts a {@code userId} from path or query.
  *
- * <p>{@code deductFromPantry} on {@link LogSnackRequest} is accepted but a no-op in 01b — the
- * cross-module pantry-deduct lands in nutrition-01l.
+ * <p>{@code deductFromPantry} on {@link LogSnackRequest} triggers the cross-module pantry deduct
+ * (nutrition-01l) and requires {@code ingredientMappingKey} — without it the request is a 400.
  */
 @RestController
 @RequestMapping("/api/v1/nutrition/intake")

@@ -111,7 +111,8 @@ class AuthMutationKillsTest {
         queryService,
         resolver,
         props,
-        new com.example.mealprep.auth.config.AdminAccessProperties(java.util.List.of()));
+        new com.example.mealprep.auth.config.AdminAccessProperties(
+            java.util.List.of(), java.util.List.of()));
   }
 
   private static HttpServletRequest mockRequest(String ip, String ua) {

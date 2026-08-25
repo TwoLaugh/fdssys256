@@ -56,7 +56,7 @@ class AuthControllerMeTest {
   void me_allowlistedUser_carriesIsAdminTrue() {
     UUID userId = stubAuthenticatedUser();
 
-    CurrentUserDto dto = controller(new AdminAccessProperties(List.of(userId))).me();
+    CurrentUserDto dto = controller(new AdminAccessProperties(List.of(userId), List.of())).me();
 
     assertThat(dto.isAdmin()).isTrue();
     assertThat(dto.userId()).isEqualTo(userId);
@@ -68,16 +68,26 @@ class AuthControllerMeTest {
     stubAuthenticatedUser();
 
     // Someone ELSE is on the allowlist — the caller still is not.
-    CurrentUserDto dto = controller(new AdminAccessProperties(List.of(UUID.randomUUID()))).me();
+    CurrentUserDto dto =
+        controller(new AdminAccessProperties(List.of(UUID.randomUUID()), List.of())).me();
 
     assertThat(dto.isAdmin()).isFalse();
+  }
+
+  @Test
+  void me_usernameAllowlistedUser_carriesIsAdminTrue() {
+    stubAuthenticatedUser();
+
+    CurrentUserDto dto = controller(new AdminAccessProperties(List.of(), List.of("Alice"))).me();
+
+    assertThat(dto.isAdmin()).isTrue();
   }
 
   @Test
   void me_unauthenticated_still401_beforeAnyAllowlistRead() {
     when(currentUserResolver.currentUserId()).thenReturn(Optional.empty());
 
-    assertThatThrownBy(() -> controller(new AdminAccessProperties(List.of())).me())
+    assertThatThrownBy(() -> controller(new AdminAccessProperties(List.of(), List.of())).me())
         .isInstanceOf(ResponseStatusException.class)
         .hasMessageContaining("401");
   }

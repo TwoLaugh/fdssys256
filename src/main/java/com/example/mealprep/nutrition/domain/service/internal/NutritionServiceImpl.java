@@ -106,6 +106,9 @@ import com.example.mealprep.nutrition.exception.InvalidPlanRollupException;
 import com.example.mealprep.nutrition.exception.InvalidWeekStartException;
 import com.example.mealprep.nutrition.exception.JournalEntryNotFoundException;
 import com.example.mealprep.nutrition.exception.NutritionTargetsNotFoundException;
+import com.example.mealprep.nutrition.exception.SnackDeductWithoutMappingKeyException;
+import com.example.mealprep.provisions.api.dto.StandaloneConsumptionCommand;
+import com.example.mealprep.provisions.domain.service.ProvisionUpdateService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -215,6 +218,7 @@ public class NutritionServiceImpl
   private final FeedbackTargetResolver feedbackTargetResolver;
   private final FeedbackAdjustmentProperties feedbackAdjustmentProperties;
   private final DriDefaultRepository driDefaultRepository;
+  private final ProvisionUpdateService provisionUpdateService;
   private final ApplicationEventPublisher eventPublisher;
   private final ObjectMapper objectMapper;
   private final Clock clock;
@@ -242,6 +246,7 @@ public class NutritionServiceImpl
       FeedbackTargetResolver feedbackTargetResolver,
       FeedbackAdjustmentProperties feedbackAdjustmentProperties,
       DriDefaultRepository driDefaultRepository,
+      ProvisionUpdateService provisionUpdateService,
       ApplicationEventPublisher eventPublisher,
       ObjectMapper objectMapper,
       Clock clock) {
@@ -267,6 +272,7 @@ public class NutritionServiceImpl
     this.feedbackTargetResolver = feedbackTargetResolver;
     this.feedbackAdjustmentProperties = feedbackAdjustmentProperties;
     this.driDefaultRepository = driDefaultRepository;
+    this.provisionUpdateService = provisionUpdateService;
     this.eventPublisher = eventPublisher;
     this.objectMapper = objectMapper;
     this.clock = clock;
@@ -1675,11 +1681,16 @@ public class NutritionServiceImpl
   @Transactional
   public IntakeDayDto logSnack(UUID userId, LocalDate onDate, LogSnackRequest request) {
     if (Boolean.TRUE.equals(request.deductFromPantry())) {
-      // 01b no-op stub: the cross-module pantry-deduct lands in nutrition-01l.
-      log.info(
-          "logSnack deductFromPantry=true requested but no-op'd in 01b userId={} onDate={}",
+      // Nutrition-01l wiring: same-tx hand-off to provisions (LLD Flow 3 step 5). The pantry
+      // match runs on the mapping key, so a deduct request without one is a 400, not a silent
+      // drop. No matching inventory row is fine per LLD line 646 (unrelated logged item).
+      if (request.ingredientMappingKey() == null || request.ingredientMappingKey().isBlank()) {
+        throw new SnackDeductWithoutMappingKeyException();
+      }
+      provisionUpdateService.applyStandaloneConsumption(
           userId,
-          onDate);
+          new StandaloneConsumptionCommand(
+              request.ingredientMappingKey(), request.quantityG(), "g", true, null));
     }
 
     IntakeDay day = findOrCreateDay(userId, onDate);
