@@ -294,7 +294,7 @@ IntakeEntryDto:
     fibreG: { type: number, format: double, minimum: 0, nullable: true }
     micros:
       type: object
-      additionalProperties: { type: number, format: double }
+      additionalProperties: { type: number, format: double, minimum: 0 }
       nullable: true
 IntakeSlotNotEditableProblem:
   type: object
@@ -352,7 +352,7 @@ LogSnackRequest:
     fibreG: { type: number, format: double, minimum: 0, nullable: true }
     micros:
       type: object
-      additionalProperties: { type: number, format: double }
+      additionalProperties: { type: number, format: double, minimum: 0 }
       nullable: true
     source: { $ref: '#/IntakeSource' }
     deductFromPantry:

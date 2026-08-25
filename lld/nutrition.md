@@ -886,6 +886,7 @@ Custom validators in `validation/`:
 - **`@ValidPerMealDistribution`**: no duplicate meal slots; per-meal calorie sum within ±100 of daily target (planner can redistribute; 50%+ mismatch is almost certainly a UI bug — warn-log; reject only when sum exceeds 2× the daily target).
 - **`@ValidActivityProfile`**: no duplicate activity levels.
 - **`@ValidDirectiveInstruction`**: `action` in known set; `target` non-blank for `restrict_ingredient` / `adjust_target`; `staged_protocol` phases are ordered, non-overlapping, weeks sum > 0.
+- **`@ValidMicros`**: request-side micros JSONB documents (`IntakeEntryDto.micros`, `LogSnackRequest.micros`) must be an object of non-negative numbers, matching the contract's `additionalProperties: number, minimum: 0` (D-0008 contract hardening). Null passes; the field is nullable.
 
 Validation failures bubble up as `MethodArgumentNotValidException` → 400 ProblemDetail.
 
