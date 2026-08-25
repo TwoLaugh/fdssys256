@@ -9,6 +9,7 @@ import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AdvisorCard } from "../../components/AdvisorCard";
 import { Modal } from "../../components/Modal";
+import { NutrientRow } from "../../components/NutrientRow";
 import { SegmentBar } from "../../components/SegmentBar";
 import { QUICK_SNACKS } from "../../mock/nutritionSeed";
 // Live-aware date anchors (real clock in live mode) — see src/live/dates.ts.
@@ -29,7 +30,6 @@ import {
   confirmSlot,
   deleteJournalEntry,
   editSlot,
-  floorViolationDayIndices,
   macroWarn,
   overrideSlot,
   recipeName,
@@ -45,6 +45,7 @@ import type {
   ActivityLevel,
   DailyAggregateDto,
   EnforcementDirection,
+  FloorViolationDto,
   FoodMoodEntryDto,
   IngredientNutritionDto,
   IntakeSlotDto,
@@ -72,6 +73,7 @@ import {
   Switch,
   type MicroRow,
 } from "./shared";
+import { TargetsEmptyState } from "./TargetsEmptyState";
 
 /* ---- activity quick control (spec §3a) -------------------------------------- */
 
@@ -96,9 +98,15 @@ const ACTIVITY_BADGE: Record<ActivityLevel, string> = {
   HEAVY_TRAINING: "H",
 };
 
+// Stable empty fallback so the selector keeps a constant reference when
+// targets are not initialised (useSyncExternalStore snapshot rule).
+const EMPTY_ADJUSTMENTS: TargetsDto["activityAdjustments"] = [];
+
 function ActivityControl({ date }: { date: string }) {
   const entry = useStore((s) => s.nutrition.dailyActivity[date]);
-  const adjustments = useStore((s) => s.targets.activityAdjustments);
+  const adjustments = useStore(
+    (s) => s.targets?.activityAdjustments ?? EMPTY_ADJUSTMENTS,
+  );
   const [open, setOpen] = useState(false);
   const [notes, setNotes] = useState("");
   const current = entry?.activityLevel ?? "LIGHT_ACTIVITY";
@@ -1192,44 +1200,32 @@ function MicrosPanel({
         const mt = targets.microTargets.find((t) => t.nutrientKey === key);
         const actual = agg.microsActualSoFar[key] ?? 0;
         const over = mt?.upperLimit != null && actual > mt.upperLimit;
-        const denom = mt?.targetValue ?? mt?.upperLimit ?? 0;
         const tooltip =
           [mt?.notes, mt?.sourcePreference].filter(Boolean).join(" · ") ||
           undefined;
+        // Shared row grammar with the Plan page's projection panel. The
+        // retrospective warn is upper-limit exceedance, data the target
+        // already carries.
         return (
-          <div className="micro-row" key={key} title={tooltip}>
-            <span>
-              {microLabel(key)}
-              {mt?.isHardFloor && (
-                <span className="hard-floor-mark" title="hard floor">
-                  ▪
-                </span>
-              )}
-            </span>
-            <span
-              style={{
-                fontVariantNumeric: "tabular-nums",
-                color: over ? "var(--mp-amber)" : undefined,
-                fontWeight: over ? 600 : 400,
-              }}
-            >
-              {fmtG(actual)} {microUnit(key)}
-              {mt
-                ? mt.targetValue != null
-                  ? ` / ${fmtG(mt.targetValue)}`
-                  : mt.upperLimit != null
-                    ? ` ≤ ${fmtG(mt.upperLimit)}`
-                    : ""
-                : " · untargeted"}
-            </span>
-            <SegmentBar
-              pct={denom > 0 ? actual / denom : 0}
-              segments={12}
-              tone={over ? "amber" : "olive"}
-            />
-          </div>
+          <NutrientRow
+            key={key}
+            label={microLabel(key)}
+            unit={microUnit(key)}
+            target={mt ? (mt.targetValue ?? mt.upperLimit ?? null) : null}
+            upperBound={mt != null && mt.targetValue == null && mt.upperLimit != null}
+            value={actual}
+            warn={over}
+            warnTitle="over the upper limit"
+            hardFloor={mt?.isHardFloor ?? false}
+            tooltip={tooltip}
+          />
         );
       })}
+      <div className="inline-note" style={{ marginTop: 8 }}>
+        0 can mean unmeasured: the intake aggregate cannot distinguish a
+        micro no logged food carried from a measured zero (backend gap G1,
+        t5 spec; B5 waived until resolved).
+      </div>
     </details>
   );
 }
@@ -1248,8 +1244,22 @@ export function OverviewTab() {
   const date = WEEK_DATES[dayIdx];
   const day = nutrition.intakeDays[date];
 
+  // Targets 404: initialise CTA as the empty state, never an error (§8).
+  if (!targets) {
+    return (
+      <div style={{ marginTop: 18 }}>
+        <TargetsEmptyState />
+      </div>
+    );
+  }
+
   const agg = computeDailyAggregate(day, targets);
-  const week = computeWeeklyAggregate(nutrition, targets);
+  // Live-aware anchors so the aggregate lines up with the real week.
+  const week = computeWeeklyAggregate(nutrition, targets, WEEK_DATES, MOCK_TODAY_ISO);
+  // Chips prefer the backend's weekly aggregate when hydrated (live mode);
+  // the mock computes the contract-equivalent shape.
+  const floorViolations: FloorViolationDto[] =
+    nutrition.weeklyAggregate?.floorViolations ?? week.floorViolations;
   const divergence =
     date === MOCK_TODAY_ISO ? computeDivergence(day) : null;
   const pendingCount =
@@ -1409,15 +1419,28 @@ export function OverviewTab() {
           </span>
         </div>
       </div>
-      {week.floorViolations.length > 0 && (
+      {floorViolations.length > 0 && (
         <div className="violation-chips">
-          {week.floorViolations.flatMap((v) =>
-            floorViolationDayIndices(nutrition, targets, v.macroOrMicro).map((i) => (
-              <span key={`${v.macroOrMicro}-${i}`} className="tint-chip red">
-                {v.macroOrMicro} floor missed · {WEEK_DAY_LABELS[i]}
+          {/* One chip per FloorViolationDto: dated entries name the day,
+              date:null entries are weekly-average floors ("this week"). */}
+          {floorViolations.map((v) => {
+            const dayIdxOf = v.date ? WEEK_DATES.indexOf(v.date) : -1;
+            const when =
+              v.date == null
+                ? "this week"
+                : dayIdxOf >= 0
+                  ? WEEK_DAY_LABELS[dayIdxOf]
+                  : shortDate(v.date);
+            return (
+              <span
+                key={`${v.macroOrMicro}-${v.date ?? "week"}`}
+                className="tint-chip red"
+                title={`${fmtG(v.actual)} vs floor ${fmtG(v.floor)}`}
+              >
+                {v.macroOrMicro} floor missed · {when}
               </span>
-            )),
-          )}
+            );
+          })}
         </div>
       )}
 

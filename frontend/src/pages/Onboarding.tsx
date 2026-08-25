@@ -528,7 +528,7 @@ export function Onboarding() {
                 the update shape, spec §5 G2). Micronutrients are omitted —
                 the server DRI-seeds them. Already initialised → 409, the
                 wizard just moves on. Current store targets:{" "}
-                {targets.calories.dailyTarget} kcal.
+                {targets ? `${targets.calories.dailyTarget} kcal` : "none yet"}.
               </div>
             </>
           )}

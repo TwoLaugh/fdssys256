@@ -183,8 +183,8 @@ export function Today() {
       );
     });
 
-  /* ---- §3c stat band (4 cells; deep-links to /nutrition) ---- */
-  const agg = computeDailyAggregate(intakeDay, targets);
+  /* ---- §3c stat band (4 cells; deep-links to /nutrition). Null targets
+     (not initialised) drops the band for a set-up link instead. ---- */
   const macroStat = (
     label: string,
     actualG: number,
@@ -197,24 +197,29 @@ export function Today() {
     targetDisplay: `${(t.targetG ?? 0).toLocaleString("en-GB")} g`,
     behind: macroWarn(t.direction, actualG, t.targetG ?? 0) || undefined,
   });
-  const nutritionStats: NutritionStat[] = [
-    {
-      label: "Calories",
-      value: agg.caloriesActualSoFar,
-      target: targets.calories.dailyTarget,
-      display: agg.caloriesActualSoFar.toLocaleString("en-GB"),
-      targetDisplay: targets.calories.dailyTarget.toLocaleString("en-GB"),
-      behind:
-        macroWarn(
-          targets.calories.direction,
-          agg.caloriesActualSoFar,
-          targets.calories.dailyTarget,
-        ) || undefined,
-    },
-    macroStat("Protein", agg.protein.actualSoFarG, targets.protein),
-    macroStat("Carbs", agg.carbs.actualSoFarG, targets.carbs),
-    macroStat("Fat", agg.fat.actualSoFarG, targets.fat),
-  ];
+  const nutritionStats: NutritionStat[] | null = targets
+    ? (() => {
+        const agg = computeDailyAggregate(intakeDay, targets);
+        return [
+          {
+            label: "Calories",
+            value: agg.caloriesActualSoFar,
+            target: targets.calories.dailyTarget,
+            display: agg.caloriesActualSoFar.toLocaleString("en-GB"),
+            targetDisplay: targets.calories.dailyTarget.toLocaleString("en-GB"),
+            behind:
+              macroWarn(
+                targets.calories.direction,
+                agg.caloriesActualSoFar,
+                targets.calories.dailyTarget,
+              ) || undefined,
+          },
+          macroStat("Protein", agg.protein.actualSoFarG, targets.protein),
+          macroStat("Carbs", agg.carbs.actualSoFarG, targets.carbs),
+          macroStat("Fat", agg.fat.actualSoFarG, targets.fat),
+        ];
+      })()
+    : null;
 
   /* ---- §3d needs attention (top-3 unread; read-only here) ---- */
   const unread = notificationRows.filter((n) => n.status === "UNREAD");
@@ -283,18 +288,29 @@ export function Today() {
 
       {/* Whole band deep-links to /nutrition (remaining lines, micros, week
           strip live there — §3c). */}
-      <div
-        role="link"
-        tabIndex={0}
-        style={{ cursor: "pointer" }}
-        title="Open nutrition"
-        onClick={() => navigate("/nutrition")}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") navigate("/nutrition");
-        }}
-      >
-        <StatBand stats={nutritionStats} />
-      </div>
+      {nutritionStats ? (
+        <div
+          role="link"
+          tabIndex={0}
+          style={{ cursor: "pointer" }}
+          title="Open nutrition"
+          onClick={() => navigate("/nutrition")}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") navigate("/nutrition");
+          }}
+        >
+          <StatBand stats={nutritionStats} />
+        </div>
+      ) : (
+        <div className="page-loading" style={{ marginTop: 18 }}>
+          No nutrition targets yet.
+          <div style={{ marginTop: 14 }}>
+            <button className="btn" onClick={() => navigate("/nutrition")}>
+              Set them up
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="today-lower">
         <section aria-label="Needs attention">

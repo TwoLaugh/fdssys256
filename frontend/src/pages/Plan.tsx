@@ -14,7 +14,11 @@ import { PageHeader } from "../components/PageHeader";
 import { StatStrip } from "../components/StatStrip";
 import type { StatStripCell } from "../components/StatStrip";
 import { StatusMark } from "../components/StatusMark";
-import { SegmentBar } from "../components/SegmentBar";
+import {
+  NutrientRow,
+  ProvenanceBadge,
+  fmtNutrient,
+} from "../components/NutrientRow";
 import { SwapLine } from "../components/SwapLine";
 import { microLabel } from "./nutrition/shared";
 // Live-aware date anchors (real clock in live mode) — so the week nav defaults
@@ -54,35 +58,10 @@ import {
 /* ---- plan vs targets: projected nutrition coverage (nutrition-driven planning) ----
  * Row and panel shapes come straight off the generated contract types:
  * NutritionTargetCoverageDocument rows under rollupSummary.nutritionCoverage
- * (re-exported as PlanNutritionCoverage in mock/types.ts).
+ * (re-exported as PlanNutritionCoverage in mock/types.ts). The row itself is
+ * the shared NutrientRow grammar; the Nutrition Overview's retrospective
+ * micros panel renders the same component.
  */
-
-/** Short provenance badge — only shown for non-measured (lossy) sources so the user knows a
- *  number is USDA-derived or an AI estimate rather than hard recipe data. */
-function SourceBadge({ source }: { source?: string | null }) {
-  if (!source || source === "measured") return null;
-  const label = source === "estimated" ? "est" : "USDA";
-  const title =
-    source === "estimated"
-      ? "AI estimate (low confidence) — no measured or USDA value available"
-      : "derived from USDA by matching ingredients (approximate)";
-  return (
-    <span
-      title={title}
-      style={{
-        marginLeft: 6,
-        fontSize: "0.7em",
-        padding: "0 4px",
-        borderRadius: 3,
-        border: "1px solid var(--mp-line)",
-        color: source === "estimated" ? "var(--mp-amber)" : "var(--mp-ink-soft, #888)",
-        verticalAlign: "middle",
-      }}
-    >
-      {label}
-    </span>
-  );
-}
 
 const MACRO_COVERAGE_LABEL: Record<string, string> = {
   calories: "Calories",
@@ -93,11 +72,6 @@ const MACRO_COVERAGE_LABEL: Record<string, string> = {
   saturated_fat: "Saturated fat",
 };
 
-const fmtCoverageNum = (n: number): string =>
-  n >= 100
-    ? Math.round(n).toLocaleString("en-GB")
-    : String(Math.round(n * 10) / 10);
-
 function CoverageRow({
   row,
   label,
@@ -105,57 +79,20 @@ function CoverageRow({
   row: NutritionTargetCoverageDocument;
   label: string;
 }) {
-  const target = row.target ?? 0;
-  const denom = target > 0 ? target : 1;
-  const targetNote =
-    row.direction === "UPPER_LIMIT"
-      ? `≤ ${fmtCoverageNum(target)}`
-      : `/ ${fmtCoverageNum(target)}`;
-
-  // NO_DATA: intake is UNKNOWN (no recipe carried this nutrient) — render it muted as "no data",
-  // never as a 0 bar or a "short" amber, so an absent data source is not read as a measured zero.
-  if (row.status === "NO_DATA" || row.projectedDailyAvg == null) {
-    return (
-      <div className="micro-row">
-        <span style={{ color: "var(--mp-ink-soft, #999)" }}>{label}</span>
-        <span style={{ color: "var(--mp-ink-soft, #999)", fontStyle: "italic" }}>
-          no data {targetNote}
-        </span>
-        <SegmentBar pct={0} segments={12} />
-      </div>
-    );
-  }
-
+  // NO_DATA: intake is UNKNOWN (no recipe carried this nutrient). Value null
+  // renders the muted "no data" row, never a 0 bar or the short amber.
+  const noData = row.status === "NO_DATA" || row.projectedDailyAvg == null;
   return (
-    <div className="micro-row">
-      <span>
-        {label}
-        {!row.met && (
-          <span
-            className="hard-floor-mark"
-            style={{ color: "var(--mp-amber)" }}
-            title="short of target"
-          >
-            ▪
-          </span>
-        )}
-      </span>
-      <span
-        style={{
-          fontVariantNumeric: "tabular-nums",
-          color: row.met ? undefined : "var(--mp-amber)",
-          fontWeight: row.met ? 400 : 600,
-        }}
-      >
-        {fmtCoverageNum(row.projectedDailyAvg)} {row.unit} {targetNote}
-        <SourceBadge source={row.source} />
-      </span>
-      <SegmentBar
-        pct={row.projectedDailyAvg / denom}
-        segments={12}
-        tone={row.met ? "olive" : "amber"}
-      />
-    </div>
+    <NutrientRow
+      label={label}
+      unit={row.unit ?? ""}
+      target={row.target ?? null}
+      upperBound={row.direction === "UPPER_LIMIT"}
+      value={noData ? null : (row.projectedDailyAvg ?? null)}
+      warn={!noData && !row.met}
+      warnTitle="short of target"
+      badge={<ProvenanceBadge source={row.source} />}
+    />
   );
 }
 
@@ -168,28 +105,42 @@ function PlanNutritionPanel({
   coverage: PlanNutritionCoverage;
 }) {
   const [showAllMicros, setShowAllMicros] = useState(false);
+  // Coverage is scored for the primary eater only (backend picks the first
+  // eater with targets), so name them on the panel and a multi-eater
+  // household reads it honestly (FC6).
+  const eaterName = useStore(
+    (s) =>
+      s.household.current?.members.find((m) => m.role === "primary")
+        ?.displayName ??
+      s.session.user?.username ??
+      null,
+  );
   const isNoData = (m: NutritionTargetCoverageDocument) =>
     m.status === "NO_DATA" || m.projectedDailyAvg == null;
   // "Short" excludes no-data — an unknown nutrient is not a failed target, it's unmeasured.
   const short = coverage.micros.filter((m) => !isNoData(m) && !m.met);
   const noData = coverage.microsNoData ?? coverage.micros.filter(isNoData).length;
   const assessed = coverage.microsTotal - noData;
+  // Default view: SHORT rows only, problems first (FC2); "show all N" reaches
+  // the rest, where NO_DATA rows sit inline in nutrient order, muted (FC5).
   const visibleMicros =
     showAllMicros || short.length === 0 ? coverage.micros : short;
-  const allMet =
-    coverage.macrosMet === coverage.macrosTotal && coverage.microsMet === assessed;
 
   return (
     <details className="mp-card micros-details" open style={{ marginTop: 18 }}>
       <summary>
-        <span className="mp-label" style={{ color: "var(--mp-ink)" }}>
+        <span
+          className="mp-label"
+          style={{ color: "var(--mp-ink)" }}
+          title="Projected coverage is scored against the primary eater's targets"
+        >
           Plan vs your targets
+          {eaterName ? ` · ${eaterName}` : ""}
         </span>
         <span className="inline-note">
           {coverage.macrosMet}/{coverage.macrosTotal} macros ·{" "}
           {coverage.microsMet}/{assessed} micros met
           {noData > 0 ? ` · ${noData} no data` : ""}
-          {allMet ? " — all hit ✓" : ""}
         </span>
       </summary>
 
@@ -210,13 +161,13 @@ function PlanNutritionPanel({
             title="USDA-derived fatty-acid split. Saturated is the one worth limiting; mono + poly unsaturated are the healthy fats that float."
           >
             Fat spread:{" "}
-            {fmtCoverageNum(coverage.fatBreakdown.saturatedG ?? 0)} g saturated ·{" "}
-            {fmtCoverageNum(
+            {fmtNutrient(coverage.fatBreakdown.saturatedG ?? 0)} g saturated ·{" "}
+            {fmtNutrient(
               (coverage.fatBreakdown.monounsaturatedG ?? 0) +
                 (coverage.fatBreakdown.polyunsaturatedG ?? 0),
             )}{" "}
-            g unsaturated ({fmtCoverageNum(coverage.fatBreakdown.monounsaturatedG ?? 0)} mono ·{" "}
-            {fmtCoverageNum(coverage.fatBreakdown.polyunsaturatedG ?? 0)} poly)
+            g unsaturated ({fmtNutrient(coverage.fatBreakdown.monounsaturatedG ?? 0)} mono ·{" "}
+            {fmtNutrient(coverage.fatBreakdown.polyunsaturatedG ?? 0)} poly)
           </div>
         )}
 

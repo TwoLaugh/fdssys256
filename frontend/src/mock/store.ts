@@ -9,7 +9,7 @@
  */
 
 import { useSyncExternalStore } from "react";
-import { MOCK_USER_ID, WEEK_DATES } from "./nutritionSeed";
+import { MOCK_USER_ID, targetsSeed, WEEK_DATES } from "./nutritionSeed";
 import {
   CURRENT_WEEK_START,
   HOUSEHOLD_ID,
@@ -66,6 +66,7 @@ import type {
   EnforcementDirection,
   ExportFormat,
   FeedbackEntryDto,
+  FloorViolationDto,
   GroceryOrderDto,
   GroceryOrderStatus,
   GrocerySubstitutionProposalDto,
@@ -4905,14 +4906,16 @@ export function saveTargets(req: UpdateTargetsRequest): void {
       "Couldn't save targets",
     );
   mutate((s) => {
+    const cur = s.targets;
+    if (!cur) return s; // not initialised: the Targets tab gates on the CTA
     const macroKeys = ["protein", "carbs", "fat", "fibre", "satFat"] as const;
-    const overridden = new Set(s.targets.userOverriddenDirections);
+    const overridden = new Set(cur.userOverriddenDirections);
     for (const k of macroKeys) {
-      if (req[k].direction !== s.targets[k].direction) overridden.add(k);
+      if (req[k].direction !== cur[k].direction) overridden.add(k);
     }
-    const version = s.targets.version + 1;
+    const version = cur.version + 1;
     const next: TargetsDto = {
-      ...s.targets,
+      ...cur,
       goal: req.goal,
       calories: req.calories,
       protein: req.protein,
@@ -4932,6 +4935,31 @@ export function saveTargets(req: UpdateTargetsRequest): void {
       { ...s, targets: next },
       "ai",
       `Nutrition targets saved — v${version}`,
+    );
+  });
+}
+
+/**
+ * POST /nutrition/targets/initialise, the Targets/Overview empty-state CTA
+ * (nutrition.md §4/§8). The server DRI-seeds any micro the request omits and
+ * 409s when targets already exist; both outcomes reconcile through the live
+ * rehydrate. The mock restores the fixture aggregate as its stand-in for the
+ * seeded row.
+ */
+export function initialiseTargets(req: UpdateTargetsRequest): void {
+  if (LIVE) {
+    liveMutation(
+      apiSend("POST", "/api/v1/nutrition/targets/initialise", req),
+      "Couldn't initialise targets",
+    );
+    return;
+  }
+  mutate((s) => {
+    if (s.targets) return s; // already initialised, the 409 no-op
+    return pushNotification(
+      { ...s, targets: targetsSeed },
+      "ai",
+      "Nutrition targets initialised — micros DRI-seeded",
     );
   });
 }
@@ -5096,17 +5124,18 @@ export function acceptDirective(
         ),
       },
     };
-    if (d.directiveType === "TARGET_ADJUSTMENT") {
+    const curTargets = out.targets;
+    if (d.directiveType === "TARGET_ADJUSTMENT" && curTargets) {
       out = {
         ...out,
         targets: {
-          ...out.targets,
-          activityAdjustments: out.targets.activityAdjustments.map((a) =>
+          ...curTargets,
+          activityAdjustments: curTargets.activityAdjustments.map((a) =>
             a.activityLevel === "TRAINING_DAY"
               ? { ...a, calorieModifier: 150 }
               : a,
           ),
-          version: out.targets.version + 1,
+          version: curTargets.version + 1,
         },
       };
     }
@@ -5325,40 +5354,18 @@ type FloorMacroKey = "protein" | "carbs" | "fat" | "fibre";
 const FLOOR_MACROS: FloorMacroKey[] = ["protein", "carbs", "fat", "fibre"];
 
 /**
- * Day indices (0 = Mon) on which `key`'s hard floor was missed — past days
- * only (today is still in flight). The mock checks per-day hard floors
- * (isHardFloor + floorG + a lower bound); the contract's floorViolations is
- * key-only, so the page derives the day annotation from this helper.
- */
-export function floorViolationDayIndices(
-  n: NutritionState,
-  targets: TargetsDto,
-  key: string,
-): number[] {
-  const macroKey = FLOOR_MACROS.find((k) => k === key);
-  if (!macroKey) return [];
-  const t = targets[macroKey];
-  if (!t.isHardFloor || t.floorG == null || t.direction === "UPPER_LIMIT") {
-    return [];
-  }
-  const out: number[] = [];
-  WEEK_DATES.forEach((date, i) => {
-    if (date >= MOCK_TODAY_ISO) return;
-    const agg = computeDailyAggregate(n.intakeDays[date], targets);
-    if (agg[macroKey].actualSoFarG < (t.floorG ?? 0)) out.push(i);
-  });
-  return out;
-}
-
-/**
  * GET intake/week/{weekStart}/aggregate equivalent — Mon-anchored. Past days
  * are settled, today is live, future days aggregate to zero actuals.
+ * The week anchors default to the fixture week; live-aware callers pass their
+ * own (src/live/dates.ts) so the aggregate lines up with the real week.
  */
 export function computeWeeklyAggregate(
   n: NutritionState,
   targets: TargetsDto,
+  weekDates: string[] = WEEK_DATES,
+  todayIso: string = MOCK_TODAY_ISO,
 ): WeeklyAggregateDto {
-  const perDay = WEEK_DATES.map((date) =>
+  const perDay = weekDates.map((date) =>
     computeDailyAggregate(n.intakeDays[date], targets),
   );
   const sum = (pick: (d: DailyAggregateDto) => number): number =>
@@ -5399,23 +5406,45 @@ export function computeWeeklyAggregate(
     },
     microsActualSoFar: totalMicros,
   };
-  // floorViolations is now FloorViolationDto[] (date/floor/actual per the
-  // contract). The page still derives its per-day chips via
-  // floorViolationDayIndices, so we surface one weekly-level entry (date: null)
-  // per violated macro to keep that mapping 1:1. Hard-floor macros only — the
-  // planner's multiplicative gate; micro hard floors are possible in the
-  // contract but not simulated here.
-  const floorViolations = FLOOR_MACROS.filter(
-    (k) => floorViolationDayIndices(n, targets, k).length > 0,
-  ).map((k) => ({
-    date: null,
-    macroOrMicro: k,
-    floor: targets[k].floorG ?? 0,
-    actual: weeklyTotal[k].actualSoFarG,
-  }));
+  // Contract-shaped floorViolations (nutrition.md §10 (b), resolved): daily-
+  // enforcement hard floors emit one dated entry per violating settled day;
+  // weekly-average hard floors emit a single date:null entry with the 7-day-
+  // summed floor vs the weekly total. Hard-floor macros only (the planner's
+  // multiplicative gate); micro hard floors are contract-legal but not
+  // simulated here.
+  const floorViolations: FloorViolationDto[] = [];
+  for (const k of FLOOR_MACROS) {
+    const t = targets[k];
+    if (!t.isHardFloor || t.floorG == null || t.direction === "UPPER_LIMIT") {
+      continue;
+    }
+    const floorG = t.floorG;
+    if (t.enforcement === "WEEKLY_AVERAGE") {
+      if (weeklyTotal[k].actualSoFarG < floorG * 7) {
+        floorViolations.push({
+          date: null,
+          macroOrMicro: k,
+          floor: floorG * 7,
+          actual: weeklyTotal[k].actualSoFarG,
+        });
+      }
+    } else {
+      weekDates.forEach((date, i) => {
+        if (date >= todayIso) return; // today is still in flight
+        if (perDay[i][k].actualSoFarG < floorG) {
+          floorViolations.push({
+            date,
+            macroOrMicro: k,
+            floor: floorG,
+            actual: perDay[i][k].actualSoFarG,
+          });
+        }
+      });
+    }
+  }
   return {
-    weekStart: WEEK_DATES[0],
-    weekEnd: WEEK_DATES[WEEK_DATES.length - 1],
+    weekStart: weekDates[0],
+    weekEnd: weekDates[weekDates.length - 1],
     perDay,
     weeklyTotal,
     floorViolations,

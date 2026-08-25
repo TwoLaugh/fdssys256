@@ -22,6 +22,7 @@ import type {
   TargetsDto,
 } from "../../mock/types";
 import { mealSlotLabel, microLabel, microUnit, parseNum, Switch } from "./shared";
+import { TargetsEmptyState } from "./TargetsEmptyState";
 
 const GOALS: Array<{ value: Goal; label: string }> = [
   { value: "LOSE_WEIGHT", label: "Lose weight" },
@@ -915,6 +916,14 @@ function TargetsEditor({
 export function TargetsTab() {
   const targets = useStore((s) => s.targets);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  // Targets 404: initialise CTA as the empty state, never an error (§4/§8).
+  if (!targets) {
+    return (
+      <div style={{ marginTop: 18 }}>
+        <TargetsEmptyState />
+      </div>
+    );
+  }
   return (
     <div>
       {savedAt !== null && (

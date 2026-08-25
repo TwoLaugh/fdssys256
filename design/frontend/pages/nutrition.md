@@ -310,3 +310,34 @@ section; the original text above is left as written.
   (HLD example: `rest_day.carb_modifier_g = -30`, while `light_activity` is the
   zero-modifier row). UI rule: no chip and no targets-band footnote on dates
   without a row; the segmented control shows no selection until the user picks.
+- **(e) 2026-08-25 — retrospective plan-vs-target wiring (t5, D-0007).** The
+  Overview is the retrospective lens ("how did my day/week actually do against
+  my targets"): day view defaulting to today with the week strip alongside
+  (FC1/FC3 — no new tab). EARS criteria, verifier-executable:
+  - **B1** When the app boots with `VITE_LIVE=1` and an active plan exists, the
+    Overview day band, slot rows, and micros panel shall render backend data
+    for **every** day of the current week (not just today), and stepping days
+    shall not fabricate empty data where the backend has intake rows. (Wired:
+    boot hydration fetches all seven `intake/{date}` days plus
+    `intake/week/{weekStart}/aggregate`.)
+  - **B2** When a tracked micro has both a target and an actual value for the
+    viewed day, its row shall show actual vs target, with the amber treatment
+    when an `upperLimit` is exceeded and the hard-floor marker when
+    `isHardFloor=true`. Rows render the shared `NutrientRow` grammar
+    (`src/components/NutrientRow.tsx`) — one component with the Plan page's
+    projection panel, two lenses.
+  - **B3** When the weekly aggregate returns `floorViolations`, the week strip
+    shall show one chip per violation — named day for dated entries (daily-
+    enforcement floors), "this week" phrasing for `date: null` entries
+    (weekly-average floors). Chips read the DTO directly; no client-side
+    per-day derivation.
+  - **B4** When the user has no targets (404), Overview and Targets tab shall
+    show the initialise CTA as an empty state, never an error (§8). Live
+    hydration stores `targets: null` on 404 — no fixture fallback.
+  - **B5 (waived — backend gap G1)** When a tracked micro appears in no decided
+    slot or snack of the day, its row should present as "no data", not 0 of
+    target. `DailyAggregateDto.microsActualSoFar` is a plain map: a micro no
+    logged food carried never appears, indistinguishable from a measured zero.
+    Until G1 is resolved the row renders `0` and the micros panel carries an
+    inline caveat saying 0 can mean unmeasured. NO_DATA-honest rendering ships
+    with the aggregate-side status (ticket W7 on the t5 spec).

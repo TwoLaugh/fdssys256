@@ -52,6 +52,7 @@ import type {
   TasteProfileDto,
   TasteProfileVersionDto,
   WasteEntryDto,
+  WeeklyAggregateDto,
 } from "../mock/types";
 import { apiGetOrNull } from "./client";
 import { CURRENT_WEEK_START, MOCK_TODAY_ISO, WEEK_DATES } from "./dates";
@@ -130,7 +131,8 @@ export async function hydrateLive(): Promise<HydrationResult> {
   // Fan out every page's reads. soft() so any single failure → empty slice.
   const [
     targets,
-    intake,
+    intakeWeek,
+    weeklyAggregate,
     notifPage,
     budget,
     pending,
@@ -168,7 +170,15 @@ export async function hydrateLive(): Promise<HydrationResult> {
     jobs,
   ] = await Promise.all([
     soft<TargetsDto>("/api/v1/nutrition/targets"),
-    soft<IntakeDayDto>(`/api/v1/nutrition/intake/${MOCK_TODAY_ISO}`),
+    // Whole current week, not just today: the Overview steps days and must
+    // see every day the backend has an intake row for (t5 B1). Absent days
+    // stay absent (404 → null), never fabricated.
+    Promise.all(
+      WEEK_DATES.map((d) => soft<IntakeDayDto>(`/api/v1/nutrition/intake/${d}`)),
+    ),
+    soft<WeeklyAggregateDto>(
+      `/api/v1/nutrition/intake/week/${CURRENT_WEEK_START}/aggregate`,
+    ),
     soft<Page<NotificationDto>>("/api/v1/notifications?size=50"),
     soft<BudgetDto>("/api/v1/provisions/budget"),
     soft<PendingChangeListItemDto[]>("/api/v1/adaptation/pending-changes"),
@@ -294,10 +304,18 @@ export async function hydrateLive(): Promise<HydrationResult> {
       provenance: {},
       nutritionByVersion: {},
     },
-    targets: targets ?? s.targets,
+    // 404 → null: the Overview/Targets tabs render the initialise CTA (t5 B4).
+    // No fixture fallback; mock targets against live intake would lie.
+    targets,
     nutrition: {
       ...s.nutrition,
-      intakeDays: intake ? { [MOCK_TODAY_ISO]: intake } : {},
+      intakeDays: Object.fromEntries(
+        WEEK_DATES.flatMap((d, i) => {
+          const day = intakeWeek[i];
+          return day ? [[d, day] as const] : [];
+        }),
+      ),
+      weeklyAggregate,
       parsingSlotIds: [],
       dailyActivity,
       journal: asList(journal),

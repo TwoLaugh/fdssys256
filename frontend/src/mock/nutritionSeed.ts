@@ -379,12 +379,14 @@ export const targetsSeed: TargetsDto = {
     direction: "BOTH_BOUNDED",
     isHardFloor: false,
   },
+  // Weekly-average hard floor: exercises the date:null floor-violation arm
+  // ("missed this week" chip) alongside protein's dated daily arm.
   fibre: {
     targetG: 30,
     floorG: 25,
-    enforcement: "DAILY",
+    enforcement: "WEEKLY_AVERAGE",
     direction: "LOWER_FLOOR",
-    isHardFloor: false,
+    isHardFloor: true,
   },
   satFat: {
     targetG: 20,
@@ -721,6 +723,7 @@ export const QUICK_SNACKS: Array<{ label: string; req: LogSnackRequest }> = [
 export function createNutritionSeed(): NutritionState {
   return {
     intakeDays: intakeDaysSeed,
+    weeklyAggregate: null,
     parsingSlotIds: [],
     dailyActivity: dailyActivitySeed,
     journal: journalSeed,

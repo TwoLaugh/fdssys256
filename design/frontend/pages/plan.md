@@ -220,6 +220,57 @@ plan returned; route to review (§5 GENERATED). If the response has
 `qualityWarning=true` or null-recipe slots, show the HLD warning: "n slots could
 not be refilled — accept the partial plan or re-optimise."
 
+### 3g. Plan vs your targets — projection panel (`rollupSummary.nutritionCoverage`)
+
+Renders below the stat strip. "Coverage" = the viewed plan's
+`rollupSummary.nutritionCoverage` (nullable: plans generated before coverage
+shipped, or no targets configured). Coverage is computed for the **primary
+eater only** (the backend picks the first eater with a targets row); the panel
+names that eater in its header. Behaviour pinned by
+`tickets/t5-plan-vs-target-ui.md` under decision D-0007 (all six FC
+recommendations adopted); row rendering is the shared `NutrientRow` grammar
+(`src/components/NutrientRow.tsx`), the same component the Nutrition Overview's
+retrospective micros panel uses.
+
+EARS criteria (verifier-executable against mock fixtures or the live stack):
+
+- **A1** When coverage is non-null, the page shall render a "Plan vs your
+  targets" panel with one row per entry of `coverage.macros` and a summary line
+  reading `{macrosMet}/{macrosTotal} macros · {microsMet}/{microsTotal −
+  microsNoData} micros met`, appending `· N no data` when `microsNoData > 0`.
+- **A2** When coverage is null, the page shall render no panel and no error or
+  placeholder.
+- **A3** When a row has `status=MET`, the row shall show `projectedDailyAvg`
+  with unit and target and no warning treatment.
+- **A4** When a row has `status=SHORT`, the row shall show the value in the
+  warning (amber) treatment with a short-of-target marker; the count of rows so
+  treated shall equal the number of non-NO_DATA rows with `met=false`.
+  Colouring is binary and backend-driven (`met`/`status`); the client authors
+  no thresholds (FC4).
+- **A5** When a row has `status=NO_DATA` (or `projectedDailyAvg=null`), the row
+  shall render a muted "no data" with the target still shown, an empty bar, and
+  shall never render a zero value or the SHORT treatment. NO_DATA rows sit
+  inline in nutrient order, muted (FC5).
+- **A6** When a row's `direction=UPPER_LIMIT`, the target shall render as an
+  upper bound ("≤ N") and met shall mean at-or-under.
+- **A7** When a row's `source` is `derived` or `estimated`, a provenance badge
+  with an explanatory tooltip shall render; `measured` rows shall carry no
+  badge.
+- **A8** When `fatBreakdown` is non-null with any unsaturated value, the panel
+  shall render the saturated/mono/poly line as informational text (no target
+  treatment).
+- **A9** When micro rows exist, the default visible set shall be the SHORT rows
+  only, with a "show all N micros" control reaching every row (FC2; when no row
+  is SHORT the full set shows and the control is omitted).
+- **A10** When the seeded dev user generates a plan on the live stack, the
+  panel shall show the five always-scored macro rows (calories, protein, carbs,
+  fat, fibre; saturated_fat additionally iff a satFat target is set) and one
+  row per DRI-seeded micro target that carries a floor or cap.
+
+NO_DATA means *unmeasured*, never *zero* and never *failed*: it never joins the
+short count, never renders as 0 or a filled amber bar, and the summary
+denominator is `microsTotal − microsNoData`.
+
 ## 4. Generation flow (`/plan/generate`) — anatomy & field mapping
 
 In-page stepper: **feasibility → generate → review**. Entered from "Generate
