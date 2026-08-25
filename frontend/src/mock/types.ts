@@ -409,6 +409,7 @@ export type LogSnackRequest = Schemas["LogSnackRequest"];
 export type DailyAggregateDto = Schemas["DailyAggregateDto"];
 export type MacroAggregateDto = Schemas["MacroAggregateDto"];
 export type WeeklyAggregateDto = Schemas["WeeklyAggregateDto"];
+export type FloorViolationDto = Schemas["FloorViolationDto"];
 
 export type CalorieTargetDto = Schemas["CalorieTargetDto"];
 export type MacroTargetDto = Schemas["MacroTargetDto"];
@@ -445,6 +446,14 @@ export interface NutritionState {
    * (transient UI state — not part of any DTO).
    */
   parsingSlotIds: string[];
+  /**
+   * Backend weekly aggregate (GET intake/week/{weekStart}/aggregate), live
+   * mode only; the retrospective floor-violation chips read its
+   * floorViolations. Null in mock mode: the mock computes the equivalent via
+   * computeWeeklyAggregate. perDay/weeklyTotal stay locally computed in both
+   * modes so the strip tracks in-session logging.
+   */
+  weeklyAggregate: WeeklyAggregateDto | null;
   /** ISO date → daily activity entry (PUT targets/activity/{date}). */
   dailyActivity: Record<string, DailyActivityDto>;
   /** Food & mood journal, newest first (all dates). */
@@ -712,7 +721,9 @@ export interface StoreState {
   pantry: PantryState;
   notifications: NotificationsState;
   nutrition: NutritionState;
-  targets: TargetsDto;
+  /** Null = not initialised (the targets GET 404) → initialise-CTA empty
+   *  states on Overview/Targets, never fixture fallback in live mode. */
+  targets: TargetsDto | null;
   preferences: PreferencesState;
   activity: ActivityState;
   household: HouseholdState;
