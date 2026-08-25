@@ -36,6 +36,13 @@ export type DayDto = PlannerSchemas["DayDto"];
 export type PlanDto = PlannerSchemas["PlanDto"];
 export type ScoreBreakdownDocument = PlannerSchemas["ScoreBreakdownDocument"];
 export type RollupSummaryDocument = PlannerSchemas["RollupSummaryDocument"];
+export type NutritionTargetCoverageDocument =
+  PlannerSchemas["NutritionTargetCoverageDocument"];
+/** `rollupSummary.nutritionCoverage` unwrapped. The contract keeps it nullable:
+ *  plans generated before coverage shipped, or no targets configured. */
+export type PlanNutritionCoverage = NonNullable<
+  RollupSummaryDocument["nutritionCoverage"]
+>;
 export type WeeklyRollupDocument = PlannerSchemas["WeeklyRollupDocument"];
 export type DailyRollupDocument = PlannerSchemas["DailyRollupDocument"];
 export type ReoptSuggestionDto = PlannerSchemas["ReoptSuggestionDto"];

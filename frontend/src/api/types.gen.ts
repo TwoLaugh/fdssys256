@@ -4991,7 +4991,7 @@ export interface components {
             } | null;
             source: components["schemas"]["IntakeSource"];
             /**
-             * @description Reserved for nutrition-01l. Currently a no-op.
+             * @description When true, deducts quantityG from the active pantry row matching ingredientMappingKey (oldest expiry first). Requires ingredientMappingKey, else 400. A key matching no pantry row deducts nothing.
              * @default false
              */
             deductFromPantry: boolean | null;
@@ -5322,6 +5322,14 @@ export interface components {
             /** @enum {string} */
             nutritionStatus: "calculated" | "partial" | "pending";
             unmapped: components["schemas"]["UnmappedIngredientDto"][];
+            /** @description Per-micro provenance: measured | derived | estimated. Absent key = unknown. */
+            microSources?: {
+                [key: string]: "measured" | "derived" | "estimated";
+            };
+            /** @description Per-micro 0..1 confidence, carried for estimated values. */
+            microConfidence?: {
+                [key: string]: number;
+            };
         };
         CandidatePlanRollupDto: {
             /** Format: date */
@@ -5521,6 +5529,14 @@ export interface components {
                 micros: {
                     [key: string]: number;
                 };
+                /** @description Per-micro provenance: measured | derived | estimated. Absent key = unknown. */
+                microSources?: {
+                    [key: string]: "measured" | "derived" | "estimated";
+                };
+                /** @description Per-micro 0..1 confidence, carried for estimated values. */
+                microConfidence?: {
+                    [key: string]: number;
+                };
             } | null;
         };
         RecipeDto: {
@@ -5607,6 +5623,14 @@ export interface components {
                     /** Format: double */
                     fibreG: number;
                     micros: {
+                        [key: string]: number;
+                    };
+                    /** @description Per-micro provenance: measured | derived | estimated. Absent key = unknown. */
+                    microSources?: {
+                        [key: string]: "measured" | "derived" | "estimated";
+                    };
+                    /** @description Per-micro 0..1 confidence, carried for estimated values. */
+                    microConfidence?: {
                         [key: string]: number;
                     };
                 } | null;
@@ -6183,6 +6207,20 @@ export interface components {
         RollupSummaryDocument: {
             daily: components["schemas"]["DailyRollupDocument"][];
             weekly: components["schemas"]["WeeklyRollupDocument"];
+            nutritionCoverage?: {
+                macros: components["schemas"]["NutritionTargetCoverageDocument"][];
+                micros: components["schemas"]["NutritionTargetCoverageDocument"][];
+                macrosMet: number;
+                macrosTotal: number;
+                microsMet: number;
+                microsTotal: number;
+                microsNoData: number;
+                fatBreakdown?: {
+                    saturatedG?: number | null;
+                    monounsaturatedG?: number | null;
+                    polyunsaturatedG?: number | null;
+                } | null;
+            } | null;
         };
         ScoreBreakdownDocument: {
             preference: number;
@@ -6213,6 +6251,8 @@ export interface components {
             /** @enum {string|null} */
             augmentationSource?: "LLM" | "USER" | null;
             phase2Addition: boolean;
+            additions?: components["schemas"]["AdditionDto"][];
+            portionFactor?: number;
         };
         MealSlotDto: {
             /** Format: uuid */
@@ -6246,19 +6286,7 @@ export interface components {
                 /** @enum {string|null} */
                 augmentationSource?: "LLM" | "USER" | null;
                 phase2Addition: boolean;
-                /** In-meal additions (Phase 2) — small whole-food riders on the slot's main. */
-                additions?: {
-                    /** @enum {string} */
-                    kind?: "INGREDIENT" | "SIDE_RECIPE";
-                    name?: string;
-                    ingredientMappingKey?: string | null;
-                    grams?: number | null;
-                    reasoning?: string | null;
-                    nutrition?: {
-                        calories?: number;
-                    } | null;
-                }[] | null;
-                /** Per-person servings of the main, sized to the meal's calorie target (Phase 1b). */
+                additions?: components["schemas"]["AdditionDto"][];
                 portionFactor?: number;
             } | null;
             /** Format: time */
@@ -7218,6 +7246,8 @@ export interface components {
             boughtVia?: "MANUAL" | "ORDER" | "BULK_TOTAL" | null;
             /** Format: uuid */
             groceryOrderId?: string | null;
+            leftoverQuantityG?: number | null;
+            bufferPercent?: number | null;
         };
         ShoppingListDto: {
             /** Format: uuid */
@@ -7959,6 +7989,51 @@ export interface components {
             } | null;
         } & {
             [key: string]: unknown;
+        };
+        NutritionTargetCoverageDocument: {
+            key: string;
+            unit?: string | null;
+            target?: number | null;
+            projectedDailyAvg?: number | null;
+            /** @enum {string|null} */
+            direction?: "LOWER_FLOOR" | "UPPER_LIMIT" | "BOTH_BOUNDED" | null;
+            met: boolean;
+            /** @enum {string|null} */
+            status?: "MET" | "SHORT" | "NO_DATA" | null;
+            /** @enum {string|null} */
+            source?: "measured" | "derived" | "estimated" | null;
+        };
+        AdditionDto: {
+            /** @enum {string} */
+            kind: "INGREDIENT" | "SIDE_RECIPE";
+            name: string;
+            ingredientMappingKey?: string | null;
+            /** Format: uuid */
+            recipeId?: string | null;
+            quantity?: number | null;
+            unit?: string | null;
+            grams?: number | null;
+            nutrition?: {
+                calories: number;
+                /** Format: double */
+                proteinG: number;
+                /** Format: double */
+                carbsG: number;
+                /** Format: double */
+                fatG: number;
+                /** Format: double */
+                fibreG: number;
+                micros: {
+                    [key: string]: number;
+                };
+                microSources?: {
+                    [key: string]: "measured" | "derived" | "estimated";
+                };
+                microConfidence?: {
+                    [key: string]: number;
+                };
+            } | null;
+            reasoning?: string | null;
         };
         RevertToPlanRequest: {
             /** Format: uuid */
@@ -14894,6 +14969,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
+            /** @description Caller is not a member of the target household. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
         };
     };
     getActivePlan: {
@@ -14919,6 +15003,15 @@ export interface operations {
             };
             /** @description Unauthenticated. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Caller is not a member of the target household. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14960,6 +15053,15 @@ export interface operations {
             };
             /** @description Unauthenticated. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Caller is not a member of the target household. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15034,6 +15136,15 @@ export interface operations {
             };
             /** @description Unauthenticated. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Caller is not a member of the target household. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15127,6 +15238,15 @@ export interface operations {
             };
             /** @description Unauthenticated. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Caller is not a member of the plan's household. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -23,8 +23,10 @@ import type {
   DayDto,
   FeasibilityCheckResultDto,
   MealSlotDto,
+  NutritionTargetCoverageDocument,
   PinnedReason,
   PlanDto,
+  PlanNutritionCoverage,
   PlannerSlotKind,
   PlannerState,
   ProposedReoptAssignmentsDocument,
@@ -240,11 +242,105 @@ function dailyRollup(
   };
 }
 
+function coverageRow(
+  key: string,
+  unit: string,
+  target: number,
+  projectedDailyAvg: number | null,
+  direction: "LOWER_FLOOR" | "UPPER_LIMIT" | "BOTH_BOUNDED",
+  source: "measured" | "derived" | "estimated",
+): NutritionTargetCoverageDocument {
+  // NO_DATA: no plan recipe carried this nutrient. Unknown, not zero, so no
+  // source and never counted as short.
+  if (projectedDailyAvg == null) {
+    return {
+      key,
+      unit,
+      target,
+      projectedDailyAvg: null,
+      direction,
+      met: false,
+      status: "NO_DATA",
+      source: null,
+    };
+  }
+  const met =
+    direction === "LOWER_FLOOR"
+      ? projectedDailyAvg >= target
+      : projectedDailyAvg <= target;
+  return {
+    key,
+    unit,
+    target,
+    projectedDailyAvg,
+    direction,
+    met,
+    status: met ? "MET" : "SHORT",
+    source,
+  };
+}
+
+/**
+ * Projected weekly-average coverage for the seeded targets (nutritionSeed):
+ * the five always-scored macros plus saturated_fat (a satFat target is set)
+ * and one row per seeded micro target. Macro projections derive from the
+ * weekly rollup so the panel and the stat strip tell one story; macro rows
+ * are always "measured", the backend rule. omega3 plays the NO_DATA row
+ * since no seeded recipe carries an omega-3 value.
+ */
+export function planCoverage(
+  weekly: RollupSummaryDocument["weekly"],
+): PlanNutritionCoverage {
+  const macros = [
+    coverageRow("calories", "kcal", 2000, Math.round(weekly.kcalTotal / 7), "UPPER_LIMIT", "measured"),
+    coverageRow("protein", "g", 120, weekly.proteinAvgG, "LOWER_FLOOR", "measured"),
+    coverageRow("carbs", "g", 220, weekly.carbsAvgG, "UPPER_LIMIT", "measured"),
+    coverageRow("fat", "g", 70, weekly.fatAvgG, "BOTH_BOUNDED", "measured"),
+    coverageRow("fibre", "g", 30, 26, "LOWER_FLOOR", "measured"),
+    coverageRow("saturated_fat", "g", 20, 19, "UPPER_LIMIT", "measured"),
+  ];
+  const micros = [
+    coverageRow("iron_mg", "mg", 18, 19.2, "LOWER_FLOOR", "measured"),
+    coverageRow("zinc_mg", "mg", 11, 8.4, "LOWER_FLOOR", "derived"),
+    coverageRow("vitamin_b12_mcg", "mcg", 2.4, 3.1, "LOWER_FLOOR", "derived"),
+    coverageRow("vitamin_d_mcg", "mcg", 15, 6.5, "LOWER_FLOOR", "estimated"),
+    coverageRow("omega3_g", "g", 1.6, null, "LOWER_FLOOR", "measured"),
+    coverageRow("magnesium_mg", "mg", 400, 428, "LOWER_FLOOR", "derived"),
+    coverageRow("calcium_mg", "mg", 1000, 1080, "LOWER_FLOOR", "measured"),
+    coverageRow("sodium_mg", "mg", 2300, 2110, "UPPER_LIMIT", "derived"),
+  ];
+  const noData = micros.filter((r) => r.status === "NO_DATA").length;
+  return {
+    macros,
+    micros,
+    macrosMet: macros.filter((r) => r.met).length,
+    macrosTotal: macros.length,
+    microsMet: micros.filter((r) => r.met).length,
+    microsTotal: micros.length,
+    microsNoData: noData,
+    fatBreakdown: { saturatedG: 19, monounsaturatedG: 27.5, polyunsaturatedG: 12.6 },
+  };
+}
+
 function rollups(
   weekStart: string,
   weekly: Partial<RollupSummaryDocument["weekly"]>,
   perDay?: Array<Partial<{ costGbp: number; totalTimeMin: number; violations: string[] }>>,
+  nutritionCoverage?: PlanNutritionCoverage | null,
 ): RollupSummaryDocument {
+  const mergedWeekly = {
+    kcalTotal: 15050,
+    proteinAvgG: 168,
+    fatAvgG: 68,
+    carbsAvgG: 220,
+    costEstimateGbp: 52,
+    costConfidence: 0.83,
+    staleIngredientCount: 4,
+    varietyIndex: 0.78,
+    batchCookSessions: 2,
+    constraintViolations: [],
+    ...weekly,
+  };
   return {
     daily: Array.from({ length: 7 }, (_, i) =>
       dailyRollup(
@@ -254,19 +350,9 @@ function rollups(
         perDay?.[i]?.violations ?? [],
       ),
     ),
-    weekly: {
-      kcalTotal: 15050,
-      proteinAvgG: 168,
-      fatAvgG: 68,
-      carbsAvgG: 220,
-      costEstimateGbp: 52,
-      costConfidence: 0.83,
-      staleIngredientCount: 4,
-      varietyIndex: 0.78,
-      batchCookSessions: 2,
-      constraintViolations: [],
-      ...weekly,
-    },
+    weekly: mergedWeekly,
+    nutritionCoverage:
+      nutritionCoverage === undefined ? planCoverage(mergedWeekly) : nutritionCoverage,
   };
 }
 
@@ -346,13 +432,20 @@ const planPrev = buildPlan({
   acceptedAt: "2026-05-31T09:12:00Z",
   completedAt: "2026-06-08T00:00:00Z",
   scoreBreakdown: score(0.74, { preference: 0.62, variety: 0.7 }),
-  rollupSummary: rollups(PREV_WEEK_START, {
-    costEstimateGbp: 49.4,
-    costConfidence: 0.71,
-    staleIngredientCount: 0,
-    varietyIndex: 0.7,
-    batchCookSessions: 1,
-  }),
+  rollupSummary: rollups(
+    PREV_WEEK_START,
+    {
+      costEstimateGbp: 49.4,
+      costConfidence: 0.71,
+      staleIngredientCount: 0,
+      varietyIndex: 0.7,
+      batchCookSessions: 1,
+    },
+    undefined,
+    // Generated before coverage shipped: plays the contract's null case, where
+    // the panel renders nothing.
+    null,
+  ),
   days: prevLineup.map(([b, l, d], i) =>
     buildDay("p1", PREV_WEEK_START, i, [
       { recipeId: b, state: "EATEN" },

@@ -33,7 +33,9 @@ import {
 } from "../mock/store";
 import type {
   MealSlotDto,
+  NutritionTargetCoverageDocument,
   PlanDto,
+  PlanNutritionCoverage,
   ReoptSuggestionDto,
   SlotState,
 } from "../mock/types";
@@ -49,37 +51,11 @@ import {
   weekRangeLabel,
 } from "./plan/shared";
 
-/* ---- plan vs targets: projected nutrition coverage (nutrition-driven planning) ---- */
-
-/** One target's projected coverage in the generated plan. Mirrors the backend
- *  `NutritionTargetCoverageDocument`; read off `rollupSummary.nutritionCoverage`. */
-type PlanTargetCoverage = {
-  key: string;
-  unit: string;
-  target: number;
-  projectedDailyAvg: number | null;
-  direction: string;
-  met: boolean;
-  // MET | SHORT | NO_DATA — NO_DATA = intake unknown (no recipe carried it), not zero.
-  status?: string;
-  // provenance backing the projection: measured | derived | estimated (null when NO_DATA).
-  source?: string | null;
-};
-
-type PlanNutritionCoverage = {
-  macros: PlanTargetCoverage[];
-  micros: PlanTargetCoverage[];
-  macrosMet: number;
-  macrosTotal: number;
-  microsMet: number;
-  microsTotal: number;
-  microsNoData?: number;
-  fatBreakdown?: {
-    saturatedG: number | null;
-    monounsaturatedG: number | null;
-    polyunsaturatedG: number | null;
-  } | null;
-};
+/* ---- plan vs targets: projected nutrition coverage (nutrition-driven planning) ----
+ * Row and panel shapes come straight off the generated contract types:
+ * NutritionTargetCoverageDocument rows under rollupSummary.nutritionCoverage
+ * (re-exported as PlanNutritionCoverage in mock/types.ts).
+ */
 
 /** Short provenance badge — only shown for non-measured (lossy) sources so the user knows a
  *  number is USDA-derived or an AI estimate rather than hard recipe data. */
@@ -126,14 +102,15 @@ function CoverageRow({
   row,
   label,
 }: {
-  row: PlanTargetCoverage;
+  row: NutritionTargetCoverageDocument;
   label: string;
 }) {
-  const denom = row.target > 0 ? row.target : 1;
+  const target = row.target ?? 0;
+  const denom = target > 0 ? target : 1;
   const targetNote =
     row.direction === "UPPER_LIMIT"
-      ? `≤ ${fmtCoverageNum(row.target)}`
-      : `/ ${fmtCoverageNum(row.target)}`;
+      ? `≤ ${fmtCoverageNum(target)}`
+      : `/ ${fmtCoverageNum(target)}`;
 
   // NO_DATA: intake is UNKNOWN (no recipe carried this nutrient) — render it muted as "no data",
   // never as a 0 bar or a "short" amber, so an absent data source is not read as a measured zero.
@@ -191,7 +168,7 @@ function PlanNutritionPanel({
   coverage: PlanNutritionCoverage;
 }) {
   const [showAllMicros, setShowAllMicros] = useState(false);
-  const isNoData = (m: PlanTargetCoverage) =>
+  const isNoData = (m: NutritionTargetCoverageDocument) =>
     m.status === "NO_DATA" || m.projectedDailyAvg == null;
   // "Short" excludes no-data — an unknown nutrient is not a failed target, it's unmeasured.
   const short = coverage.micros.filter((m) => !isNoData(m) && !m.met);
@@ -908,11 +885,7 @@ export function Plan() {
 
   /* ---- header machinery (§3a + §5) ---- */
   const weekly = viewed.rollupSummary.weekly;
-  const nutritionCoverage = (
-    viewed.rollupSummary as unknown as {
-      nutritionCoverage?: PlanNutritionCoverage | null;
-    }
-  ).nutritionCoverage;
+  const nutritionCoverage = viewed.rollupSummary.nutritionCoverage;
   const metaLine = [
     `generation ${viewed.generation}`,
     TRIGGER_LABEL[viewed.triggerKind],
