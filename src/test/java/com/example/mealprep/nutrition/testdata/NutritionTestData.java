@@ -417,6 +417,17 @@ public final class NutritionTestData {
       return this;
     }
 
+    /** Add a cap-only micro target (upper limit, no floor), e.g. sodium. */
+    public NutritionTargetsBuilder withMicroCap(String key, BigDecimal upperLimit) {
+      micros.add(
+          MicroTarget.builder()
+              .id(UUID.randomUUID())
+              .nutrientKey(key)
+              .upperLimit(upperLimit)
+              .build());
+      return this;
+    }
+
     public NutritionTargetsBuilder withActivity(ActivityLevel level, int calories, int carbs) {
       activities.add(
           ActivityAdjustment.builder()

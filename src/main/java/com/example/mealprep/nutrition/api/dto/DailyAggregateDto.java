@@ -1,6 +1,7 @@
 package com.example.mealprep.nutrition.api.dto;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -13,6 +14,10 @@ import java.util.Map;
  * planned/actual micros documents (and snack micros) — slots without saturated-fat data contribute
  * zero. The raw {@code microsActualSoFar["saturated_fat_g"]} entry is retained alongside it for
  * map-convention consumers.
+ *
+ * <p>{@code micros} carries the status-aware rows: one MEASURED entry per key in {@code
+ * microsActualSoFar} plus one NO_DATA entry per tracked-but-unmeasured micro target (see {@link
+ * MicroIntakeStatusDto}). The map is retained alongside for existing consumers.
  */
 public record DailyAggregateDto(
     int caloriesPlanned,
@@ -23,4 +28,5 @@ public record DailyAggregateDto(
     MacroAggregateDto fat,
     MacroAggregateDto fibre,
     MacroAggregateDto satFat,
-    Map<String, BigDecimal> microsActualSoFar) {}
+    Map<String, BigDecimal> microsActualSoFar,
+    List<MicroIntakeStatusDto> micros) {}
