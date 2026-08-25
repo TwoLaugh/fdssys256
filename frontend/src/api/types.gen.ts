@@ -5382,9 +5382,12 @@ export interface components {
             fat: components["schemas"]["MacroAggregateDto"];
             fibre: components["schemas"]["MacroAggregateDto"];
             satFat: components["schemas"]["MacroAggregateDto"];
+            /** @description Map convention retained for existing consumers: measured entries only, keyed by nutrient key. Status-aware consumers should read micros instead. */
             microsActualSoFar: {
                 [key: string]: number;
             };
+            /** @description Per-micro status rows, one per measured key plus one NO_DATA row per tracked-but-unmeasured micro target. Intake-side mirror of the planner coverage rows (planner.yaml#/NutritionTargetCoverageDocument) so both lenses share a row grammar. */
+            micros: components["schemas"]["MicroIntakeStatusDto"][];
         };
         DivergenceSummaryDto: {
             plannedSoFar: {
@@ -7989,6 +7992,19 @@ export interface components {
             } | null;
         } & {
             [key: string]: unknown;
+        };
+        /** @description One micronutrient's measurement status in an intake aggregate. MEASURED means at least one decided slot or snack wrote the key; a measured zero stays MEASURED with actualSoFar 0. NO_DATA means no decided source carried the key, so intake is unknown, never zero: actualSoFar is null and the row exists only for tracked micros (the user's micro targets carrying a floor or cap). Writers must omit unmeasured micros from their documents rather than write 0, the deferred AI parse included. */
+        MicroIntakeStatusDto: {
+            key: string;
+            /** @description Display hint derived from the key suffix (mg / mcg; empty otherwise), same derivation as the planner coverage rows. */
+            unit: string;
+            /**
+             * Format: double
+             * @description Summed actual for the period; null when status is NO_DATA.
+             */
+            actualSoFar: number | null;
+            /** @enum {string} */
+            status: "MEASURED" | "NO_DATA";
         };
         NutritionTargetCoverageDocument: {
             key: string;

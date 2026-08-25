@@ -334,10 +334,11 @@ section; the original text above is left as written.
   - **B4** When the user has no targets (404), Overview and Targets tab shall
     show the initialise CTA as an empty state, never an error (§8). Live
     hydration stores `targets: null` on 404 — no fixture fallback.
-  - **B5 (waived — backend gap G1)** When a tracked micro appears in no decided
-    slot or snack of the day, its row should present as "no data", not 0 of
-    target. `DailyAggregateDto.microsActualSoFar` is a plain map: a micro no
-    logged food carried never appears, indistinguishable from a measured zero.
-    Until G1 is resolved the row renders `0` and the micros panel carries an
-    inline caveat saying 0 can mean unmeasured. NO_DATA-honest rendering ships
-    with the aggregate-side status (ticket W7 on the t5 spec).
+  - **B5** When a tracked micro appears in no decided slot or snack of the day,
+    its row shall present as "no data", not 0 of target: muted, inline in
+    nutrient order (FC5), target kept visible, empty bar, never the warn
+    treatment — the same NO_DATA grammar as the projection lens. The panel
+    reads `DailyAggregateDto.micros[]` per-micro status (D-0008 resolved gap
+    G1): MEASURED rows carry the summed actual (a measured zero stays 0),
+    NO_DATA rows carry a null value. The plain `microsActualSoFar` map remains
+    for map-convention consumers only.

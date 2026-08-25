@@ -132,6 +132,7 @@ export const MICRO_META: Record<string, { label: string; unit: string }> = {
   sodium_mg: { label: "Sodium", unit: "mg" },
   saturated_fat_g: { label: "Saturated fat", unit: "g" },
   potassium_mg: { label: "Potassium", unit: "mg" },
+  selenium_mcg: { label: "Selenium", unit: "mcg" },
   vitamin_c_mg: { label: "Vitamin C", unit: "mg" },
   vitamin_b6_mg: { label: "Vitamin B6", unit: "mg" },
 };
