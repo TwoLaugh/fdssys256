@@ -915,6 +915,13 @@ class NutritionServiceImplIntakeFlowsTest {
     // delete+insert on the (day, meal_slot) unique index).
     assertThat(day.getSlots()).contains(pending);
     assertThat(pending.getPlannedCalories()).isEqualTo(500);
+    assertThat(pending.getPlannedProteinG()).isEqualByComparingTo("30.0");
+    assertThat(pending.getPlannedCarbsG()).isEqualByComparingTo("60.0");
+    assertThat(pending.getPlannedFatG()).isEqualByComparingTo("15.0");
+    assertThat(pending.getPlannedFibreG()).isEqualByComparingTo("8.0");
+    assertThat(pending.getPlannedMicros()).isNull();
+    assertThat(pending.getPlannedRecipeId()).isNull();
+    assertThat(pending.isNeedsAiParse()).isFalse();
     assertThat(pending.getActualStatus()).isEqualTo(IntakeSlotStatus.PENDING);
     assertThat(day.getPlanId()).isEqualTo(planId);
 

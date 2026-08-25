@@ -208,10 +208,12 @@ class PlanAcceptedPrefillListenerTest {
   }
 
   @Test
-  void onPlanAccepted_snackAndCustomSlots_notPrefilled() {
+  void onPlanAccepted_snackCustomNullKindAndNullEaterSlots_notPrefilled() {
     UUID eater = UUID.randomUUID();
     MealSlotDto snack = slot(SlotKind.SNACK, List.of(eater), null);
     MealSlotDto custom = slot(SlotKind.CUSTOM, List.of(eater), null);
+    MealSlotDto kindless = slot(null, List.of(eater), null);
+    MealSlotDto eaterless = slot(SlotKind.LUNCH, null, null);
     MealSlotDto dinner = slot(SlotKind.DINNER, List.of(eater), null);
     PlanDto planDto = plan(List.of(day(MONDAY, List.of(snack, custom, dinner))));
     when(planQueryService.getPlanById(PLAN_ID)).thenReturn(Optional.of(planDto));
