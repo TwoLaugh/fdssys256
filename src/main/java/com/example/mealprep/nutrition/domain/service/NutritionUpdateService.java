@@ -94,9 +94,13 @@ public interface NutritionUpdateService {
   TargetsDto applyFeedbackAdjustment(UUID userId, FeedbackTargetAdjustment adjustment);
 
   /**
-   * Pre-fill an intake day from a plan snapshot. In-process only in 01b — no HTTP endpoint accepts
-   * this; the planner module (deferred) will inject {@link NutritionUpdateService} and call this
-   * method on plan creation. Creates the day row + slot rows; writes a {@code PREFILL} audit row.
+   * Pre-fill an intake day from a plan snapshot. In-process only — no HTTP endpoint accepts this;
+   * the production caller is the nutrition module's {@code PlanAcceptedPrefillListener} on plan
+   * acceptance. Creates the day row + slot rows; writes a {@code PREFILL} audit row.
+   *
+   * <p>Idempotent re-prefill: decided slots (anything not PENDING) are preserved verbatim so
+   * user-entered actuals are never clobbered; PENDING slots are updated in place to the new
+   * snapshot, stale PENDING slots removed, missing meal slots added.
    */
   IntakeDayDto prefillFromPlan(
       UUID userId, LocalDate onDate, UUID planId, List<PlannedSlotInputDto> slots);

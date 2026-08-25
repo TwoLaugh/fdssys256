@@ -944,10 +944,11 @@ mealprep.nutrition.divergence.minimum-planned-floor-kcal: 200    # avoid noise o
 
 ### Consumed
 
-Two `@TransactionalEventListener(phase = AFTER_COMMIT)` listeners:
+Three `@TransactionalEventListener(phase = AFTER_COMMIT)` listeners:
 
 - **`MealCookedEvent`** → auto-confirms the matching planned slot per [technical-architecture.md §Flow 4](../design/technical-architecture.md#flow-4-cook-event). The listener calls `confirmFromPlan(userId, onDate, mealSlot)` resolved from the payload. Duplicate events (same `(userId, planId, mealSlotId)`) no-op idempotently because the slot is already `CONFIRMED`.
 - **`RecipeEvolvedEvent`** → triggers `NutritionCalculationService.recalculateForEvolvedRecipe`. The recipe module passes the updated ingredient list via `CalculateRecipeNutritionRequest`; the result is returned to the recipe module, which owns recipe storage and decides whether to overwrite or version the nutrition record.
+- **`PlanAcceptedEvent`** → `PlanAcceptedPrefillListener` (D-0008) fetches the accepted plan via `PlanQueryService`, derives per-slot planned figures (recipe per-serving nutrition × portion factor + Phase-2 additions, per person, breakfast/lunch/dinner only per the CUSTOM/SNACK join rule) and calls `prefillFromPlan` per eater per day of the plan's week. Re-accepting or re-optimising is idempotent: `prefillFromPlan` preserves decided slots and updates `PENDING` ones in place, so user-entered actuals are never clobbered. Micros a recipe did not measure stay absent in `planned_micros`, never zero-filled. No listener-level transaction; each per-day pre-fill runs in its own service transaction and failures are logged, never re-thrown.
 
 The HLD does not specify whether `MealCookedEvent` listening lives in the planner or the nutrition module. Per [technical-architecture.md §Flow 4](../design/technical-architecture.md#flow-4-cook-event) ("Nutrition Logger listener auto-confirms planned nutrition for that meal slot"), it lives here. **Worth user review.**
 
