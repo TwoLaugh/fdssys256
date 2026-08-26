@@ -342,3 +342,14 @@ section; the original text above is left as written.
     G1): MEASURED rows carry the summed actual (a measured zero stays 0),
     NO_DATA rows carry a null value. The plain `microsActualSoFar` map remains
     for map-convention consumers only.
+- **(f) 2026-08-26 — intake-integrity fixes (D-0008 deferred findings #3/#4).**
+  - §3b sat-fat cell: `DailyAggregateDto.satFat` is now the status-aware
+    `SatFatAggregateDto` (`plannedG`, nullable `actualSoFarG`/`remainingG`,
+    `status: MEASURED | NO_DATA`). The cell reads it directly; on NO_DATA it
+    renders the B5 grammar (muted dash, target kept, empty bar, "no data"
+    sub-line, no warn) instead of a fabricated 0.
+  - §3d Edit values modal: micro rows start empty. Planned micros render
+    read-only in the advanced section ("Planned · not logged") and enter the
+    payload only via the explicit "Use planned values" copy action or by
+    typing. A planned micro the user never touched is no longer submitted as
+    a measured actual.

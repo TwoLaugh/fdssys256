@@ -5324,8 +5324,9 @@ function microStatuses(
  *
  * satFat aggregate added by backend #247 (TargetsDto already carried a satFat
  * target). Slots have no per-slot satFat, so the fixture sources its actual
- * from microsActualSoFar["saturated_fat_g"] and leaves plannedG at 0; the stat
- * band still reads that micro directly (unchanged here).
+ * from microsActualSoFar["saturated_fat_g"] and leaves plannedG at 0. The
+ * aggregate is status-aware: an absent key means NO_DATA with null actual and
+ * remaining, matching the backend's SatFatAggregateDto.
  */
 export function computeDailyAggregate(
   day: IntakeDayDto | undefined,
@@ -5369,8 +5370,8 @@ export function computeDailyAggregate(
     remainingG: remaining(targetG ?? 0, actual[key]),
   });
   // satFat (#247) has no per-slot planned/actual; its actual is the
-  // saturated_fat_g micro — the same value the stat band reads.
-  const satFatActual = microsActual["saturated_fat_g"] ?? 0;
+  // saturated_fat_g micro. Key absent = NO_DATA, unmeasured rather than zero.
+  const satFatActual = microsActual["saturated_fat_g"];
   return {
     caloriesPlanned,
     caloriesActualSoFar: caloriesActual,
@@ -5379,11 +5380,15 @@ export function computeDailyAggregate(
     carbs: macro("carbs", targets.carbs.targetG),
     fat: macro("fat", targets.fat.targetG),
     fibre: macro("fibre", targets.fibre.targetG),
-    satFat: {
-      plannedG: 0,
-      actualSoFarG: round1(satFatActual),
-      remainingG: remaining(targets.satFat.targetG ?? 0, satFatActual),
-    },
+    satFat:
+      satFatActual !== undefined
+        ? {
+            plannedG: 0,
+            actualSoFarG: round1(satFatActual),
+            remainingG: remaining(targets.satFat.targetG ?? 0, satFatActual),
+            status: "MEASURED",
+          }
+        : { plannedG: 0, actualSoFarG: null, remainingG: null, status: "NO_DATA" },
     microsActualSoFar: microsActual,
     micros: microStatuses(microsActual, targets),
   };
@@ -5438,11 +5443,21 @@ export function computeWeeklyAggregate(
       actualSoFarG: sum((d) => d.fibre.actualSoFarG),
       remainingG: 0,
     },
-    satFat: {
-      plannedG: sum((d) => d.satFat.plannedG),
-      actualSoFarG: sum((d) => d.satFat.actualSoFarG),
-      remainingG: 0,
-    },
+    // Weekly satFat: MEASURED when any day measured it (summing those days),
+    // NO_DATA when none did.
+    satFat: perDay.some((d) => d.satFat.actualSoFarG != null)
+      ? {
+          plannedG: sum((d) => d.satFat.plannedG),
+          actualSoFarG: sum((d) => d.satFat.actualSoFarG ?? 0),
+          remainingG: 0,
+          status: "MEASURED",
+        }
+      : {
+          plannedG: sum((d) => d.satFat.plannedG),
+          actualSoFarG: null,
+          remainingG: null,
+          status: "NO_DATA",
+        },
     microsActualSoFar: totalMicros,
     micros: microStatuses(totalMicros, targets),
   };

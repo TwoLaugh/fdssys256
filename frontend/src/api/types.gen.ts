@@ -5381,7 +5381,7 @@ export interface components {
             carbs: components["schemas"]["MacroAggregateDto"];
             fat: components["schemas"]["MacroAggregateDto"];
             fibre: components["schemas"]["MacroAggregateDto"];
-            satFat: components["schemas"]["MacroAggregateDto"];
+            satFat: components["schemas"]["SatFatAggregateDto"];
             /** @description Map convention retained for existing consumers: measured entries only, keyed by nutrient key. Status-aware consumers should read micros instead. */
             microsActualSoFar: {
                 [key: string]: number;
@@ -7992,6 +7992,17 @@ export interface components {
             } | null;
         } & {
             [key: string]: unknown;
+        };
+        /** @description Saturated-fat aggregate. Unlike the four column-backed macros, satFat is read from the slot/snack micros documents, so a day can carry no measurement at all. MEASURED means at least one decided slot or snack wrote saturated_fat_g (a written zero stays MEASURED with actualSoFarG 0); NO_DATA means none did, so intake is unknown, never zero, and actualSoFarG and remainingG are null. plannedG always sums the planned micros documents. */
+        SatFatAggregateDto: {
+            /** Format: double */
+            plannedG: number;
+            /** Format: double */
+            actualSoFarG: number | null;
+            /** Format: double */
+            remainingG: number | null;
+            /** @enum {string} */
+            status: "MEASURED" | "NO_DATA";
         };
         /** @description One micronutrient's measurement status in an intake aggregate. MEASURED means at least one decided slot or snack wrote the key; a measured zero stays MEASURED with actualSoFar 0. NO_DATA means no decided source carried the key, so intake is unknown, never zero: actualSoFar is null and the row exists only for tracked micros (the user's micro targets carrying a floor or cap). Writers must omit unmeasured micros from their documents rather than write 0, the deferred AI parse included. */
         MicroIntakeStatusDto: {

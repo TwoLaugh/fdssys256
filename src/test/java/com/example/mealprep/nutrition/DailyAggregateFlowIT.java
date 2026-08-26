@@ -1,6 +1,7 @@
 package com.example.mealprep.nutrition;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -94,10 +95,12 @@ class DailyAggregateFlowIT {
         .andExpect(jsonPath("$.caloriesActualSoFar").value(0))
         // No targets → remaining falls back to max(0, planned-actual) = 0.
         .andExpect(jsonPath("$.caloriesRemaining").value(0))
-        // satFat is a required field — empty days emit a zero-valued aggregate.
+        // satFat is a required field; an empty day carries no measurement, so it reads NO_DATA
+        // with null actual and remaining, never a fabricated zero.
         .andExpect(jsonPath("$.satFat.plannedG").value(0.0))
-        .andExpect(jsonPath("$.satFat.actualSoFarG").value(0.0))
-        .andExpect(jsonPath("$.satFat.remainingG").value(0.0))
+        .andExpect(jsonPath("$.satFat.actualSoFarG").value(nullValue()))
+        .andExpect(jsonPath("$.satFat.remainingG").value(nullValue()))
+        .andExpect(jsonPath("$.satFat.status").value("NO_DATA"))
         // No targets and no intake: nothing measured, nothing tracked, so no status rows.
         .andExpect(jsonPath("$.micros").isEmpty())
         .andExpect(openApi().isValid(openApiValidator));
@@ -134,6 +137,7 @@ class DailyAggregateFlowIT {
         .andExpect(jsonPath("$.satFat.actualSoFarG").value(1.5))
         // remaining = max(0, satFat target 20 - actual 1.5) — mirrors the other macros.
         .andExpect(jsonPath("$.satFat.remainingG").value(18.5))
+        .andExpect(jsonPath("$.satFat.status").value("MEASURED"))
         // Map-convention entry retained alongside the first-class aggregate.
         .andExpect(jsonPath("$.microsActualSoFar.saturated_fat_g").value(1.5))
         // Status rows (D-0008): the written key reads MEASURED with its value; the DRI-seeded

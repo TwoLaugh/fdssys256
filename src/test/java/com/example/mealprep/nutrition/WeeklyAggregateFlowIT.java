@@ -212,9 +212,14 @@ class WeeklyAggregateFlowIT {
         .andExpect(jsonPath("$.floorViolations[1].date").value(nullValue()))
         .andExpect(jsonPath("$.floorViolations[1].floor").value(700.0))
         .andExpect(jsonPath("$.floorViolations[1].actual").value(6.0))
-        // satFat aggregate rides perDay + weeklyTotal for free (sibling ticket).
+        // satFat aggregate rides perDay + weeklyTotal for free (sibling ticket). Days that
+        // measured it read MEASURED; days that wrote nothing read NO_DATA, not zero.
         .andExpect(jsonPath("$.perDay[2].satFat.actualSoFarG").value(2.0))
+        .andExpect(jsonPath("$.perDay[2].satFat.status").value("MEASURED"))
+        .andExpect(jsonPath("$.perDay[0].satFat.status").value("NO_DATA"))
+        .andExpect(jsonPath("$.perDay[0].satFat.actualSoFarG").value(nullValue()))
         .andExpect(jsonPath("$.weeklyTotal.satFat.actualSoFarG").value(2.0))
+        .andExpect(jsonPath("$.weeklyTotal.satFat.status").value("MEASURED"))
         .andExpect(openApi().isValid(openApiValidator));
   }
 }

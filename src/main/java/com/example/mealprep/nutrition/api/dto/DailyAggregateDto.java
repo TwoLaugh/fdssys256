@@ -11,9 +11,11 @@ import java.util.Map;
  * remainingG}. {@code microsActualSoFar} is keyed by nutrient key (e.g. {@code "iron_mg"}).
  *
  * <p>{@code satFat} is computed from the {@code "saturated_fat_g"} entries of the per-slot
- * planned/actual micros documents (and snack micros) — slots without saturated-fat data contribute
- * zero. The raw {@code microsActualSoFar["saturated_fat_g"]} entry is retained alongside it for
- * map-convention consumers.
+ * planned/actual micros documents (and snack micros). It is status-aware: when no decided slot or
+ * snack wrote the key the aggregate reads NO_DATA with null actual and remaining, never a
+ * fabricated zero (see {@link SatFatAggregateDto}). The raw {@code
+ * microsActualSoFar["saturated_fat_g"]} entry is retained alongside it for map-convention
+ * consumers.
  *
  * <p>{@code micros} carries the status-aware rows: one MEASURED entry per key in {@code
  * microsActualSoFar} plus one NO_DATA entry per tracked-but-unmeasured micro target (see {@link
@@ -27,6 +29,6 @@ public record DailyAggregateDto(
     MacroAggregateDto carbs,
     MacroAggregateDto fat,
     MacroAggregateDto fibre,
-    MacroAggregateDto satFat,
+    SatFatAggregateDto satFat,
     Map<String, BigDecimal> microsActualSoFar,
     List<MicroIntakeStatusDto> micros) {}
