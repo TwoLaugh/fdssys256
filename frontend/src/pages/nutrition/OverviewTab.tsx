@@ -382,9 +382,13 @@ function EditValuesModal({
   const [fat, setFat] = useState(repair ? "" : String(p.fatG ?? ""));
   const [fibre, setFibre] = useState(repair ? "" : String(p.fibreG ?? ""));
   const [advanced, setAdvanced] = useState(false);
-  const [microRows, setMicroRows] = useState<MicroRow[]>(
-    repair ? [] : rowsFromMicros(p.micros),
-  );
+  // Micro rows start empty. The backend stores whatever this form sends as
+  // measured actuals, so a planned micro the user never saw must not ride
+  // along in the payload. Planned values render read-only in the advanced
+  // section; "Use planned values" copies them into the editable rows.
+  const [microRows, setMicroRows] = useState<MicroRow[]>([]);
+  const [plannedCopied, setPlannedCopied] = useState(false);
+  const plannedMicroRows = repair ? [] : rowsFromMicros(p.micros);
 
   const num = (v: string): number | null => {
     if (v.trim() === "") return null;
@@ -451,6 +455,34 @@ function EditValuesModal({
         </button>
         {advanced && (
           <div style={{ marginTop: 10 }}>
+            {plannedMicroRows.length > 0 && !plannedCopied && (
+              <div
+                className="mp-card"
+                data-testid="planned-micros-reference"
+                style={{ padding: 10, marginBottom: 10 }}
+              >
+                <span className="mp-label" style={{ color: "var(--mp-muted)" }}>
+                  Planned · not logged
+                </span>
+                <div className="inline-note" style={{ margin: "6px 0 8px" }}>
+                  {plannedMicroRows
+                    .map((r) => `${microLabel(r.key)} ${r.value}`)
+                    .join(" · ")}
+                </div>
+                <button
+                  className="btn btn-small"
+                  onClick={() => {
+                    setMicroRows(plannedMicroRows.map((r) => ({ ...r })));
+                    setPlannedCopied(true);
+                  }}
+                >
+                  Use planned values
+                </button>
+                <div className="inline-note" style={{ marginTop: 6 }}>
+                  planned micros are saved only if you copy them in
+                </div>
+              </div>
+            )}
             <MicroRowsEditor
               rows={microRows}
               onChange={setMicroRows}
