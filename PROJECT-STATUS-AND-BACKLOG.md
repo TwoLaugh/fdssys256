@@ -46,9 +46,9 @@ Legend: ✅ works · ◐ wired-but-dormant (by milestone design) · ✗ broken/s
 
 ## 2. Testing state & roadmap
 
-**Metrics — STALE, carried not regenerated.** No build was run for this revision either; refresh from the post-merge CI run's report. Last measured numbers, anchored to the post-12-module-mutation-campaign CI run on main at `52d094b` (#112, GH Actions run 26191394397 — the run the pom gate comments cite, `pom.xml:470-474,542-545`):
+**Metrics — MEASURED.** Anchored to main `97b4084` (post-#271), CI run 32879134582 (2026-08-25), computed from that run's jacoco-report and pit-reports artifacts:
 
-- Line **93.4%** (17,691/18,951) · Branch **79.5%** (4,747/5,968) · Mutation **78% killed** (5,960/7,661), test-strength **95%**.
+- Line **91.9%** (31,950/34,761) · Branch **77.7%** (9,571/12,312) · Mutation **77.5% killed** (10,902/14,062). Codebase roughly doubled since the `52d094b` anchor (18,951 -> 34,761 lines measured); percentages dipped accordingly while staying clear of the 88/74/73 gates. Previous anchor's 93.4/79.5/78 (#112 run 26191394397) kept for trend.
 - That run predates ~40 commits to `17e726d` plus the 63-commit experiment-branch merge and the #263 wave to `b466d73` — a much larger drift than at the previous revision. The first CI run on merged main regenerates JaCoCo + Pitest; take the numbers from there.
 - (The previous revision's 89.1/70.8/62 figures were an even older anchor and are superseded.)
 
@@ -82,7 +82,7 @@ Struck on earlier re-verification (all previously listed here):
 - [x] ~~`logSnack` silent pantry no-op~~ — wired in the same PR as this revision; missing mapping key now 400s (see §1 row).
 - [ ] Manual-override pre-parse zero-macro window — narrowed (#221 parse, #244 repair), decide whether the residual window needs a UI signal; add a rollup assertion.
 - [ ] Endpoint-vs-contract-asserting-IT inventory — never done; #90 covered the 7 known stragglers only (#263's `2a4e982` closed two more drift instances found by hand).
-- [ ] Refresh coverage/mutation numbers from the first post-merge CI run on `b466d73`-or-later and re-check headroom against the 88/74/73 gates.
+- [x] Refresh coverage/mutation numbers from the first post-merge CI run — done 2026-08-25 (run 32879134582); headroom vs gates: line +3.9pp, branch +3.7pp, mutation +4.5pp.
 
 ### P2 — deferred-by-design / hardening
 - [ ] Login throttle/lockout under concurrency (read-modify-write without row lock) — UNVERIFIED whether the #197 hardening sweep addressed the row-lock specifically; re-check `LoginThrottleService` before shipping auth standalone.
@@ -116,4 +116,4 @@ Struck on earlier re-verification (all previously listed here):
 
 ## 5. Net assessment
 
-The trial slice — **planner + user-initiated import + grocery + notifications + live frontend** — is a go on the P0/P1 ledger: the last P0 (household read authz) closed in #263, the logSnack silent no-op is wired, the dogfood stack can reach its admin surfaces, and D-0006 put the trial baseline back on main. Automated discovery stays explicitly out of scope per D-0004 (implemented but unsupported for the trial). Remaining conditions are operational, not code: populate the prod admin allowlist at deploy time, and refresh the STALE §2 metrics from the first post-merge CI run before leaning on them. The prior revision's headline risk (an unmerged 63-commit de-facto live line) is resolved history — the residual risk worth watching is anchor rot in this very file; run the §0 delta check.
+The trial slice — **planner + user-initiated import + grocery + notifications + live frontend** — is a go on the P0/P1 ledger: the last P0 (household read authz) closed in #263, the logSnack silent no-op is wired, the dogfood stack can reach its admin surfaces, and D-0006 put the trial baseline back on main. Automated discovery stays explicitly out of scope per D-0004 (implemented but unsupported for the trial). Remaining conditions are operational, not code: populate the prod admin allowlist at deploy time, and the §2 metrics are now measured (run 32879134582). The prior revision's headline risk (an unmerged 63-commit de-facto live line) is resolved history — the residual risk worth watching is anchor rot in this very file; run the §0 delta check.
