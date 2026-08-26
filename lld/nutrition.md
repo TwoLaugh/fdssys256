@@ -452,8 +452,11 @@ public record IntakeSnackDto(UUID id, String ingredientMappingKey, String freeTe
                              IntakeSource source, Instant loggedAt) {}
 
 // Per macro: planned, actualSoFar, remaining triple. Plus micros actual-so-far map.
-// satFat is summed from the slot/snack micros documents' "saturated_fat_g" entries
-// (no dedicated slot columns); the map entry is retained alongside it.
+// satFat is read from the slot/snack micros documents' "saturated_fat_g" entries
+// (no dedicated slot columns); the map entry is retained alongside it. Its actual side is
+// status-aware: MEASURED with the summed value when a decided slot or snack wrote the key,
+// NO_DATA with null actual and remaining when none did (absent is unknown, never zero,
+// the same rule as the micros rows).
 // micros adds per-micro status on top of the map (D-0008 / t5 gap G1): one MEASURED row per
 // merged key (a present zero stays MEASURED with value 0) and one NO_DATA row (null value) per
 // tracked micro target no decided source wrote. Tracked = the user's micro targets carrying a
@@ -462,11 +465,15 @@ public record IntakeSnackDto(UUID id, String ingredientMappingKey, String freeTe
 public record DailyAggregateDto(
     int caloriesPlanned, int caloriesActualSoFar, int caloriesRemaining,
     MacroAggregateDto protein, MacroAggregateDto carbs, MacroAggregateDto fat, MacroAggregateDto fibre,
-    MacroAggregateDto satFat,
+    SatFatAggregateDto satFat,
     Map<String, BigDecimal> microsActualSoFar,
     List<MicroIntakeStatusDto> micros
 ) {}
 public record MacroAggregateDto(BigDecimal plannedG, BigDecimal actualSoFarG, BigDecimal remainingG) {}
+
+// status: MEASURED | NO_DATA. actualSoFarG and remainingG null iff NO_DATA.
+public record SatFatAggregateDto(BigDecimal plannedG, BigDecimal actualSoFarG,
+                                 BigDecimal remainingG, String status) {}
 
 // status: MEASURED | NO_DATA. actualSoFar null iff NO_DATA. unit derived from the key suffix
 // (mg / mcg; empty otherwise), same derivation as the planner coverage rows.

@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 import com.example.mealprep.nutrition.api.dto.DailyAggregateDto;
 import com.example.mealprep.nutrition.api.dto.FloorViolationDto;
 import com.example.mealprep.nutrition.api.dto.MicroIntakeStatusDto;
+import com.example.mealprep.nutrition.api.dto.SatFatAggregateDto;
 import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
 import com.example.mealprep.nutrition.domain.entity.IntakeDay;
 import com.example.mealprep.nutrition.domain.entity.IntakeSlot;
@@ -339,9 +340,53 @@ class IntakeAggregatorTest {
     assertThat(agg.satFat().actualSoFarG()).isEqualByComparingTo(new BigDecimal("7.50"));
     // remaining = max(0, satFat target 20 - actual 7.5) — mirrors the other four macros.
     assertThat(agg.satFat().remainingG()).isEqualByComparingTo(new BigDecimal("12.50"));
+    assertThat(agg.satFat().status()).isEqualTo(SatFatAggregateDto.STATUS_MEASURED);
     // The micros-map convention entry is retained for one release (frontend cutover).
     assertThat(agg.microsActualSoFar().get("saturated_fat_g"))
         .isEqualByComparingTo(new BigDecimal("7.50"));
+  }
+
+  @Test
+  void aggregateDay_satFat_noDecidedSourceWroteKey_isNoData_notZero() {
+    UUID userId = UUID.randomUUID();
+    // The slot is decided and carries planned saturated fat, but its actual micros document and
+    // the snack both lack the key: the actual side is unknown, not a measured zero.
+    IntakeSlot slot = confirmedSlot(MealSlot.BREAKFAST, 500, 30, 60, 15, 8);
+    slot.setPlannedMicros(micros("saturated_fat_g", "6.0"));
+    slot.setActualMicros(micros("iron_mg", "5.0"));
+    IntakeDay d = day(userId, DAY, slot);
+    d.addSnack(snack(180, 7, 6, 15, 3));
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, DAY)).thenReturn(Optional.of(d));
+    when(targetsRepository.findByUserId(userId))
+        .thenReturn(Optional.of(NutritionTestData.targets().withUserId(userId).build()));
+
+    DailyAggregateDto agg = aggregator().aggregateDay(userId, DAY);
+
+    assertThat(agg.satFat().status()).isEqualTo(SatFatAggregateDto.STATUS_NO_DATA);
+    assertThat(agg.satFat().actualSoFarG()).isNull();
+    assertThat(agg.satFat().remainingG()).isNull();
+    // The planned sum is independent of measurement status.
+    assertThat(agg.satFat().plannedG()).isEqualByComparingTo(new BigDecimal("6.00"));
+    assertThat(agg.microsActualSoFar()).doesNotContainKey("saturated_fat_g");
+  }
+
+  @Test
+  void aggregateDay_satFat_writtenZero_staysMeasuredZero() {
+    UUID userId = UUID.randomUUID();
+    IntakeSlot slot = confirmedSlot(MealSlot.BREAKFAST, 500, 30, 60, 15, 8);
+    slot.setActualMicros(micros("saturated_fat_g", "0"));
+    IntakeDay d = day(userId, DAY, slot);
+    when(intakeDayRepository.findByUserIdAndOnDate(userId, DAY)).thenReturn(Optional.of(d));
+    when(targetsRepository.findByUserId(userId))
+        .thenReturn(Optional.of(NutritionTestData.targets().withUserId(userId).build()));
+
+    DailyAggregateDto agg = aggregator().aggregateDay(userId, DAY);
+
+    // Same rule as the micros rows: a written zero is a measurement, not absence.
+    assertThat(agg.satFat().status()).isEqualTo(SatFatAggregateDto.STATUS_MEASURED);
+    assertThat(agg.satFat().actualSoFarG()).isEqualByComparingTo(BigDecimal.ZERO);
+    // remaining = max(0, satFat target 20 - actual 0).
+    assertThat(agg.satFat().remainingG()).isEqualByComparingTo(new BigDecimal("20.00"));
   }
 
   @Test
@@ -360,6 +405,7 @@ class IntakeAggregatorTest {
     assertThat(agg.satFat().plannedG()).isEqualByComparingTo(new BigDecimal("4.00"));
     assertThat(agg.satFat().actualSoFarG()).isEqualByComparingTo(new BigDecimal("9.00"));
     assertThat(agg.satFat().remainingG()).isEqualByComparingTo(BigDecimal.ZERO);
+    assertThat(agg.satFat().status()).isEqualTo(SatFatAggregateDto.STATUS_MEASURED);
   }
 
   @Test
@@ -377,13 +423,35 @@ class IntakeAggregatorTest {
 
     assertThat(out.perDay().get(0).satFat().actualSoFarG())
         .isEqualByComparingTo(new BigDecimal("5.00"));
-    // Empty days emit a zero-valued satFat aggregate (required field, never absent).
-    assertThat(out.perDay().get(1).satFat().actualSoFarG()).isEqualByComparingTo(BigDecimal.ZERO);
+    assertThat(out.perDay().get(0).satFat().status()).isEqualTo(SatFatAggregateDto.STATUS_MEASURED);
+    // Empty days carry no measurement: NO_DATA with null actual and remaining, not zero.
+    assertThat(out.perDay().get(1).satFat().status()).isEqualTo(SatFatAggregateDto.STATUS_NO_DATA);
+    assertThat(out.perDay().get(1).satFat().actualSoFarG()).isNull();
+    assertThat(out.perDay().get(1).satFat().remainingG()).isNull();
+    // Weekly total: measured on any day reads MEASURED with the sum of the measured days.
     assertThat(out.weeklyTotal().satFat().actualSoFarG())
         .isEqualByComparingTo(new BigDecimal("5.00"));
+    assertThat(out.weeklyTotal().satFat().status()).isEqualTo(SatFatAggregateDto.STATUS_MEASURED);
     // Weekly remaining = 7×20 - 5 = 135, zero-floored target basis like the other macros.
     assertThat(out.weeklyTotal().satFat().remainingG())
         .isEqualByComparingTo(new BigDecimal("135.00"));
+  }
+
+  @Test
+  void aggregateWeek_satFat_noDayMeasured_weeklyTotalNoData() {
+    UUID userId = UUID.randomUUID();
+    // A tracked day exists, but nothing on it wrote the saturated-fat key.
+    IntakeDay d = day(userId, MONDAY, confirmedSlot(MealSlot.BREAKFAST, 500, 30, 60, 15, 8));
+    when(intakeDayRepository.findByUserIdAndOnDateBetween(eq(userId), any(), any()))
+        .thenReturn(List.of(d));
+    when(targetsRepository.findByUserId(userId))
+        .thenReturn(Optional.of(NutritionTestData.targets().withUserId(userId).build()));
+
+    WeeklyAggregateDto out = aggregator().aggregateWeek(userId, MONDAY);
+
+    assertThat(out.weeklyTotal().satFat().status()).isEqualTo(SatFatAggregateDto.STATUS_NO_DATA);
+    assertThat(out.weeklyTotal().satFat().actualSoFarG()).isNull();
+    assertThat(out.weeklyTotal().satFat().remainingG()).isNull();
   }
 
   // ---------------- per-micro status (D-0008 / t5 gap G1) ----------------

@@ -884,7 +884,7 @@ DailyAggregateDto:
     carbs:   { $ref: '#/MacroAggregateDto' }
     fat:     { $ref: '#/MacroAggregateDto' }
     fibre:   { $ref: '#/MacroAggregateDto' }
-    satFat:  { $ref: '#/MacroAggregateDto' }
+    satFat:  { $ref: '#/SatFatAggregateDto' }
     microsActualSoFar:
       type: object
       description: 'Map convention retained for existing consumers: measured entries only, keyed by nutrient key. Status-aware consumers should read micros instead.'
@@ -927,6 +927,22 @@ MacroAggregateDto:
     plannedG:     { type: number, format: double, minimum: 0 }
     actualSoFarG: { type: number, format: double, minimum: 0 }
     remainingG:   { type: number, format: double }
+SatFatAggregateDto:
+  type: object
+  description: >-
+    Saturated-fat aggregate. Unlike the four column-backed macros, satFat is read from the
+    slot/snack micros documents, so a day can carry no measurement at all. MEASURED means at
+    least one decided slot or snack wrote saturated_fat_g (a written zero stays MEASURED with
+    actualSoFarG 0); NO_DATA means none did, so intake is unknown, never zero, and actualSoFarG
+    and remainingG are null. plannedG always sums the planned micros documents.
+  required: [plannedG, actualSoFarG, remainingG, status]
+  properties:
+    plannedG:     { type: number, format: double, minimum: 0 }
+    actualSoFarG: { type: number, format: double, minimum: 0, nullable: true }
+    remainingG:   { type: number, format: double, nullable: true }
+    status:
+      type: string
+      enum: [MEASURED, NO_DATA]
 DivergenceSummaryDto:
   type: object
   required: [plannedSoFar, actualSoFar, percentVariance]

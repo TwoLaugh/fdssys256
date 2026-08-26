@@ -4,6 +4,7 @@ import com.example.mealprep.nutrition.api.dto.DailyAggregateDto;
 import com.example.mealprep.nutrition.api.dto.FloorViolationDto;
 import com.example.mealprep.nutrition.api.dto.MacroAggregateDto;
 import com.example.mealprep.nutrition.api.dto.MicroIntakeStatusDto;
+import com.example.mealprep.nutrition.api.dto.SatFatAggregateDto;
 import com.example.mealprep.nutrition.api.dto.WeeklyAggregateDto;
 import com.example.mealprep.nutrition.domain.entity.IntakeDay;
 import com.example.mealprep.nutrition.domain.entity.IntakeSlot;
@@ -44,9 +45,11 @@ import org.springframework.stereotype.Component;
  *       left) rather than fabricating a target.
  *   <li>Macro {@code plannedG} sums {@code IntakeSlot.plannedXxxG} across all slots; snacks have no
  *       planned counterpart.
- *   <li>{@code satFat} has no dedicated slot columns — it is summed from the {@code
- *       "saturated_fat_g"} entry of each slot's planned/actual micros documents (and snack micros).
- *       Slots without saturated-fat data contribute zero. The raw {@code
+ *   <li>{@code satFat} has no dedicated slot columns; it is read from the {@code "saturated_fat_g"}
+ *       entry of each slot's planned/actual micros documents (and snack micros). The actual side is
+ *       status-aware: MEASURED with the summed value when at least one decided source wrote the
+ *       key, NO_DATA with null actual and remaining when none did. Absent data is unknown, never
+ *       zero, matching the {@code micros} rows. The raw {@code
  *       microsActualSoFar["saturated_fat_g"]} entry is retained for map-convention consumers.
  *   <li>{@code microsActualSoFar} merges the slot.actualMicros JSONB objects + snack.micros JSONB
  *       objects, summing numeric values per key.
@@ -112,7 +115,6 @@ public class IntakeAggregator {
     BigDecimal fibrePlanned = BigDecimal.ZERO;
     BigDecimal fibreActual = BigDecimal.ZERO;
     BigDecimal satFatPlanned = BigDecimal.ZERO;
-    BigDecimal satFatActual = BigDecimal.ZERO;
     Map<String, BigDecimal> micros = new LinkedHashMap<>();
 
     for (IntakeSlot s : day.getSlots()) {
@@ -127,7 +129,6 @@ public class IntakeAggregator {
       fibrePlanned = fibrePlanned.add(nz(s.getPlannedFibreG()));
       fibreActual = fibreActual.add(nz(s.getActualFibreG()));
       satFatPlanned = satFatPlanned.add(microValue(s.getPlannedMicros(), SAT_FAT_MICRO_KEY));
-      satFatActual = satFatActual.add(microValue(s.getActualMicros(), SAT_FAT_MICRO_KEY));
       mergeMicros(micros, s.getActualMicros());
     }
 
@@ -138,11 +139,12 @@ public class IntakeAggregator {
       carbsActual = carbsActual.add(nz(snack.getCarbsG()));
       fatActual = fatActual.add(nz(snack.getFatG()));
       fibreActual = fibreActual.add(nz(snack.getFibreG()));
-      satFatActual = satFatActual.add(microValue(snack.getMicros(), SAT_FAT_MICRO_KEY));
       mergeMicros(micros, snack.getMicros());
     }
 
     Map<String, BigDecimal> scaled = scaleMicros(micros);
+    // The actual side comes off the merged micros map: key present means some decided slot or
+    // snack measured it, key absent means NO_DATA. One source, no separate sum to drift.
     return new DailyAggregateDto(
         caloriesPlanned,
         caloriesActual,
@@ -151,7 +153,10 @@ public class IntakeAggregator {
         macroAgg(targets == null ? null : targets.carbs(), carbsPlanned, carbsActual),
         macroAgg(targets == null ? null : targets.fat(), fatPlanned, fatActual),
         macroAgg(targets == null ? null : targets.fibre(), fibrePlanned, fibreActual),
-        macroAgg(targets == null ? null : targets.satFat(), satFatPlanned, satFatActual),
+        satFatAgg(
+            targets == null ? null : targets.satFat(),
+            satFatPlanned,
+            scaled.get(SAT_FAT_MICRO_KEY)),
         scaled,
         microStatuses(scaled, targets));
   }
@@ -203,7 +208,7 @@ public class IntakeAggregator {
         macroAgg(targets == null ? null : targets.carbs(), BigDecimal.ZERO, BigDecimal.ZERO),
         macroAgg(targets == null ? null : targets.fat(), BigDecimal.ZERO, BigDecimal.ZERO),
         macroAgg(targets == null ? null : targets.fibre(), BigDecimal.ZERO, BigDecimal.ZERO),
-        macroAgg(targets == null ? null : targets.satFat(), BigDecimal.ZERO, BigDecimal.ZERO),
+        satFatAgg(targets == null ? null : targets.satFat(), BigDecimal.ZERO, null),
         new LinkedHashMap<>(),
         microStatuses(Map.of(), targets));
   }
@@ -220,6 +225,23 @@ public class IntakeAggregator {
     BigDecimal basis = dailyTarget != null ? scale(dailyTarget) : p;
     BigDecimal remaining = basis.subtract(a).max(BigDecimal.ZERO);
     return new MacroAggregateDto(p, a, remaining);
+  }
+
+  /**
+   * satFat aggregate. A null {@code actual} means no decided slot or snack wrote the saturated-fat
+   * key: the row is NO_DATA with null actual and remaining, never a fabricated zero. A measured
+   * value (a written zero included) uses the same remaining formula as {@link #macroAgg}.
+   */
+  private static SatFatAggregateDto satFatAgg(
+      BigDecimal dailyTarget, BigDecimal planned, BigDecimal actual) {
+    BigDecimal p = scale(planned);
+    if (actual == null) {
+      return new SatFatAggregateDto(p, null, null, SatFatAggregateDto.STATUS_NO_DATA);
+    }
+    BigDecimal a = scale(actual);
+    BigDecimal basis = dailyTarget != null ? scale(dailyTarget) : p;
+    return new SatFatAggregateDto(
+        p, a, basis.subtract(a).max(BigDecimal.ZERO), SatFatAggregateDto.STATUS_MEASURED);
   }
 
   /**
@@ -337,7 +359,8 @@ public class IntakeAggregator {
     BigDecimal fibrePlanned = BigDecimal.ZERO;
     BigDecimal fibreActual = BigDecimal.ZERO;
     BigDecimal satFatPlanned = BigDecimal.ZERO;
-    BigDecimal satFatActual = BigDecimal.ZERO;
+    // Null until some day measured; a week where no day wrote the key stays NO_DATA.
+    BigDecimal satFatActual = null;
     Map<String, BigDecimal> micros = new LinkedHashMap<>();
 
     for (DailyAggregateDto d : days) {
@@ -352,7 +375,10 @@ public class IntakeAggregator {
       fibrePlanned = fibrePlanned.add(d.fibre().plannedG());
       fibreActual = fibreActual.add(d.fibre().actualSoFarG());
       satFatPlanned = satFatPlanned.add(d.satFat().plannedG());
-      satFatActual = satFatActual.add(d.satFat().actualSoFarG());
+      BigDecimal daySatFat = d.satFat().actualSoFarG();
+      if (daySatFat != null) {
+        satFatActual = satFatActual == null ? daySatFat : satFatActual.add(daySatFat);
+      }
       for (Map.Entry<String, BigDecimal> e : d.microsActualSoFar().entrySet()) {
         micros.merge(e.getKey(), e.getValue(), BigDecimal::add);
       }
@@ -369,7 +395,7 @@ public class IntakeAggregator {
         macroAgg(weekly == null ? null : weekly.carbs(), carbsPlanned, carbsActual),
         macroAgg(weekly == null ? null : weekly.fat(), fatPlanned, fatActual),
         macroAgg(weekly == null ? null : weekly.fibre(), fibrePlanned, fibreActual),
-        macroAgg(weekly == null ? null : weekly.satFat(), satFatPlanned, satFatActual),
+        satFatAgg(weekly == null ? null : weekly.satFat(), satFatPlanned, satFatActual),
         scaled,
         microStatuses(scaled, targets));
   }
